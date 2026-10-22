@@ -1,0 +1,2 @@
+kb: dùng: kb.py check [--strict] | kb.py check spec <ngày-slug|đường-dẫn> | kb.py check current-state [đường-dẫn]
+rc=64

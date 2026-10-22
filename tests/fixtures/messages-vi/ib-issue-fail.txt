@@ -1,0 +1,5 @@
+intent_branch: could not create the tracking issue (best-effort, does NOT block the branch): HTTP 403: Resource not accessible by integration
+       branch intent/2026-01-01-g2 is created; add `issue: N` to kb/intent/2026-01-01-g2.md by hand if needed.
+       NO TRACKING ISSUE WAS RECORDED. Check `gh issue list --label intent` first (a call that timed out may still have created one), then retry once the cause is fixed: intent-branch.sh retry-issue --slug 2026-01-01-g2
+intent/2026-01-01-g2
+rc=0

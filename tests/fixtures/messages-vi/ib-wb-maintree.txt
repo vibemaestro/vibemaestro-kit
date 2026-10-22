@@ -1,0 +1,5 @@
+intent_branch: đang đứng ở CÂY CHÍNH của repo (hoặc một submodule) — KHÔNG tạo w2. `checkout -b` sẽ chuyển nhánh của cây chung, nơi có thể đang mang việc dở của phiên khác. Tạo branch không checkout rồi làm trong worktree riêng:
+       scripts/intent-branch.sh worker-branch --intent 2026-01-01-e --name w2 --no-checkout
+       git worktree add <S>/ib/.claude/worktrees/<tên> w2
+       (đặt worktree TRONG clone — ngoài thư mục làm việc là hộp thoại xin quyền; quy trình Git điều 1.)
+rc=7

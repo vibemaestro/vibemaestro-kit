@@ -1,0 +1,5 @@
+intent_branch: could not create the tracking issue (best-effort, does NOT block the branch): không đọc được số issue từ output `gh issue create`: 'created'
+       branch intent/2026-01-01-g3 is created; add `issue: N` to kb/intent/2026-01-01-g3.md by hand if needed.
+       NO TRACKING ISSUE WAS RECORDED. Check `gh issue list --label intent` first (a call that timed out may still have created one), then retry once the cause is fixed: intent-branch.sh retry-issue --slug 2026-01-01-g3
+intent/2026-01-01-g3
+rc=0

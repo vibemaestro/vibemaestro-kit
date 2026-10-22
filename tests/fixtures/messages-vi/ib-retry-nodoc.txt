@@ -1,0 +1,2 @@
+intent_branch: chưa có kb/intent/2026-01-01-none.md
+rc=3

@@ -1,0 +1,137 @@
+# =============================================================================
+# Which paths wake which suite — the ONE map of tests/plan.py (CI, run-all.sh --changed, a worker's local run)
+# =============================================================================
+#   <suite> <glob|%group> …    tests/test-<suite>.sh runs when the diff touches a matching path (its own file is implied)
+#   %group <glob|%group> …     a name for a set of globs, used on suite lines
+#   @always <suite> …          in every plan
+#   @full <glob> …             a path here makes the plan the full suite
+#   @with <suite> <suite> …    when the first suite is planned, the others are planned too
+# `*` matches any characters, `/` included. One line per suite; tests/test-plan.sh (python3 tests/plan.py --check) is red when a
+# tracked file is in no line and not in tests/map-exclusions.txt, a glob matches nothing, a suite has no line, or a suite names
+# (or runs, through imports and shell wiring) a file under plugins/ or tests/fixtures/ that its line does not cover.
+# Editing a suite's line runs that suite (and @always); editing @always, @full or @with runs everything.
+# A path in tests/map-exclusions.txt (the documents: READMEs, docs/, kb/, release notes) wakes no suite even when a line here matches
+# it: CI tests code, not documents.
+# A PR runs the tests of what it changed: a test script wakes its own suite (the scanners that read every test file run
+# in the full run); skill and rule text (`skills/**.md`, `rules/*.md`) is in no whole-plugin group and wakes only the suites that
+# read it, named on their lines; code wakes the suites that run it.
+# Why: a PR runs the suites its diff reaches, and the scheduled full run catches the rest.
+# =============================================================================
+
+# every suite sources lib.sh, and lib.sh sources netguard.sh, capped.sh and plant.sh. The planner, its exclusion list and the runner are not
+# here: tests/plan.py and tests/map-exclusions.txt wake `plan`, tests/run-all.sh wakes `plan` and `run-all`
+@full tests/fixtures/lib.sh tests/fixtures/netguard.sh tests/fixtures/capped.sh tests/fixtures/plant.sh
+
+# read EVERY tracked file, so no path can be what wakes them: the coverage guard (a file added anywhere is only checked by it)
+# and cai-dat (its leak scan reads every file outside .git/ and tests/ for home paths, e-mails, public IPs, tokens and keys, and
+# counts symlinks anywhere in the repository)
+# and conflict-markers (it scans every tracked text file, tests/ included, for a committed merge-conflict marker)
+@always plan cai-dat conflict-markers
+
+
+# ── groups ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+# the branch/PR cores and what they import
+%core plugins/vibemaestro-sdlc/gates/gate_common.py plugins/vibemaestro-sdlc/gates/pr_body.py plugins/vibemaestro-sdlc/scripts/sdlc_config.py plugins/vibemaestro-sdlc/scripts/messages.py plugins/vibemaestro-sdlc/scripts/current_state.py plugins/vibemaestro-sdlc/scripts/kb_index.py plugins/vibemaestro-sdlc/scripts/kb_plan.py plugins/vibemaestro-sdlc/scripts/intent_branch.py plugins/vibemaestro-sdlc/scripts/intent-branch.sh plugins/vibemaestro-sdlc/scripts/open_pr.py plugins/vibemaestro-sdlc/scripts/open-pr.sh
+# everything the hook engine and kb.py load at run time: every script, the hooks. Not the rule text it delivers (the suites that
+# read a rule name it), not the skills (the engine only checks that skills/<name>/SKILL.md exists) and not the manifest
+# (rule_packs.py reads a DEPENDENT plugin's only)
+%runtime plugins/vibemaestro-sdlc/scripts/* plugins/vibemaestro-sdlc/gates/gate_common.py plugins/vibemaestro-sdlc/gates/pr_body.py plugins/vibemaestro-sdlc/hooks/* plugins/vibemaestro-sdlc/templates/*
+%gates plugins/vibemaestro-sdlc/gates/* %core
+%batons plugins/vibemaestro-sdlc/batons/* plugins/vibemaestro-sdlc/scripts/baton.py plugins/vibemaestro-sdlc/scripts/baton-launcher.py plugins/vibemaestro-sdlc/templates/baton-script.sh
+# a whole plugin's code: suites that validate, install, scan or copy-and-check all of it. Its code directories are listed one by
+# one, so skill and rule text is not in the group and a new top-level directory is unmapped until it gets a line (the guard)
+%sdlc plugins/vibemaestro-sdlc/.claude-plugin/* plugins/vibemaestro-sdlc/CONTRACT.md plugins/vibemaestro-sdlc/batons/* plugins/vibemaestro-sdlc/gates/* plugins/vibemaestro-sdlc/hooks/* plugins/vibemaestro-sdlc/scripts/* plugins/vibemaestro-sdlc/templates/*
+%brain plugins/vibemaestro-brain/.claude-plugin/* plugins/vibemaestro-brain/bin/* plugins/vibemaestro-brain/hooks/* plugins/vibemaestro-brain/scripts/* plugins/vibemaestro-brain/templates/*
+# the planner reads a suite's `$X/hooks/hooks.json` (sdlc's, through a variable it cannot resolve) as every hooks/hooks.json, so
+# since B1.2 these suites also "reach" the brain's hooks and what they import; they never run them (an over-approximation)
+%brain-hooks plugins/vibemaestro-brain/hooks/hooks.json plugins/vibemaestro-brain/scripts/brain.py plugins/vibemaestro-brain/scripts/brain_hook.py plugins/vibemaestro-brain/scripts/brain_store.py plugins/vibemaestro-brain/scripts/brain_cost.py plugins/vibemaestro-brain/scripts/brain_matrix.py
+# what the brain's code runs of vibemaestro-sdlc (its dependency): the loader, the sensitive-value filter brain_store.py calls, the manifest
+%sdlc-for-brain plugins/vibemaestro-sdlc/.claude-plugin/* plugins/vibemaestro-sdlc/scripts/sdlc_config.py plugins/vibemaestro-sdlc/scripts/messages.py plugins/vibemaestro-sdlc/gates/pr_sensitive.py plugins/vibemaestro-sdlc/gates/gate_common.py
+# the sdlc hooks.json and what its hooks import (brain-matrix's probe runs the sdlc SessionStart; the planner reads brain-owner's
+# `$X/hooks/hooks.json` as the sdlc one too)
+%sdlc-hooks plugins/vibemaestro-sdlc/hooks/hooks.json plugins/vibemaestro-sdlc/scripts/session-start.py plugins/vibemaestro-sdlc/scripts/vsdlc.py plugins/vibemaestro-sdlc/scripts/hookout.py plugins/vibemaestro-sdlc/scripts/baton.py plugins/vibemaestro-sdlc/scripts/current_state.py plugins/vibemaestro-sdlc/scripts/pre-bash.py plugins/vibemaestro-sdlc/scripts/pre-edit.py plugins/vibemaestro-sdlc/scripts/rule_packs.py plugins/vibemaestro-sdlc/scripts/rules.py
+%hub tests/fixtures/hub-shaped/*
+%flow tests/fixtures/flow.sh tests/fixtures/ports.sh
+# the repository's own sdlc config: read by kb.py run from the repo root, and by suites that copy the whole repository
+%repo-config .vibemaestro/*
+
+# ── suites ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+agent-models        %runtime plugins/vibemaestro-sdlc/skills/*.md plugins/vibemaestro-sdlc/rules/*.md
+backends            %gates tests/fixtures/backends_drive.py tests/fixtures/merge_gh.py tests/fixtures/ports.sh
+# ban-cai reads workflow-core and git-process and the ship skill, and copies the rules directory (the guard asks for every rule)
+ban-cai             %sdlc .claude-plugin/marketplace.json tests/fixtures/flow.sh %repo-config %brain-hooks plugins/vibemaestro-sdlc/rules/*.md plugins/vibemaestro-sdlc/skills/ship/SKILL.md
+brain-hooks         %brain %sdlc-for-brain tests/fixtures/brain.sh tests/live/brain-owner-dialog.sh
+brain-matrix        %brain %sdlc-for-brain %sdlc-hooks tests/fixtures/brain.sh tests/fixtures/brain-probe/* tests/live/brain-probe.sh plugins/vibemaestro-brain/skills/matrix/SKILL.md tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
+brain-owner         %brain %sdlc-for-brain %sdlc-hooks tests/fixtures/brain.sh
+brain-store         %brain %sdlc-for-brain tests/fixtures/brain.sh
+coordinator-bootstrap %sdlc %hub plugins/vibemaestro-brain/.claude-plugin/plugin.json tests/fixtures/ports.sh tests/fixtures/dependent-plugin/*
+baton               %runtime %batons %gates tests/fixtures/ports.sh tests/fixtures/baton_gate.py tests/fixtures/baton_go_interrupt.py tests/fixtures/baton_term_at.py tests/fixtures/go-dash-verdict.txt plugins/vibemaestro-sdlc/skills/batonrun/* %brain-hooks plugins/vibemaestro-sdlc/rules/batonrun.instructions.md plugins/*/.claude-plugin/plugin.json tests/fixtures/dependent-plugin/*
+batonrun-standard   tests/fixtures/batonrun_standard_check.py plugins/vibemaestro-sdlc/skills/batonrun/SKILL.md plugins/vibemaestro-sdlc/rules/batonrun.instructions.md plugins/vibemaestro-sdlc/rules/workflow-core.instructions.md plugins/vibemaestro-sdlc/scripts/baton.py plugins/vibemaestro-sdlc/docs/batonrun.md
+baton-gh-write      %batons %gates tests/fixtures/gh_write_gh.py tests/fixtures/ports.sh
+baton-kinds         %batons %core tests/fixtures/ports.sh tests/fixtures/baton_kinds_gh.py plugins/vibemaestro-sdlc/templates/baton-kinds/*
+baton-permissions   %runtime %batons %hub tests/fixtures/ports.sh
+capped-breaks
+cai-dat             %sdlc %brain .claude-plugin/marketplace.json .github/workflows/test.yml tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
+conflict-markers   tests/fixtures/conflict_markers.py tests/conflict-marker-allow.txt
+config              %runtime %batons %hub %flow %brain-hooks plugins/vibemaestro-sdlc/rules/git-process.instructions.md plugins/vibemaestro-sdlc/rules/pr-no-leaks.instructions.md
+config-compat       %runtime %repo-config %flow tests/fixtures/config_compat/* plugins/vibemaestro-sdlc/rules/config-compat.instructions.md
+# contract's merge fixture parses the deny globs out of the init-kb skill
+contract            %sdlc %hub plugins/vibemaestro-brain/.claude-plugin/* %flow .claude-plugin/marketplace.json .github/actions/* tests/fixtures/contract.py tests/fixtures/gh_write_gh.py tests/fixtures/merge_fx.py tests/fixtures/merge_gh.py %brain-hooks plugins/vibemaestro-sdlc/skills/init-kb/SKILL.md tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
+core-adapters       %core %flow
+core-branch         %core %hub %flow
+core-issue          %core %flow
+core-pr             %core %hub %flow
+core-pr-links       %core %flow
+current-state       %runtime tests/fixtures/flow.sh %repo-config
+current-state-added-lines %runtime %flow
+current-state-warn  %runtime %batons %hub %flow %brain-hooks
+# export-public installs the export of a scratch rev and runs the cached sdlc and brain hooks: a plugin change, an allowlisted
+# root file or the export script changes what it exports or installs; it reads the last line of workflow-core in the session
+export-public       scripts/export-public.sh %sdlc %brain .claude-plugin/marketplace.json .github/actions/fetch-plugin/* plugins/vibemaestro-sdlc/rules/workflow-core.instructions.md tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
+# export-gate runs the real export and term scanner on a scratch rev of this checkout and reads the workflow: the gate, its pins and
+# config, the two scripts it runs, the workflow, and the exported file its [T] case edits
+export-gate         scripts/export-gate.sh scripts/export-gate.pins scripts/export-gate.gitleaks.toml scripts/export-public.sh scripts/scan-internal-terms.sh .github/workflows/export-gate.yml plugins/vibemaestro-sdlc/rules/workflow-core.instructions.md
+# doc-lap's static scan reads every plugin file, skill and rule text included; its scan of tests/ runs in the full run
+doc-lap             %sdlc %hub tests/fixtures/flow.sh scripts/scan-internal-terms.sh %repo-config %brain-hooks plugins/*/skills/*.md plugins/*/rules/*.md plugins/vibemaestro-brain/bin/brain
+fetch-plugin        %core plugins/vibemaestro-sdlc/.claude-plugin/* plugins/vibemaestro-sdlc/rules/workflow-core.instructions.md .github/actions/fetch-plugin/* .claude-plugin/marketplace.json .gitignore %repo-config
+# fixture-pin's [S] scan reads every suite and every shell fixture: it runs in the full run, not on each test file edit;
+# its replay sources lib.sh and gates.sh
+fixture-pin         tests/fixtures/pin-replay.sh tests/fixtures/gates.sh
+gate-current-state  %runtime %hub %flow tests/fixtures/gate_run.py tests/fixtures/language/vi/current-state.md
+gates               %gates %hub %flow tests/fixtures/gates.sh tests/fixtures/gate_gh.py plugins/vibemaestro-sdlc/scripts/install_gates.py plugins/vibemaestro-sdlc/skills/install-gates/*
+gates-body          %gates %hub %flow tests/fixtures/gates.sh tests/fixtures/gate_gh.py tests/fixtures/pr-body-old-flow.md
+gates-commit        %gates %hub %flow tests/fixtures/gates.sh tests/fixtures/gate_gh.py
+gates-dead          %gates %hub %flow tests/fixtures/gates.sh tests/fixtures/gate_gh.py
+gates-sensitive     %gates %hub %flow tests/fixtures/gates.sh tests/fixtures/gate_gh.py
+gates-title         %gates %hub %flow tests/fixtures/gates.sh tests/fixtures/gate_gh.py
+gates-evidence      %flow %core plugins/vibemaestro-sdlc/gates/pr_evidence.py plugins/vibemaestro-sdlc/gates/workflows/pr-evidence.yml tests/fixtures/evidence_cases.py tests/fixtures/gh_expr.py
+gates-workflows     %gates %hub %flow tests/fixtures/gates.sh tests/fixtures/gate_gh.py tests/fixtures/workflow_check.py tests/fixtures/concurrency_check.py tests/fixtures/gh_expr.py plugins/vibemaestro-sdlc/scripts/install_gates.py .github/workflows/*
+# hook delivers the real sdlc rules (catalogue, line budgets per rule and in all) and checks four core skills are present
+hook                %runtime %batons %hub %brain-hooks tests/fixtures/ports.sh plugins/vibemaestro-sdlc/rules/*.md plugins/vibemaestro-sdlc/skills/init-kb/SKILL.md plugins/vibemaestro-sdlc/skills/intake/SKILL.md plugins/vibemaestro-sdlc/skills/plan/SKILL.md plugins/vibemaestro-sdlc/skills/spec/SKILL.md
+hook-latency        %runtime tests/fixtures/ports.sh tests/hook-latency.py plugins/vibemaestro-sdlc/rules/pr-no-leaks.instructions.md
+hub-shaped-flow     %runtime %hub tests/fixtures/flow.sh
+init-setup          %runtime %hub %flow tests/fixtures/init-setup/* plugins/vibemaestro-sdlc/skills/init-kb/SKILL.md
+# install counts each plugin's rules, checks their names and that the doctor skill and an sdlc rule reach the session
+install             %sdlc %brain %hub .claude-plugin/marketplace.json %repo-config plugins/vibemaestro-sdlc/rules/*.md tests/fixtures/dependent-plugin/*
+kb-index            %runtime %batons %hub
+kb-plan             %runtime tests/fixtures/kb_plan_gh.py plugins/*/.claude-plugin/plugin.json tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
+khung-luong         %runtime %batons %hub plugins/vibemaestro-sdlc/.claude-plugin/* plugins/vibemaestro-sdlc/skills/*.md
+language            %runtime %hub tests/fixtures/language/* tests/fixtures/ports.sh
+messages-language   %runtime %gates plugins/vibemaestro-brain/scripts/* tests/fixtures/messages_drive.sh tests/fixtures/messages_measure.py tests/fixtures/messages-vi/* tests/fixtures/language/lang.py tests/fixtures/ports.sh
+merge-guard         %gates %batons %hub tests/fixtures/merge_fx.py tests/fixtures/merge_gh.py tests/fixtures/ports.sh plugins/vibemaestro-sdlc/skills/init-kb/SKILL.md
+no-duplicate-rules  plugins/vibemaestro-sdlc/rules/* plugins/vibemaestro-sdlc/scripts/* plugins/vibemaestro-sdlc/gates/gate_common.py plugins/vibemaestro-sdlc/gates/pr_body.py tests/fixtures/dependent-plugin/*
+plan                tests/suites.map .github/workflows/test.yml tests/plan.py tests/map-exclusions.txt tests/run-all.sh
+plugin-version      plugins/* .claude-plugin/marketplace.json %flow tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
+full-run            .github/workflows/test-full.yml tests/full-run-issue.py
+release             %runtime %batons plugins/vibemaestro-sdlc/skills/release/* tests/fixtures/ports.sh plugins/*/.claude-plugin/plugin.json tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
+rule-packs          %runtime %batons %hub %flow %sdlc plugins/vibemaestro-sdlc/.claude-plugin/* plugins/vibemaestro-brain/.claude-plugin/* %brain-hooks plugins/vibemaestro-sdlc/rules/*.instructions.md tests/fixtures/dependent-plugin/*
+rules-origin        %runtime %batons %hub %brain-hooks
+run-all             tests/run-all.sh
+runner-var-check    %runtime %gates %hub %flow
+scan-ci-workflow    .github/workflows/test.yml scripts/scan-internal-terms.sh
+scan-internal-terms scripts/scan-internal-terms.sh %hub
+public-tree         scripts/public-tree.py scripts/public-tree.baseline scripts/public-tree.allow scripts/scan-internal-terms.sh scripts/export-public.sh .github/workflows/public-tree.yml
+# expect_red's scratch removal (ports.sh) and the probe that runs it on a copy of ports.sh
+tmp-footprint       %core tests/fixtures/ports.sh
+thanh-phan          %sdlc .claude-plugin/marketplace.json %repo-config plugins/vibemaestro-sdlc/skills/*.md
+thu-tuc             %runtime %batons %hub tests/fixtures/flow.sh plugins/vibemaestro-sdlc/skills/*.md

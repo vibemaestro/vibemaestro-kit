@@ -1,0 +1,2 @@
+kb: loại 'frob' không có — chỉ: intent, plan, spec
+rc=64

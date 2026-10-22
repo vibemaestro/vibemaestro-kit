@@ -1,0 +1,3 @@
+sha256 0f5e4ea5e3edaeffb5dcbfdbeb94293c464c259ecd3af6c9ddae73d05151d1b9
+The floor reader (rule config-compat): the first sdlc_config.py that reads an unknown key as a warning, not a problem.
+Move it only when every reader in use (pod image, laptops, runners) is at or above the new one; moving it is a PR that replaces both files.

@@ -1,0 +1,28 @@
+name: fetch-plugin
+description: >-
+  Chép toàn bộ nội dung repo này tại SHA được gọi (không .git) vào một thư mục, để repo khác dùng làm build context
+  hoặc lấy plugin theo SHA. Không secret, không gọi mạng, không phụ thuộc repo nào khác.
+
+inputs:
+  dest:
+    description: Thư mục đích (bắt buộc). Tạo nếu chưa có; file trùng tên bị ghi đè.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Chép nội dung repo vào dest
+      shell: bash
+      env:
+        DEST: ${{ inputs.dest }}
+      run: |
+        set -euo pipefail
+        [ -n "${DEST:-}" ] || { echo "fetch-plugin: thiếu input dest" >&2; exit 64; }
+        # Gốc repo của action = ba cấp trên thư mục action (.github/actions/fetch-plugin).
+        SRC="$(cd "${GITHUB_ACTION_PATH}/../../.." && pwd -P)"
+        [ -f "$SRC/.claude-plugin/marketplace.json" ] || { echo "fetch-plugin: $SRC không phải gốc repo plugin" >&2; exit 2; }
+        mkdir -p "$DEST"
+        DEST_ABS="$(cd "$DEST" && pwd -P)"
+        tar --exclude=.git -C "$SRC" -cf - . | tar -C "$DEST_ABS" -xf -
+        echo "fetch-plugin: đã chép $SRC -> $DEST_ABS (không .git). Cấp 1:"
+        ls -A "$DEST_ABS"

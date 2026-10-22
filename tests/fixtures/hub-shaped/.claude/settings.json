@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Edit|Write", "hooks": [ { "type": "command", "command": "python3 .github/hooks/instructions-for-path.py" } ] },
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "python3 .github/hooks/instructions-for-command.py" } ] }
+    ]
+  }
+}

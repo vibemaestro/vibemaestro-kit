@@ -1,0 +1,2 @@
+open-pr: không có `gh`
+rc=2

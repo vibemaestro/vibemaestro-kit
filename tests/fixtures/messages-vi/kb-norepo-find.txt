@@ -1,0 +1,2 @@
+kb: cwd không nằm trong repo git: <S>/kb-norepo
+rc=2

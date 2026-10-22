@@ -1,0 +1,14 @@
+{
+  "description": "vibemaestro-brain: re-inject hot memory after every compaction; log compactions; guard writes",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" session-start", "timeout": 10}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" pre-compact", "timeout": 10}]}],
+    "PostCompact": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" post-compact", "timeout": 10}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" session-end"}]}],
+    "PreToolUse": [
+      {"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(brain op *)", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" guard-bash", "timeout": 10}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" guard-owner", "timeout": 10}]},
+      {"matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" guard-edit", "timeout": 10}]}
+    ]
+  }
+}

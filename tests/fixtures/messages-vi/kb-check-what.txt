@@ -1,0 +1,2 @@
+kb: chỉ kiểm được 'spec' hoặc 'current-state' (dùng: kb.py check spec <<ngày>-<slug> | đường-dẫn> | kb.py check current-state [đường-dẫn])
+rc=64

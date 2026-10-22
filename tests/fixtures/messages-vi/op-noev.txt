@@ -1,0 +1,2 @@
+open-pr: thiếu --evidence <file> — bằng chứng chạy là ĐIỀU KIỆN mở PR
+rc=64

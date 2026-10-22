@@ -1,0 +1,110 @@
+{
+  "_comment": "Synthetic answers for the adopt case: everything detection does not read, written by hand. The rules directory, the allowlist and the runner label are left to --detect.",
+  "schema": 1,
+  "hooks": "auto",
+  "branch": {
+    "intent_prefix": "intent/",
+    "protected": [
+      "main",
+      "master"
+    ]
+  },
+  "pr": {
+    "title": {
+      "pattern": "^(feat|fix|docs|chore|refactor|test|ci)([(][a-z0-9._-]+[)])?: .{3,}$",
+      "max_len": 72,
+      "intent_form": "reject"
+    },
+    "draft": true,
+    "flow": [
+      "Worker: build/test + bằng chứng chạy",
+      "Reviewer: gate máy",
+      "Reviewer: AI review",
+      "Tester: E2E"
+    ],
+    "tester_exempt": {
+      "decision": "kb/decisions/example-no-e2e.md",
+      "unless_package_script": "test:e2e"
+    },
+    "closing": {
+      "keyword": "Closes",
+      "verify": true,
+      "tries": 10,
+      "wait_s": 2,
+      "deadline_s": 30
+    }
+  },
+  "commits": {
+    "max_per_pr": 15,
+    "max_touches": 4
+  },
+  "current_state": {
+    "path": "kb/current-state.md",
+    "template": "map",
+    "limits": {
+      "bytes": 28000,
+      "line_chars": 400
+    },
+    "forbid": [],
+    "forbid_patterns": [
+      {
+        "id": "measured_dm",
+        "regex": "(?i)measured\\s+[0-9]{1,2}/[0-9]{1,2}"
+      }
+    ],
+    "table": null,
+    "tables": [
+      {
+        "heading": "^2\\.",
+        "columns": [
+          "Area",
+          "Component",
+          "Status",
+          "What it is · where to read",
+          "Check"
+        ],
+        "enums": {
+          "Status": [
+            "running",
+            "in review",
+            "off",
+            "not deployed"
+          ]
+        }
+      },
+      {
+        "heading": "^8\\.",
+        "columns": [
+          "Item",
+          "Status",
+          "Where to read"
+        ]
+      }
+    ],
+    "no_empty_cells": true,
+    "exempt": {
+      "min_reason_chars": 15
+    },
+    "watch": [
+      "systems/",
+      "deploy/"
+    ],
+    "gate": "builtin"
+  },
+  "dead_branches": {
+    "max_merged_on_remote": 0
+  },
+  "tokens": {
+    "summary_heading": "Tóm tắt",
+    "criteria_heading": "Tiêu chí chấp nhận",
+    "evidence_heading": "Bằng chứng chạy",
+    "flow_heading": "Luồng",
+    "fixes_line": "Vá cho",
+    "not_run": "KHÔNG CHẠY:",
+    "no_state_change": [
+      "NO STATE CHANGE:"
+    ],
+    "commit_exception": "NGOAI LE COMMIT:",
+    "round_comment_prefix": "SHA:"
+  }
+}

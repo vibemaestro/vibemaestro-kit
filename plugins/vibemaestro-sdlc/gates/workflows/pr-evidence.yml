@@ -1,0 +1,109 @@
+# =============================================================================
+# Gate: an AI review pinned to the PR's current head, and E2E evidence for a PR that changes UI paths (.vibemaestro/gates/pr_evidence.py)
+# =============================================================================
+# Rule behind it: `pr-body-shape` (round comments: first line `SHA: <full head SHA>`). Config: evidence.ui_paths (null: no UI, no E2E
+# asked), tokens.round_comment_prefix, commits.round_pattern in .vibemaestro/sdlc.json, read at the BASE.
+#
+# Job `evidence` checks the base branch out and runs the script and the config found there; the PR's commits are fetched as data
+# (the patch-id that carries evidence over a pure merge of the base) and never run. It runs when the PR is ready and on each new
+# commit, and on an edit only when the base changed; not on a draft (ready_for_review starts the round).
+#
+# A comment does not attach a run to the PR's checks (an issue_comment run belongs to the default branch), so job `rerun` re-runs
+# the evidence job's latest run on the head when it is red. That job is fenced: its `if` checks the commenter's association BEFORE
+# anything else, it checks out nothing and runs no file of the repository (its steps are gh calls on values passed through env),
+# and it alone has actions: write. It skips a comment without a full 40-hex SHA in it.
+#
+# A skipped run tested nothing: the merge guard keeps the verdict of the last real run on the head. A red run is a signal on the
+# PR; whether it blocks the merge is the repo's guard or ruleset.
+name: pr-evidence
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+
+# A new commit on the PR cancels the run of the head it replaces (the merge guard only trusts the newest head). Every other event
+# (a comment, an edit, a label, a review, ready, main, a dispatch) gets a group of its own: it neither cancels a commit run nor, as a
+# newer member of a shared group, replaces a pending one (GitHub keeps one pending run per group, whatever cancel-in-progress says).
+# A re-run of an OLDER head's run is a commit run too and cancels the newest head's run: re-run the newest head instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  evidence:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.base)
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: check the review and E2E evidence against the head (comments read through gh)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .vibemaestro/gates/pr_evidence.py ]; then
+            echo "::warning::the gates are not installed on the base branch yet, so pr-evidence did not run for this PR"
+            exit 0
+          fi
+          git fetch --no-tags origin "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"
+          python3 .vibemaestro/gates/pr_evidence.py --pr "$PR_NUMBER" --repo "$REPO" --head "$HEAD_SHA" \
+            --base "origin/$BASE_REF" --base-ref "$BASE_REF" --config-ref "origin/$BASE_REF"
+
+  rerun:
+    if: (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR') && github.event_name == 'issue_comment' && github.event.issue.pull_request && toJSON(github.event.issue.draft) == 'false'
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - name: re-run the evidence check of the head when it is red (no checkout, no repository file runs)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$COMMENT_BODY" | grep -Eq '[0-9a-fA-F]{40}'; then
+            echo "no full SHA in this comment: nothing to re-check"
+            exit 0
+          fi
+          wf=${WORKFLOW_REF%%@*}; wf=${wf##*/}
+          head=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)
+          # the newest pull_request run on the head whose evidence job did not skip (a body edit's run skips it)
+          for _ in $(seq 1 40); do
+            set --
+            for id in $(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$head&event=pull_request&per_page=100" \
+                          --jq '.workflow_runs[].id'); do
+              job=$(gh api "repos/$REPO/actions/runs/$id/jobs" --jq '.jobs[] | select(.name == "evidence") | "\(.status) \(.conclusion)"' | head -n 1)
+              case "$job" in *" skipped") continue;; "") continue;; esac
+              set -- "$id" $job
+              break
+            done
+            [ -n "${1:-}" ] || { echo "no evidence run on $head yet: nothing to re-run"; exit 0; }
+            [ "$2" = completed ] && break
+            sleep 15
+          done
+          [ "${2:-}" = completed ] || { echo "the evidence run $1 on $head is still going: it reads the comments itself"; exit 0; }
+          if [ "$3" = success ]; then echo "the evidence run $1 on $head is green: nothing to re-run"; exit 0; fi
+          gh run rerun "$1" --repo "$REPO"
+          echo "re-ran $1 (its evidence job was $3) on $head"

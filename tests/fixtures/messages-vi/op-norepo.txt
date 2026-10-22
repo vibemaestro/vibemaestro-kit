@@ -1,0 +1,2 @@
+open_pr: `<S>/op-norepo` không nằm trong một repo git
+rc=5

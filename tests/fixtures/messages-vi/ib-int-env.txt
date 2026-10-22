@@ -1,0 +1,2 @@
+intent_branch: env đang đặt GIT_DIR — phép dò worktree bỏ qua chúng nhưng lệnh git ghi thì không, nên hai bên có thể nhìn hai repo khác nhau. KHÔNG góp ngược. Bỏ các biến đó rồi chạy lại với `--cwd <worktree>`.
+rc=7

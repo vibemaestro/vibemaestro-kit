@@ -1,0 +1,33 @@
+# =============================================================================
+# Gate: remote branches already inside the main line are cleaned up (.vibemaestro/gates/dead_branches.sh)
+# =============================================================================
+# Config: dead_branches.max_merged_on_remote, branch.protected, branch.intent_prefix in .vibemaestro/sdlc.json.
+# It runs on a schedule and by hand, not on a PR: the count has nothing to do with what one PR changes. It only reports and prints the
+# cleanup command; it never deletes a branch. A squash-merged branch is not an ancestor of main, so the count can only be too low.
+name: dead-branches
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dead-branches:
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Every branch: the gate reads refs/remotes/origin/*, and a shallow clone of one branch would show none.
+          fetch-depth: 0
+
+      - name: count the branches already merged into the main line
+        run: |
+          set -euo pipefail
+          if [ ! -f .vibemaestro/gates/dead_branches.sh ]; then
+            echo "::warning::the gates are not installed on this branch, so dead-branches did not run"
+            exit 0
+          fi
+          bash .vibemaestro/gates/dead_branches.sh

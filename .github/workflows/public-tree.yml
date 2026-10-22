@@ -1,0 +1,68 @@
+name: public-tree
+# The public-tree check (scripts/public-tree.py): every tracked file outside the root kb/ and public.private is published, so none may
+# carry a kb pointer, an issue, PR or row number, a dated decision or diary line, an e-mail, a home path or a private term (the
+# repository secret KIT_TERMS, read through scripts/scan-internal-terms.sh). Hits recorded in scripts/public-tree.baseline are
+# tolerated, and that baseline only shrinks against the base of the change. Fail closed: an empty or missing secret, a missed control
+# or a base that does not resolve is red. No term and no line text is printed: findings are path, line and class.
+# The secret is in the one step's environment only, written to a 0600 file under RUNNER_TEMP and unset before the check runs.
+# Its own file, not a job of test.yml: that file reads the secret exactly once (tests/test-scan-ci-workflow.sh). Only where the term
+# list and kb/ live: a public copy of this file skips the job.
+# No CI on a draft: a PR runs it when it is marked ready, then on each new commit; only a new commit cancels a running check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  public-tree:
+    name: public-tree
+    if: github.event.repository.private && (github.event_name == 'push' || github.event.pull_request.draft == false)
+    # Light gate runner when CI_GATE_RUNNER is set, else CI_RUNNER, else GitHub-hosted
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      # Full history: the base's baseline is read from git. On a pull request the checkout is the test-merge commit (what merges).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The base: on a pull request the test-merge commit's first parent (the base it was merged onto, newer than the event's
+      # base.sha when main moved), for a push the commit before it. Event data comes through env, never into the script text.
+      - name: Check the published tree
+        env:
+          KIT_TERMS: ${{ secrets.KIT_TERMS }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          if [ -z "${KIT_TERMS:-}" ] || [ -z "${KIT_TERMS//[[:space:]]/}" ]; then
+            echo "::error::The KIT_TERMS secret is empty or missing: the public-tree check cannot look for private terms, and a check that did not scan must not pass."
+            exit 1
+          fi
+          umask 077
+          export TMPDIR="${RUNNER_TEMP:?}"
+          terms=$(mktemp "$TMPDIR/kit-terms.XXXXXX") || exit 1
+          trap 'rm -f "$terms"' EXIT
+          printf '%s\n' "$KIT_TERMS" > "$terms"
+          unset KIT_TERMS
+          if [ "$EVENT" = pull_request ]; then
+            BASE=$(git rev-parse --verify --quiet 'HEAD^1') || { echo "::error::The test-merge commit has no first parent."; exit 1; }
+          else
+            BASE=$BEFORE
+          fi
+          # -I: no module from the checkout (a PR's own module beside the check would shadow the standard library); -B: no bytecode
+          rc=0
+          python3 -I -B scripts/public-tree.py --ci --base "$BASE" --terms "$terms" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::The public-tree check failed (exit $rc): a new hit, a stale or grown baseline line, a private term, or a broken instrument. The log names path, line and class."
+            exit 1
+          fi

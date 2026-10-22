@@ -1,0 +1,3 @@
+pr-evidence: review ok: https://example.invalid/c/1 pins the head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+pr-evidence: ✗ e2e: "E2E không chạy:" needs a reason of at least 15 characters (https://example.invalid/c/1)
+rc=1

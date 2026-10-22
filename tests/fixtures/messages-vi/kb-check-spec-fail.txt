@@ -1,0 +1,6 @@
+kb: kb/specs/2026-01-01-bad.md does not pass the spec shape (4 problem(s)):
+- section `## Bối cảnh` is missing
+- section `## Mục tiêu` is missing
+- section `## Ngoài phạm vi` is missing
+- section `## Tiêu chí chấp nhận` is missing
+rc=65

@@ -1,0 +1,3 @@
+open-pr: --closes 7 read from <S>/op/.claude/worktrees/p/kb/intent/2026-01-01-p.md (branch intent/2026-01-01-p)
+open_pr: head là 'main' — PR phải mở TỪ branch riêng, không phải từ main
+rc=64

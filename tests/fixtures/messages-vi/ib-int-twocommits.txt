@@ -1,0 +1,9 @@
+intent-branch: two có 2 commit so với điểm cắt <SHA> — một task = một
+       commit, một vòng sửa theo review = một commit. KHÔNG góp ngược, KHÔNG tự squash.
+       Squash về ĐIỂM CẮT (merge-base), không về tip — reset về tip là xoá việc
+       người khác vừa góp:
+         git reset --soft "$(git merge-base HEAD origin/intent/2026-01-01-i)"
+         git commit           # một message cho cả việc
+       rồi chạy lại. Thứ tự các bước là load-bearing và mỗi bước revert được độc
+       lập thì khai `--load-bearing`.
+rc=8

@@ -1,0 +1,2 @@
+intent_branch: intent/2026-01-01-zz không tồn tại ở local lẫn origin
+rc=5

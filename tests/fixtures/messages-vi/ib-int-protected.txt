@@ -1,0 +1,2 @@
+intent_branch: nhánh nguồn là `main` — KHÔNG góp ngược nhánh mặc định vào intent/2026-01-01-i (rebase sẽ viết lại `main` lên việc chưa review). Góp nhánh con của bạn: `--branch <nhánh-con>`, hoặc checkout nó trong worktree.
+rc=7

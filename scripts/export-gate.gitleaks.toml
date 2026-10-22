@@ -1,0 +1,6 @@
+# gitleaks config of the export gate (scripts/export-gate.sh): the default rules of the
+# pinned release, nothing removed. A finding that is not a secret is allowed here, one [[allowlists]] entry per finding with its
+# reason in `description` and the narrowest match (one path, one regex); never by a `gitleaks:allow` comment in an exported file,
+# which the gate ignores. None today: the export of main db6f7d9 had no finding.
+[extend]
+useDefault = true

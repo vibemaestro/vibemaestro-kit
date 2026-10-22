@@ -1,0 +1,7 @@
+{
+  "name": "dependent-fixture",
+  "description": "Test fixture: a plugin that depends on vibemaestro-sdlc, ships one rule pack rule and a coordinator bootstrap report",
+  "author": { "name": "vibemaestro" },
+  "license": "Apache-2.0",
+  "dependencies": ["vibemaestro-sdlc"]
+}

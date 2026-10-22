@@ -1,0 +1,3 @@
+.vibemaestro/sdlc.json is valid (schema 1)
+WARNING pr.tester_exempt: deprecated since 2026-10-20, it does nothing now: remove it: the E2E exemption is a line `E2E không chạy: <reason>` in a comment pinned to the head (pr-evidence)
+rc=0

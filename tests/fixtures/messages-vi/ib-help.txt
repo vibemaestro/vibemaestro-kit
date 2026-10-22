@@ -1,0 +1,48 @@
+Lifecycle of the `intent/*` branch: the ONE path that creates, splits and
+integrates the branches of an intent. Mô hình: một intent = một branch = một
+PR draft. PM ghi `kb/intent/<slug>.md`, tạo `intent/<slug>` từ `origin/main`,
+mở PR draft. Worker cắt branch con TỪ `intent/*`, làm trong worktree riêng,
+rồi góp ngược vào `intent/*`. Thứ chứa QUYẾT ĐỊNH nằm ở đây, không ở lời dặn:
+(a) tạo `intent/<slug>` khi chưa có `kb/intent/<slug>.md` → rc 3 (b) branch
+con cắt từ một base `intent/*` KHÔNG tồn tại → rc 5 (c) góp ngược mà branch
+không phải hậu duệ tip `intent/*`: TỰ rebase; rebase hỏng (conflict) → rc 4 và
+DỪNG → rc 4 (d) góp ngược không ff được sau khi đã rebase → rc 4 (e) góp ngược
+từ CÂY CHÍNH (hoặc submodule), hay nhánh nguồn là `main`/`master` (mọi cách
+viết: `heads/main`, `refs/heads/main`, `origin/main`), hay env đặt biến định
+vị repo (`GIT_DIR`…) — từ chối TRƯỚC fetch/rebase/push → rc 7 (f) `worker-
+branch` KHÔNG `--no-checkout` mà đứng ở CÂY CHÍNH (hoặc submodule), hay env
+đặt `GIT_DIR`… — từ chối TRƯỚC khi tạo branch; `--no-checkout` thì cho qua →
+rc 7 (g) a rebase is needed and git cannot resolve a committer identity
+(config `rebase.identity`, then git): refused BEFORE the rebase → rc 2 Vì sao
+(e) chặn cả khi có `--branch`: `git rebase <tip> <branch>` checkout nhánh đó
+NGAY TRONG cwd, nên chạy ở cây chính là đổi nhánh của cây chung dù nhánh nguồn
+là gì. Phép dò worktree dùng chung `open_pr.in_linked_worktree`. Lời nhắc chỗ
+đặt worktree trong thông điệp rc 7 (`open_pr.worktree_hint` + `WORKTREE_WHY`)
+nói worktree phải nằm TRONG clone. Vì sao (c) phải là code chứ không phải một
+dòng trong skill: `--ff-only` giữ lịch sử `intent/*` tuyến tính, nhưng người
+tích hợp gặp `--ff-only` đỏ thì phản xạ tự nhiên là gõ `git merge` thường — và
+lịch sử mất tuyến tính mà không có gì đỏ lên. Đường này KHÔNG BAO GIỜ gọi `git
+merge` không có `--ff-only`, nên ca đó không tồn tại: hoặc rebase xong rồi ff,
+hoặc `block`. `--to` khai TƯỜNG MINH, KHÔNG auto-detect: `--to local` merge
+`--ff-only` vào branch `intent/*` của repo đang đứng. Git chỉ cho MỘT worktree
+giữ một branch, nên đường này hỏng (rc 5) khi `intent/*` đang bị worktree khác
+chiếm — đó là trạng thái bình thường khi PM còn mở worktree của intent. `--to
+origin` `git push origin <branch>:refs/heads/<intent>`. Push thường của git
+vốn đã từ chối non-fast-forward, nên đây là cùng một phép chặn ở tầng khác.
+Đây là đường nhiều worker song song dùng: mỗi worker một worktree, không ai
+checkout `intent/*`. Tự đoán giữa hai đường là tự chọn chỗ ghi cho người dùng,
+nên không có mặc định. Dùng: intent_branch.py create-intent --slug <ngày-slug>
+[--base origin/main] [--no-checkout] [--issue] intent_branch.py worker-branch
+--intent <intent/slug|slug> --name <branch> [--no-checkout] intent_branch.py
+integrate --intent <intent/slug|slug> --to local|origin [--branch <br>] [--no-
+fetch] [--no-rebase] intent_branch.py retry-issue --slug <ngày-slug> # đường
+thử lại khi `create-intent --issue` # lần đầu không tạo được issue
+(quyền/mạng); # `create-intent` không dùng lại được vì # branch đã tồn tại thì
+nó từ chối ở rc 6. rc: 0 xong · 1 `retry-issue` không tạo được issue (best-
+effort, KHÔNG dùng cho `create-intent`/`worker-branch`/`integrate` — ba lệnh
+đó dùng các rc có tên dưới đây) · 2 môi trường (không phải git repo, thiếu
+git) · 3 thiếu `kb/intent/<slug>.md` · 4 không góp ngược được — BLOCK · 5
+base/đích không dùng được · 6 branch đã tồn tại (dedup/race) · 7 integrate,
+hay worker-branch có checkout, đứng sai chỗ (cây chính/submodule, nhánh nguồn
+main/master, hoặc env `GIT_DIR`…) · 64 sai tham số
+rc=0

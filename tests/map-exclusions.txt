@@ -1,0 +1,27 @@
+# Documents and tracked files no suite reads — each with its reason. tests/plan.py --check is red for a tracked file that is in no
+# line of tests/suites.map and not here, for a pattern here that matches no file, for a line without a reason, and for a file here
+# that a suite runs or names (that file is code, not a document).
+#   <glob>  <reason, a few words>
+# A path here wakes no suite, even when a suite line (a whole-plugin group) also matches it: a diff that touches only these runs
+# the @always set, whose cai-dat still scans every file for leaks. CI tests code, not documents.
+# `*` matches `/` too: a plugin's documents are named one plugin at a time, so the READMEs nested in its templates, skeleton and
+# deploy trees (copied into user repos, or named by code) stay mapped. Under docs/, kb/ and .changes/ only `.md` is a document: a
+# script or data file added there stays unmapped, so the guard asks for a line. The guard sees what a suite runs or names under
+# plugins/ and tests/fixtures/ only: a script that reads a document here by a built path (release.py reads .changes/, the plugin
+# CHANGELOGs and kb/current-state.md) is not seen, and a doc-only diff does not run its suite (plugin-version).
+.github/workflows/pr-body.yml  this repo's own run of the pr-body gate: read by GitHub Actions only; the template it copies is under gates/workflows/
+README*.md  the public front page: a document
+DEVELOPMENT*.md  the development guide and its Vietnamese twin: documents
+docs/*.md  the kit documentation: documents
+plugins/vibemaestro-sdlc/README*.md  the plugin README: a document
+plugins/vibemaestro-brain/README*.md  the plugin README: a document
+plugins/vibemaestro-sdlc/CHANGELOG.md  release notes: a document
+plugins/vibemaestro-brain/CHANGELOG.md  release notes: a document
+.changes/*.md  pending release notes: their form is checked by plugin-version on every plugin code change and on the release PR
+kb/*.md  intent, spec, plan and decision records: the ship and spec skills run kb.py check before each PR
+kb/*/.gitkeep  keeps an empty kb/ folder in git: no content
+LICENSE  the licence text: a document
+NOTICE  the attribution notice: a document
+tests/replay-current-state.sh  a manual parity tool (needs a clone of another repository): no suite runs it
+tests/fixtures/replay_gates.py  the gate replay that tests/replay-current-state.sh runs: no suite runs it
+kb/research-runs/*  study run files (prompts, report lines, a study's own checker and tally with their own tests): read by no suite

@@ -1,0 +1,38 @@
+kb: kb/current-state.md chưa đạt khuôn current-state (12 vấn đề):
+- vượt trần dòng: 134 > 120 — chi tiết đang nằm sai chỗ, đẩy sang kb/specs/ hoặc kb/decisions/
+- dòng 4: dấu hiệu lịch sử [ngày (YYYY-MM-DD)]: '2026-10-11' — current-state chỉ ghi trạng thái hiện hành
+- dòng 5: dấu hiệu lịch sử [ngày (YYYY/MM/DD)]: '2026/10/11' — current-state chỉ ghi trạng thái hiện hành
+- dòng 6: dấu hiệu lịch sử [ngày (dd/mm)]: '11/10' — current-state chỉ ghi trạng thái hiện hành
+- dòng 7: dấu hiệu lịch sử [ngày (tháng N năm YYYY)]: 'tháng 10 năm 2026' — current-state chỉ ghi trạng thái hiện hành
+- dòng 8: dấu hiệu lịch sử [ngày (ngày N tháng M)]: 'ngày 11 tháng 10' — current-state chỉ ghi trạng thái hiện hành
+- dòng 9: dấu hiệu lịch sử [ngày (ngày N/M)]: 'ngày 5/9' — current-state chỉ ghi trạng thái hiện hành
+- dòng 10: dấu hiệu lịch sử [commit SHA]: 'commit <SHA>' — current-state chỉ ghi trạng thái hiện hành
+- dòng 11: dấu hiệu lịch sử [từ chỉ lịch sử]: 'trước đây' — current-state chỉ ghi trạng thái hiện hành
+- dòng 12: dấu hiệu lịch sử [dòng ghi ngày cập nhật]: 'Cập nhật lần cuối' — current-state chỉ ghi trạng thái hiện hành
+- dòng 13: tiêu đề mục kiểu lịch sử — lịch sử đã có trong git log và PR, không ghi vào current-state
+- dòng 14: dòng dài 450 > 200 ký tự — chi tiết trong một ô/dòng, đẩy sang spec/decision
+Quá trần 14 dòng (134 > 120): rút ít nhất bấy nhiêu.
+PR này đã thêm 131 dòng vào kb/current-state.md (so với origin/main), đây là chỗ để rút:
+  dòng 4: On 2026-10-11.
+  dòng 5: Since 2026/10/11.
+  dòng 6: On 11/10.
+  dòng 7: In tháng 10 năm 2026.
+  dòng 8: On ngày 11 tháng 10.
+  dòng 9: On ngày 5/9.
+  dòng 10: At commit <SHA>.
+  dòng 11: trước đây it was slow; previously too.
+  dòng 12: Cập nhật lần cuối: now.
+  dòng 13: ## Lịch sử
+  dòng 14: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…
+  dòng 15: Line 1.
+  dòng 16: Line 2.
+  dòng 17: Line 3.
+  dòng 18: Line 4.
+  dòng 19: Line 5.
+  dòng 20: Line 6.
+  dòng 21: Line 7.
+  dòng 22: Line 8.
+  dòng 23: Line 9.
+  … và 111 dòng nữa
+Sửa: viết đè trạng thái hiện hành; chi tiết/lịch sử/cách làm sang kb/specs/ hoặc kb/decisions/.
+rc=65

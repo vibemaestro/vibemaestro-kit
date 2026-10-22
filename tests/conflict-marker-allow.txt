@@ -1,0 +1,3 @@
+# Tracked files that need conflict markers as test fixtures, so tests/test-conflict-markers.sh does not flag them.
+#   <tracked path>  <reason, a few words>   (a reason is required; an entry for a path that is untracked or has no marker is red)
+# Empty today: no tracked file needs one (the suite builds its marker lines at run time).

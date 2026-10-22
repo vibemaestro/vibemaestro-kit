@@ -1,0 +1,2 @@
+intent_branch: env đang đặt GIT_DIR — phép dò worktree bỏ qua chúng nhưng `git checkout` thì không, nên có thể chuyển nhánh của repo khác. KHÔNG tạo w3. Bỏ các biến đó rồi chạy lại với `--cwd <worktree>`, hoặc thêm `--no-checkout`.
+rc=7

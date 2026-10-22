@@ -1,0 +1,2 @@
+# public-tree baseline: hit lines recorded when the check started; it only shrinks. One line per hit line:
+# <path>\t<classes>\t<first 16 hex of sha256 of the stripped line>. Written by scripts/public-tree.py --write-baseline.

@@ -1,0 +1,2 @@
+kb: không đọc được <S>/kb/kb/current-state.md — repo chưa có kb/current-state.md (chưa init-kb?)
+rc=66

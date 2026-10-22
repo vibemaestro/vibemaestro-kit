@@ -1,0 +1,2 @@
+kb: --date phải là YYYY-MM-DD
+rc=64

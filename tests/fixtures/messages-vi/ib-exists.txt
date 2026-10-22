@@ -1,0 +1,2 @@
+intent_branch: branch intent/2026-01-01-e đã tồn tại — dedup hoặc race
+rc=6

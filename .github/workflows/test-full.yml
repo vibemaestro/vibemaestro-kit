@@ -1,0 +1,125 @@
+name: test-full
+
+# The FULL suite on a schedule: every pull request and push runs only its plan (test.yml, tests/plan.py), so this run is the net
+# for what a plan does not cover — a map line that misses a dependency, two PRs that are green alone and red together.
+#
+# Schedule: 19:00Z Sunday and Wednesday = 02:00 +07 Monday and Thursday. By hand: gh workflow run test-full.yml --ref main
+# Red ⇒ tests/full-run-issue.py opens ONE issue labelled full-run-red (creating the label when missing) or comments on the open
+# one; green ⇒ closes it. A run on another ref touches no issue. Permissions: contents read, issues write, nothing else; the
+# token reaches the issue step only. The job is red whenever the test step is red, whatever the issue step does.
+# Over a public export: gh workflow run test-full.yml -f export_rev=<40-hex commit> runs the same suite inside the export of that
+# commit (scripts/export-public.sh) on a GitHub-hosted ubuntu-latest, in the `export` job: read-only, no token, no issue, its own
+# concurrency group. With export_rev empty (the schedule, or a dispatch without it) the `full` job runs as above and `export` is skipped.
+# Shape and the issue logic (fake gh): tests/test-full-run.sh.
+on:
+  schedule:
+    - cron: "0 19 * * 0,3"
+  workflow_dispatch:
+    inputs:
+      export_rev:
+        description: "Full commit SHA (40 hex): run the full suite over the public export of this commit on ubuntu-latest, instead of over this ref"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+# One group per kind of run: an export run never waits behind a scheduled full run, nor cancels it, and the reverse.
+concurrency:
+  group: test-full${{ inputs.export_rev && format('-export-{0}', inputs.export_rev) || '' }}
+  cancel-in-progress: false
+
+jobs:
+  full:
+    name: bash tests/run-all.sh (full, scheduled)
+    if: ${{ inputs.export_rev == '' }}
+    # Self-hosted runner when the repo variable CI_RUNNER is set; otherwise GitHub-hosted (a self-hosted runner only serves a private repository)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # CLI `claude` for the validate / install-from-directory / hook-from-cache parts; no login. Same pin as test.yml.
+      - name: Install the claude CLI (no login)
+        timeout-minutes: 10
+        run: npm install -g @anthropic-ai/claude-code@2.1.290
+
+      # Its own timeout: a hang is a red step, and the issue step still runs and reports it.
+      - name: Run the full suite
+        id: full
+        timeout-minutes: 60
+        env:
+          PLUGIN_REQUIRE_CLAUDE: "1"
+        run: |
+          set -o pipefail
+          bash tests/run-all.sh 2>&1 | tee "$RUNNER_TEMP/full.log"
+
+      - name: One issue while red, closed when green
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OUTCOME: ${{ steps.full.outcome }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: >-
+          python3 tests/full-run-issue.py --repo "$REPO" --run-url "$RUN_URL" --outcome "$OUTCOME"
+          --ref "$REF" --default-branch "$DEFAULT_BRANCH" --log "$RUNNER_TEMP/full.log"
+
+  export:
+    name: bash tests/run-all.sh (full, public export of export_rev)
+    if: ${{ inputs.export_rev != '' }}
+    # Always GitHub-hosted, never vars.CI_RUNNER: the run proves the export works on a clean machine like a public user's
+    runs-on: ubuntu-latest
+    # The suite took 53.7 min in a pod over the git-initialised export (measured by the release session, not on GitHub): margin to 90
+    timeout-minutes: 105
+    permissions:
+      contents: read
+    steps:
+      # The input reaches the shell through env only, and only this check reads it first
+      - name: Check export_rev is a full commit SHA (40 hex)
+        timeout-minutes: 1
+        env:
+          REV: ${{ inputs.export_rev }}
+        run: |
+          [[ "$REV" =~ ^[[:xdigit:]]{40}$ ]] || { echo "export_rev must be a full commit SHA (40 hex)" >&2; exit 1; }
+
+      # All branches and tags, so the rev is there when it is on a branch; no credentials kept
+      - uses: actions/checkout@v4
+        timeout-minutes: 10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Export the public tree of export_rev
+        timeout-minutes: 5
+        env:
+          REV: ${{ inputs.export_rev }}
+        run: bash scripts/export-public.sh "$REV" "$RUNNER_TEMP/export"
+
+      # The suites read the tracked files through git (git ls-files; a bare export turns them red) and a public user has a clone, not a bare tree
+      - name: Make the export a git work tree, as a public clone is
+        timeout-minutes: 2
+        working-directory: ${{ runner.temp }}/export
+        run: |
+          git init -q .
+          git add -Af
+          git -c user.name=export -c user.email=export@localhost -c commit.gpgsign=false commit -qm "public export"
+
+      - name: Install the claude CLI (no login)
+        timeout-minutes: 10
+        run: npm install -g @anthropic-ai/claude-code@2.1.290
+
+      - name: Run the full suite inside the export
+        timeout-minutes: 90
+        working-directory: ${{ runner.temp }}/export
+        env:
+          PLUGIN_REQUIRE_CLAUDE: "1"
+        run: bash tests/run-all.sh

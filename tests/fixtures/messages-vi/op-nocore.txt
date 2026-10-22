@@ -1,0 +1,2 @@
+open-pr: thiếu lõi <S>/alone/open_pr.py
+rc=2

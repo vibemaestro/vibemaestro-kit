@@ -1,0 +1,2 @@
+intent_branch: chưa có kb/intent/2026-01-01-x.md — `kb/intent/` là việc TRƯỚC khi tạo branch, không phải việc dọn sau
+rc=3

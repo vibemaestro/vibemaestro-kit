@@ -1,0 +1,4 @@
+# Allowlist for the sensitive-information gate: one SHA-256 of an approved literal per line (the bare 64 hex digits, then `  # reason`), never the literal itself.
+# Hashes below are of the strings "example-allowed-one" and "example-allowed-two".
+bd898238abb3a9dbbbf85b20663ccb4739583321659824ae1c2b0dd4c29168ee  # example-allowed-one
+6aba325a5d74f2daaaf5fd928b704d3425a4c0beb88884021661d1b7258b7cf4  # example-allowed-two

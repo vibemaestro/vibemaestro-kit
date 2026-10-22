@@ -1,0 +1,2 @@
+kb: dùng: kb.py new <intent|plan|spec> <slug>
+rc=64

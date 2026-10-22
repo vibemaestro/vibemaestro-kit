@@ -1,0 +1,66 @@
+# =============================================================================
+# Gate: a PR carries the repo's commit unit (counted by .vibemaestro/gates/commit_discipline.py)
+# =============================================================================
+# Rule behind it: `commit-unit`. Limits and the exemption token come from .vibemaestro/sdlc.json (commits.*, tokens.commit_exception).
+#
+# Trust: this job checks out the BASE branch and runs the gate script and the config found there; the PR's commits are fetched as data
+# and only read by `git log`. A PR therefore cannot relax its own gate by editing the script or the config. What it can still edit is
+# this workflow file (it comes from the PR's merge commit): review changes under .github/ like code that runs with the repo's token.
+# A repo that has not merged the gates yet has no script on its base branch: the step says so and passes, for the PR that installs them.
+#
+# A red run is a signal on the PR; whether it blocks the merge is the repo's ruleset, not this file.
+name: commit-discipline
+
+on:
+  pull_request:
+    # ready_for_review: the draft check below skips the job on a draft, and nothing else would run it when the PR is marked ready.
+    # edited: the exemption line lives in the PR body, so an edit runs the gate again when the old or the new body holds the
+    # exemption token (tokens.commit_exception, written in by install-gates, which never overwrites: after changing the token,
+    # delete this file and install again), or when the base changed (the range it counts); a title-only edit does not.
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# A new commit on the PR cancels the run of the head it replaces (the merge guard only trusts the newest head). Every other event
+# (a comment, an edit, a label, a review, ready, main, a dispatch) gets a group of its own: it neither cancels a commit run nor, as a
+# newer member of a shared group, replaces a pending one (GitHub keeps one pending run per group, whatever cancel-in-progress says).
+# A re-run of an OLDER head's run is a commit run too and cancels the newest head's run: re-run the newest head instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  commit-discipline:
+    # WIP commits are fine while the work is in progress; the unit is asked for before the PR is handed in.
+    # No CI on a draft: going ready (ready_for_review) starts the round. A run skipped here tested nothing: the merge guard keeps
+    # the verdict of the last real run on the head.
+    if: "github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.base || github.event.changes.body && (contains(github.event.changes.body.from, '@@COMMIT_EXCEPTION@@') || contains(github.event.pull_request.body, '@@COMMIT_EXCEPTION@@')))"
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Full history: a shallow clone has no merge base, so the range is empty and the gate would pass without counting.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: count commits, repeated file edits and side-branch merges
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Through env, not interpolated into run: a branch name is chosen by whoever pushes it.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .vibemaestro/gates/commit_discipline.py ]; then
+            echo "::warning::the gates are not installed on the base branch yet, so commit-discipline did not run for this PR"
+            exit 0
+          fi
+          # The head is fetched as data. The body is read through gh (the state NOW, not the event payload): editing the body and
+          # re-running must turn the gate green. BASE is the CURRENT tip of the base branch, not the event's base sha: a catch-up
+          # merge of main made after the PR was opened carries main commits that an older base does not contain.
+          git fetch --no-tags origin "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"
+          gh pr view "$PR_NUMBER" --json body -q .body > "$RUNNER_TEMP/pr-body.md"
+          python3 .vibemaestro/gates/commit_discipline.py "origin/$BASE_REF" origin/pr-head \
+            --body-file "$RUNNER_TEMP/pr-body.md" --config-ref "origin/$BASE_REF"

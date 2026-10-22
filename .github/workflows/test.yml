@@ -1,0 +1,85 @@
+name: test
+
+# Every PR and every push to main runs the PLAN of its change: the suites tests/plan.py picks from tests/suites.map, plus the
+# coverage guard (test-plan.sh). The full suite runs on a schedule, twice a week: test-full.yml.
+# Job `tests` needs no secret and no other repo; job `scan-terms` reads the secret KIT_TERMS (the internal-term list).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: bash tests/run-all.sh   # the check name branch protection may require: kept as it was
+    # Self-hosted runner when the repo variable CI_RUNNER is set; otherwise GitHub-hosted (the fallback).
+    # A self-hosted runner only serves a private repository: remove CI_RUNNER before the repository goes public.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45   # a plan can be the full suite (a planner change, an unmapped file): 18-30 minutes on the runner
+    steps:
+      # Full history: the planner diffs from the merge-base, and tests/test-contract.sh compares with origin/main (which a full
+      # clone has; a depth-1 fetch on top would make the clone shallow). No credentials kept in the clone the suites read.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # CLI `claude` chỉ cần cho phần test validate / cài từ thư mục / chạy hook từ bản cache; không cần đăng nhập.
+      # PLUGIN_REQUIRE_CLAUDE=1: thiếu CLI thì suite ĐỎ thay vì tự bỏ qua.
+      - name: Cài CLI claude (không đăng nhập)
+        run: npm install -g @anthropic-ai/claude-code@2.1.290
+
+      # The plan of this change: the PR's base (the checkout is the merge commit, so the plan is what merging changes), or for a
+      # push the commit before it. A base that does not resolve (a new branch, a force-push) gives the full suite.
+      - name: Chạy bộ test (the plan of this change)
+        env:
+          PLUGIN_REQUIRE_CLAUDE: "1"
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: bash tests/run-all.sh --changed "$BASE"
+
+  # The internal-term scan: the owner's term list (repository secret KIT_TERMS) over the tracked tree.
+  # Why a secret: the list holds the very names it hunts, so it is never committed.
+  # Fail closed: an empty or missing secret, a control miss or a hit outside kb/ is red. kb/ is only counted (owner decision O3, deferred).
+  # Forks get no secret, so their run is red too (the repository is private). No term is ever printed: the scanner prints term
+  # indexes and counts, the secret is in this one step's environment only, no `set -x`, no job summary, no artifact, no add-mask.
+  # Only where the term list lives: a public copy of this file skips the job instead of failing closed on every PR.
+  scan-terms:
+    name: internal-term scan
+    if: github.event.repository.private
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Scan the tracked tree with the term list
+        env:
+          KIT_TERMS: ${{ secrets.KIT_TERMS }}
+        run: |
+          set -uo pipefail
+          if [ -z "${KIT_TERMS:-}" ] || [ -z "${KIT_TERMS//[[:space:]]/}" ]; then
+            echo "::error::The KIT_TERMS secret is empty or missing: the internal-term scan cannot run, and a scan that did not run must not pass."
+            exit 1
+          fi
+          umask 077
+          # the scanner's own scratch copy of the parsed terms goes under RUNNER_TEMP too: the runner cleans it, /tmp it does not
+          export TMPDIR="${RUNNER_TEMP:?}"
+          terms=$(mktemp "$TMPDIR/kit-terms.XXXXXX") || exit 1
+          trap 'rm -f "$terms"' EXIT
+          chmod 600 "$terms"
+          printf '%s\n' "$KIT_TERMS" > "$terms"
+          unset KIT_TERMS
+          rc=0
+          out=$(bash scripts/scan-internal-terms.sh --ci --terms "$terms" --exclude kb/ --tree 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::The internal-term scan failed (exit $rc): a hit outside kb/, a control miss or an unusable term list. The log has term indexes only."
+            exit 1
+          fi
+          if [ "${out##*$'\n'}" != "control: found 1/1; hits: 0" ]; then
+            echo "::error::The scan did not end with 'control: found 1/1; hits: 0'."
+            exit 1
+          fi

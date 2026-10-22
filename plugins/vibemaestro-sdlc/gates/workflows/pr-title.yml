@@ -1,0 +1,52 @@
+# =============================================================================
+# Gate: the PR title and branch follow the repo's naming (.vibemaestro/gates/pr_title.py)
+# =============================================================================
+# Config: pr.title.pattern, pr.title.max_len, pr.title.intent_form, branch.pattern in .vibemaestro/sdlc.json; with none of them set the
+# gate passes everything. A PR opened as a draft for its intent file keeps a title that describes the file until it is ready; the
+# `intent_form: reject` check fires when a ready PR carries code and still has that title.
+#
+# Trust: the job checks out the BASE branch and reads the script and the config there. A repo that has not merged the gates yet has no
+# script on its base branch: the step says so and passes, for the PR that installs them. A red run is a signal on the PR.
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# A new commit on the PR cancels the run of the head it replaces (the merge guard only trusts the newest head). Every other event
+# (a comment, an edit, a label, a review, ready, main, a dispatch) gets a group of its own: it neither cancels a commit run nor, as a
+# newer member of a shared group, replaces a pending one (GitHub keeps one pending run per group, whatever cancel-in-progress says).
+# A re-run of an OLDER head's run is a commit run too and cancels the newest head's run: re-run the newest head instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  pr-title:
+    # No CI on a draft (ready_for_review starts the round); an edit runs it only when the title or the base (whose config it
+    # reads) changed. A skipped run tested
+    # nothing: the merge guard keeps the verdict of the last real run on the head.
+    if: github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: check the title and the branch (the current state, read through gh)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .vibemaestro/gates/pr_title.py ]; then
+            echo "::warning::the gates are not installed on the base branch yet, so pr-title did not run for this PR"
+            exit 0
+          fi
+          python3 .vibemaestro/gates/pr_title.py --pr "$PR_NUMBER" --repo "$REPO" --config-ref "origin/$BASE_REF"

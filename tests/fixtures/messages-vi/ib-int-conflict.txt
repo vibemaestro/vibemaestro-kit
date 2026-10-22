@@ -1,0 +1,3 @@
+intent_branch: feat cũ hơn origin/intent/2026-01-01-i — rebase trước khi ff (tự động)
+intent_branch: rebase feat lên origin/intent/2026-01-01-i HỎNG — BLOCK. Conflict ở file thuộc phạm vi task của bạn thì tự sửa rồi chạy lại; ngoài phạm vi thì dừng và hỏi.
+rc=4

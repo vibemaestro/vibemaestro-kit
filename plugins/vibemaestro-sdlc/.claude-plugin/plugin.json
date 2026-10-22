@@ -1,0 +1,9 @@
+{
+  "name": "vibemaestro-sdlc",
+  "version": "0.1.0",
+  "description": "The intent -> spec -> plan -> ship process for a Claude Code session opened in an app repo: the process core, the rules and the hooks that look up rules by file and command live in the plugin, with no dependency on another repo",
+  "author": {
+    "name": "vibemaestro"
+  },
+  "license": "Apache-2.0"
+}

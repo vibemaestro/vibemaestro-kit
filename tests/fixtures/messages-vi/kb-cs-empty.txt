@@ -1,0 +1,2 @@
+kb: kb/current-state.md rỗng — chưa có khuôn current-state; dựng bằng `vibemaestro-sdlc:init-kb` hoặc viết trạng thái hiện hành vào đó
+rc=66

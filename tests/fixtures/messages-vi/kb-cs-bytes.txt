@@ -1,0 +1,5 @@
+kb: kb/current-state.md chưa đạt khuôn current-state (1 vấn đề):
+- vượt trần byte: 210 > 100 — chi tiết đang nằm sai chỗ, đẩy sang kb/specs/ hoặc kb/decisions/
+Quá trần 110 byte (210 > 100): rút ít nhất bấy nhiêu.
+Sửa: viết đè trạng thái hiện hành; chi tiết/lịch sử/cách làm sang kb/specs/ hoặc kb/decisions/.
+rc=65

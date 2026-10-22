@@ -1,0 +1,212 @@
+{
+  "_comment": "Synthetic full answers: every key of schema 1 with a value that differs from the default, so a verbatim write is distinguishable from a merge over defaults.",
+  "schema": 1,
+  "hooks": "auto",
+  "language": "en",
+  "branch": {
+    "intent_prefix": "feature/",
+    "protected": [
+      "main",
+      "release"
+    ],
+    "pattern": "^(feat|fix)/[a-z0-9-]+$"
+  },
+  "pr": {
+    "title": {
+      "pattern": "^[a-z]+: .{3,}$",
+      "max_len": 80,
+      "intent_form": "reject"
+    },
+    "body": {
+      "max_chars": 2500,
+      "summary_max_lines": 8,
+      "evidence_max_lines": 25
+    },
+    "draft": true,
+    "flow": [
+      {
+        "text": "Build and test",
+        "done": true
+      },
+      "Review"
+    ],
+    "tester_exempt": {
+      "decision": "kb/decisions/no-e2e.md",
+      "unless_package_script": "e2e"
+    },
+    "closing": {
+      "keyword": "Fixes",
+      "verify": false,
+      "tries": 3,
+      "wait_s": 1,
+      "deadline_s": 10
+    }
+  },
+  "commits": {
+    "max_per_pr": 9,
+    "max_touches": 3,
+    "round_pattern": "\\bpass\\s*(\\d+)\\b"
+  },
+  "current_state": {
+    "path": "kb/current-state.md",
+    "template": "ledger",
+    "inject": true,
+    "limits": {
+      "lines": 100,
+      "bytes": 10000,
+      "line_chars": 160,
+      "warn_ratio": 0.9
+    },
+    "forbid": [
+      "pr_ref"
+    ],
+    "forbid_patterns": [
+      {
+        "id": "todo_word",
+        "regex": "(?i)\\btodo\\b"
+      }
+    ],
+    "table": {
+      "columns": 4,
+      "required": false
+    },
+    "table_own_width": false,
+    "tables": [
+      {
+        "heading": "^Parts$",
+        "columns": [
+          "Part",
+          "State"
+        ]
+      }
+    ],
+    "no_empty_cells": true,
+    "exempt": {
+      "min_reason_chars": 10
+    },
+    "labels": {
+      "regex": "\\*chưa kiểm(?: từ (?P<date>[^*]*))?\\*",
+      "max_age_days": 7
+    },
+    "watch": [
+      "src/"
+    ],
+    "watch_exclude": [
+      "src/tests/"
+    ],
+    "pages": "kb/state/*.md",
+    "page_limits": {
+      "lines": null,
+      "bytes": 8000,
+      "line_chars": 400,
+      "warn_ratio": 0.85
+    },
+    "gate": "builtin"
+  },
+  "rules": {
+    "dirs": [
+      "docs/rules"
+    ],
+    "disable": [
+      "measurement-commands"
+    ]
+  },
+  "public": {
+    "private": [
+      "ops/**"
+    ]
+  },
+  "evidence": {
+    "ui_paths": [
+      "web/**"
+    ]
+  },
+  "sensitive": {
+    "allowlist": ".allow",
+    "scan": [
+      "pr_body"
+    ]
+  },
+  "dead_branches": {
+    "max_merged_on_remote": 2
+  },
+  "ci": {
+    "runner_var": "RUNNER",
+    "runner_default": "other-runners",
+    "backend": "external:tools/ci_adapter.py"
+  },
+  "merge": {
+    "deny_globs": [
+      ".github/workflows/**",
+      ".vibemaestro/**"
+    ],
+    "admin_bypass": true,
+    "required_checks": [
+      "test"
+    ],
+    "log": "merge-log-app.jsonl",
+    "planner": {
+      "script": "tests/plan.py",
+      "inputs": [
+        "tests/suites.map",
+        "tests/map-exclusions.txt"
+      ]
+    },
+    "image_bump": {
+      "enabled": true,
+      "tag_files": [
+        "deploy/app.yaml"
+      ],
+      "tree": "image/",
+      "revision": {
+        "file": ".github/workflows/image.yml",
+        "pattern": "IMAGE_REVISION: \"(r[0-9]+)\""
+      },
+      "registry": {
+        "backend": "ghcr",
+        "host": "ghcr.io",
+        "image": "acme/app"
+      }
+    }
+  },
+  "rebase": {
+    "identity": {
+      "name": "Example Bot",
+      "email": "example-bot-address"
+    }
+  },
+  "upstream_issues": false,
+  "agents": {
+    "review_model": "fable",
+    "search_model": "sonnet",
+    "worker_model": "opus"
+  },
+  "kb": {
+    "spec_warn_bytes": 30000
+  },
+  "tokens": {
+    "summary_heading": "Summary",
+    "criteria_heading": "Criteria",
+    "evidence_heading": "Evidence",
+    "flow_heading": "Flow",
+    "fixes_line": "Fixes for",
+    "not_run": "NOT RUN:",
+    "no_state_change": [
+      "NO STATE CHANGE:"
+    ],
+    "commit_exception": "COMMIT EXCEPTION:",
+    "round_comment_prefix": "AT:",
+    "evidence_cut": "[{n} lines cut]",
+    "not_run_note": "Not run, see the reason:",
+    "criteria_note": "_Tick with a command in {evidence}._",
+    "spec": {
+      "context": "Background",
+      "goal": "Objective",
+      "out_of_scope": "Not doing",
+      "criteria": "Checks",
+      "design": "Approach",
+      "evidence": "Proof",
+      "placeholder": "<TODO"
+    }
+  }
+}

@@ -1,0 +1,2 @@
+intent_branch: feat không phải hậu duệ của origin/intent/2026-01-01-i (tip đã nhích) — TỪ CHỐI góp ngược. `--no-rebase` đang bật nên không tự rebase.
+rc=4

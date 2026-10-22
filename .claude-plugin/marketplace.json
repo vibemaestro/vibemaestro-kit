@@ -1,0 +1,17 @@
+{
+  "name": "vibemaestro",
+  "description": "Marketplace of the vibemaestro plugins for Claude Code sessions: vibemaestro-sdlc (the intent, spec, plan, ship process) and vibemaestro-brain (hot memory for long sessions, which brings sdlc as a dependency)",
+  "owner": { "name": "vibemaestro" },
+  "plugins": [
+    {
+      "name": "vibemaestro-sdlc",
+      "source": "./plugins/vibemaestro-sdlc",
+      "description": "The intent -> spec -> plan -> ship process and the rule lookup hooks for a Claude Code session in an app repo"
+    },
+    {
+      "name": "vibemaestro-brain",
+      "source": "./plugins/vibemaestro-brain",
+      "description": "Hot memory for long-running sessions that survives compaction, on top of vibemaestro-sdlc (installed with it as a dependency): the brain CLI with a hash-chained op log, item operations only, and owner decisions written only through the permission dialog"
+    }
+  ]
+}

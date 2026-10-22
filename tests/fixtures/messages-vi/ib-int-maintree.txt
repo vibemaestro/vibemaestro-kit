@@ -1,0 +1,5 @@
+intent_branch: đang đứng ở CÂY CHÍNH của repo (hoặc một submodule), không phải worktree liên kết — KHÔNG góp ngược. Rebase sẽ checkout nhánh ngay trong cây chung, nơi có thể đang mang việc dở của phiên khác.
+       cd vào worktree của bạn rồi chạy lại; chưa có thì:
+       git worktree add -b <branch> <S>/int/.claude/worktrees/<tên> origin/intent/2026-01-01-i
+       (đặt worktree TRONG clone — ngoài thư mục làm việc là hộp thoại xin quyền; quy trình Git điều 1.)
+rc=7

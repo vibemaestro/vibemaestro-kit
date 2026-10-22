@@ -1,0 +1,52 @@
+# =============================================================================
+# Gate: the PR body stays short (.vibemaestro/gates/pr_body.py)
+# =============================================================================
+# Config: pr.body.max_chars (3000), pr.body.summary_max_lines (10), pr.body.evidence_max_lines (30) in .vibemaestro/sdlc.json; the
+# limits are ON by default and `0` turns one off. The body is read through gh at the time the job runs, so a body rewritten with
+# `gh pr edit` is checked too (the `edited` trigger).
+#
+# Trust: the job checks out the BASE branch and reads the script and the config there, so a PR cannot raise its own limits or edit
+# the script. The workflow file itself comes from the PR (as for every pull_request gate), so a change under .github/ needs review.
+# A repo that has not merged the gates yet has no script on its base branch: the step says so and passes, for the PR that installs them. A red run is a signal on the PR. No secret beyond the read-only job token; not pull_request_target.
+name: pr-body
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# A new commit on the PR cancels the run of the head it replaces (the merge guard only trusts the newest head). Every other event
+# (a comment, an edit, a label, a review, ready, main, a dispatch) gets a group of its own: it neither cancels a commit run nor, as a
+# newer member of a shared group, replaces a pending one (GitHub keeps one pending run per group, whatever cancel-in-progress says).
+# A re-run of an OLDER head's run is a commit run too and cancels the newest head's run: re-run the newest head instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  pr-body:
+    # No CI on a draft (ready_for_review starts the round); an edit runs it only when the body changed (a title-only edit does
+    # not), or when the base changed (its limits and headings come from the base's config). A skipped run tested nothing: the merge guard keeps the verdict of the last real run on the head.
+    if: github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.body || github.event.changes.base)
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: check the length of the body (the current state, read through gh)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .vibemaestro/gates/pr_body.py ]; then
+            echo "::warning::the gates are not installed on the base branch yet, so pr-body did not run for this PR"
+            exit 0
+          fi
+          python3 .vibemaestro/gates/pr_body.py --pr "$PR_NUMBER" --repo "$REPO" --config-ref "origin/$BASE_REF"

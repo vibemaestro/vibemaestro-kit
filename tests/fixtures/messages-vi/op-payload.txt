@@ -1,0 +1,3 @@
+current-state gate: the profile watches no path (current_state.watch is empty): the gate does not apply
+open_pr: không ghi được --payload-out: [Errno 2] No such file or directory: '<S>/no/dir/p.json'
+rc=66

@@ -1,0 +1,2 @@
+intent_branch: kb/intent/2026-01-01-empty.md rỗng — hồ sơ intent là lời người đặt, không phải file giữ chỗ
+rc=3

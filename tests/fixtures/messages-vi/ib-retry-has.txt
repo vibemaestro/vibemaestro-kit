@@ -1,0 +1,2 @@
+intent_branch: hồ sơ đã có dòng `issue:` — không tạo thêm (idempotent): kb/intent/2026-01-01-has.md
+rc=0

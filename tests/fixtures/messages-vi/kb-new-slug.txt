@@ -1,0 +1,2 @@
+kb: slug 'Bad_Slug' không hợp lệ — chữ thường không dấu, số, gạch nối (vd: them-thanh-toan)
+rc=64

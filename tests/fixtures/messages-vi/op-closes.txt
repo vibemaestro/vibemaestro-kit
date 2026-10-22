@@ -1,0 +1,4 @@
+open-pr: --closes 7 read from <S>/op/.claude/worktrees/p/kb/intent/2026-01-01-p.md (branch intent/2026-01-01-p)
+current-state gate: the profile watches no path (current_state.watch is empty): the gate does not apply
+{"title": "t", "head": "intent/2026-01-01-p", "base": "main", "body": "Closes #7\n\n## Tóm tắt\n\nWhat this does.\n\n## Bằng chứng chạy\n\n```\n$ make test\n0 fail\n```\n"}
+rc=0

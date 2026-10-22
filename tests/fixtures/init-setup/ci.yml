@@ -1,0 +1,15 @@
+name: example-ci
+on: [push]
+jobs:
+  build:
+    runs-on: ${{ vars.CI_RUNNER || 'ops-runners' }}   # the repo variable picks the runner, the label is the fallback
+    steps:
+      - run: echo build
+  test:
+    runs-on: ${{ vars.CI_RUNNER || 'ops-runners' }}
+    steps:
+      - run: echo test
+  docs:
+    runs-on: ci-small
+    steps:
+      - run: echo docs

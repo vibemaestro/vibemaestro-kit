@@ -1,0 +1,2 @@
+kb: repo chưa có kb/specs/ — chạy `kb.py init` trước (skill vibemaestro-sdlc:init-kb)
+rc=2

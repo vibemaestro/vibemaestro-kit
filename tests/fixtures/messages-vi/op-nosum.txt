@@ -1,0 +1,2 @@
+open-pr: thiếu --summary <file>
+rc=64

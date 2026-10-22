@@ -1,0 +1,3 @@
+pr-evidence: review ok: https://example.invalid/c/1 pins the head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+pr-evidence: ✗ e2e: this PR changes UI paths (web/a.js) and no comment pinned to the head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa has "E2E pass" or "E2E không chạy: <reason>".
+rc=1

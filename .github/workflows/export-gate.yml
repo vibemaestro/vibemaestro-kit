@@ -1,0 +1,57 @@
+name: export-gate
+# The public kit's export gate: export one rev with scripts/export-public.sh outside the checkout, scan the export for the owner's
+# internal terms (repository secret KIT_TERMS) and with a pinned gitleaks binary, and print `export-gate: rev=<full sha> digest=<tree id>` when it is clean. The publisher
+# trusts only a green workflow_dispatch run of this file as it is on main, for the exact rev and digest it publishes.
+# Every pull request runs it on its test-merge commit: the export is the whole tree but the root kb/ and public.private, so any change can reach
+# it. Fail closed: an empty or missing secret, a checksum mismatch, a missed control or any finding is red. No term, secret or
+# term-list size is printed, no artifact, no summary. In a public repository (no secret, and nothing left to export) the job is skipped.
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      rev:
+        description: "The commit to export and scan (a full sha: the publisher reads it back from the export-gate line)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  export-gate:
+    name: export-gate
+    # only where the private term list lives: a public copy of this file skips the job instead of failing closed on every PR
+    if: github.event.repository.private
+    # Light gate runner when CI_GATE_RUNNER is set, else CI_RUNNER, else GitHub-hosted (a self-hosted runner only serves a private repository)
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      # Full history: the rev to export is the test-merge commit the checkout holds, or any commit a dispatch names.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The secret is in this one step's environment only, written to a 0600 file under RUNNER_TEMP and unset before the gate runs.
+      # REV comes through env, never into the script text: a dispatch input is not shell. On a pull request REV is the test-merge
+      # commit (github.sha, refs/pull/N/merge), the PR on top of its base: what merges, so a file the base has fixed since the branch
+      # was cut is exported as fixed. The publisher reads only dispatch runs, whose rev is the input.
+      - name: Export the rev and scan it
+        env:
+          KIT_TERMS: ${{ secrets.KIT_TERMS }}
+          REV: ${{ github.event_name == 'pull_request' && github.sha || inputs.rev }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          [ -z "${PR_HEAD:-}" ] || echo "export-gate: exporting the test-merge commit $REV of PR head $PR_HEAD"
+          if [ -z "${KIT_TERMS:-}" ] || [ -z "${KIT_TERMS//[[:space:]]/}" ]; then
+            echo "::error::The KIT_TERMS secret is empty or missing: the export gate cannot scan, and a gate that did not scan must not pass."
+            exit 1
+          fi
+          umask 077
+          export TMPDIR="${RUNNER_TEMP:?}"
+          terms=$(mktemp "$TMPDIR/kit-terms.XXXXXX") || exit 1
+          trap 'rm -f "$terms"' EXIT
+          printf '%s\n' "$KIT_TERMS" > "$terms"
+          unset KIT_TERMS
+          bash scripts/export-gate.sh --rev "$REV" --terms "$terms"

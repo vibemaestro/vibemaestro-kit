@@ -1,0 +1,43 @@
+# =============================================================================
+# Gate: the PR body stays short (plugins/vibemaestro-sdlc/gates/pr_body.py)
+# =============================================================================
+# Config: pr.body.max_chars (3000), pr.body.summary_max_lines (10), pr.body.evidence_max_lines (30) in .vibemaestro/sdlc.json; the
+# limits are ON by default and `0` turns one off. The body is read through gh at the time the job runs, so a body rewritten with
+# `gh pr edit` is checked too (the `edited` trigger).
+#
+# This repo has no .vibemaestro/gates/ copy and runs no other PR gate, so the job runs the script from plugins/ on the base branch.
+#
+# Trust: the job checks out the BASE branch and reads the script and the config there, so a PR cannot raise its own limits or edit
+# the script. The workflow file itself comes from the PR (as for every pull_request gate), so a change under .github/ needs review.
+# A repo that has not merged the gates yet has no script on its base branch: the step says so and passes, for the PR that installs them. A red run is a signal on the PR. No secret beyond the read-only job token; not pull_request_target.
+name: pr-body
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-body:
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: check the length of the body (the current state, read through gh)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if [ ! -f plugins/vibemaestro-sdlc/gates/pr_body.py ]; then
+            echo "::warning::the gates are not installed on the base branch yet, so pr-body did not run for this PR"
+            exit 0
+          fi
+          python3 plugins/vibemaestro-sdlc/gates/pr_body.py --pr "$PR_NUMBER" --repo "$REPO" --config-ref "origin/$BASE_REF"

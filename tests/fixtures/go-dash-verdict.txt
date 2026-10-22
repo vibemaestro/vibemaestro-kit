@@ -1,0 +1,7 @@
+# Measured verdicts of `<launcher> go - <args> <<'BATON_EOF'` with a baton skeleton as the body, one line per permission mode:
+#   <mode> <verdict> <Claude Code version> <source>
+# verdict: blocked | runs | not-measured. fam_go_dash_guidance (tests/test-baton.sh) reads this file: while any mode says
+# blocked, the core skill and the rule must not recommend `go -`, and every other mention must say blocked or measured.
+# Change a line only with a new measurement and a source that records it.
+default blocked 2.1.303 a live measurement in default mode (built-in check: "Contains brace with quote character (expansion obfuscation)")
+auto not-measured - no logged-in claude in the sandbox pod (2.1.290); the go-dash measurement spec records the decision to go without it

@@ -1,0 +1,2 @@
+intent_branch: intent/2026-01-01-i đang bị worktree khác giữ (<S>/int/.claude/worktrees/w4) — git chỉ cho MỘT worktree giữ một branch. Dùng `--to origin`.
+rc=5

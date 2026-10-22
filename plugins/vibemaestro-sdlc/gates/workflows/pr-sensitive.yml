@@ -1,0 +1,67 @@
+# =============================================================================
+# Gate: the PR body, every comment and every commit message carry no sensitive value (.vibemaestro/gates/pr_sensitive.py)
+# =============================================================================
+# Rule behind it: `pr-no-leaks`. Config: sensitive.scan and sensitive.allowlist in .vibemaestro/sdlc.json.
+#
+# The PR is read through the API AT RUN TIME, not from the event payload: a payload is a snapshot, so editing the body and re-running
+# would scan the old text. For the same reason every event scans the WHOLE PR again, not only what just changed.
+# Drafts: in a PUBLIC repository it scans a draft too, because a public draft is already exposed (and the server keeps the edit
+# history of a body or a comment). In a private repository a draft is not scanned: going ready scans the whole PR. An edit of the
+# PR runs it again only when the body or the base (the commits it scans) changed, not the title; an edited comment or review always
+# does. A comment payload without the issue's draft field counts as a draft (the next PR event scans everything).
+#
+# Trust: the job checks out the DEFAULT branch (the script comes from there); the config and the allowlist are read at the PR's BASE
+# commit, so a PR cannot exempt the value it is leaking. A repo that has not merged the gates yet has no script on its default branch:
+# the step says so and passes, for the PR that installs them.
+#
+# A run started by issue_comment executes the default branch's workflow and is not attached to the PR's check list (it shows under
+# Actions); the next edited or synchronize event scans everything again, so the PR turns red there.
+name: pr-sensitive
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+# A new commit on the PR cancels the run of the head it replaces (the merge guard only trusts the newest head). Every other event
+# (a comment, an edit, a label, a review, ready, main, a dispatch) gets a group of its own: it neither cancels a commit run nor, as a
+# newer member of a shared group, replaces a pending one (GitHub keeps one pending run per group, whatever cancel-in-progress says).
+# A re-run of an OLDER head's run is a commit run too and cancels the newest head's run: re-run the newest head instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  pr-sensitive:
+    # issue_comment also fires for plain issues: scan only when the issue is a PR.
+    if: (github.event_name != 'issue_comment' || github.event.issue.pull_request) && (github.event.repository.private == false || (github.event_name == 'issue_comment' && toJSON(github.event.issue.draft) == 'false') || (github.event_name != 'issue_comment' && github.event.pull_request.draft == false)) && (github.event_name != 'pull_request' || github.event.action != 'edited' || github.event.changes.body || github.event.changes.base)
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: scan body, comments and commit messages (read through the API at run time)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # Do not add set -x and do not print the files this reads: a log is readable by everyone who can read the repo. Only the
+          # scanner prints, and it prints masked values.
+          if [ ! -f .vibemaestro/gates/pr_sensitive.py ]; then
+            echo "::warning::the gates are not installed on the default branch yet, so pr-sensitive did not run for this PR"
+            exit 0
+          fi
+          python3 .vibemaestro/gates/pr_sensitive.py --pr "$PR" --repo "$REPO"

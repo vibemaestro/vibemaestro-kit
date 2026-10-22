@@ -1,0 +1,15 @@
+{
+  "name": "vibemaestro-brain",
+  "version": "0.1.0",
+  "description": "A second brain for long-running Claude Code sessions that works with compaction: hot memory kept as one hash-chained op log outside the repository, changed only by item operations, owner decisions written only through Claude Code's permission dialog, and rendered small enough to re-inject after every compaction",
+  "author": {
+    "name": "vibemaestro"
+  },
+  "license": "Apache-2.0",
+  "dependencies": [
+    {
+      "name": "vibemaestro-sdlc",
+      "version": ">=0.1.0"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+open-pr: --closes 7 read from <S>/op/.claude/worktrees/p/kb/intent/2026-01-01-p.md (branch intent/2026-01-01-p)
+open_pr: evidence_file rỗng/thiếu: <S>/empty.md — KHÔNG mở PR.
+       Chạy lệnh chứng minh thay đổi của bạn hoạt động rồi ghi CẢ lệnh
+       lẫn output thật vào file đó. Không chạy được thì dòng đầu ghi:
+         KHÔNG CHẠY: <lý do cụ thể>
+rc=3

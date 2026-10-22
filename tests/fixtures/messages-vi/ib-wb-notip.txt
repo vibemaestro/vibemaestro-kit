@@ -1,0 +1,2 @@
+intent_branch: base intent/2026-01-01-nope không tồn tại ở local lẫn origin — PM phải tạo và đẩy branch intent trước
+rc=5

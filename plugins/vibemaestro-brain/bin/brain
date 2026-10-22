@@ -1,0 +1,3 @@
+#!/bin/sh
+# The `brain` CLI: on the Bash PATH while the plugin is enabled (bin/ of a plugin, Claude Code docs).
+exec python3 "$(dirname "$0")/../scripts/brain.py" "$@"

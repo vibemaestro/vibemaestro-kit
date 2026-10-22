@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "_comment": "keys a newer plugin may define: an older reader at or above the floor warns and ignores them (rule config-compat)",
+  "future_section": {
+    "enabled": true,
+    "paths": [
+      "web/**"
+    ]
+  },
+  "pr": {
+    "draft": true,
+    "future_key": {
+      "a": 1
+    }
+  },
+  "merge": {
+    "deny_globs": [
+      ".github/workflows/**"
+    ],
+    "future_merge_key": 3
+  },
+  "current_state": {
+    "forbid_patterns": [
+      {
+        "id": "diary",
+        "regex": "x",
+        "future_item_key": 1
+      }
+    ]
+  }
+}

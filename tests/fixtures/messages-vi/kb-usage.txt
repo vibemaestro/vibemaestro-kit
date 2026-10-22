@@ -1,0 +1,2 @@
+kb: dùng: kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run] | kb.py new <intent|plan|spec> <slug> [--date D] | kb.py base --default <ref> | kb.py check spec <ngày-slug|đường-dẫn> | kb.py check current-state [đường-dẫn] | kb.py find <words...> [--type intent|spec|plan|decision] [--all] [--limit N] | kb.py list [--type T] [--status S] | kb.py outline <file> | kb.py check [--strict] | kb.py plan status <plan file> [--json] | kb.py check links [--base REF | --all]
+rc=64

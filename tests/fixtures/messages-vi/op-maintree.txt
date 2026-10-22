@@ -1,0 +1,5 @@
+open_pr: git-dir trùng git-common-dir ở `<S>/op` — đây là CÂY CHÍNH của repo (hoặc một submodule), không phải worktree liên kết. KHÔNG mở PR.
+       Cây chung có thể đang mang việc dở của session khác (git-workflow điều 1).
+       git worktree add -b <branch> <S>/op/.claude/worktrees/<tên> origin/main
+       (đặt worktree TRONG clone — ngoài thư mục làm việc là hộp thoại xin quyền; quy trình Git điều 1.)
+rc=5
