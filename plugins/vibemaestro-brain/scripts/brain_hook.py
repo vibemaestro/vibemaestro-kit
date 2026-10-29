@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """vibemaestro-brain hooks: one entry for every event, `brain_hook.py <event>` with the hook JSON on stdin.
 
-    session-start  inject hot memory and the Shelf index through additionalContext (≤ 8,000 characters); log the episode
+    session-start  string 1: inject hot memory (pins, windows, Now) and the Shelf index through additionalContext (≤ 8,000
+                   characters); log the episode; mark an item whose anchor names a closed issue or merged PR, and in the
+                   writer's session close an item whose `closes` anchors are all done (brain_stale.py). It renders strings 2
+                   and 3 in the same pass and hands each over in a file of `starts/` (Claude Code runs the three commands in
+                   parallel); the command that prints one deletes its file, so a hand-over is used once
+    session-start-sessions, session-start-plan
+                   strings 2 (`## Brain · sessions`: S, Q) and 3 (`## Brain · plan`: X, T, Done, F), ≤ 9,500 characters each:
+                   what session-start handed over for this SessionStart, else, after START_WAIT, their own part from the
+                   log without lookups; nothing when the part is empty and has no note
     pre-compact    log the trigger and the context size (S1) from the transcript's tail; add the calls since the saved
                    byte offset to the session's running cost sums (B1.3); never blocks
     post-compact   save compact_summary (0600, never injected) and log the loss score
@@ -11,6 +19,8 @@
     guard-edit     deny Edit/Write/NotebookEdit under the brain state root
     guard-owner    on an owner-shaped Bash command: ask with the one-line dialog and write the "asked" record in a dialog
                    mode; deny otherwise (owner-confirmation spec)
+    update-check   the update reminder: vibemaestro-sdlc's scripts/update_check.py run with brain's own root and data
+                   (one `systemMessage` line when a newer public brain exists); silent when sdlc is not found
 
 Every event is silent under BRAIN_OFF and in a sandbox worker (INTENT_SLUG and SEAT); every event but guard-owner and
 session-end is silent in a project with no hot memory. Fail-open: an error is one line on stderr and rc 0. A guard denies or
@@ -91,6 +101,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 BLOCK_MAX = 8000
+START_WAIT = 6.0                        # seconds strings 2 and 3 wait for string 1's hand-over (worst case: 4 s of waits, then its work)
+SIBLINGS = 1.0                          # seconds between the starts of the commands of one SessionStart, at most (measured: 2 ms)
+T_START = time.time()                   # this process's start: the commands of one SessionStart start together
+PART_EVENTS = {"session-start-sessions": "sessions", "session-start-plan": "plan"}
 SHELF_MAX = 1000
 SHELF_LINE = 100
 PLUGIN_LINE = 200
@@ -131,14 +145,7 @@ def has_state(d):
 
 def episode(d, inp, kind, **fields):
     """Append one line to episodes.jsonl (append-only, 0600, one write per line)."""
-    s = store()
-    s.ensure_dir(d)
-    line = dict(fields, t=s.now_iso(), kind=kind, session=inp.get("session_id") or None)
-    fd = os.open(os.path.join(d, "episodes.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-    try:
-        os.write(fd, (s.dumps(line) + "\n").encode("utf-8"))
-    finally:
-        os.close(fd)
+    store().episode_line(d, inp.get("session_id"), kind, **fields)
 
 
 def cwd_of(inp):
@@ -146,13 +153,64 @@ def cwd_of(inp):
     return c if isinstance(c, str) and os.path.isabs(c) and os.path.isdir(c) else os.getcwd()
 
 
+def unwritten(s, sid, d):
+    """After a failed write of the session's record: what `brain` run from Bash will use now. A record naming another brain
+    is removed (best effort), so it cannot send the CLI there; one naming this brain (a sibling worktree) is kept."""
+    try:
+        left = s.read_session(sid)
+    except s.Refused:
+        return ""                                   # the CLI refuses a damaged record itself, naming it
+    if left and left["state"] == d:
+        return ""
+    if left:
+        s.drop_session(sid)
+        try:
+            left = s.read_session(sid)
+        except s.Refused:
+            return ""
+    if left:
+        return "; it still names %s, which `brain` run from Bash would use" % s.printable(left["project"])
+    return "; `brain` run from Bash follows the shell's directory until a hook writes it"
+
+
+def resolve(inp, record=True):
+    """(project, state directory, the other project a new record replaced or None) of this session, never of the shell's
+    directory while the session is known: CLAUDE_PROJECT_DIR (the directory the session started in; the input's `cwd` follows
+    every `cd`), recorded under the session id for the CLI (unless `record` is false); else the session's record; else the
+    input's cwd. A record that cannot be trusted raises, so the hook does nothing rather than act on another project."""
+    s = store()
+    sid = inp.get("session_id")
+    sid = sid if isinstance(sid, str) and sid else ""
+    env = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if os.path.isabs(env) and os.path.isdir(env):
+        d, old = s.state_dir(env), None
+        try:
+            old = s.record_session(sid, env, d) if sid and record else None
+        except OSError as e:                        # the record serves the CLI; this hook still has its project
+            sys.stderr.write("brain: the session's project record was not written: %s%s\n" % (e.__class__.__name__,
+                                                                                                 unwritten(s, sid, d)))
+        if old:
+            sys.stderr.write("brain: this session's project was %s; it is now %s (CLAUDE_PROJECT_DIR)\n"
+                             % (s.printable(old), s.printable(env)))
+        return env, d, old
+    b = s.read_session(sid) if sid else None
+    if b:
+        return b["project"], b["state"], None
+    c = cwd_of(inp)
+    return c, s.state_dir(c), None
+
+
 # --- shell words --------------------------------------------------------------------------------------------------------------
 
-def segments(cmd):
+def segments(cmd, heredoc=False):
     """[(text, flags)]: the command split at unquoted `;`, `&`, `|`, `(`, `)` and newlines. flags holds `expansion` ($, a
     backtick or a leading ~ outside single quotes), `glob` (unquoted * ? [ {), `redirect` (unquoted < >) and `open` (a quote
-    left open)."""
-    out, cur, flags = [], [], set()
+    left open). With `heredoc`, the body of a here-document (`<<` or `<<-`, not `<<<`) is skipped: it is a command's input,
+    not a command, and its line `brain owner …` or its apostrophe is no word of the command. The segment holding the
+    `<<` keeps its `redirect` flag, so a command with a here-document is never literal. A body is skipped only up to its
+    closing line: a `<<` with no such line after it (a shift, as in `$((1<<2))`, `$[1<<2]` or `${a[1<<0]}`) skips nothing,
+    so the lines after it stay commands (review rounds 1 and 2)."""
+    out, cur, flags, docs = [], [], set(), []
     q, i, n, start = None, 0, len(cmd), True
     while i < n:
         c = cmd[i]
@@ -188,9 +246,17 @@ def segments(cmd):
             out.append(("".join(cur), flags))
             cur, flags, start = [], set(), True
             i += 1
+            if c == "\n" and docs:
+                i, docs = skip_bodies(cmd, i, docs), []
             continue
         elif c in "<>":
             flags.add("redirect")
+            if heredoc and cmd.startswith("<<", i):     # `<<<` has no word: its third `<` stops here_delim
+                docs += [d for d in [here_delim(cmd, i + 2)] if d]
+                cur.append("<<")
+                i += 2
+                start = False
+                continue
         elif c in "$`~":
             flags.add("expansion")                  # ~ after `=` or `:` is expanded too, so any unquoted ~
         elif c in "*?[{":
@@ -204,11 +270,70 @@ def segments(cmd):
     return [(t, f) for t, f in out if t.strip()]
 
 
+def here_delim(cmd, i):
+    """(word, strip tabs) of the here-document whose operator ends just before `i`, or None: the word after an optional `-`
+    and blanks, with its quotes and backslashes removed, as bash compares it to each body line."""
+    strip = cmd[i:i + 1] == "-"
+    if strip:
+        i += 1
+    while i < len(cmd) and cmd[i] in " \t":
+        i += 1
+    word, q = [], None
+    while i < len(cmd):
+        c = cmd[i]
+        if q:
+            if c == q:
+                q = None
+            else:
+                word.append(c)
+        elif c in "'\"":
+            q = c
+        elif c == "\\":
+            word.append(cmd[i + 1:i + 2])
+            i += 1
+        elif c.isspace() or c in ";&|()<>":
+            break
+        else:
+            word.append(c)
+        i += 1
+    return ("".join(word), strip) if word else None
+
+
+def skip_bodies(cmd, i, docs):
+    """The index after the bodies of `docs` [(word, strip tabs)] that start at `i`, one after the other. A body with no
+    closing line is not skipped: bash would run it to the end of the command, but a `<<` that is a shift has none either,
+    and its lines are commands; reading them as commands only keeps the deny of main."""
+    for word, strip in docs:
+        j = i
+        while j < len(cmd):
+            e = cmd.find("\n", j)
+            line, j = (cmd[j:], len(cmd)) if e < 0 else (cmd[j:e], e + 1)
+            if (line.lstrip("\t") if strip else line) == word:
+                i = j
+                break
+    return i
+
+
 def words(text):
     try:
         return shlex.split(text)
     except ValueError:
         return None
+
+
+def lead_words(text, k=3):
+    """The first `k` words of `text`, read as shlex reads them up to a quote left open: enough for `owner_tokens` to tell a
+    brain call from a command that only mentions the words further on."""
+    lex = shlex.shlex(text, posix=True)
+    lex.whitespace_split, lex.commenters = True, ""
+    out = []
+    with contextlib.suppress(ValueError):
+        while len(out) < k:
+            w = lex.get_token()
+            if w is None:
+                break
+            out.append(w)
+    return out
 
 
 def is_brain(w):
@@ -339,20 +464,35 @@ def shelf_index(s, project):
     return "\n".join(lines) + "\n"
 
 
-def cut(block):
-    """The hard cut at BLOCK_MAX (a backstop): whole lines, then one line naming what was cut."""
-    if len(block) <= BLOCK_MAX:
+def units(text):
+    """The length Claude Code counts a hook string in: UTF-16 code units, so an emoji or another character past U+FFFF is 2."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def cut(block, limit=BLOCK_MAX):
+    """The hard cut at `limit` UTF-16 units (a backstop): whole lines, then one line naming the sections it cut lines of."""
+    if units(block) <= limit:
         return block, 0
     keep, size = [], 0
     lines = block.splitlines(True)
     for l in lines:
-        if size + len(l) > BLOCK_MAX - 120:
+        if size + units(l) > limit - 120:
             break
         keep.append(l)
-        size += len(l)
-    gone = len(block) - size
-    sections = sorted({m.group(1) for m in re.finditer(r"(?m)^## ([^\n(]{1,40})", "".join(lines[len(keep):]))})
-    return "".join(keep) + "[brain: cut %d characters%s]\n" % (gone, ": " + ", ".join(sections) if sections else ""), gone
+        size += units(l)
+    gone = len(block) - len("".join(keep))
+    titles = {t for _, t in store().SECTIONS} | {store().DONE_TITLE}
+    sections, here = [], None
+    for i, l in enumerate(lines):
+        m = re.match(r"## ([^\n(]{1,60})", l)
+        here = (re.sub(r" v[0-9]+ · .*", "", m.group(1)).strip() if m
+                else l.rstrip("\n") if l.rstrip("\n") in titles else here)
+        if i >= len(keep) and here and here not in sections:
+            sections.append(here)
+    named = "[brain: cut %d characters%s]\n" % (gone, ": " + ", ".join(sections) if sections else "")
+    if size + units(named) > limit:                 # many sections named: the count alone, never past the limit
+        named = "[brain: cut %d characters]\n" % gone
+    return "".join(keep) + named, gone
 
 
 def sources_ok(source):
@@ -365,33 +505,150 @@ def sources_ok(source):
     return not names or source in names
 
 
+def read_state(s, d):
+    """The state, read under the store lock: a read between a write's line and its head would see a broken log (rc 5). When the
+    lock stays held past LOCK_WAIT (a writer stuck), or the lock file cannot be opened (a read-only or full disk), the read goes
+    on without it."""
+    try:
+        with s.locked(d, s.LOCK_WAIT):
+            return s.load(d)[1]
+    except s.Refused as e:
+        if e.rc != 1:                               # 1: the lock was not free in time; anything else is the log's answer
+            raise
+    except OSError:
+        pass
+    return s.load(d)[1]
+
+
+def start_file(d, sid, part):
+    """The hand-over of one session's SessionStart string `part` (sessions or plan), in the project's state directory."""
+    return os.path.join(d, "starts", "%s.%s.json" % (hashlib.sha256(sid.encode("utf-8")).hexdigest()[:32], part))
+
+
+def hand_over(s, d, sid, hand):
+    """Write one hand-over file per part (0600, atomic); old ones of other sessions are swept. Never raises: the other commands
+    then render their own parts."""
+    try:
+        sd = os.path.join(d, "starts")
+        if not os.path.isdir(sd):
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(sd, 0o700)
+        for p in PART_EVENTS.values():
+            one = {k: v for k, v in hand.items() if k != "parts"}
+            s._write_file(start_file(d, sid, p), s.dumps(dict(one, part=p, text=hand["parts"].get(p, ""))) + "\n")
+        for name in os.listdir(sd):
+            with contextlib.suppress(OSError):
+                q = os.path.join(sd, name)
+                if time.time() - os.lstat(q).st_mtime > 86400:
+                    os.unlink(q)
+    except OSError as e:
+        sys.stderr.write("brain: strings 2 and 3 were not handed over: %s\n" % e.__class__.__name__)
+
+
 def session_start(inp):
     s = store()
-    cwd = cwd_of(inp)
-    d = s.state_dir(cwd)
+    project, d, rebound = resolve(inp)
     if not has_state(d):
         return
     source = str(inp.get("source") or "startup")
     if not sources_ok(source):
         return
+    sid = inp.get("session_id")
+    sid = sid if isinstance(sid, str) else ""
     head_line = ("# vibemaestro-brain — re-injected at SessionStart:%s; change it only with `brain op` / `brain owner` "
                  "(skill brain)\n" % s.clean_line(source)[:20])
+    hand = {"session": sid, "source": source, "t": T_START, "parts": {}}
+    for p in PART_EVENTS.values() if sid else ():  # an earlier SessionStart's leftovers: never this one's strings
+        with contextlib.suppress(OSError):
+            os.unlink(start_file(d, sid, p))
     try:
-        _, st = s.load(d)
-        hot = s.render(st)
-    except s.Refused as e:
-        warn = "brain: hot memory was not injected: %s; run `brain doctor`" % s.printable(e.msg)
-        emit("SessionStart", additionalContext=warn)
-        sys.stderr.write(warn + "\n")
-        return
-    project = os.environ.get("CLAUDE_PROJECT_DIR") or cwd
-    block, gone = cut(head_line + hot + "\n" + shelf_index(s, project))
+        try:
+            st = read_state(s, d)
+            parts = s.render_parts(st)
+        except s.Refused as e:
+            hand["error"] = "refused"               # strings 2 and 3 read the log themselves, and stay silent if it refuses them too
+            warn = "brain: hot memory was not injected: %s; run `brain doctor`" % s.printable(e.msg)
+            emit("SessionStart", additionalContext=warn)
+            sys.stderr.write(warn + "\n")
+            return
+        import brain_stale
+        parts, stale, did, st = brain_stale.annotate(parts, st, d, sid or None)
+        block, gone = cut(head_line + parts["hot"] + "\n" + shelf_index(s, project))
+        more = {p: cut(parts[p], s.STRING_MAX) if p in did["noted"] or not s.part_empty(st, p) else ("", 0)
+                for p in ("sessions", "plan")}
+        hand["parts"] = {p: more[p][0] for p in more}
+    except BaseException:
+        hand["error"] = "failed"                    # the other commands render their own parts
+        raise
+    finally:
+        if sid:                                     # a hand-over is matched by session: none without an id
+            hand_over(s, d, sid, hand)
     emit("SessionStart", additionalContext=block)
-    fields = {"source": source, "transcript": inp.get("transcript_path"), "injected": len(block), "cut": gone}
+    if did["closed"]:
+        episode(d, inp, "auto-close", hook="SessionStart", ids=[i for i, _ in did["closed"]],
+                anchors=[a["anchor"] for _, an in did["closed"] for a in an])
+    fields = {"source": source, "transcript": inp.get("transcript_path"), "injected": len(block), "cut": gone, "stale": stale,
+              "format": s.FORMAT, "injected_sessions": len(more["sessions"][0]), "cut_sessions": more["sessions"][1],
+              "injected_plan": len(more["plan"][0]), "cut_plan": more["plan"][1]}
+    fields.update({k: v for k, v in (("closed", len(did["closed"])), ("held", did["held"])) if v})
+    if rebound:
+        fields["rebound_from"] = rebound
     if source in ("resume", "fork"):
         fields.update({k: inp[k] for k in ("context_tokens", "prompt_cache_likely_expired", "estimated_cache_write_usd")
                        if k in inp})
     episode(d, inp, "session-start", **fields)
+
+
+def taken_over(d, sid, source, part):
+    """The hand-over of `part` string 1's command wrote for this SessionStart (same session and source, started within SIBLINGS
+    seconds of this command), waiting up to START_WAIT seconds for it, and deleted once read: an earlier SessionStart's was
+    taken by its own command. None when none came."""
+    p, end = start_file(d, sid, part), T_START + START_WAIT
+    while True:
+        try:
+            with open(p, encoding="utf-8") as f:
+                h = json.loads(f.read())
+            t = h.get("t") if isinstance(h, dict) else None
+            if (h.get("session") == sid and h.get("source") == source and isinstance(t, (int, float))
+                    and not isinstance(t, bool) and abs(t - T_START) <= SIBLINGS and isinstance(h.get("text"), str)):
+                with contextlib.suppress(OSError):
+                    os.unlink(p)
+                return h
+        except (OSError, ValueError, AttributeError):
+            pass
+        if time.time() >= end:
+            return None
+        time.sleep(0.005 if time.time() < T_START + 0.5 else 0.05)   # string 1 usually hands over within half a second
+
+
+def session_part(inp, part):
+    """String 2 or 3: string 1's hand-over for this SessionStart, else this part rendered here from the log, without lookups."""
+    s = store()
+    _, d, _ = resolve(inp, record=False)            # string 1's command records the session
+    if not has_state(d):
+        return
+    source = str(inp.get("source") or "startup")
+    if not sources_ok(source):
+        return
+    sid = inp.get("session_id")
+    sid = sid if isinstance(sid, str) else ""
+    sd = os.path.join(d, "starts")
+    waits = bool(sid) and (os.access(sd, os.W_OK | os.X_OK) if os.path.isdir(sd) else not os.path.lexists(sd))   # else no place
+    h = taken_over(d, sid, source, part) if waits else None
+    if h is not None and not h.get("error"):
+        text = h["text"]
+    else:
+        try:
+            st = read_state(s, d)
+        except s.Refused as e:
+            if h is None or h.get("error") != "refused":            # string 1 has not said it already
+                emit("SessionStart", additionalContext="brain: the %s string was not injected: %s; run `brain doctor`"
+                     % (part, s.printable(e.msg)))
+            return
+        text = "" if s.part_empty(st, part) else cut(s.render_part(st, part) + "stale-anchor check: skipped (string 1 handed "
+                                                                               "nothing over)\n", s.STRING_MAX)[0]
+    if text:
+        emit("SessionStart", additionalContext=text)
 
 
 # --- PreCompact, PostCompact, SessionEnd ----------------------------------------------------------------------------------------
@@ -426,7 +683,7 @@ def hot_version(s, d):
 
 def pre_compact(inp):
     s = store()
-    d = s.state_dir(cwd_of(inp))
+    d = resolve(inp)[1]
     if not has_state(d):
         return
     episode(d, inp, "pre-compact", trigger=inp.get("trigger"), context_before=last_context(inp.get("transcript_path")),
@@ -463,7 +720,7 @@ def tail_lines(path, nbytes=65536):
 
 def post_compact(inp):
     s = store()
-    d = s.state_dir(cwd_of(inp))
+    d = resolve(inp)[1]
     if not has_state(d):
         return
     trigger = re.sub(r"[^a-z]", "", str(inp.get("trigger") or "unknown"))[:10] or "unknown"
@@ -507,11 +764,18 @@ def session_end(inp):
     sid = inp.get("session_id")
     if sid:
         clear_pending(s, sid)                       # the record of the marker's own project, whatever this cwd (round 2)
-    d = s.state_dir(cwd_of(inp))
+    try:
+        d = resolve(inp)[1]
+    finally:
+        if sid and inp.get("reason") not in ("clear", "resume"):  # the record lives as long as the session; after
+            s.drop_session(sid)                     # /clear or a switch the Bash environment may still carry this id
     if not os.path.isdir(d):
         return
     if sid:
         s.void_records(d, sid)
+        for p in PART_EVENTS.values():
+            with contextlib.suppress(OSError):
+                os.unlink(start_file(d, sid, p))
     episode(d, inp, "session-end", reason=inp.get("reason"))
     cost_line(s, d, inp)                            # the episode's last line (the parent spec's hook map)
 
@@ -663,11 +927,11 @@ def guard_owner(inp):
         clear_pending(store(), sid)
     if "owner" not in cmd or "brain" not in cmd:
         return
-    found, segs = [], segments(cmd)
+    found, segs = [], segments(cmd, heredoc=True)
     for text, flags in segs:
         ws = words(text)
         if ws is None:
-            if re.search(r"(?:^|[\s/])brain(?:\.py)?\b.*\bowner\b", text):
+            if owner_tokens(lead_words(text)) is not None:      # a brain call at the start, not the words anywhere
                 found.append((None, flags | {"open"}))
             continue
         toks = owner_tokens(ws)
@@ -676,7 +940,7 @@ def guard_owner(inp):
     if not found:
         return
     s = store()
-    d = s.state_dir(cwd_of(inp))
+    project, d, _ = resolve(inp)                    # the project `brain owner` will write to, whatever the shell's directory
     mode = str(inp.get("permission_mode") or "unknown")
     log = {"mode": mode}
 
@@ -702,7 +966,7 @@ def guard_owner(inp):
     dialog = mode in ("default", "acceptEdits") or (mode == "auto" and version_ok()) or mode in ask_modes()
     if not dialog:
         return deny(s.NO_DIALOG, "no-dialog")
-    ans = s.answerers()
+    ans = s.answerers(s.project_root(project))
     if ans:
         return deny("owner items are refused while something can answer the permission prompt in place of a human: "
                     + s.printable("; ".join(ans)), "answerer")
@@ -722,8 +986,27 @@ def guard_owner(inp):
         episode(d, inp, "owner-call", decision="ask", record=rid, **log)
 
 
-HANDLERS = {"session-start": session_start, "pre-compact": pre_compact, "post-compact": post_compact,
-            "session-end": session_end, "guard-bash": guard_bash, "guard-edit": guard_edit, "guard-owner": guard_owner}
+def update_check(inp):
+    """sdlc's update reminder for brain (brain depends on sdlc): its root is brain's, so the line, the read and the cache are
+    brain's own. No sdlc found: nothing."""
+    import importlib.util
+    import brain_store as s
+    f = s.sdlc_file(os.path.join("scripts", "update_check.py"))
+    if not f:
+        return
+    try:
+        spec = importlib.util.spec_from_file_location("vibemaestro_update_check", f)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.session_start(os.path.dirname(HERE))
+    except Exception:  # noqa: BLE001 — the reminder is silent on any error, as in sdlc's own entry
+        pass
+
+
+HANDLERS = {"session-start": session_start, "session-start-sessions": lambda inp: session_part(inp, "sessions"),
+            "session-start-plan": lambda inp: session_part(inp, "plan"), "pre-compact": pre_compact, "post-compact": post_compact,
+            "session-end": session_end, "guard-bash": guard_bash, "guard-edit": guard_edit, "guard-owner": guard_owner,
+            "update-check": update_check}
 
 
 def main(argv):

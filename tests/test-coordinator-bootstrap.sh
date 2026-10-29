@@ -13,6 +13,8 @@
 #       explicit attribution value kept
 #   [U] undo through baton's own path (a copy whose post-check fails): the settings and the launcher come back byte for byte, a
 #       created settings file goes again; a settings file that changed since the run is left alone (rc 5)
+#   [V] a session whose sdlc is not the registry's (an older copy left in the cache): rehearse is refused with one line naming both
+#       versions, rc 3, nothing written or signed; the installed copy rehearses
 #   [R] a merge that cannot reach permissions --check rc 0 is refused at rehearse; nothing written
 #   [G] the report: a dependent plugin's lines only when it is installed (the fixture tests/fixtures/dependent-plugin), and only
 #       its CHECK lines; a plugin that does not declare the dependency adds none; no path under the machine's home in a CHECK line
@@ -26,6 +28,8 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 . "$HERE/fixtures/lib.sh"
 # shellcheck source=fixtures/ports.sh
 . "$HERE/fixtures/ports.sh"
+# shellcheck source=fixtures/baton-owner.sh
+. "$HERE/fixtures/baton-owner.sh"
 
 PLUGIN="$SRC_ROOT/plugins/vibemaestro-sdlc"
 DEP="$SRC_ROOT/tests/fixtures/dependent-plugin"; DEPN=dependent-fixture
@@ -55,7 +59,7 @@ machine() {
   local base v g
   M="$(fresh)/m"; base="$M/home/.claude/plugins/cache/vibemaestro"
   mkdir -p "$M/state" "$M/proj" "$base/vibemaestro-sdlc"
-  v=$(version_of "$1"); MP="$base/vibemaestro-sdlc/$v"; cp -R "$1" "$MP"
+  v=$(version_of "$1"); MP="$base/vibemaestro-sdlc/$v"; cp -R "$1" "$MP"; baton_isolate "$MP"
   if [ -n "${2:-}" ]; then
     g="$base/$DEPN/${DEPDIR:-$(version_of "$2")}"; mkdir -p "$(dirname "$g")"; cp -R "$2" "$g"
     printf '{"version": 2, "plugins": {"vibemaestro-sdlc@vibemaestro": [{"installPath": "%s"}], "%s@vibemaestro": [{"installPath": "%s"}]}}\n' "$MP" "$DEPN" "$g" \
@@ -66,10 +70,14 @@ machine() {
 }
 SETTINGS() { printf '%s' "$M/home/.claude/settings.json"; }
 LAUNCHER() { printf '%s' "$M/state/vibemaestro/baton/bin/baton"; }
-# b <baton args...> — rc of the machine's own baton.py, run from its project; the output is in $OUT
+# b <baton args...> — rc of the machine's own baton.py, run from its project; the output is in $OUT. A `sign --by owner` first goes
+# through the plugin's guard hook (owner_asked), as in a session whose owner clicks the dialog: no ask rule is needed for it.
 b() {
+  local BT_ENV=(HOME="$M/home" CLAUDE_CONFIG_DIR="$M/home/.claude" CLAUDE_PROJECT_DIR="$M/proj")
+  [ "${1:-} ${2:-} ${3:-}" = "sign --by owner" ] && owner_asked "$MP" "$M/proj" "$M/state" s-owner "${@:2}" >/dev/null
+  [ "${1:-}" = mode ] && [ $# -gt 1 ] && mode_asked "$MP" "$M/proj" "$M/state" s-owner "${@:2}" >/dev/null
   ( cd "$M/proj" && cenv HOME="$M/home" CLAUDE_CONFIG_DIR="$M/home/.claude" XDG_STATE_HOME="$M/state" CLAUDE_PROJECT_DIR="$M/proj" \
-      ${FIXTURE_REPORT:+FIXTURE_REPORT="$FIXTURE_REPORT"} ${FAKE_GH_AUTH:+FAKE_GH_AUTH="$FAKE_GH_AUTH"} python3 "$MP/scripts/baton.py" "$@" ) > "$OUT" 2>&1
+      CLAUDE_CODE_SESSION_ID=s-owner ${FIXTURE_REPORT:+FIXTURE_REPORT="$FIXTURE_REPORT"} ${FAKE_GH_AUTH:+FAKE_GH_AUTH="$FAKE_GH_AUTH"} python3 "$MP/scripts/baton.py" "$@" ) > "$OUT" 2>&1
   echo $?
 }
 # gate <args...> — rc of the machine's own engine, called directly as a session could; the output is in $OUT
@@ -133,7 +141,7 @@ fam_fresh() {
   machine "$P"
   eq "$(b check kit:coordinator-bootstrap)" 0 "[F] check kit:coordinator-bootstrap: rc 0"
   eq "$(b rehearse kit:coordinator-bootstrap)" 0 "[F] rehearse on a fresh machine: rc 0"
-  hasline "$(cat "$OUT")" "PLAN-COUNT 2" "[F] …two writes: the launcher and the settings"
+  hasline "$(cat "$OUT")" "  PLAN-COUNT 2" "[F] …two writes: the launcher and the settings"
   has "$(cat "$OUT")" "CHECK launcher: missing" "[F] …the report names the launcher missing"
   has "$(cat "$OUT")" "CHECK mode: manual" "[F] …and the mode manual"
   eq "$(b go kit:coordinator-bootstrap)" 8 "[F] go: exit 8 (Stops security-boundary: the owner signs)"
@@ -156,7 +164,7 @@ fam_fresh() {
   eq "$(ls "$M/state/vibemaestro/baton/signatures" | wc -l | tr -d ' ')" "$sigs" "[F] …and nothing was signed"
   machine "$P"
   b rehearse kit:coordinator-bootstrap >/dev/null
-  has "$(grep '^PLAN bootstrap ' "$OUT")" ", engine sha256 " "[F] every plan line binds the engine's sha256"
+  has "$(grep '^  PLAN bootstrap ' "$OUT")" ", engine sha256 " "[F] every plan line binds the engine's sha256"
   seal=$(sed -n 's/^seal \([^ ]*\) .*/\1/p' "$OUT")
   eq "$(b sign --by owner --seal "${seal:-none}" kit:coordinator-bootstrap)" 0 "[F] a second fresh machine: signed by the owner"
   printf '\n# changed after the signature\n' >> "$MP/gates/coordinator_bootstrap.py"
@@ -164,7 +172,7 @@ fam_fresh() {
   [ ! -e "$(SETTINGS)" ] && [ ! -e "$(LAUNCHER)" ] && ok "[F] …nothing written" || bad "[F] …nothing written"
   machine "$P"
   b rehearse kit:coordinator-bootstrap >/dev/null
-  sed -n 's/^PLAN \(bootstrap .*, engine sha256 \)[0-9a-f]\{64\}$/\1'"$(printf '0%.0s' $(seq 64))"'/p' "$OUT" > "$TMP/wrong-sha.plan"
+  sed -n 's/^  PLAN \(bootstrap .*, engine sha256 \)[0-9a-f]\{64\}$/\1'"$(printf '0%.0s' $(seq 64))"'/p' "$OUT" > "$TMP/wrong-sha.plan"
   eq "$(wc -l < "$TMP/wrong-sha.plan" | tr -d ' ')" 2 "[F] instrument: a plan of both lines with another engine sha256"
   eq "$(gate do settings --expect-plan "$TMP/wrong-sha.plan")" 3 "[F] a write whose signed engine sha256 is not the engine's: refused (rc 3)"
   eq "$(gate do launcher --expect-plan "$TMP/wrong-sha.plan")" 3 "[F] …the launcher write too"
@@ -254,6 +262,27 @@ fam_unreachable() {
   [ ! -e "$(LAUNCHER)" ] && ok "[R] …no launcher installed" || bad "[R] …no launcher installed"
 }
 
+fam_version() {
+  local P=$1 reg S sigs
+  machine "$P"; reg=$MP                           # the registry lists this copy: the installed sdlc
+  S="$(dirname "$reg")/3dd2665ed242-be49dd83"; cp -R "$P" "$S"; baton_isolate "$S"   # an older copy left in the cache, unlisted: the session's
+  MP=$reg
+  eq "$(b rehearse kit:coordinator-bootstrap)" 0 "[V] instrument: the installed copy rehearses on a fresh machine: rc 0"
+  MP=$S
+  eq "$(b rehearse kit:coordinator-bootstrap)" 1 "[V] rehearse from a session that is not the installed sdlc: refused"
+  has "$(cat "$OUT")" "the rehearse phase exited 3" "[V] …the run's own exit is 3"
+  has "$(cat "$OUT")" "REFUSE this session runs vibemaestro-sdlc $(basename "$S"), the installed one is $(basename "$reg")" "[V] …one REFUSE line names the session's version and the installed one"
+  eq "$(gate plan)" 3 "[V] the engine's plan from that copy: rc 3"
+  eq "$(grep -c . "$OUT")" 1 "[V] …it prints one line"
+  has "$(cat "$OUT")" "restart Claude Code" "[V] …and says restart Claude Code"
+  [ ! -e "$(SETTINGS)" ] && [ ! -e "$(LAUNCHER)" ] && ok "[V] …nothing written" || bad "[V] …nothing written"
+  sigs=$(ls "$M/state/vibemaestro/baton/signatures" 2>/dev/null | wc -l | tr -d ' ')
+  eq "$(b go kit:coordinator-bootstrap)" 1 "[V] go from that copy: rc 1, stopped at rehearse"
+  eq "$(ls "$M/state/vibemaestro/baton/signatures" 2>/dev/null | wc -l | tr -d ' ')" "$sigs" "[V] …and nothing was signed"
+  MP=$reg
+  eq "$(gate plan)" 0 "[V] the installed copy's own plan: rc 0"
+}
+
 fam_report() {
   local P=$1 G=$2
   machine "$P"
@@ -268,7 +297,7 @@ fam_report() {
   has "$(cat "$OUT")" "CHECK fixture-env: ok" "[G] …its line, run in the session's environment"
   has "$(cat "$OUT")" "CHECK fixture-next: info" "[G] …its next line"
   hasnt "$(cat "$OUT")" "fixture noise" "[G] …and not its line without the CHECK prefix"
-  hasnt "$(grep '^CHECK ' "$OUT")" "$M/home" "[G] no CHECK line spells the machine's home"
+  hasnt "$(grep '^  CHECK ' "$OUT")" "$M/home" "[G] no CHECK line spells the machine's home"
   b rehearse kit:coordinator-bootstrap >/dev/null
   has "$(cat "$OUT")" "CHECK fixture-env: MISSING" "[G] …the same line without its variable"
   python3 - "$M/home/.claude/plugins/cache/vibemaestro/$DEPN/$(version_of "$G")/.claude-plugin/plugin.json" <<'PY2'
@@ -306,7 +335,7 @@ print("CHECK planted: ok \x1b[2Jcleared")
 PY2
   b rehearse kit:coordinator-bootstrap >/dev/null
   has "$(cat "$OUT")" "CHECK planted: ok [2Jcleared" "[H] the hook's line is shown at rehearse"
-  eq "$(LC_ALL=C grep -c "$(printf '\033')" "$OUT")" 0 "[H] …with its control bytes dropped"
+  eq "$(LC_ALL=C grep -cF -e "$(printf '\033')" -e '\u{1b}' "$OUT")" 0 "[H] …with its control bytes dropped"   # dropped by the engine, not escaped by baton
   eq "$(owner_run)" "0/0" "[H] signed by the owner and run: rc 0"
   has "$(cat "$M/home/hook-phases")" "rehearse" "[H] instrument: the hook logs its phase"
   hasnt "$(cat "$M/home/hook-phases")" "run" "[H] the hook never runs in the signed run phase"
@@ -314,7 +343,7 @@ PY2
 
 echo "== the real plugin =="
 REAL="$TMP/real"; cp -R "$PLUGIN" "$REAL"; GREAL="$TMP/dependent"; cp -R "$DEP" "$GREAL"
-for fam in fam_fresh fam_setup fam_undo fam_unreachable; do echo "-- $fam"; "$fam" "$REAL"; done
+for fam in fam_fresh fam_setup fam_undo fam_unreachable fam_version; do echo "-- $fam"; "$fam" "$REAL"; done
 echo "-- fam_report"; fam_report "$REAL" "$GREAL"
 echo "-- fam_hook"; fam_hook "$REAL" "$GREAL"
 
@@ -326,10 +355,12 @@ BRK() {
 }
 fam_hook_g() { fam_hook "$1" "$GREAL"; }
 fam_report_g() { fam_report "$1" "$GREAL"; }
+BRK version-unchecked fam_version '[V] rehearse from a session that is not the installed sdlc: refused' gates/coordinator_bootstrap.py \
+    '    other = B.registry_other()' '    other = None'
 BRK undo-does-not-restore fam_undo '[U] settings byte-identical after undo' gates/coordinator_bootstrap.py \
     '            rc, out = kind("undo", user, rules)' '            rc, out = 0, ["VERDICT undo ok"]'
 BRK nothing-to-do-runs fam_fresh '[F] …REFUSE nothing to do' gates/coordinator_bootstrap.py \
-    '    if not p.lines:' '    if False:'
+    '    elif not p.lines:' '    elif False:'
 BRK extra-allow-rule fam_fresh '[F] the added rules equal the printed block exactly' gates/coordinator_bootstrap.py \
     '    rules["attribution"] = snip["attribution"]' '    rules["attribution"] = snip["attribution"]; rules["allow"] = rules.get("allow", []) + ["Bash(curl:*)"]'
 BRK attribution-flipped fam_setup '[B] …an explicit attribution value is kept' templates/baton-kinds/settings-merge.sh \

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# tests/run-all.sh itself: parallel mode, --jobs 1, filter words, summary lines, exit codes
+# tests/run-all.sh itself: parallel mode, --jobs 1, filter words, summary lines, exit codes, the CPU quota and the resource line
 # =============================================================================
 # Run: bash tests/test-run-all.sh
 #
@@ -110,11 +110,50 @@ eq "$(overlap)" no "RUN_ALL_JOBS=1: sequential"
 eq "$(overlap)" yes "the --jobs flag wins over RUN_ALL_JOBS"
 NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
 if [ "$NCPU" -ge 2 ]; then
-  run "$OVLDIR"
+  # with no CPU quota (an empty fake cgroup): a host or container quota under 2 CPUs would rightly make this run one job at a time
+  mkdir -p "$TMP/no-cgroup"; RUN_ALL_CGROUP_DIR="$TMP/no-cgroup" run "$OVLDIR"
   eq "$(overlap)" yes "default jobs (derived from $NCPU CPUs) overlap independent suites"
 else
   ok "default jobs: one CPU, overlap not asserted"
 fi
+
+echo "== the CPU quota (cgroup v2 cpu.max) and the resource line =="
+# a fake cgroup v2 directory (RUN_ALL_CGROUP_DIR): nproc shows the node's CPUs in a pod, the quota is what the run may use
+CG="$TMP/cgroup"; mkdir -p "$CG"
+cgrun() {  # cgrun <dir> <args…> — run with the fake cgroup and no RUN_ALL_JOBS
+  local d=$1; shift
+  : > "$LOG"
+  OUT=$(env -u NET_LOG -u RUN_ALL_JOBS RUN_ALL_CGROUP_DIR="$CG" RUN_ALL_SUITE_DIR="$d" OVERLAP_LOG="$LOG" OOM_EVENTS="$CG/memory.events" bash "$RUN" "$@" 2>&1); RC=$?
+}
+res() { printf '%s\n' "$OUT" | grep '^resources: ' | sed 's/;.*//'; }
+NJ=$NCPU; WHY="$NCPU CPUs"; [ "$NJ" -le 8 ] || { NJ=8; WHY="cap 8 of $NCPU CPUs"; }
+quota() {  # quota <cpus> — the resource line's jobs part for a quota of <cpus>
+  if [ "$1" -lt "$NCPU" ] && [ "$1" -le 8 ]; then echo "resources: jobs $1 (cpu quota $1 of $NCPU CPUs)"; else echo "resources: jobs $NJ ($WHY)"; fi
+}
+printf '600000 100000\n' > "$CG/cpu.max"; cgrun "$GREENDIR"
+eq "$(res)" "$(quota 6)" "cpu.max 600000 100000 (the k3s runner's 6 CPUs): at most 6 jobs"
+eq "$RC" 0 "…and the run is green"
+printf '50000 100000\n' > "$CG/cpu.max"; cgrun "$GREENDIR"
+eq "$(res)" "$(quota 1)" "a quota under one CPU: one job, not zero"
+printf 'max 100000\n' > "$CG/cpu.max"; cgrun "$GREENDIR"
+eq "$(res)" "resources: jobs $NJ ($WHY)" "cpu.max max (no quota): the CPU count, as before"
+printf '600000 0\n' > "$CG/cpu.max"; cgrun "$GREENDIR"
+eq "$(res)" "resources: jobs $NJ ($WHY)" "a period of 0 is no quota (no division by zero)"
+rm -f "$CG/cpu.max"; cgrun "$GREENDIR"
+eq "$(res)" "resources: jobs $NJ ($WHY)" "no cpu.max file: the CPU count, as before"
+printf '600000 100000\n' > "$CG/cpu.max"; cgrun "$GREENDIR" --jobs 3
+eq "$(res)" "resources: jobs 3 (asked)" "--jobs wins over the quota"
+OUT=$(env -u NET_LOG RUN_ALL_JOBS=2 RUN_ALL_CGROUP_DIR="$CG" RUN_ALL_SUITE_DIR="$GREENDIR" bash "$RUN" 2>&1)
+eq "$(res)" "resources: jobs 2 (asked)" "RUN_ALL_JOBS wins over the quota"
+printf '104857600\n' > "$CG/memory.peak"; printf '2147483648\n' > "$CG/memory.max"; printf 'low 0\noom 2\noom_kill 2\n' > "$CG/memory.events"
+OOMDIR="$TMP/stubs-oom"; mkdir -p "$OOMDIR"
+mk_stub "$OOMDIR" oom 'printf "low 0\noom 5\noom_kill 5\n" > "$OOM_EVENTS"' 'ok "an OOM kill counted meanwhile"' 'summary'
+cgrun "$OOMDIR"
+has "$OUT" "cgroup memory peak 100 MiB of 2048 MiB" "the resource line: the cgroup's memory peak and limit"
+has "$OUT" "oom kills 3" "…the OOM kills during the run only (5 at the end, 2 at the start)"
+eq "$(printf '%s\n' "$OUT" | tail -n 3 | head -n 1 | cut -c1-11)" "resources: " "…on the line before the last block (the last line stays the verdict)"
+rm -f "$CG/memory.events"; cgrun "$GREENDIR"
+hasnt "$OUT" "oom kills" "no memory.events: the OOM count is left out, not guessed"
 
 echo "== ordering and filters =="
 run "$GREENDIR" --jobs 1
@@ -122,8 +161,8 @@ eq "$(printf '%s\n' "$OUT" | grep '^################ ' | tr -d '#' | tr -s ' ' |
 run "$GREENDIR" --jobs 4
 eq "$(printf '%s\n' "$OUT" | grep '^################ ' | tail -n 1)" "################ ledger" "--jobs 4: the ledger block is printed last (it runs after every other suite)"
 # the known-slow suites are launched first: with 2 jobs and three stubs, the slow one must start before the alphabetically later bbb
-SLOWDIR="$TMP/stubs-slowfirst"; CTLDIR="$TMP/stubs-slowfirst-ctl"; mkdir -p "$SLOWDIR" "$CTLDIR"
-for pair in "$SLOWDIR:plugin-version" "$CTLDIR:zz-core"; do
+SLOWDIR="$TMP/stubs-slowfirst"; CTLDIR="$TMP/stubs-slowfirst-ctl"; MGDIR="$TMP/stubs-slowfirst-mg"; mkdir -p "$SLOWDIR" "$CTLDIR" "$MGDIR"
+for pair in "$SLOWDIR:plugin-version" "$CTLDIR:zz-core" "$MGDIR:merge-guard"; do
   d=${pair%%:*}; slow=${pair#*:}
   mk_stub "$d" aaa 'echo aaa >> "$OVERLAP_LOG"' 'sleep 0.5' 'ok a' 'summary'
   mk_stub "$d" bbb 'echo bbb >> "$OVERLAP_LOG"' 'ok b' 'summary'
@@ -133,6 +172,8 @@ pos() { awk -v n="$1" '$0==n{print NR; exit}' "$LOG"; }
 run "$SLOWDIR" --jobs 2
 [ "$(pos plugin-version)" -lt "$(pos bbb)" ] && ok "--jobs 2: plugin-version starts before the alphabetically earlier bbb (slow suites first)" || bad "--jobs 2: plugin-version started after bbb ($(tr '\n' ' ' < "$LOG"))"
 eq "$(last)" "XANH 3/3 suite" "…and every suite still runs and is counted"
+run "$MGDIR" --jobs 2
+[ "$(pos merge-guard)" -lt "$(pos bbb)" ] && ok "--jobs 2: merge-guard (the longest suite) starts before the alphabetically earlier bbb" || bad "--jobs 2: merge-guard started after bbb ($(tr '\n' ' ' < "$LOG"))"
 run "$CTLDIR" --jobs 2
 [ "$(pos zz-core)" -gt "$(pos bbb)" ] && ok "control: a suite that is not in the slow list starts in alphabetical order (zz-core after bbb)" || bad "control: zz-core started before bbb ($(tr '\n' ' ' < "$LOG")): the check cannot tell the orders apart"
 run "$GREENDIR" --jobs 4 green chatty-a
@@ -229,6 +270,7 @@ kill -TERM "$RP"; wait "$RP"; RC=$?
 eq "$RC" 143 "SIGTERM: run-all exits 143"
 sleep 2
 [ ! -e "$MARK.after" ] && ok "SIGTERM: the running suite was stopped too (it never reached its next command)" || bad "SIGTERM: the suite ran on as an orphan"
+has "$(cat "$TMP/sig-term.out")" "resources: jobs 2 (asked)" "SIGTERM (a CI timeout): the resource line is printed all the same"
 
 echo "== --changed runs the planner's suites, exact names; anything it cannot give is the full suite =="
 # A stub planner (RUN_ALL_PLANNER): it logs its arguments, prints PLAN_OUT one name per line, a `plan:` line on stderr, exits PLAN_RC.
@@ -252,6 +294,8 @@ has "$OUT" "################ chatty-a" "…chatty-a ran"
 hasnt "$OUT" "################ chatty-b" "…chatty-b, not planned, did not"
 eq "$(printf '%s\n' "$OUT" | head -n 1)" "plan: stub — planned" "…and the planner's stderr line comes first"
 eq "$(cat "$TMP/plan-args")" "base-ref" "the planner gets the base (no head: the working tree)"
+crun "green" 0 --changed @merge-parent:0123abc
+eq "$(cat "$TMP/plan-args")" "@merge-parent:0123abc" "--changed @merge-parent:<pr head> (test.yml on a PR): the planner gets the word as it is"
 crun "green" 0 --changed base-ref --head head-ref
 eq "$(cat "$TMP/plan-args")" "base-ref head-ref" "--head is passed to the planner as its second argument"
 eq "$(last)" "XANH 1/1 suite" "…one planned suite, one run"

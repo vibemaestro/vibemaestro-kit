@@ -5,6 +5,7 @@
 # Undo: removes the file only while it holds the planned bytes; the directory's mode is put back
 # Pre: the source is a readable file; the target is absent (other bytes there are refused, never overwritten); the directory is not under a .git or .claude directory, the Claude Code config directory or the vibemaestro state directory
 # Stops: none
+# Usage: <source file> <directory>
 # Expect: install *
 #
 # A baton script of kind install-file (BatonRun): run as is with `<launcher> go kind:install-file <source> <directory>` (no script
@@ -16,6 +17,8 @@
 # Why `Stops: none`: an ordinary directory only. Settings, hooks, the launcher and the baton state (a .git or .claude directory,
 # the Claude Code config directory, the vibemaestro state directory) are a security boundary: this kind refuses them, and such a
 # copy is a baton of its own with Stops: security-boundary, which the owner signs.
+# `kind:install-file` keeps its positional arguments (`# Usage:`). A copy meant to be kept with `baton pack` declares
+# `# Params:` instead, reads its values in a block of `P_<KEY>="$<n>"` lines and declares Targets as `{key}` patterns.
 # bash 3.2 (macOS) runs this file: no associative arrays, no ${var,,}, no mapfile.
 set -euo pipefail
 PHASE=${BATON_PHASE:-rehearse}

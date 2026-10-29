@@ -117,4 +117,7 @@ ARGS=(--title "$TITLE" --summary-file "$SUM" --evidence-file "$EV" --base "$BASE
 # adapter does (test-core-pr.sh pins that). The slug read from `gh` goes to the core as `--repo`; with no slug `gh` chooses
 # by the working directory.
 [ -n "$SLUG" ] && ARGS+=(--repo "$SLUG")
+# The ship step starts here: tell the sandbox (stage-signal.sh is a no-op without a `session-notify` that supports `--stage`
+# and never fails this script). Not on `--dry-run`, which returned above.
+bash "$HERE/stage-signal.sh" ship ${HEAD_BR:+--branch "$HEAD_BR"} || true
 exec python3 "$CORE" "${ARGS[@]}"

@@ -5,7 +5,9 @@
 
 Reads form only, never meaning. Checks (plugin code only: the documents themselves are not tested):
   - the stop list of the skill core and STOP_WORDS of baton.py are the same words in the same order;
-  - the skill core, the rule and the BatonRun bullet of the workflow core name the standard docs/batonrun.md.
+  - the skill core, the rule and the BatonRun bullet of the workflow core name the standard docs/batonrun.md;
+  - the always-on text (the BatonRun bullet, the skill's description and the rule's description, without their quotes) is at
+    most ALWAYS_ON_MAX bytes, and the rule has at most RULE_LINES_MAX lines (both as measured when the text said one idea).
 Prints one line per problem, then a last line `<n> checks, <m> problems`; rc 0 when there is none, 1 otherwise, 2 on bad usage.
 """
 import ast
@@ -19,6 +21,8 @@ RULE = SDLC + "/rules/batonrun.instructions.md"
 CORE = SDLC + "/rules/workflow-core.instructions.md"
 BATON = SDLC + "/scripts/baton.py"
 POINTERS = (SKILL, RULE)
+ALWAYS_ON_MAX = 1396
+RULE_LINES_MAX = 23
 
 
 def read(root, rel):
@@ -37,6 +41,12 @@ def section(text, title):
     rest = text[m.end():]
     n = re.search(r"^## ", rest, re.M)
     return rest[: n.start()] if n else rest
+
+
+def description(text):
+    """The `description:` value of a front matter, without its quotes; None when there is none."""
+    m = re.search(r'^description: *"?(.*?)"?$', text.split("\n---", 1)[0], re.M)
+    return m.group(1) if m else None
 
 
 def baton_constant(src, name):
@@ -79,6 +89,17 @@ def main(argv):
     need(bullet is not None, "%s: no BatonRun bullet" % CORE)
     if bullet:
         need("docs/batonrun.md" in bullet.group(0), "%s: the BatonRun bullet does not name the standard" % CORE)
+
+    # the budgets
+    rule = read(root, RULE) or ""
+    lines = rule.count("\n") + (0 if rule.endswith("\n") or not rule else 1)
+    need(lines <= RULE_LINES_MAX, "%s: %d lines, over %d" % (RULE, lines, RULE_LINES_MAX))
+    parts = [bullet.group(0) if bullet else None, description(skill), description(rule)]
+    need(None not in parts, "the always-on text: a part is missing (the bullet, or a description)")
+    if None not in parts:
+        n = sum(len(x.encode("utf-8")) for x in parts)
+        need(n <= ALWAYS_ON_MAX, "the always-on text is %d bytes (%s), over %d"
+             % (n, " + ".join(str(len(x.encode("utf-8"))) for x in parts), ALWAYS_ON_MAX))
 
     for p in problems:
         print(p)

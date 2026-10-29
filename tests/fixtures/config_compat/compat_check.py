@@ -10,6 +10,8 @@ One line per check on stdout: `ok\t<label>` or `FAIL\t<label>`; the suite turns 
               read (or is in DEPRECATED), DEPRECATED is well formed
   deprecated  a deprecated key in its window: read, moved to its new key, noted with the new key's name
   migrate     MIGRATIONS carry a config up to SCHEMA; a missing step and a newer schema refuse
+  deny        the default deny globs (`MERGE_DENY_DEFAULT`, what `kb.py init` writes and the bootstrap floor adds) deny a sample of
+              each glob the floor's default holds, except `.vibemaestro/batons/**`; a config that sets its own list keeps it
 The floor reader is a snapshot (one stdlib file); `floor.txt` holds its sha256, checked first.
 """
 import copy
@@ -235,6 +237,39 @@ def fam_migrate(C, F, fx, repo_cfg):
             say(rc == 65 and got == {"schema": base} and left == ["sdlc.json"],
                 "[M] config migrate --write with a result that would be invalid: rc 65 and the file is untouched (%s, %s)" % (rc, got))
     C.MIGRATIONS.clear()
+
+
+# (path, denied by the floor's default, denied by the plugin's): a sample for each glob of the floor's default, then the paths it
+# leaves the same; only the project batons leave the default (BatonRun row d, Q2a)
+DENY_SAMPLES = ((".github/workflows/ci.yml", True, True), (".github/workflows/a/b.yml", True, True),
+                (".vibemaestro/sdlc.json", True, True), (".vibemaestro/x", True, True), (".vibemaestro/gates/x.py", True, True),
+                (".vibemaestro/rules/a.instructions.md", True, True), ("deploy/a-secret.txt", True, True), ("secret", True, True),
+                (".vibemaestro/batons/merge-x.sh", True, False), (".vibemaestro/batons/a/b.sh", True, False),
+                ("src/main.py", False, False), (".github/actions/a.yml", False, False))
+
+
+def fam_deny(C, F, fx, repo_cfg):
+    def denied(R, p):
+        return any(R.glob_match(g, p) for g in R.MERGE_DENY_DEFAULT)
+    for p, old, new in DENY_SAMPLES:
+        say(denied(F, p) == old, "[D] instrument: the floor's default %s %s" % ("denies" if old else "leaves", p))
+        say(denied(C, p) == new, "[D] the default %s %s" % ("denies" if new else "leaves", p))
+    for g in F.MERGE_DENY_DEFAULT:
+        say(any(F.glob_match(g, p) and p not in (".vibemaestro/batons/merge-x.sh", ".vibemaestro/batons/a/b.sh")
+                for p, _o, _n in DENY_SAMPLES), "[D] a sample for the floor's glob %s" % g)
+    say(all(C.glob_ok(g) for g in C.MERGE_DENY_DEFAULT) and all(F.glob_ok(g) for g in C.MERGE_DENY_DEFAULT),
+        "[D] every default glob is a glob the floor reader accepts")
+    own = json.load(open(os.path.join(fx, "old-kit-config.json"), encoding="utf-8"))
+    want = own["merge"]["deny_globs"]
+    for name, R in (("floor", F), ("plugin", C)):
+        got = R.effective(copy.deepcopy(own))["merge"]["deny_globs"]
+        say(got == want, "[D] %s reader: a config that sets merge.deny_globs keeps exactly its list (%s)" % (name, got))
+    say(".vibemaestro/**" in want, "[D] instrument: that config's own list denies .vibemaestro/**")
+    if repo_cfg:
+        mine = json.load(open(repo_cfg, encoding="utf-8"))
+        want = (mine.get("merge") or {}).get("deny_globs")
+        got = C.effective(copy.deepcopy(mine))["merge"]["deny_globs"]
+        say(want is None or got == want, "[D] plugin reader: this repo's merge.deny_globs is read as written")
 
 
 def main(argv):

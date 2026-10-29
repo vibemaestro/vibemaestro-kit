@@ -34,6 +34,7 @@ import functools
 import json
 import math
 import os
+import posixpath
 import re
 import sys
 import unicodedata
@@ -150,6 +151,8 @@ DEFAULTS = {
     "schema": 1,
     "hooks": "auto",
     "language": "vi",
+    # the update reminder of a public install (scripts/update_check.py): false turns it off in this repository, for sdlc and brain
+    "update_check": True,
     "branch": {"intent_prefix": "intent/", "protected": ["main", "master"], "pattern": None},
     "pr": {
         "title": {"pattern": None, "max_len": None, "intent_form": "allow"},
@@ -309,6 +312,11 @@ def is_present(root):
 # required keys) ("tokenlist",) ("gate",) ("keyword",) ("ident",) ("patterns",) ("tables",) ("gitfile",) ("gitprefixes",) ("pageglob",)
 # ("labelre",)
 _STR = ("str",)
+# `ci.runner_default` is a runner label, or this value: no fallback label at all, the workflows install-gates writes fail at the start of a
+# run while the runner variable is unset (an organisation with self-hosted runners only has no hosted machine to fall back to). It holds a
+# space, so it can never equal a label; to a reader that predates the form it is an ordinary string.
+RUNNER_SELF_HOSTED_ONLY = "self-hosted only"
+RUNNER_LABEL = re.compile(r"[A-Za-z0-9._-]+")
 LABEL_PROBE_SECONDS = 1     # the `labelre` probes are 10 characters at most: a regex that needs longer backtracks
 
 
@@ -348,6 +356,7 @@ SCHEMA_TREE = {
     "schema": ("int", 1),
     "hooks": ("enum", ("auto", "off")),
     "language": ("enum", LANGUAGES),
+    "update_check": ("bool",),
     "branch": ("obj", {
         "intent_prefix": ("prefix",),
         "protected": ("strlist",),
@@ -438,8 +447,29 @@ _REF_SEG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # rather than read literally, so nobody relies on a class or a brace that would match nothing.
 GLOB_BAD_CHARS = "[]{}\\"
 # the deny globs a new config gets from `kb.py init` (the list the init-kb skill proposes), and the floor the guarded merge adds to
-# the deny globs of a config a repo's first PR brings (bootstrap), so that PR cannot empty its own list
-MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/**", "**/*secret*")
+# the deny globs of a config a repo's first PR brings (bootstrap), so that PR cannot empty its own list. `.vibemaestro/` is named
+# file by file and directory by directory, leaving out `batons/`: a project baton merges through the guard like other code (BatonRun
+# Q2a). A config that sets merge.deny_globs keeps its own list
+MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")
+
+
+def merge_deny_floor(rules_dirs):
+    """MERGE_DENY_DEFAULT plus `<dir>/**` for each `rules.dirs` folder that sits under `.vibemaestro/` and is not named there yet: a
+    rules folder is policy as much as `.vibemaestro/rules`, whatever its name. A folder outside `.vibemaestro/` adds nothing. A name
+    the glob language cannot spell literally fails closed: each of `[`, `]`, `{`, `}` becomes `?` (it denies that folder and may deny
+    a neighbour), `*` and `?` stay (so does a run of `*` as one). The gates folder is fixed (`install_gates.py`), so it is in the tuple."""
+    have = set(g.lower() for g in MERGE_DENY_DEFAULT)
+    extra = []
+    for d in rules_dirs if isinstance(rules_dirs, list) else []:
+        if not isinstance(d, str) or not _clean(d):
+            continue
+        norm = posixpath.normpath(d)
+        low = norm.lower()
+        g = re.sub(r"\*+", "*", re.sub(r"[\[\]{}]", "?", norm)) + "/**"
+        if (low == ".vibemaestro" or low.startswith(".vibemaestro/")) and glob_ok(g) and g.lower() not in have:
+            have.add(g.lower())
+            extra.append(g)
+    return list(MERGE_DENY_DEFAULT) + extra
 # a registry host (`ghcr.io`, `registry.example.test:5000`) and an image path (lower case, the OCI distribution grammar)
 _HOST = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::[0-9]{1,5})?$")
 # `merge.log`: a plain file name in the user's state directory, so it can never point into the baton's own state
@@ -907,6 +937,11 @@ def check(data):
     for key, d in sorted(DEPRECATED.items()):
         if not d.get("removed") and _lookup(data, key)[0]:
             notes.append((key, Note(_deprecation_note(key, d, lang))))
+    rd = data.get("ci", {}).get("runner_default") if isinstance(data.get("ci"), dict) else None
+    if _text(rd) and rd != RUNNER_SELF_HOSTED_ONLY and not RUNNER_LABEL.fullmatch(rd):     # the type stays a string for every older reader
+        notes.append(("ci.runner_default", Note("is not a runner label ([A-Za-z0-9._-]+) and not \"%s\": install-gates refuses it; write a label "
+                                                "(the fallback of the runs-on expression) or \"%s\" (no fallback)"
+                                                % (RUNNER_SELF_HOSTED_ONLY, RUNNER_SELF_HOSTED_ONLY))))
     moved = _forward(data)
     if moved is not data:                    # a value moved to its new key is checked against the new key's type too
         again = []

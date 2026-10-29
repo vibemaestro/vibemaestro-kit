@@ -36,6 +36,8 @@
 #   [V] a second owner-shaped call voids the earlier record: a direct brain.py call is asked again, and a call the hook
 #       cannot read literally leaves no record a denied dialog could have left
 #   [L] the dialog lines of add (decision, window), unpin, supersede and promote; Vietnamese byte for byte; ≤ 283
+#   [J] guard-owner run with the shell in B for a session whose project is A writes its record in A, and `brain owner`
+#       typed in B then writes A's hot memory; B gets no state
 #   [T] arguments read literally, the command alone, or denied: substitution, glob, redirect, two owner commands, an open
 #       quote, an escaped $ in double quotes, a backslash, ~ after =, a carriage return, a leading cd; --help is one deny
 #   [Q] round 1: a record serves only the call it was asked for: the session's next Bash call of any shape (an eval, a
@@ -44,6 +46,12 @@
 #   [A] a programmatic answerer: deny before any dialog
 #   [S] the BRAIN_TEST switch (BRAIN_TEST_ASK_MODES): asks in plan and bypassPermissions only, the record keeps the real
 #       mode, and the CLI refuses it; in every mode the CLI answers the same with and without the switch
+#   [F] a command that only mentions brain and owner is silent with no record: a heredoc (an apostrophe, a line
+#       `brain owner …`, <<-, after a shift in arithmetic), echo, printf, grep, a commit message, a gh body
+#   [G] every real form is still guarded: bin/brain by path (quoted or not) and python3.X brain.py alone and literal
+#       are asked; after `&&`, after a heredoc (two on a line, a backslash word, after a subshell), after a shift `<<` in
+#       arithmetic (no closing line: nothing skipped), with a heredoc, an open quote after a quoted path: denied; bash -c, sh -c
+#       and a heredoc fed to a shell: silent, no record, and the CLI they run refuses rc 6
 #   [X] planted breaks: each case goes red on a copy with one break
 # =============================================================================
 set -uo pipefail
@@ -388,6 +396,21 @@ fakever() {  # fakever <version line> — a fake Claude Code binary printing it;
 }
 LINE1='Pin owner decision D1, from "prompt 10-18 09:11": "Owner merges every PR that touches clusters/"'
 
+case_hook_project() {  # guard-owner and the CLI agree on the session's project while the shell is in another one
+  newp
+  local A=$P B="$TMP/other$NP" dA dB
+  mkdir -p "$B"; git_ -C "$B" init -q -b main
+  dA=$(sdir); dB=$(cd "$B" && bpy 'import os; print(s.state_dir(os.getcwd()))')
+  cd "$B" || return 1
+  P=$B CLAUDE_PROJECT_DIR=$A gown default "${ADD[@]}"
+  c_eq "$(hfield permissionDecision)" ask "[J] guard-owner with cwd in B, the session's project A: ask"
+  c_eq "$(ls "$dA/asked" 2>/dev/null | wc -l | tr -d ' ')" 1 "[J] the record is in A"
+  br owner "${ADD[@]}"
+  c_rc 0 "[J] brain owner typed in B: written"
+  c_has "$(cat "$dA/hot.jsonl" 2>/dev/null)" "Owner merges every PR" "[J] into A's hot memory"
+  c_eq "$([ -e "$dB" ] && echo made || echo none)" none "[J] B has no brain state"
+}
+
 case_hook_ask() {
   newp
   gown default "${ADD[@]}"
@@ -597,7 +620,64 @@ print(sorted(set(h.TEST_ASK_MODES) & set(s.DIALOG_MODES)))' "$BROOT/scripts"); c
 }
 
 echo "== cases =="
-for c in case_hook_ask case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
+case_hook_mention() {  # [F] only the words, never a brain call: silent, no record
+  newp
+  local c o; o=$(cmdline brain owner "${ADD[@]}")
+  for c in $'cat > note.md <<\'EOF\'\nThe brain hook refuses the owner\'s note\nEOF' \
+           $'cat > note.md <<EOF\n'"$o"$'\nEOF' \
+           $'cat > note.md <<-"EOF"\n\tbrain owner unpin D1 is the owner\'s\n\tEOF\necho done' \
+           "echo the brain's owner rule" \
+           "printf '%s\n' 'brain owner unpin D1'" \
+           'grep -rn "brain owner" .' \
+           $'git commit -m "$(cat <<\'EOF\'\nfix(brain): the owner hook\n\nbrain owner unpin D1 is guarded; it\'s real\nEOF\n)"' \
+           $'gh issue comment 562 --body-file - <<\'EOF\'\nbrain owner unpin D1\nthe owner\'s words\nEOF' \
+           "gh issue create --title t --body \"brain's owner: $o\"" \
+           $'echo $((1<<2)); cat <<EOF\n'"$o"$'\nEOF'; do
+    gcmd default "$c"; c_eq "$OUT" "" "[F] only mentions the words, silent: $(printf '%q' "${c:0:50}")"
+  done
+  c_eq "$(recmode)" none "[F] no record for any of them"
+}
+
+case_hook_forms() {  # [G] every real form is still guarded
+  newp
+  local f c o o2 a=(owner add --kind decision --text x --owner-quote q --where w)
+  for f in /opt/x/bin/brain "'/opt/a b/bin/brain'" '"/opt/a b/bin/brain"' "python3.12 '/opt/a b/scripts/brain.py'" \
+           'python3 "/opt/a b/scripts/brain.py"'; do
+    gcmd default "$f $(cmdline "${a[@]}")"; c_eq "$(hfield permissionDecision)" ask "[G] alone and literal, asked: $f owner add"
+  done
+  o=$(cmdline brain owner "${ADD[@]}")
+  for c in "true && $o" \
+           $'cat > n.md <<\'EOF\'\nnote\nEOF\n'"$o" \
+           $'cat > n.md <<-EOF\n\tnote\n\tEOF\n'"$o" \
+           $'cat > n.md <<"E O"\nbrain owner unpin D1\nE O\n'"$o" \
+           $'cat <<EOF; '"$o"$'\nbody\nEOF' \
+           $'cat <<A <<\'B\'\na\nA\nb\nB\n'"$o" \
+           $'cat <<\\EOF\nx\nEOF\n'"$o" \
+           $'echo $((1<<2))\n'"$o" \
+           $'(( x = 1 << 3 ))\n'"$o" \
+           $'(( x = (1+(2)) << 2 ))\n'"$o" \
+           $'echo $[1<<2] ${a[1<<0]}\n'"$o" \
+           $'((echo a); echo b)\ncat <<EOF\nit\'s\nEOF\n'"$o" \
+           "$o"$' <<\'EOF\'\nx\nEOF' \
+           "'/opt/a b/bin/brain' owner add --kind decision --text 'open --owner-quote q --where w"; do
+    gcmd default "$c"; c_eq "$(hfield permissionDecision)" deny "[G] a real form not alone or not literal, denied: $(printf '%q' "${c:0:60}")"
+  done
+  c_eq "$(recmode)" none "[G] no record for any of them"
+  # the shell runs below: a sure-positive control first (the hook asked for this very call, so the same run writes)
+  sh_run() { OUT=$(cd "$P" && PATH="$BROOT/bin:$PATH" CLAUDE_CODE_SESSION_ID="$SID" bash -c "$1" 2>&1); RC=$?; }
+  gcmd default "$o"; sh_run "$o"; c_rc 0 "[G] instrument: an asked call run through the shell writes"
+  o2=$(cmdline brain owner add --kind decision --text "fed to a shell" --owner-quote q --where w)
+  for c in "bash -c $(cmdline "$o2")" "sh -c $(cmdline "$o2")" \
+           $'cat <<EOF | bash\n'"$o2"$'\nEOF' $'bash <<EOF\n'"$o2"$'\nEOF' $'sh <<-EOF\n\t'"$o2"$'\n\tEOF'; do
+    gcmd default "$o2"; c_eq "$(hfield permissionDecision)" ask "[G] instrument: the bare call is asked (a fresh record)"
+    gcmd default "$c"; c_eq "$OUT" "" "[G] silent: $(printf '%q' "${c:0:40}")"
+    c_eq "$(recmode)" none "[G] no record, and the fresh one is void"
+    sh_run "$c"; c_rc 6 "[G] the CLI it runs refuses rc 6: $(printf '%q' "${c:0:40}")"
+    c_has "$OUT" "$SENTENCE" "[G] with the refusal sentence"
+  done
+}
+
+for c in case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
   run_case $c; done
 cd "$TMP" || exit 1
 
@@ -651,6 +731,7 @@ plant worker-check-removed case_worker $ST '    if os.environ.get("INTENT_SLUG")
 plant writer-check-removed case_worker $ST '        check_writer(st)
         test_pause()' '        test_pause()'
 HK=scripts/brain_hook.py
+plant guard-owner-follows-cwd case_hook_project $HK '    project, d, _ = resolve(inp)  ' '    project, d, _ = (cwd_of(inp), s.state_dir(cwd_of(inp)), None)  '
 plant hook-mode-not-checked case_hook_deny $HK 'dialog = mode in ("default", "acceptEdits") or (mode == "auto" and version_ok()) or mode in ask_modes()' 'dialog = True'
 plant hook-version-floor-ignored case_hook_ask $HK '(mode == "auto" and version_ok())' '(mode == "auto")'
 plant hook-subagent-allowed case_hook_deny $HK '    if inp.get("agent_id"):
@@ -662,7 +743,7 @@ plant hook-literal-not-checked case_hook_literal $HK 'if len(found) > 1 or len(s
 plant hook-text-cut case_hook_line $HK "'Pin owner decision %s, from \"%s\": \"%s\"' % (iid, ns.where, ns.text)" "'Pin owner decision %s, from \"%s\": \"%s\"' % (iid, ns.where, ns.text[:40])"
 plant quote-lookalike-allowed case_hook_line $ST '        if value and field != "text":' '        if False:'
 plant source-after-text case_hook_line $HK "'Pin owner decision %s, from \"%s\": \"%s\"' % (iid, ns.where, ns.text)" "'Pin owner decision %s: \"%s\" · from: %s' % (iid, ns.text, ns.where)"
-plant hook-answerers-ignored case_hook_answerer $HK '    ans = s.answerers()' '    ans = []'
+plant hook-answerers-ignored case_hook_answerer $HK '    ans = s.answerers(s.project_root(project))' '    ans = []'
 plant switch-records-default case_hook_switch $HK '    rid = s.record_asked(d, sid, mode, args)' '    rid = s.record_asked(d, sid, "default" if mode in ask_modes() else mode, args)'
 plant switch-without-brain-test case_hook_switch $HK '    if os.environ.get("BRAIN_TEST") != "1":
         return []' '    if False:
@@ -693,6 +774,19 @@ plant hook-owner-anywhere case_hook_deny $HK '    if ws[i:i + 1] and is_brain(ws
         return ws[i + 2:]' '    for i in range(len(ws)):
         if is_brain(ws[i]) and ws[i + 1:i + 2] == ["owner"]:
             return ws[i + 2:]'
+plant mention-anywhere case_hook_mention $HK '            if owner_tokens(lead_words(text)) is not None:' '            if re.search(r"(?:^|[\s/])brain(?:\.py)?\b.*\bowner\b", text):'
+plant heredoc-not-skipped case_hook_mention $HK 'segments(cmd, heredoc=True)' 'segments(cmd)'
+plant heredoc-never-closes case_hook_mention $HK '            if (line.lstrip("\t") if strip else line) == word:' '            if False:'
+plant heredoc-dash-keeps-tabs case_hook_mention $HK '            if (line.lstrip("\t") if strip else line) == word:' '            if line == word:'
+plant heredoc-quotes-kept case_hook_mention $HK '        elif c in "'"'"'\"":
+            q = c' '        elif False:
+            q = c'
+plant heredoc-closing-not-required case_hook_forms $HK '                i = j
+                break
+    return i' '                break
+        i = j
+    return i'
+plant lead-words-split case_hook_forms $HK '            if owner_tokens(lead_words(text)) is not None:' '            if owner_tokens(text.split()[:3]) is not None:'
 plant switch-may-name-auto case_hook_switch $HK 'TEST_ASK_MODES = ("plan", "bypassPermissions")' 'TEST_ASK_MODES = ("plan", "bypassPermissions", "auto")'
 plant quote-allowed case_hook_line $ST "        if value and '\"' in value:" "        if False:"
 plant marks-unbounded case_hook_line $ST '    if _marks_run(value) > MARKS_RUN_MAX:' '    if False:'

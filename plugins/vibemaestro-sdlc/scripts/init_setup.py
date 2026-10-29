@@ -297,8 +297,9 @@ DENY_NOTE = ("merge.deny_globs = %s: the paths the guarded merge refuses in its 
 DENY_UNSET_NOTE = ("merge.deny_globs is unset (the answers say null): the guarded merge refuses every PR of this repo until the "
                    "config lists the paths it refuses ([] is a valid answer)")
 RUNNER_NOTE = ("CI runner: install-gates will check, read-only through gh, that the repo variable %s is set; unset or empty, the "
-               "workflows fall back to a fallback runner label (ubuntu-latest, GitHub-hosted, unless the repo names another), and where "
-               "hosted minutes are locked the gates never start")
+               "workflows follow ci.runner_default: a fallback runner label (ubuntu-latest, GitHub-hosted, unless the repo names another; "
+               "where hosted minutes are locked the gates never start), or \"" + C.RUNNER_SELF_HOSTED_ONLY + "\" (no fallback: every gate run "
+               "fails at its start, naming the variable)")
 
 
 def table_cols(basis, template):
@@ -332,6 +333,8 @@ def run(root, argv, kb_plan, config_check, config_notices):
     inputs = layer(prop, answers)                                   # what the person and the detection say
     composed = layer(layer(ADOPT_SCAFFOLD if o["adopt"] else APP_SCAFFOLD, prop), answers)
     composed.setdefault("schema", 1)
+    if isinstance(composed.get("merge"), dict) and "deny_globs" not in (inputs.get("merge") or {}):             # no answer for the deny globs: the default, and each rules folder under .vibemaestro/
+        composed["merge"]["deny_globs"] = C.merge_deny_floor(dig(composed, "rules.dirs"))
     bad = C.problems(composed, strict=True)                         # the rules that span keys too, and no unknown key: refused before the first write
     if bad:
         sys.stderr.write("kb: init: the answers%s are invalid (%d problem(s)); nothing was written:\n%s\n"

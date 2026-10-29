@@ -13,7 +13,8 @@
 #   [S] settings-merge: adds rules, removes none; backup and run record; undo restores byte for byte through the record, and
 #       leaves a file that changed since (exit 5)
 #   [R] remote-exec: over the fake ssh; the plan carries the host's own name; a host that does not answer is printed first
-#   [K] kubectl-exec: over the fake kubectl; the plan carries context, API server and pod uid; Stops cluster-lane (go: exit 8)
+#   [K] kubectl-exec: over the fake kubectl; the plan carries context, API server and pod uid; Stops cluster-lane (go: exit 8);
+#       a server other than the one the context names is refused
 #   [G] ci-rerun-failed: over a fake gh (tests/fixtures/baton_kinds_gh.py); record, rerun, the next attempt; undo cancels it
 #   [C] kind:<name>: install-file, settings-merge and ci-rerun-failed run with no script written; other names rc 64;
 #       the binding names the kinds directory; a link on a predictable temp name is never written through
@@ -21,16 +22,26 @@
 #   [X] planted breaks: each family goes red on a plugin copy with one break in a kind or in baton.py
 # =============================================================================
 set -uo pipefail
+# the owner's-dialog check of baton.py reads the HOME of every ancestor from its initial environment, which forked subshells share:
+# start again without the launcher's (clean_env then points HOME into the scratch tree; the user base is pinned first)
+if [ -z "${ACCOUNT_HOME_REEXEC:-}" ]; then
+  export PYTHONUSERBASE="${PYTHONUSERBASE:-$(python3 -m site --user-base 2>/dev/null)}"
+  exec env -u CLAUDE_CONFIG_DIR ACCOUNT_HOME_REEXEC=1 HOME=/nonexistent bash "$0" "$@"
+fi
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 # shellcheck source=fixtures/lib.sh
 . "$HERE/fixtures/lib.sh"
 # shellcheck source=fixtures/ports.sh
 . "$HERE/fixtures/ports.sh"
+# shellcheck source=fixtures/baton-owner.sh
+. "$HERE/fixtures/baton-owner.sh"
+# shellcheck source=fixtures/account-home.sh
+. "$HERE/fixtures/account-home.sh"
 
 PLUGIN="$SRC_ROOT/plugins/vibemaestro-sdlc"
 TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
-trap 'rm -rf "$TMP"' EXIT
+trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT    # an input copy is read-only (0400 in a 0500 directory)
 clean_env "$TMP"
 export PYTHONDONTWRITEBYTECODE=1
 export BATON_POSTCHECK_WAITS="0 0 0 0"   # a failed post-check is undone at once
@@ -80,7 +91,13 @@ PATH="$FB:$PATH"; export PATH
 
 BT_OUT="$TMP/bt.out"; ST=""
 # bt <plugin> <dir> <baton args...> — rc of baton run from <dir> with the state in $ST; its output is in $BT_OUT
-bt() { local p=$1 d=$2; shift 2; ( cd "$d" && XDG_STATE_HOME="$ST" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$p/scripts/baton.py" "$@" ) > "$BT_OUT" 2>&1; echo $?; }
+# a `sign --by owner` first goes through the plugin's guard hook (owner_asked), as in a session whose owner clicks the dialog
+bt() {
+  local p=$1 d=$2; shift 2
+  [ "${1:-} ${2:-} ${3:-}" = "sign --by owner" ] && owner_asked "$p" "$d" "$ST" s-owner "${@:2}" >/dev/null
+  [ "${1:-}" = mode ] && [ $# -gt 1 ] && mode_asked "$p" "$d" "$ST" s-owner "${@:2}" >/dev/null
+  ( cd "$d" && XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-owner FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$p/scripts/baton.py" "$@" ) > "$BT_OUT" 2>&1; echo $?
+}
 # sg <plugin> <dir> <script> [args...] — rehearse to read the seal, sign it as owner; the rc of sign
 sg() {
   local p=$1 d=$2 seal; shift 2
@@ -176,15 +193,22 @@ fam_kind_settings() {
 }
 
 fam_kind_remote() {
-  local P=$1 W f out
+  local P=$1 W f out seal
+  # a text with a space, from an input file, through printf %q into the remote bash -s; the kind is Stops: none, so the
+  # session signs it in mode auto
   ST="$(fresh)/state"; W=$(fresh); f=$(kind_in "$P" "$W" remote-exec); out="$W/remote/motd"; mkdir -p "$W/remote"
-  eq "$(bt "$P" "$W" rehearse "$f" host1 "$out" 'hello there')" 0 "[R] rehearse over ssh: rc 0"
+  printf 'hello there\n' > "$W/body.txt"; printf 'hi\n' > "$W/hi.txt"
+  local V=(host=host1 rpath="$out" body="$W/body.txt")
+  eq "$(bt "$P" "$W" rehearse "$f" "${V[@]}")" 0 "[R] rehearse over ssh: rc 0"
   has "$(cat "$BT_OUT")" "PLAN remote host1 ($(uname -n)) create $out sha256" "[R] …the plan carries the host and the name it reports"
   has "$(cat "$W/fake.log")" "ssh host1 bash -s" "[R] …the program went through stdin into bash -s"
-  eq "$(sg "$P" "$W" "$f" host1 "$out" 'hello there')" 0 "[R] sign: rc 0"
-  eq "$(bt "$P" "$W" run "$f" host1 "$out" 'hello there')" 0 "[R] run and post-check: rc 0"
+  bt "$P" "$W" mode auto >/dev/null
+  seal=$( (cd "$W" && XDG_STATE_HOME="$ST" FAKE_LOG="$W/fake.log" FAKE_GH_WORLD="$W/gh.json" python3 "$P/scripts/baton.py" rehearse "$f" "${V[@]}") 2>/dev/null \
+          | sed -n 's/^seal \([^ ]*\) .*/\1/p')
+  eq "$(bt "$P" "$W" sign --by coordinator-auto --seal "${seal:-none}" "$f" "${V[@]}")" 0 "[R] sign: rc 0"
+  eq "$(bt "$P" "$W" run "$f" "${V[@]}")" 0 "[R] run and post-check: rc 0"
   eq "$(cat "$out")" "hello there" "[R] …the file holds the text"
-  eq "$(bt "$P" "$W" rehearse "$f" down "$W/remote/x" hi)" 1 "[R] a host that does not answer: rehearse rc 1"
+  eq "$(bt "$P" "$W" rehearse "$f" host=down rpath="$W/remote/x" body="$W/hi.txt")" 1 "[R] a host that does not answer: rehearse rc 1"
   has "$(cat "$BT_OUT")" "Connection refused" "[R] …the remote read was printed before the decision"
   has "$(cat "$BT_OUT")" "REFUSE" "[R] …and refused by name"
 }
@@ -192,16 +216,21 @@ fam_kind_remote() {
 fam_kind_kubectl() {
   local P=$1 W f out
   ST="$(fresh)/state"; W=$(fresh); f=$(kind_in "$P" "$W" kubectl-exec); out="$W/pod/conf"; mkdir -p "$W/pod"
-  eq "$(bt "$P" "$W" rehearse "$f" ctx1 ns1 web-0 "$out" 'a=1')" 0 "[K] rehearse over kubectl exec: rc 0"
+  printf 'a=1\n' > "$W/body.txt"; printf 'hi\n' > "$W/hi.txt"
+  local V=(ctx=ctx1 ns=ns1 pod=web-0 server=https://api.fake.test:6443 rpath="$out" body="$W/body.txt")
+  eq "$(bt "$P" "$W" rehearse "$f" "${V[@]}")" 0 "[K] rehearse over kubectl exec: rc 0"
   has "$(cat "$BT_OUT")" "PLAN pod ns1/web-0 (uid uid-web-0-0001) on https://api.fake.test:6443 (context ctx1) create $out sha256" \
       "[K] …the plan carries the pod uid, the API server and the context"
   has "$(cat "$W/fake.log")" "exec -i web-0 -- bash -s" "[K] …the program went through stdin into bash -s"
-  eq "$(bt "$P" "$W" go "$f" ctx1 ns1 web-0 "$out" 'a=1')" 8 "[K] go: exit 8 (Stops cluster-lane: the owner signs)"
-  eq "$(sg "$P" "$W" "$f" ctx1 ns1 web-0 "$out" 'a=1')" 0 "[K] sign as owner: rc 0"
-  eq "$(bt "$P" "$W" run "$f" ctx1 ns1 web-0 "$out" 'a=1')" 0 "[K] run and post-check: rc 0"
+  eq "$(bt "$P" "$W" go "$f" "${V[@]}")" 8 "[K] go: exit 8 (Stops cluster-lane: the owner signs)"
+  eq "$(sg "$P" "$W" "$f" "${V[@]}")" 0 "[K] sign as owner: rc 0"
+  eq "$(bt "$P" "$W" run "$f" "${V[@]}")" 0 "[K] run and post-check: rc 0"
   eq "$(cat "$out")" "a=1" "[K] …the file holds the text"
-  eq "$(bt "$P" "$W" rehearse "$f" ctx1 ns1 gone "$W/pod/x" hi)" 1 "[K] a pod that is gone: rehearse rc 1"
+  eq "$(bt "$P" "$W" rehearse "$f" ctx=ctx1 ns=ns1 pod=gone server=https://api.fake.test:6443 rpath="$W/pod/x" body="$W/hi.txt")" 1 "[K] a pod that is gone: rehearse rc 1"
   has "$(cat "$BT_OUT")" "NotFound" "[K] …the read was printed before the decision"
+  eq "$(bt "$P" "$W" rehearse "$f" ctx=ctx1 ns=ns1 pod=web-0 server=https://other.fake.test rpath="$W/pod/y" body="$W/hi.txt")" 1 \
+     "[K] a server the context does not name: rehearse rc 1"
+  has "$(cat "$BT_OUT")" "REFUSE context ctx1 names the API server https://api.fake.test:6443, not https://other.fake.test" "[K] …a server mismatch is refused by name"
 }
 
 # gh_world <dir> [python statements on W] — the fake gh's world: acme/app private, acme/pub public; run 77 of acme/app failed at attempt 1
@@ -269,7 +298,8 @@ fam_kind_callable() {
   printf '{"permissions": {"allow": []}}\n' > "$s"; printf '{"ask": ["Bash(rm:*)"]}\n' > "$r"
   eq "$(bt "$P" "$W" go kind:settings-merge "$s" "$r")" 8 "[C] go kind:settings-merge: exit 8 (Stops security-boundary)"
   cmd=$(sed -n "s/^on the owner's go: //p" "$BT_OUT")
-  eq "$( (cd "$W" && XDG_STATE_HOME="$ST" bash -c "$cmd") >/dev/null 2>&1; echo $?)" 0 "[C] …the printed owner command signs kind:settings-merge"
+  guard_cmd "$P" "$W" "$ST" s-owner "$cmd" >/dev/null                      # the session runs it; the guard opens the dialog
+  eq "$( (cd "$W" && XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-owner bash -c "$cmd") >/dev/null 2>&1; echo $?)" 0 "[C] …the printed owner command signs kind:settings-merge"
   cmd=$(sed -n 's/^then: *//p' "$BT_OUT")
   eq "$( (cd "$W" && XDG_STATE_HOME="$ST" bash -c "$cmd") >/dev/null 2>&1; echo $?)" 0 "[C] …the printed run command runs it"
   eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["permissions"]["ask"])' "$s")" "['Bash(rm:*)']" "[C] …the rule is merged"
@@ -283,8 +313,8 @@ fam_kind_callable() {
   has "$(cat "$BT_OUT")" "REFUSE $W/link.json is a symbolic link" "[C] …refused by name"
   for k in remote-exec kubectl-exec 'x/../y' '../baton-script' ''; do
     eq "$(bt "$P" "$W" go "kind:$k" a b)" 64 "[C] go kind:$k: rc 64"
+    has "$(cat "$BT_OUT")" "install-file, settings-merge, ci-rerun-failed" "[C] …go kind:$k: the message lists the callable kinds"
   done
-  has "$(cat "$BT_OUT")" "install-file, settings-merge, ci-rerun-failed" "[C] …the message lists the callable kinds"
   mkdir -p "$W/bin2"; outside="$W/outside.txt"; printf 'keep\n' > "$outside"
   ln -s "$outside" "$W/bin2/tool.sh.baton-new"
   eq "$(bt "$P" "$W" go kind:install-file "$src" "$W/bin2")" 0 "[C] install-file with a link on the old temp name: rc 0"
@@ -357,7 +387,16 @@ fam_d5() {
   D5_REPO="$SRC_ROOT"
 }
 
-FAMILIES="fam_d5 fam_kinds_new fam_kind_install fam_kind_settings fam_kind_remote fam_kind_kubectl fam_kind_ci fam_kind_callable fam_kind_review"
+# [Y] the machine's own ~/.claude is not read: the answerer check of baton.py reads the HOME of every ancestor from /proc, and a subshell
+# of this suite shows the HOME this shell was started with
+fam_y() {
+  local P=$1
+  eq "$(grep -c '^SUITE_PID = ' "$P/scripts/baton.py")" 1 "[Y1] the plugin copy is isolated from the machine (baton_isolate): its ancestor walk stops at the suite's shell"
+  eq "$(home_leaks "$P/scripts" baton ancestors)" "True []" "[Y2] the ancestors the copy sees from below the suite: at least one, none with a HOME outside the scratch tree"
+  has "$(HOME=/ctl-real home_leaks "$P/scripts" baton ancestors)" "'/ctl-real'" "[Y3] control: a bash above the call that was started with another HOME is named, so [Y2] can see a leak"
+}
+
+FAMILIES="fam_y fam_d5 fam_kinds_new fam_kind_install fam_kind_settings fam_kind_remote fam_kind_kubectl fam_kind_ci fam_kind_callable fam_kind_review"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for fam in $FAMILIES; do echo "-- $fam"; "$fam" "$REAL"; done
@@ -378,7 +417,9 @@ KBRK settings-undo-blind fam_kind_settings '[S] …a file that changed since the
     '  if [ "$NOW" = "$AFTER" ]; then' '  if true; then'
 KBRK kubectl-uid-dropped fam_kind_kubectl '[K] …the plan carries the pod uid' templates/baton-kinds/kubectl-exec.sh \
     '(uid $PUID)' '(uid -)'
-KBRK kind-any-name fam_kind_callable '[C] go kind:remote-exec: rc 64' scripts/baton.py \
+KBRK kubectl-server-unchecked fam_kind_kubectl '[K] …a server mismatch is refused by name' templates/baton-kinds/kubectl-exec.sh \
+    'if [ "$SERVER" != "$P_SERVER" ]; then' 'if false; then'
+KBRK kind-any-name fam_kind_callable '[C] …go kind:remote-exec: the message lists the callable kinds' scripts/baton.py \
     '    if name not in CALLABLE_KINDS:' '    if not KIND_RE.match(name):'
 KBRK kind-unbound fam_kind_callable '[C] …the same kind run from another plugin copy' scripts/baton.py \
     '            self.bind_sha = sha256(self.sha + "\0kind:" + KINDS_REAL)' '            self.bind_sha = self.sha'

@@ -5,6 +5,12 @@
 #   python3 tests/plan.py <base> [<head>]   the suites to run, one name per line (the `X` of tests/test-X.sh), sorted
 #                                           no <head>: the working tree (uncommitted and untracked files included) against
 #                                           the merge-base of <base> and HEAD
+#   python3 tests/plan.py @merge-parent:<pr head> [<head>]
+#                                           the same from the first parent of <head> (or HEAD), which must be a merge commit of
+#                                           exactly two parents whose second is <pr head>: on a PR, GitHub's merge commit of the PR
+#                                           head into the current main, so the plan is the PR's own change against that main
+#                                           (test.yml passes the event's head.sha). Any other commit, a worker's own merge of main
+#                                           into its branch included, or no <pr head>: full
 #   python3 tests/plan.py --paths           read paths on stdin (one per line), print `<path>\t<suite> <suite>…` per path:
 #                                           what each path wakes on its own (tests/test-plan.sh checks every tracked file)
 #   python3 tests/plan.py --check           the coverage guard: rc 0 when the map covers the tree, rc 1 with one line per problem
@@ -24,8 +30,10 @@
 # plan prints every tests/test-*.sh. Fail closed: anything the planner cannot decide is the full suite, never a smaller one.
 #   - the diff is `git diff --name-only --no-renames --ignore-submodules=none <merge-base> <head>`: a rename counts as both names,
 #     and a gitlink bump counts even when .gitmodules says `ignore = all` (as in tests/fixtures/plugin_version.py);
-#   - full when: a ref does not resolve, no merge-base, git fails, the map or the exclusion list does not parse, a path matches
-#     `@full` (it wins over an exclusion), a path matches no suite and no exclusion, a planned suite has no file;
+#   - full when: a ref does not resolve, @merge-parent on a commit that is not a merge of two parents (one parent, a root, an
+#     octopus, a shallow clone's graft) or whose second parent is not the PR head, no merge-base, git fails, the map or the
+#     exclusion list does not parse, a path matches `@full` (it wins over an exclusion), a path matches no suite and no exclusion,
+#     a planned suite has no file;
 #   - a change to the map itself: the suites whose expanded line differs
 #     between the merge-base and the head run, plus what the other paths wake under either map; a changed `@always`/`@full` line,
 #     or a map that does not parse at the merge-base, is full.
@@ -60,6 +68,13 @@ TOKEN_RE = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+/?")
 IMPORT_RE = re.compile(r"^\s*(?:from\s+([A-Za-z_]\w*)|import\s+([A-Za-z_]\w*))", re.M)
 VAR_RE = re.compile(r"""^\s*(?:local\s+|export\s+)?([A-Z_][A-Z0-9_]*)=["']?\$\{?SRC_ROOT\}?/(plugins/[A-Za-z0-9_.-]+)/?["']?\s*(?:$|[;#])""", re.M)
 NAME_RE = re.compile(r"(?<![\w.-])([A-Za-z0-9_][\w.-]*\.(?:py|sh|json|yml|yaml))\b")
+# shell functions: a definition `name() {`, a source line `. <…>/x.sh`, and a call: the name as a word anywhere in the code (comments
+# dropped first), not followed by `.<ext>` (`capped.sh` is a file, not a call). A word catches eval, trap, quoted names and a name kept
+# in a variable; a name built at run time from parts is not seen.
+SH_DEF_RE = re.compile(r"(^|(?<=[\s;&|(){]))(?:function[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)\s*\{", re.M)
+SH_SOURCE_RE = re.compile(r"^[ \t]*(?:\.|source)[ \t]+(.*)$", re.M)
+SH_CALL = r"(?<![\w.-])(?:%s)(?![\w-]|\.\w)"
+SH_HEREDOC_RE = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 class MapError(Exception):
@@ -221,9 +236,34 @@ def resolve(ref, what):
         raise Full("%s `%s` does not resolve to a commit" % (what, ref))
 
 
+MERGE_PARENT = "@merge-parent"
+
+
+def merge_parent(base, h, name):
+    """`base` is `@merge-parent:<pr head>`: the first parent of `h`, which must be a merge commit of exactly two parents whose second
+    is <pr head> (GitHub's merge commit of that head into main); anything else is the full suite. Why not `h^1` of any commit: on
+    another checkout the first parent is the PR's own previous commit, and on a worker's own merge of main into its branch it is the
+    branch, so the diff is main's change, not the PR's: a narrower plan."""
+    want = base[len(MERGE_PARENT) + 1:] if base.startswith(MERGE_PARENT + ":") else ""
+    if not want:
+        raise Full("`%s` names no PR head (%s:<sha>): no base to plan from" % (base, MERGE_PARENT))
+    pr = resolve(want, "the PR head")
+    try:
+        parents = git("rev-list", "--parents", "-n", "1", h).decode().split()[1:]
+    except RuntimeError as e:
+        raise Full(str(e))
+    what = "head `%s`" % name if name != "HEAD" else "HEAD"
+    if len(parents) != 2:
+        raise Full("%s is not a merge commit of two parents (%d parent%s): %s has no base"
+                   % (what, len(parents), "" if len(parents) == 1 else "s", MERGE_PARENT))
+    if parents[1] != pr:
+        raise Full("the second parent of %s is not the PR head `%s`: not GitHub's merge commit of the PR" % (what, want))
+    return resolve(parents[0], "the first parent of %s" % what)
+
+
 def changed(base, head):
-    b = resolve(base, "base")
     h = resolve(head, "head") if head else resolve("HEAD", "HEAD")
+    b = merge_parent(base, h, head or "HEAD") if base.startswith(MERGE_PARENT) else resolve(base, "base")
     try:
         mb = git("merge-base", b, h).decode().strip()
     except RuntimeError:
@@ -469,6 +509,229 @@ class Refs:
         return seen
 
 
+def arith_at(text, i):
+    """True when the `((` at `i` is arithmetic, not a subshell in a subshell (`((a) && (b))`): the first time its parentheses close
+    back to one level, the next character closes the other too (`))`)."""
+    depth, j, n = 2, i + 2, len(text)
+    while j < n:
+        c = text[j]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 1:
+                return text[j + 1:j + 2] == ")"
+        j += 1
+    return False
+
+
+def shell_scan(text):
+    """→ (code, braces): shell text with its comments dropped, as bash reads them, and the offsets in it of the braces that group
+    commands (`name() {`, `{ …; }`), not those in a quote, a `${…}`, arithmetic or a brace expansion. A nesting stack follows quotes,
+    `$'…'`, `$( )`, `${ }`, `(( ))`/`$(( ))`, subshells, `case … esac` and backticks, across lines; a `#` starts a comment only at the
+    start of a word in code (after a blank, `;`, `|`, `&` or `(`, not after `)` or an escaped blank). A heredoc's body is kept as it
+    is; `<<<` and a shift inside arithmetic open none. When the scan is unsure (an odd quote), it keeps text: more words, never
+    fewer."""
+    out, braces, stack, pending = [], [], [], []
+    olen = 0                                        # the length of the code so far (a running count: summing `out` is quadratic)
+    i, n, word_start = 0, len(text), True
+    code_ctx = (None, "cmd", "sub", "case")
+
+    def put(s):
+        nonlocal olen
+        out.append(s)
+        olen += len(s)
+
+    while i < n:
+        c = text[i]
+        ctx = stack[-1] if stack else None
+        if c == "\n":
+            put(c)
+            i += 1
+            word_start = True
+            if pending and ctx not in ("sq", "dq", "ansi"):
+                for delim in pending:                       # heredoc bodies, kept raw, up to each delimiter line
+                    while i < n:
+                        j = text.find("\n", i)
+                        j = n if j < 0 else j
+                        line = text[i:j]
+                        put(text[i:j + 1])
+                        i = j + 1
+                        if line.strip() == delim:
+                            break
+                pending = []
+            continue
+        two, was_start, word_start = text[i:i + 2], word_start, False
+        if ctx == "sq":
+            if c == "'":
+                stack.pop()
+        elif ctx == "ansi":
+            if c == "\\":
+                put(text[i:i + 2]); i += 2; continue
+            if c == "'":
+                stack.pop()
+        elif ctx == "dq":
+            if c == "\\":
+                put(text[i:i + 2]); i += 2; continue
+            if c == '"':
+                stack.pop()
+            elif text.startswith("$((", i):
+                stack.append("arith"); put("$(("); i += 3; continue
+            elif two == "$(":
+                stack.append("cmd"); put(two); i += 2; word_start = True; continue
+            elif two == "${":
+                stack.append("brace"); put(two); i += 2; continue
+            elif c == "`":
+                stack.append("bt")
+        elif ctx in ("arith", "apar"):                      # arithmetic: no comment, no heredoc, no grouping brace
+            if c == "(":
+                stack.append("apar")
+            elif c == ")" and ctx == "apar":
+                stack.pop()
+            elif two == "))":
+                stack.pop(); put(two); i += 2; continue
+            elif two == "$(" and not text.startswith("$((", i):
+                stack.append("cmd"); put(two); i += 2; word_start = True; continue
+        else:                                               # code: the top level, $( ), ( ), case, ${ }, backticks
+            if c == "\\":
+                put(text[i:i + 2]); i += 2; continue
+            if two == "$'":
+                stack.append("ansi"); put(two); i += 2; continue
+            if text.startswith("$((", i):
+                stack.append("arith"); put("$(("); i += 3; continue
+            if two == "$(":
+                stack.append("cmd"); put(two); i += 2; word_start = True; continue
+            if two == "${":
+                stack.append("brace"); put(two); i += 2; continue
+            if ctx in code_ctx and was_start and two == "((" and arith_at(text, i):
+                stack.append("arith"); put(two); i += 2; continue
+            if ctx in code_ctx and was_start and re.match(r"case\s", text[i:i + 5]):
+                stack.append("case"); put("case"); i += 4; continue
+            if ctx == "case" and was_start and re.match(r"esac(?:$|[\s;)&|])", text[i:i + 5]):
+                stack.pop(); put("esac"); i += 4; continue
+            if c == "'":
+                stack.append("sq")
+            elif c == '"':
+                stack.append("dq")
+            elif c == "`":
+                if ctx == "bt":
+                    stack.pop()
+                else:
+                    stack.append("bt")
+            elif ctx == "brace":
+                if c == "}":
+                    stack.pop()
+            elif c == "(":
+                stack.append("sub")
+                word_start = True
+            elif c == ")":
+                if ctx in ("cmd", "sub"):
+                    stack.pop()                             # in a case, `)` ends a pattern: it closes nothing
+            elif c == "#" and ctx in code_ctx and was_start:
+                j = text.find("\n", i)
+                i = n if j < 0 else j                       # a comment: dropped up to the end of its line
+                continue
+            elif c in " \t;|&" and ctx in code_ctx:
+                word_start = True
+            elif c in "{}" and ctx in code_ctx:
+                nxt = text[i + 1] if i + 1 < n else "\n"
+                if (c == "{" and nxt in " \t\n") or (c == "}" and was_start):
+                    braces.append((olen, c))
+            elif two == "<<" and ctx in code_ctx and text[i:i + 3] != "<<<" and text[i - 1:i] != "<":
+                m = SH_HEREDOC_RE.match(text, i)
+                if m:
+                    pending.append(m.group(2))
+        put(c)
+        i += 1
+    return "".join(out), braces
+
+
+def shell_code(text):
+    """Shell text without its comments, so a name in a comment is no call."""
+    return shell_scan(text)[0]
+
+
+def calls(text, names):
+    """The names of `names` that `text` (shell code) uses as a word: a call, an eval or trap string, a name kept in a variable."""
+    if not names:
+        return set()
+    return set(re.findall(SH_CALL % "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)), text))
+
+
+def shell_functions(text):
+    """{name: body} of every function defined in shell text (nested, several on a line, in a heredoc: each), plus LOAD: the
+    top-level code (what runs when the file is sourced). A body runs from its definition to the brace that closes the one it
+    opens, by the grouping braces of shell_scan; no such brace (a definition inside a heredoc, an odd quote): to the end of its
+    line, or of the file when its brace groups. A name defined twice gets both bodies."""
+    code, braces = shell_scan(text)
+    at = {pos: k for k, (pos, _c) in enumerate(braces)}
+    out, spans = {}, []
+    for m in SH_DEF_RE.finditer(code):
+        start, open_ = m.start(2), m.end() - 1
+        k = at.get(open_)
+        if k is None:
+            nl = code.find("\n", open_)
+            end = len(code) if nl < 0 else nl
+        else:
+            depth, end = 0, len(code)
+            for pos, ch in braces[k:]:
+                depth += 1 if ch == "{" else -1
+                if depth == 0:
+                    end = pos + 1
+                    break
+            spans.append((start, end))
+        out[m.group(2)] = (out[m.group(2)] + "\n" if m.group(2) in out else "") + code[start:end]
+    top, last = [], 0
+    for start, end in sorted(spans):
+        if start >= last:
+            top.append(code[last:start])
+            last = end
+        else:
+            last = max(last, end)
+    top.append(code[last:])
+    out[LOAD] = "".join(top)
+    return out
+
+
+LOAD = "(load)"   # the pseudo function of a fixture's top-level code: a suite that sources the file runs it
+
+
+def hidden_fixtures(m, refs):
+    """{fixture: the @full file that sources it}: shell fixtures an @full shell file sources that are not @full themselves. The
+    closure stops at an @full file, so a suite never names them; it reaches them only by calling their functions."""
+    out = {}
+    for f in refs.files:
+        if not (f.endswith(".sh") and hit(f, m.full)):
+            continue
+        for rest in SH_SOURCE_RE.findall(shell_code(refs.text(f))):
+            names = re.findall(r"([\w.-]+\.sh)\b", rest)
+            c = os.path.normpath(os.path.join(os.path.dirname(f), names[-1])) if names else None
+            if c in refs.fileset and not hit(c, m.full):
+                out.setdefault(c, f)
+    return out
+
+
+def function_reach(refs, hidden):
+    """{hidden fixture: {(file, function)}}: the functions of the shell fixtures that use, directly or through other fixture
+    functions, a function the hidden fixture defines (its own functions included); (file, LOAD) when a fixture's top-level code
+    does."""
+    bodies = {f: shell_functions(refs.text(f)) for f in refs.files if f.startswith("tests/fixtures/") and f.endswith(".sh")}
+    out = {}
+    for h in hidden:
+        reach = {(h, n) for n in bodies.get(h, {}) if n != LOAD}
+        grown = True
+        while grown:
+            grown = False
+            names = {n for _f, n in reach if n != LOAD}
+            for f, fns in bodies.items():
+                for n, body in fns.items():
+                    if (f, n) not in reach and f != h and calls(body, names):
+                        reach.add((f, n))
+                        grown = True
+        out[h] = reach
+    return out
+
+
 def check():
     problems = []
     try:
@@ -507,12 +770,34 @@ def check():
             problems.append("`%s` is mapped to no suite and not excluded (add it to a suite's line in %s, or to %s with a reason)"
                             % (f, MAP_REL, EXCL_REL))
     refs = Refs(files)
+    hidden = hidden_fixtures(m, refs)
+    reach = function_reach(refs, hidden)
     for s in sorted(m.suites):
         if s not in on_disk:
             continue
         covered = {f for f in files if f == suite_file(s) or hit(f, m.suites[s])}
         start = refs.named(suite_file(s))
-        need = {f for f in refs.closure(start, m.full) if f.startswith(REF_ROOTS)}
+        reached = refs.closure(start, m.full)
+        need = {f for f in reached if f.startswith(REF_ROOTS)}
+        # a function of a fixture an @full file sources: what the suite calls of it, among the fixtures it can call (those it
+        # reaches, and those an @full file it reaches sources)
+        if hidden:
+            text = shell_code(refs.text(suite_file(s)))
+            can = reached | {h for h, src in hidden.items() if src in reached}
+            for h in sorted(hidden):
+                if h not in can or h in covered:
+                    continue
+                via = sorted((n, f) for f, n in reach[h] if f in can and n != LOAD)
+                hits = calls(text, {n for n, _f in via})
+                loads = sorted(f for f, n in reach[h] if n == LOAD and f in reached)
+                if loads:
+                    problems.append("suite `%s` sources %s, whose top-level code reaches %s that %s sources, but its line in %s does not cover %s"
+                                    % (s, loads[0], h, hidden[h], MAP_REL, h))
+                elif hits:
+                    n = min(hits)
+                    f = min(f for nn, f in via if nn == n)
+                    problems.append("suite `%s` calls `%s` (%s), which reaches %s that %s sources, but its line in %s does not cover %s"
+                                    % (s, n, f, h, hidden[h], MAP_REL, h))
         missing = sorted(f for f in need - covered if not hit(f, m.full))
         if missing:
             more = " (and %d more)" % (len(missing) - 8) if len(missing) > 8 else ""
@@ -546,7 +831,7 @@ def main(argv):
             return main_suites(woken, old)
     if len(argv) in (1, 2) and not argv[0].startswith("-"):
         return main_plan(argv[0], argv[1] if len(argv) == 2 else None)
-    print("usage: plan.py <base> [<head>] | --paths | --check | --suites [--woken] [--old <dir>]", file=sys.stderr)
+    print("usage: plan.py <base>|@merge-parent:<pr head> [<head>] | --paths | --check | --suites [--woken] [--old <dir>]", file=sys.stderr)
     return 2
 
 

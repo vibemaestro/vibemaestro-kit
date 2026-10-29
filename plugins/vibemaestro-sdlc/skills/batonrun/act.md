@@ -1,8 +1,8 @@
 # batonrun reference: writing the act
 
 Read this when the act runs a remote program (`ssh`, `kubectl exec`), when undo must restore something the act moves, when a
-plugin script runs inside the baton, or when `go` refused a file as stale. The rules every baton needs are in the core
-(`SKILL.md`, step 3); this file holds the rest. Also printed by `<launcher> help act`.
+plugin script runs inside the baton, when `go` refused a file as stale, or when a task runs several batons. The rules every
+baton needs are in the core (`SKILL.md`, step 5); this file holds the rest. Also printed by `<launcher> help act`.
 
 ## The script
 
@@ -95,3 +95,11 @@ Two answers are right about the path and wrong about the object, so pick the pat
 - A token that cannot see a private repository gets 404 for everything in it, so "absent" there means "not visible":
   read the repository itself first when the token may lack access.
 URL-encode a name in the path (`jq -rn --arg v "$name" '$v|@uri'`): an unencoded `#`, `?` or space reads another path.
+
+## Several batons
+
+In place by default, any number. Delegate 3 or more batons only when the main context is over ~400k tokens.
+Then ONE worker subagent (model `agents.worker_model`), one Agent call with the whole job and the exact script names
+`<prefix>-<act>.sh`, a prefix of its own; a worker never delegates. Then ONE call `<launcher> log --wait-names
+<prefix>-a.sh,… --timeout 580`: rc 0 once each name's latest run line since the wait's start − 300 s is ok (a fixed re-run
+counts), else rc 9 at the deadline. After the wait, the worker's hand-back needs no tool call: end the turn.

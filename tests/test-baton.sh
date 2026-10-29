@@ -19,10 +19,12 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 . "$HERE/fixtures/lib.sh"
 # shellcheck source=fixtures/ports.sh
 . "$HERE/fixtures/ports.sh"
+# shellcheck source=fixtures/baton-owner.sh
+. "$HERE/fixtures/baton-owner.sh"
 
 PLUGIN="$SRC_ROOT/plugins/vibemaestro-sdlc"
 TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
-trap 'rm -rf "$TMP"' EXIT
+trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT    # an input copy is read-only (0400 in a 0500 directory)
 clean_env "$TMP"
 export PYTHONDONTWRITEBYTECODE=1
 H0=$(tree_hash "$SRC_ROOT")
@@ -32,11 +34,21 @@ tree_files "$SRC_ROOT" > "$TMP/tree-before.lst"
 BT_OUT="$TMP/bt.out"
 ST=""
 
-# bt <plugin> <dir> <baton args...> — rc of baton run from <dir> with the state in $ST (plus BT_ENV); its output is in $BT_OUT
-BT_ENV=()
+# bt <plugin> <dir> <baton args...> — rc of baton run from <dir> with the state in $ST (plus BT_ENV) as session OWNER_SID; its
+# output is in $BT_OUT. A `sign --by owner` first goes through the plugin's guard hook (owner_asked), as in a session whose owner
+# clicks the dialog; fam_owner_dialog tests the record itself. BT_PRE, when set, is a command baton runs under (HUP_DFL below).
+BT_ENV=(); BT_PRE=(); OWNER_SID=s-owner
+# HUP_DFL — runs its arguments with SIGHUP at its default. A check that stops baton with SIGHUP uses it: baton keeps a SIGHUP its parent
+# ignored (nohup), so without it the check would test the parent shell, not baton.
+HUP_DFL=(python3 -c 'import os, signal, sys
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])')
 bt() {
   local p=$1 d=$2; shift 2
-  ( cd "$d" && cenv XDG_STATE_HOME="$ST" ${BT_ENV[@]+"${BT_ENV[@]}"} python3 "$p/scripts/baton.py" "$@" ) > "$BT_OUT" 2>&1; echo $?
+  [ "${1:-} ${2:-} ${3:-}" = "sign --by owner" ] && owner_asked "$p" "$d" "$ST" "$OWNER_SID" "${@:2}" >/dev/null
+  [ "${1:-}" = mode ] && [ $# -gt 1 ] && mode_asked "$p" "$d" "$ST" "$OWNER_SID" "${@:2}" >/dev/null
+  ( cd "$d" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID="$OWNER_SID" ${BT_ENV[@]+"${BT_ENV[@]}"} ${BT_PRE[@]+"${BT_PRE[@]}"} \
+      python3 "$p/scripts/baton.py" "$@" ) > "$BT_OUT" 2>&1; echo $?
 }
 # seal_for <plugin> <dir> <script> [args...] — the seal that rehearse prints (empty when rehearse fails)
 seal_for() {
@@ -49,7 +61,9 @@ sg() { local p=$1 d=$2 by=$3 seal; shift 3; seal=$(seal_for "$p" "$d" "$@"); bt 
 # fresh_state — a new empty state directory for this family run (families run once per plugin copy)
 fresh_state() { ST="$(fresh)/state"; }
 # act_in <plugin> <dir> — the template written by `baton new act` into <dir>; prints its path
-act_in() { bt "$1" "$2" new act --dir "$2" >/dev/null; printf '%s' "$2/act.sh"; }
+# act_in <plugin> <dir> — a positional baton (no Params: <file> <text>), the shape most families exercise; the template `new`
+# writes declares Params and is run in fam_new
+act_in() { cp "$SRC_ROOT/tests/fixtures/baton-positional.sh" "$2/act.sh"; printf '%s' "$2/act.sh"; }
 POSTCHECK_OK=$'postcheck() {\n  holds_text\n}'; POSTCHECK_NO=$'postcheck() {\n  false\n}'
 # in_act <script> <line> — plant one line at the top of the act
 in_act() { mutate "$1" $'act() {\n' $'act() {\n  '"$2"$'\n'; }
@@ -82,6 +96,11 @@ fam_new() {
   eq "$(bt "$P" "$W" new Bad_Name --dir "$W")" 64 "[new] a name outside [a-z0-9-]: rc 64"
   eq "$(bt "$P" "$W" check "$W/demo.sh")" 0 "[new] the template passes check as generated"
   eq "$(bash -n "$W/demo.sh"; echo $?)" 0 "[new] the template is valid bash"
+  printf 'hi\n' > "$W/body.txt"; bt "$P" "$W" mode auto >/dev/null
+  eq "$(bt "$P" "$W" go "$W/demo.sh" dest="$W/out.txt" body="$W/body.txt")/$(cat "$W/out.txt" 2>/dev/null)" "0/hi" \
+     "[new] the template runs with its Params: the file holds the input's bytes"
+  eq "$(bt "$P" "$W" go "$W/demo.sh" "$W/o2.txt" hi)" 64 "[new] …a positional call does not fit its Params: rc 64"
+  eq "$(bt "$P" "$W" pack "$W/demo.sh" user:demo-put)" 0 "[new] …and it can be kept as generated: pack rc 0"
 }
 
 # ── check ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -325,7 +344,7 @@ fam_check_stops() {
 fam_rehearse_expect() {
   local P=$1 W A; fresh_state; W=$(fresh); A=$(act_in "$P" "$W")
   eq "$(bt "$P" "$W" rehearse "$A" "$W/out.txt" hello)" 0 "[rehearse-expect] control: the template rehearses: rc 0"
-  hasline "$(cat "$BT_OUT")" "PLAN create $W/out.txt" "[rehearse-expect] control: one PLAN line with the resolved path"
+  hasline "$(cat "$BT_OUT")" "  PLAN create $W/out.txt" "[rehearse-expect] control: one PLAN line with the resolved path"
   [ ! -e "$W/out.txt" ] && ok "[rehearse-expect] rehearse writes nothing" || bad "[rehearse-expect] rehearse writes nothing"
   mutate "$A" '# Expect: create *' '# Expect: delete *'
   eq "$(bt "$P" "$W" rehearse "$A" "$W/out.txt" hello)" 1 "[rehearse-expect] plan differs from Expect: rc 1"
@@ -394,7 +413,8 @@ fam_run_args() {
   eq "$(sg "$P" "$W" owner "$A" "$W/out.txt" hello)" 0 "[run-args] sign: rc 0"
   eq "$(bt "$P" "$W" run "$A" "$W/out.txt" other)" 3 "[run-args] other arguments: rc 3"
   [ ! -e "$W/out.txt" ] && ok "[run-args] nothing written" || bad "[run-args] nothing written"
-  eq "$(sg "$P" "$W" owner "$A" "$W/b.txt" hello --by owner)" 1 \
+  # a seal of the printed form (rehearse prints none for a script whose usage check fails), so the guard asks and sign rehearses
+  eq "$(bt "$P" "$W" sign --by owner --seal 0000000000000000.0000000000000000 "$A" "$W/b.txt" hello --by owner)" 1 \
      "[run-args] a trailing --by goes to the script (four arguments fail its usage check in rehearse): rc 1"
   eq "$(nsig)" 1 "[run-args] …and nothing more is signed"
 }
@@ -477,8 +497,11 @@ fam_run_undo() {
   eq "$(bt "$P" "$W" run "$f" "$W/d.txt" hello)" 5 "[run-undo] an interrupted run: rc 5 (state unknown), no undo"
   eq "$(logcol 10)/$(logcol 11)" "interrupted/no" "[run-undo] log: interrupted, undone no"
   f="$W/nl.sh"; cp "$A" "$f"
-  eq "$(sg "$P" "$W" owner "$f" "$W/e.txt" $'two lines\n')" 0 "[run-undo] sign a text that ends in a newline: rc 0"
+  # an argument with a newline is no owner-signable shape (owner_shape): the session signs it in mode auto
+  bt "$P" "$W" mode auto >/dev/null
+  eq "$(sg "$P" "$W" coordinator-auto "$f" "$W/e.txt" $'two lines\n')" 0 "[run-undo] sign a text that ends in a newline: rc 0"
   eq "$(bt "$P" "$W" run "$f" "$W/e.txt" $'two lines\n')" 0 "[run-undo] …its post-check compares bytes: rc 0"
+  bt "$P" "$W" mode manual >/dev/null
   f="$W/nu.sh"; cp "$A" "$f"; mutate "$f" "$POSTCHECK_OK" "$POSTCHECK_NO"; mutate "$f" 'write "remove $DEST" rm -f -- "$DEST"' 'write "remove $DEST" true'
   eq "$(sg "$P" "$W" owner "$f" "$W/g.txt" hello)" 0 "[run-undo] sign a script whose undo removes nothing: rc 0"
   eq "$(bt "$P" "$W" run "$f" "$W/g.txt" hello)" 5 "[run-undo] an undo that leaves the act's bytes is not reported as undone: rc 5"
@@ -500,6 +523,25 @@ fam_run_interrupt() {
   [ ! -e "$W/b.txt.late" ] && ok "$L" || bad "$L"
 }
 
+# a stop signal that reaches baton while it starts the phase's process (inside Popen: where a loaded runner delivered the act's own
+# kill) must stop the phase's group like one a moment later; the act starts a late writer first, then the fixture signals baton.
+fam_start_interrupt() {
+  local P=$1 W A f sig pre
+  fresh_state; W=$(fresh); A=$(act_in "$P" "$W")
+  for sig in TERM HUP INT TERM+HUP INT+TERM HUP+INT+TERM; do
+    f="$W/s$sig.sh"; cp "$A" "$f"
+    in_act "$f" 'if [ -e "$DEST.go" ]; then bash -c '"'"'sleep 1; touch "$0.late"'"'"' "$DEST" & touch "$DEST.ready"; sleep 2; fi'
+    : > "$W/$sig.txt.go"; pre=(); case "$sig" in *HUP*) pre=("${HUP_DFL[@]}");; esac
+    eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" ${pre[@]+"${pre[@]}"} python3 "$HERE/fixtures/baton_signal_in_popen.py" "SIG${sig//+/+SIG}" "$W/$sig.txt.ready" \
+      "$P/scripts/baton.py" rehearse "$f" "$W/$sig.txt" hello) >/dev/null 2>&1; echo $?)" 3 "[start-interrupt] SIG$sig while the phase starts: rehearse rc 3"
+    python3 -c 'import time; time.sleep(1.5)'
+    [ -e "$W/$sig.txt.ready" ] && ok "[start-interrupt] …instrument: the act had started its late writer (SIG$sig)" \
+      || bad "[start-interrupt] …instrument: the act had started its late writer (SIG$sig)"
+    L="[start-interrupt] …the phase's group was stopped: no late write (SIG$sig)"
+    [ ! -e "$W/$sig.txt.late" ] && ok "$L" || bad "$L"
+  done
+}
+
 # ── approval modes ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 fam_round2_streams() {
   local P=$1 W A f v; fresh_state; W=$(fresh); A=$(act_in "$P" "$W"); export W ST
@@ -513,7 +555,7 @@ fam_round2_streams() {
   f="$W/rh.sh"; cp "$A" "$f"
   in_act "$f" 'if [ -e "$DEST.stop" ]; then bash -c '"'"'kill -HUP "$1"; sleep 1; touch "$0.late"'"'"' "$DEST" "$PPID"; fi'
   : > "$W/h.txt.stop"
-  eq "$(bt "$P" "$W" rehearse "$f" "$W/h.txt" hello)" 3 "[round2] a rehearse stopped by SIGHUP: rc 3"
+  BT_PRE=("${HUP_DFL[@]}"); eq "$(bt "$P" "$W" rehearse "$f" "$W/h.txt" hello)" 3 "[round2] a rehearse stopped by SIGHUP: rc 3"; BT_PRE=()
   python3 -c 'import time; time.sleep(1.5)'
   L="[round2] the SIGHUP-stopped rehearse's script did not write late"
   [ ! -e "$W/h.txt.late" ] && ok "$L" || bad "$L"
@@ -546,7 +588,7 @@ fam_modes() {
   eq "$(sg "$P" "$W" coordinator-auto "$A" "$W/a.txt" hello)" 3 "[modes] manual: coordinator-auto cannot sign: rc 3"
   eq "$(nsig)" 0 "[modes] manual: nothing signed"
   eq "$(bt "$P" "$W" mode auto)" 0 "[modes] mode auto: rc 0"
-  eq "$(cat "$(baton_dir)/mode" 2>/dev/null)" auto "[modes] the mode lives in the state directory"
+  eq "$(head -n 1 "$(baton_dir)/mode" 2>/dev/null)" auto "[modes] the mode lives in the state directory"
   [ ! -e "$W/mode" ] && [ ! -e "$W/.vibemaestro" ] && ok "[modes] nothing written in the working directory" || bad "[modes] nothing written in the working directory"
   eq "$(sg "$P" "$W" coordinator-auto "$A" "$W/a.txt" hello)" 0 "[modes] auto + Stops none: coordinator-auto signs"
   eq "$(bt "$P" "$W" run "$A" "$W/a.txt" hello)" 0 "[modes] auto: the coordinator-auto signature runs"
@@ -579,23 +621,28 @@ fam_mode_choice() {
     case $m in
       none) has "$(cat "$BT_OUT")" "  Stop:     mode manual (not chosen yet): ask the owner once which mode" \
               "[mode-choice] none: the card says the mode is not chosen yet"
-            has "$(cat "$BT_OUT")" "  Mode:     the baton rules are not in force in the user or managed settings: the owner runs \`! python3 " \
-              "[mode-choice] none, no rules: the owner runs mode themselves";;
+            has "$(cat "$BT_OUT")" "  Mode:     on the owner's answer the session runs \`python3 " \
+              "[mode-choice] none, no rules: the session runs mode alone, the hook opens the owner's dialog"
+            hasnt "$(cat "$BT_OUT")" "\`! " "[mode-choice] none: no \`!\` command (a mode call with no record is refused)";;
       manual) has "$(cat "$BT_OUT")" "  Stop:     mode manual: the owner signs every baton" "[mode-choice] manual: the card keeps the manual line"
               hasnt "$(cat "$BT_OUT")" "not chosen yet" "[mode-choice] manual: chosen once, never asked again";;
       auto) eq "$(cat "$W/o.txt" 2>/dev/null)" hello "[mode-choice] auto: the session signs and runs a Stops: none baton";;
     esac
   done
-  fresh_state; mkdir -p "$(baton_dir)"; echo sometimes > "$(baton_dir)/mode"; rm -f "${W:?}/o.txt"; touch "$A"
+  fresh_state; baton_set_mode "$ST" sometimes; rm -f "${W:?}/o.txt"; touch "$A"
   eq "$(bt "$P" "$W" go "$A" "$W/o.txt" hello)" 8 "[mode-choice] a mode file with another value: manual, rc 8"
-  hasnt "$(cat "$BT_OUT")" "not chosen yet" "[mode-choice] a mode file with another value: only a missing file is not chosen"
+  hasnt "$(cat "$BT_OUT")" "not chosen yet" "[mode-choice] a mode file with another value: only a missing or unproven file is not chosen"
+  fresh_state; mkdir -p "$(baton_dir)"; echo auto > "$(baton_dir)/mode"; rm -f "${W:?}/o.txt"; touch "$A"
+  eq "$(bt "$P" "$W" go "$A" "$W/o.txt" hello)" 8 "[mode-choice] a mode file auto without the owner's dialog line (an older baton.py wrote it): manual, rc 8"
+  has "$(cat "$BT_OUT")" "not chosen yet" "[mode-choice] …not chosen: the owner is asked once more"
   fresh_state; mkdir -p "$(baton_dir)/mode"; touch "$A"
   eq "$(bt "$P" "$W" go "$A" "$W/o.txt" hello)" 8 "[mode-choice] a mode path that is a directory: manual, rc 8"
   hasnt "$(cat "$BT_OUT")" "not chosen yet" "[mode-choice] a mode path that is a directory: chosen, not asked"
   fresh_state; mkdir -p "$(baton_dir)"; printf '\377auto\n' > "$(baton_dir)/mode"; touch "$A"
   eq "$(bt "$P" "$W" go "$A" "$W/o.txt" hello)" 8 "[mode-choice] a mode file that is not UTF-8: manual, rc 8"
   hasnt "$(cat "$BT_OUT")" "not chosen yet" "[mode-choice] a mode file that is not UTF-8: chosen, not asked"
-  eq "$(bt "$P" "$W" mode auto)/$(cat "$(baton_dir)/mode")" "0/auto" "[mode-choice] a mode file that is not UTF-8: mode auto rewrites it"
+  eq "$(bt "$P" "$W" mode auto)/$(head -n 1 "$(baton_dir)/mode")" "0/auto" "[mode-choice] a mode file that is not UTF-8: mode auto rewrites it"
+  has "$(sed -n 2p "$(baton_dir)/mode")" "dialog " "[mode-choice] …with the owner's dialog line"
 }
 
 # ── log, environment, usage ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -604,7 +651,7 @@ fam_log_env() {
   sg "$P" "$W" owner "$A" "$W/a.txt" hello >/dev/null; bt "$P" "$W" run "$A" "$W/a.txt" hello >/dev/null
   eq "$(bt "$P" "$W" log --tail 1)/$(wc -l < "$BT_OUT" | tr -d ' ')" "0/1" "[log] --tail 1 prints one line"
   eq "$(cut -f2 "$BT_OUT")" run "[log] the last event is the run"
-  eq "$(awk -F'\t' '{print NF}' "$(baton_dir)/log.tsv" | sort -u)" 12 "[log] every line has 12 tab-separated fields"
+  eq "$(awk -F'\t' '{print NF}' "$(baton_dir)/log.tsv" | sort -u)" 13 "[log] every line has 13 tab-separated fields (the last: baton)"
   ls "$(baton_dir)/runs/"*-act-*.log >/dev/null 2>&1 && ok "[log] the full output of the run is kept under runs/" || bad "[log] the full output of the run is kept under runs/"
   eq "$(bt "$P" "$W" log --tail 0)" 64 "[log] --tail 0: rc 64"
   rm -f "$W/a.txt"; sg "$P" "$W" owner "$A" "$W/a.txt" $'x\rFAKE\tsign\x0bline' >/dev/null
@@ -631,10 +678,12 @@ fam_log_env() {
 }
 fam_state_place() {
   local P=$1 W A H; fresh_state; W=$(fresh); A=$(act_in "$P" "$W"); H=$(fresh)
-  ( cd "$W" && cenv HOME="$H" python3 "$P/scripts/baton.py" mode auto ) >/dev/null 2>&1
-  eq "$(cat "$H/.local/state/vibemaestro/baton/mode" 2>/dev/null)" auto "[state] without XDG_STATE_HOME: ~/.local/state/vibemaestro/baton"
-  ( cd "$W" && cenv HOME="$H" XDG_STATE_HOME=relative python3 "$P/scripts/baton.py" mode manual ) >/dev/null 2>&1
-  eq "$(cat "$H/.local/state/vibemaestro/baton/mode" 2>/dev/null)" manual "[state] a relative XDG_STATE_HOME is ignored"
+  ( cd "$W" && cenv HOME="$H" python3 "$P/scripts/baton.py" permissions --install-launcher ) >/dev/null 2>&1
+  [ -f "$H/.local/state/vibemaestro/baton/bin/baton" ] && ok "[state] without XDG_STATE_HOME: ~/.local/state/vibemaestro/baton" \
+    || bad "[state] without XDG_STATE_HOME: ~/.local/state/vibemaestro/baton"
+  rm -f "$H/.local/state/vibemaestro/baton/bin/baton"
+  ( cd "$W" && cenv HOME="$H" XDG_STATE_HOME=relative python3 "$P/scripts/baton.py" permissions --install-launcher ) >/dev/null 2>&1
+  [ -f "$H/.local/state/vibemaestro/baton/bin/baton" ] && ok "[state] a relative XDG_STATE_HOME is ignored" || bad "[state] a relative XDG_STATE_HOME is ignored"
   [ ! -e "$W/relative" ] && ok "[state] …and nothing is written under the working directory" || bad "[state] …and nothing is written under the working directory"
 }
 
@@ -688,6 +737,22 @@ fam_rule() {
   fires 'git push --mirror origin'
   fires "git push origin '+main'"
   fires 'git --work-tree /w push -f'
+  # a ref delete, by push or straight in the repository's directory: the reminder is the only guard of a bare one
+  fires 'git push origin --delete feat/x'
+  fires 'git push origin :feat/x'
+  fires "git push --force-with-lease='refs/heads/x:abc' origin ':refs/heads/x'"
+  fires 'git -C /lab/remote.git update-ref -d refs/heads/feature/old'
+  fires 'cd /lab/remote.git && git update-ref refs/heads/x 0000000000000000000000000000000000000000'
+  fires "printf 'delete refs/heads/x\\n' | git -C /lab/remote.git update-ref --stdin"
+  fires 'git branch -D feat/x'
+  fires 'git -C /lab/remote.git tag -d v1'
+  fires 'git -P -C /lab/remote update-ref -d refs/heads/x'
+  silent 'git push origin HEAD:refs/heads/feat/x'
+  silent 'git branch -d feat/x'
+  silent 'git update-ref refs/heads/x 0123456789abcdef0123456789abcdef01234567'
+  silent 'git update-ref refs/heads/x 0123456789abcdef0123456789abcdef01234567 0000000000000000000000000000000000000000'
+  silent "git commit -m 'docs: delete refs/ note; update-ref'"
+  silent 'git tag -a v1 -m v1'
   silent 'gh repo view acme/x'
   silent 'gh secret list'
   silent "$DK compose up -d"
@@ -719,9 +784,10 @@ fam_rule() {
   eq "$(within 5 python3 -c 'import re, sys
 sys.path.insert(0, sys.argv[1]); import rules
 rx = rules.front(open(sys.argv[2]).read(), "applyWhen")
-for w, o in (("claude", "--verbose"), ("dock" "er", "--verbose"), ("git", "--verbose"), ("git", "--work-tree")):
-    re.search(rx, w + " " + " ".join([o] * 3000) + " x")' "$P/scripts" "$P/rules/batonrun.instructions.md")" 0 \
-     "[rule] the applyWhen regex stays linear: 3000 options in under 5 s (it runs before every Bash command)"
+for w, o in (("claude", "--verbose"), ("dock" "er", "--verbose"), ("git", "--verbose"), ("git", "--work-tree"), ("git", "-P")):
+    re.search(rx, w + " " + " ".join([o] * 3000) + " x")
+re.search(rx, "delete refs/heads/x\n" * 20000)' "$P/scripts" "$P/rules/batonrun.instructions.md")" 0 \
+     "[rule] the applyWhen regex stays linear: 3000 options, or 20000 heredoc delete lines, in under 5 s (it runs before every Bash command)"
   fires 'git push --force origin feat/x'
 }
 
@@ -749,14 +815,14 @@ TRUSTED_LINE='python3 -I -B "$BATON_PLUGIN_ROOT/gates/merge_guard.py" --help >/d
 fam_kit() {
   local P=$1 W A f P2 n
   fresh_state; W=$(fresh); A=$(act_in "$P" "$W")
-  f="$P/batons/t-kit.sh"; cp "$A" "$f"; in_act "$f" "$TRUSTED_LINE"; in_act "$f" 'echo "root=${BATON_PLUGIN_ROOT:-unset}"'
+  f="$P/batons/t-kit.sh"; cp "$A" "$f"; mutate "$f" '# Stops: none' $'# Stops: none\n# Usage: <file> <text>'; in_act "$f" "$TRUSTED_LINE"; in_act "$f" 'echo "root=${BATON_PLUGIN_ROOT:-unset}"'
   eq "$(bt "$P" "$W" check kit:t-kit)" 0 "[kit] check kit:t-kit (a plugin gate run as python3 -I -B \"\$BATON_PLUGIN_ROOT/gates/x.py\"): rc 0"
   cp "$f" "$W/session.sh"
   eq "$(bt "$P" "$W" check "$W/session.sh")" 1 "[kit] the same line in a session baton: check rc 1"
   has "$(cat "$BT_OUT")" "local script" "[kit] …a local script, as before"
   for bad_line in 'python3 -I -B "$BATON_PLUGIN_ROOT/gates/../scripts/x.py"' 'python3 "$BATON_PLUGIN_ROOT/gates/merge_guard.py" --help' \
                   'bash "$BATON_PLUGIN_ROOT/gates/dead_branches.sh"' 'python3 -I -B "$BATON_PLUGIN_ROOT/scripts/kb.py" --help'; do
-    cp "$A" "$P/batons/t-bad.sh"; in_act "$P/batons/t-bad.sh" "$bad_line"
+    cp "$A" "$P/batons/t-bad.sh"; mutate "$P/batons/t-bad.sh" '# Stops: none' $'# Stops: none\n# Usage: <file> <text>'; in_act "$P/batons/t-bad.sh" "$bad_line"
     eq "$(bt "$P" "$W" check kit:t-bad)" 1 "[kit] a kit baton with another form ($bad_line): check rc 1"
   done
   eq "$(bt "$P" "$W" rehearse kit:t-kit "$W/a.txt" hi)" 0 "[kit] rehearse kit:t-kit: rc 0"
@@ -1053,7 +1119,7 @@ fam_plugin_script() {
 fam_each() {
   local P=$1 W A f
   fresh_state; W=$(fresh); A=$(act_in "$P" "$W")
-  f="$P/batons/t-each.sh"; cp "$A" "$f"; mutate "$f" '# Expect: create *' '# Each: create *'; in_act "$f" 'echo "PLAN-COUNT 1"'
+  f="$P/batons/t-each.sh"; cp "$A" "$f"; mutate "$f" '# Expect: create *' '# Each: create *'; mutate "$f" '# Stops: none' $'# Stops: none\n# Usage: <file> <text>'; in_act "$f" 'echo "PLAN-COUNT 1"'
   eq "$(bt "$P" "$W" check kit:t-each)" 0 "[each] check kit:t-each (Each: create *): rc 0"
   eq "$(bt "$P" "$W" rehearse kit:t-each "$W/a.txt" hi)" 0 "[each] rehearse: one plan line, PLAN-COUNT 1: rc 0"
   has "$(cat "$BT_OUT")" "  ok   create $W/a.txt  ~  create *" "[each] …the table matches the line against the Each glob"
@@ -1147,7 +1213,7 @@ fam_go_equiv() {
       grep -q "^go: ok — 1 write — $(baton_dir)/runs/[^/]*\.log\$" "$BT_OUT" && ok "[go-ok] good: the line is 'go: ok — 1 write — <run log>'" \
         || bad "[go-ok] good: the line is 'go: ok — 1 write — <run log>' ($(head -c 300 "$BT_OUT"))"
       eq "$(golog)" "$(logcol 12)" "[go-ok] good: the line names this run's log"
-      for step in "go: check ok" "== rehearse" "go: rehearse ok" "go: plan-vs-Expect ok (1 of 1 line)" "go: sign ok" "== run" "DO create " "== postcheck" "VERDICT postcheck ok"; do
+      for step in "go: check ok" "== rehearse" "go: rehearse ok" "go: plan-vs-Expect ok (1 of 1 line)" "go: sign ok" "== run" "  DO create " "== postcheck" "  VERDICT postcheck ok"; do
         grep -q "^$step" "$(golog)" && ok "[go-steps] good: the run log holds '$step'" || bad "[go-steps] good: the run log holds '$step'"
       done
       grep -q '^go: seal [0-9a-f]\{16\}\.[0-9a-f]\{16\}$' "$(golog)" && ok "[go-steps] good: the seal is in the run log" || bad "[go-steps] good: the seal is in the run log"
@@ -1159,7 +1225,7 @@ fam_go_equiv() {
       esac
       grep -q "^$w" "$BT_OUT" && ok "[go-fail] $kind: the step's output is printed ('$w')" || bad "[go-fail] $kind: the step's output is printed ('$w')"
       case "$kind" in runfail|pcfail|undofail)
-        grep -q '^DO create ' "$BT_OUT" && ok "[go-fail] $kind: the run step's output is printed (its DO line)" \
+        grep -q '^  DO create ' "$BT_OUT" && ok "[go-fail] $kind: the run step's output is printed (its DO line)" \
           || bad "[go-fail] $kind: the run step's output is printed (its DO line)"
         [ -f "$(golog)" ] && ok "[go-fail] $kind: 'full output:' names the run log" || bad "[go-fail] $kind: 'full output:' names the run log";;
       esac
@@ -1204,8 +1270,8 @@ fam_go_owner() {
     for field in "== rehearse" "seal "; do
       eq "$(grep -c "^$field" "$BT_OUT")/$(grep -c "^$field" "$f2" 2>/dev/null)" "0/1" "[go-card] $kase: '$field' is in the detail file, not printed"
     done
-    cmd=$(sed -n "s/^on the owner's go: //p" "$BT_OUT")
-    eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" bash -c "$cmd") >/dev/null 2>&1; echo $?)" 0 "[go-owner] $kase: the printed owner command signs"
+    cmd=$(sed -n "s/^on the owner's go: //p" "$BT_OUT"); guard_cmd "$P" "$W" "$ST" "$OWNER_SID" "$cmd" >/dev/null
+    eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID="$OWNER_SID" bash -c "$cmd") >/dev/null 2>&1; echo $?)" 0 "[go-owner] $kase: the printed owner command signs"
     cmd=$(sed -n 's/^then: *//p' "$BT_OUT")
     eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" bash -c "$cmd") >/dev/null 2>&1; echo $?)/$(cat "$W/o.txt" 2>/dev/null)" "0/hello" \
        "[go-owner] $kase: the printed run command runs it"
@@ -1215,19 +1281,25 @@ fam_go_owner() {
   S="$W/esc.sh"; cp "$f" "$S"; mutate "$S" '# Undo: removes' $'# Undo: \e[1A\e[2Kremoves'
   eq "$(bt "$P" "$W" go "$S" "$W/q.txt" hello)" 8 "[go-card] instrument: a header with control characters passes check"
   n=$(card_line "detail: ")
-  if head -n "$n" "$BT_OUT" | grep -qF '\x1b[1A\x1b[2Kremoves' && ! head -n "$n" "$BT_OUT" | grep -q $'\e'; then
+  if head -n "$n" "$BT_OUT" | grep -qF '\u{1b}[1A\u{1b}[2Kremoves' && ! head -n "$n" "$BT_OUT" | grep -q $'\e'; then
     ok "[go-card] auto-stops: control characters on the card are escaped"
   else bad "[go-card] auto-stops: control characters on the card are escaped"; fi
   ! grep -q $'\e' "$BT_OUT" && ok "[go-card] …and nowhere in what go printed (nothing can redraw the card)" \
     || bad "[go-card] …and nowhere in what go printed (nothing can redraw the card)"
   cp "$f" "$W/-s.sh"
   eq "$(bt "$P" "$W" go -- -s.sh "$W/r.txt" hello)" 8 "[go-owner] a script path that starts with '-': exit 8"
-  cmd=$(sed -n "s/^on the owner's go: //p" "$BT_OUT")
-  eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" bash -c "$cmd") >/dev/null 2>&1; echo $?)" 0 "[go-owner] …its printed owner command puts -- before the path and signs"
+  cmd=$(sed -n "s/^on the owner's go: //p" "$BT_OUT"); guard_cmd "$P" "$W" "$ST" "$OWNER_SID" "$cmd" >/dev/null
+  eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID="$OWNER_SID" bash -c "$cmd") >/dev/null 2>&1; echo $?)" 0 "[go-owner] …its printed owner command puts -- before the path and signs"
 }
 
-# gate_at <gate> <file> <n> — hold go inside its Nth rehearse (the act reads <gate>, a fifo), append a line to <file>, release it
-gate_at() { python3 "$HERE/fixtures/baton_gate.py" "$@"; }
+# gate_at <gate> <file> <n> — hold go inside its Nth rehearse (the act reads <gate>, a fifo), append a line to <file>, release it.
+# The fixture runs in the background (its pid in GATE_PID); this returns once its first gate exists, so go is started after it: a go
+# started first could pass its first rehearse before the gate was made (seen on CI under load, `0/run/ok`).
+gate_at() {
+  local ready="$TMP/gate-ready"; rm -f "$ready"; mkfifo "$ready"
+  python3 "$HERE/fixtures/baton_gate.py" "$@" > "$ready" & GATE_PID=$!
+  read -r _ < "$ready"; rm -f "$ready"
+}
 fam_go_attack() {
   local P=$1 W A f nth pid w
   fresh_state; W=$(fresh); A=$(act_in "$P" "$W"); bt "$P" "$W" mode auto >/dev/null
@@ -1241,8 +1313,9 @@ fam_go_attack() {
   for nth in 1 2; do
     cp "$A" "$f"; in_act "$f" 'if [ -p "$DEST.gate" ]; then cat "$DEST.gate" >/dev/null; fi'
     eq "$(bt "$P" "$W" check "$f")" 0 "[go-attack] instrument: the gated script passes check"
+    gate_at "$W/e$nth.txt.gate" "$f" "$nth"
     ( bt "$P" "$W" go "$f" "$W/e$nth.txt" hello > "$TMP/go-rc" ) & pid=$!
-    gate_at "$W/e$nth.txt.gate" "$f" "$nth"; wait "$pid"
+    wait "$GATE_PID"; wait "$pid"
     eq "$(cat "$TMP/go-rc")" 3 "[go-attack] the script edited inside rehearse $nth of go (1: before its sign, 2: between sign and run): exit 3"
     [ ! -e "$W/e$nth.txt" ] && ok "[go-attack] …nothing ran ($nth)" || bad "[go-attack] …nothing ran ($nth)"
     if [ "$nth" = 1 ]; then w="go: stopped at sign (exit 3): sign refused: the seal now is"; else w="go: stopped at run (exit 3): run refused, nothing ran: the script changed"; fi
@@ -1263,8 +1336,9 @@ fam_go_attack() {
   f="$W/world.sh"; cp "$A" "$f"; mutate "$f" '  write "create $DEST" put_text' '  write "create $DEST from $(cat "$DEST.src")" put_text'
   in_act "$f" 'if [ -p "$DEST.gate" ]; then cat "$DEST.gate" >/dev/null; fi'
   echo v1 > "$W/w.txt.src"
+  gate_at "$W/w.txt.gate" "$W/w.txt.src" 3
   ( bt "$P" "$W" go "$f" "$W/w.txt" hello > "$TMP/go-rc" ) & pid=$!
-  gate_at "$W/w.txt.gate" "$W/w.txt.src" 3; wait "$pid"
+  wait "$GATE_PID"; wait "$pid"
   eq "$(cat "$TMP/go-rc")/$(find "$W" -name w.txt | wc -l | tr -d ' ')" "3/0" "[go-attack] the plan changed after go signed it (inside the run's own rehearse): exit 3, nothing ran"
 }
 
@@ -1335,8 +1409,10 @@ open(sys.argv[2], "w").write(t[t.index(a) + len(a):t.index(b)] if a in t and b i
 PY
   ne "$(grep -c . "$f")" 0 "[skeleton] instrument: the skill holds the skeleton between its markers"
   eq "$(bt "$P" "$W" check "$f")" 0 "[skeleton] it passes check as written"
-  eq "$(bt "$P" "$W" rehearse "$f" "$W/k.txt" hi)" 0 "[skeleton] it rehearses"
-  eq "$(bt "$P" "$W" go "$f" "$W/k.txt" hi)/$(cat "$W/k.txt" 2>/dev/null)" "0/hi" "[skeleton] go runs it: the file is written"
+  printf 'hi\n' > "$W/body.txt"
+  eq "$(bt "$P" "$W" rehearse "$f" dest="$W/k.txt" body="$W/body.txt")" 0 "[skeleton] it rehearses with its values"
+  eq "$(bt "$P" "$W" go "$f" dest="$W/k.txt" body="$W/body.txt")/$(cat "$W/k.txt" 2>/dev/null)" "0/hi" "[skeleton] go runs it: the file is written"
+  eq "$(bt "$P" "$W" pack "$f" user:skeleton-put)" 0 "[skeleton] …and pack keeps it as written"
 }
 
 # ── go and a stale file: a session baton from a file written before this call is refused, unless --reuse ──────────────
@@ -1385,6 +1461,115 @@ fam_stop_hint() {
   f="$W/h2.sh"; cp "$A" "$f"; in_act "$f" 'write "drain" kubectl --context prod drain node-1'
   eq "$(bt "$P" "$W" check "$f")" 1 "[stop-hint] kubectl drain: check rc 1"
   has "$(cat "$BT_OUT")" 'matched `kubectl … drain|cordon` (`kubectl --context prod drain`)' "[stop-hint] …names kubectl … drain|cordon"
+  # a ref deleted without a push: a remote's directory is as writable as the clone
+  local Z=0000000000000000000000000000000000000000 n=0 line lab
+  refdel() {   # refdel <label> <line>: check rc 1 under Stops: none, the FAIL line names irreversible-delete and the label
+    n=$((n + 1)); f="$W/rd$n.sh"; cp "$A" "$f"; in_act "$f" "$2"
+    eq "$(bt "$P" "$W" check "$f")" 1 "[stop-hint] ${2%%$'\n'*}: flagged (check rc 1)"
+    has "$(cat "$BT_OUT")" "looks like stop category \`irreversible-delete\`: matched \`$1\`" "[stop-hint] …as \`$1\`"
+  }
+  refok() {    # refok <line>: ordinary ref work in the session's own clone, check rc 0
+    n=$((n + 1)); f="$W/ro$n.sh"; cp "$A" "$f"; in_act "$f" "$1"
+    eq "$(bt "$P" "$W" check "$f")" 0 "[stop-hint] ${1%%$'\n'*}: not flagged (check rc 0)"
+  }
+  # two deletes a `Stops: none` baton once passed check with: update-ref -d in the remote's directory, a quoted :<ref> push
+  refdel 'git update-ref -d|--delete' 'write "delete b" git --git-dir=$DEST update-ref -d refs/heads/feature/old 6a0252a'
+  lab='git push --delete|-d|:<ref>'
+  refdel "$lab" 'write "delete b" git push --force-with-lease="refs/heads/old:$DEST" origin ":refs/heads/old"'
+  refdel "$lab" 'write "delete b" git push --force origin ":$DEST"'
+  refdel "$lab" 'write "delete b" git push origin ":$DEST"'
+  refdel "$lab" "write \"delete b\" git push origin ':\$DEST'"
+  refdel "$lab" "write \"delete b\" git push origin ':refs/heads/old'"
+  refdel "$lab" "write \"delete b\" git push origin '+:refs/heads/old'"
+  refok 'write "push b" git push --force-with-lease="refs/heads/old:" origin "$DEST:refs/heads/old"'
+  # a flagged branch delete names the kit for a merged GitHub branch; a tag delete does not
+  n=$((n + 1)); f="$W/kh$n.sh"; cp "$A" "$f"; in_act "$f" 'write "delete b" git push origin --delete feat/x'
+  eq "$(bt "$P" "$W" check "$f")" 1 "[stop-hint] git push --delete under Stops: none: check rc 1"
+  has "$(cat "$BT_OUT")" 'deletes it with no owner signature' "[stop-hint] …the FAIL line names kit:branch-delete for a merged branch"
+  # the kit proves the merge against the default branch only: the hint promises no protected base
+  eq "$(grep -c 'merged into its default branch at a pinned head' "$BT_OUT")/$(grep -c 'protected' "$BT_OUT")" "1/0" \
+    "[stop-hint] …the kit's reach is the default branch at a pinned head, no protected base"
+  n=$((n + 1)); f="$W/kh$n.sh"; cp "$A" "$f"; in_act "$f" 'write "drop v1" git tag -d v1'
+  eq "$(bt "$P" "$W" check "$f")/$(grep -c 'kit:branch-delete' "$BT_OUT")" "1/0" "[stop-hint] git tag -d: check rc 1, and no kit named (a tag needs the owner)"
+  eq "$(python3 -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("b", sys.argv[1]); b = importlib.util.module_from_spec(s); s.loader.exec_module(b)
+labels = {l for _c, l, _r in b.STOP_HINTS}
+print(" ".join(l for l in b.BRANCH_DELETE_LABELS if l not in labels) or "none")' "$P/scripts/baton.py")" none "[stop-hint] every label the kit hint names is a stop pattern's label"
+  lab='git update-ref -d|--delete'
+  refdel "$lab" 'write "delete feature/old" git -C /lab/remote.git update-ref -d refs/heads/feature/old'
+  refdel "$lab" 'write "delete v1" git --git-dir=/lab/remote.git update-ref --delete refs/tags/v1'
+  refdel 'git update-ref <ref> 0{40}' "write \"delete x\" git update-ref -m 'drop it' refs/heads/x $Z"
+  lab='update-ref --stdin: delete <ref>|update <ref> 0{40}|<heredoc or file>'
+  refdel "$lab" "printf 'delete refs/heads/x\\n' | git -C /lab/remote.git update-ref --stdin"
+  refdel "$lab" $'git -C /lab/remote.git update-ref --stdin <<\'OPS\'\ndelete refs/heads/x\nOPS'
+  refdel "$lab" "echo \"update refs/heads/x $Z\" > \"\$DEST.ops\""
+  refdel "$lab" "printf 'delete %s\\n' \"\$DEST\" | git update-ref --stdin -z"
+  refdel "$lab" $'git -C "$DEST" update-ref --stdin <<OPS\ndelete $DEST\nOPS'
+  refdel "$lab" 'git -C /lab/remote.git update-ref --stdin < "$DEST.ops"'
+  refdel "$lab" 'cat "$DEST.ops" | git -C /lab/remote.git update-ref --stdin'
+  refdel "$lab" 'for r in $DEST; do echo "delete $r"; done | git -C /lab/remote.git update-ref --stdin'
+  refdel "$lab" '/bin/cat "$DEST.ops" | git -C /lab/remote.git update-ref --stdin'
+  refdel "$lab" 'if true; then cat "$DEST.ops" | git -C /lab/remote.git update-ref --stdin; fi'
+  refdel "$lab" 'sudo cat "$DEST.ops" | git -C /lab/remote.git update-ref --stdin'
+  refdel "$lab" 'printf x | (cat) | git -C /lab/remote.git update-ref --stdin'
+  lab='git branch -D|-d -f|--delete --force'
+  refdel "$lab" 'write "drop x" git branch -D feat/x'
+  refdel "$lab" 'write "drop x" git -C /lab/remote.git branch --delete --force feat/x'
+  refdel "$lab" 'write "drop x" git branch -Dq feat/x'
+  refdel "$lab" 'write "drop x" git branch -df feat/x'
+  refdel "$lab" 'write "drop x" git branch -d -fq feat/x'
+  lab='git -C|--git-dir|--work-tree|GIT_DIR=<dir> branch -d|-f|-M|-C|--delete|--force'
+  refdel "$lab" 'write "drop x" git -C /lab/remote.git branch -d feature/old'
+  refdel "$lab" 'write "drop x" env GIT_DIR=/lab/remote.git git branch --delete feature/old'
+  refdel "$lab" 'write "overwrite x" git -C /lab/remote.git branch -M scratch feature/old'
+  refdel "$lab" 'write "drop x" git -C /lab/remote.git branch -dr origin/feature/old'
+  refdel 'git update-ref -d|--delete' 'write "delete x" git -P -C /lab/remote update-ref -d refs/heads/x'
+  refdel 'git tag -d|--delete' 'write "drop v1" git tag -d v1'
+  lab='rm|unlink|mv|truncate|shred|find -delete|-exec rm|> … refs/'
+  refdel "$lab" 'write "drop x" rm -f /lab/remote.git/refs/heads/feature/old'
+  refdel "$lab" 'write "drop all" find "$DEST/refs/heads" -name old -delete'
+  refdel "$lab" 'write "drop all" find /lab/remote.git/refs/heads -name old -exec rm {} +'
+  refdel "$lab" ': > /lab/remote.git/refs/heads/old'
+  refdel "$lab" ': > "$DEST"/refs/heads/old'
+  refdel "$lab" 'write "drop all" rm -rf "$DEST"/refs/*'
+  refdel "$lab" 'write "drop all" rm -rf /lab/remote.git/refs/'
+  refdel "$lab" 'write "drop all" find "$DEST/refs/" -type f -delete'
+  refdel "$lab" 'write "drop backup" rm -rf "$DEST/refs/original"'
+  refdel "$lab" 'write "drop all" find /lab/remote.git/refs/heads -exec /bin/rm {} +'
+  lab='packed-refs written: >|tee|sed -i|perl -i|dd of=|rm|mv|truncate|cp onto'
+  refdel "$lab" "write \"drop x\" sed -i '/feature/d' /lab/remote.git/packed-refs"
+  refdel "$lab" 'grep -v feature "$DEST.bak" > /lab/remote.git/packed-refs'
+  refdel "$lab" 'write "restore" cp "$DEST.bak" /lab/remote.git/packed-refs'
+  refok 'write "move x" git update-ref refs/heads/x 0123456789abcdef0123456789abcdef01234567'
+  refok "write \"create x\" git update-ref refs/heads/x 0123456789abcdef0123456789abcdef01234567 $Z"
+  refok 'write "pin" git -C "$DEST" update-ref refs/trial/pin1 0123456789abcdef0123456789abcdef01234567'
+  refok "printf 'create refs/heads/x %s\\n' \"\$DEST\" | git update-ref --stdin"
+  refok 'write "drop merged x" git branch -d feat/x'
+  refok 'write "tag v1" git tag -a v1 -m "release v1"'
+  refok 'cp /lab/remote.git/packed-refs "$DEST.bak"'
+  refok 'rm -f "$DEST.packed-refs.bak"'
+  refok "write \"edit\" sed -i 's/a/b/' docs/packed-refs.md"
+  refok 'docker run --rm -v "$DEST:/w" img cat /w/refs/x'
+  refok 'write "drop doc" git rm docs/refs/old.md'
+  refok 'write "rename" mv "$DEST/refs/a.md" "$DEST/refs/b.md"'
+  refok 'write "delete $DEST" rm -f -- "$DEST"'
+  refok 'write "rename main" git branch -M main'
+  refok 'git -C "$DEST" branch --sort -refname'
+  refok "cat \"\$DEST.ver\"; printf 'create refs/heads/x %s\\n' \"\$DEST\" | git update-ref --stdin"
+  refok "printf 'create refs/heads/cat %s\\n' \"\$DEST\" | git update-ref --stdin"
+  refok '/opt/cat-tools/gen "$DEST" | git update-ref --stdin'
+  refok 'cat.sh "$DEST" | git update-ref --stdin'
+  refok 'echo x > "$DEST/refs.txt"'
+  # the lint runs per body line: a long line of repeated stdin feeds stays far from cubic
+  eq "$(within 5 python3 -c 'import importlib.util, re, sys
+s = importlib.util.spec_from_file_location("b", sys.argv[1]); b = importlib.util.module_from_spec(s); s.loader.exec_module(b)
+for line in ("git update-ref --stdin " * 1000, "cat <<x | " * 1000, "delete refs/heads/x " * 1000, "rm refs/ " * 1000):
+    [re.search(rx, line) for _c, _l, rx in b.STOP_HINTS]' "$P/scripts/baton.py")" 0 \
+     "[stop-hint] the stop patterns on a 1000-fold line (update-ref --stdin, heredoc pipe, delete, rm refs/): under 5 s"
+  refok 'git -C /lab/remote.git rev-parse --verify -q refs/heads/feature/old'
+  f="$W/rd-declared.sh"; cp "$A" "$f"; in_act "$f" 'write "delete x" git -C /lab/remote.git update-ref -d refs/heads/x'
+  mutate "$f" '# Stops: none' '# Stops: irreversible-delete'
+  eq "$(bt "$P" "$W" check "$f")" 0 "[stop-hint] the same delete declared (Stops: irreversible-delete): check rc 0"
   out=$(python3 - "$P/skills/batonrun/limits.md" "$P/scripts/baton.py" <<'PY'
 import importlib.util, re, sys
 t = open(sys.argv[1], encoding="utf-8").read()
@@ -1404,7 +1589,7 @@ for x in sorted(code - skill): print("in code only: %s %s" % x)
 for x in sorted(skill - code): print("in the skill only: %s %s" % x)
 PY
 )
-  has "$out" "pairs 23" "[stop-hint] instrument: the code holds the 23 labelled patterns"
+  has "$out" "pairs 31" "[stop-hint] instrument: the code holds the 31 labelled patterns"
   eq "$(printf '%s\n' "$out" | grep -c -E '^(in |unparsed)')" 0 "[stop-hint] the pattern list (limits.md) equals STOP_HINTS' labels ($(printf '%s' "$out" | grep -E '^(in |unparsed)' | head -2 | tr '\n' ' '))"
 }
 
@@ -1550,6 +1735,7 @@ a, b = "<!-- baton-skeleton -->\n```bash\n", "```\n<!-- /baton-skeleton -->"
 sk = t[t.index(a) + len(a):t.index(b)]
 plans, expects = [x for x in sys.argv[3].split("\n") if x], [x for x in sys.argv[4].split("\n") if x]
 sk = sk.replace("# Expect: create *\n", "".join("# Expect: %s\n" % e for e in expects))
+sk = re.sub(r"(?m)^# Targets: .*$", "# Targets: the plan lines below", sk)   # prose: no Targets test of these plan lines
 act = "act() {\n" + "".join("  write %s true\n" % shlex.quote(p) for p in plans) + "  :\n}\n"
 sk, n = re.subn(r"(?ms)^act\(\) \{\n.*?^\}\n", lambda m: act, sk, count=1)
 assert n == 1
@@ -1557,7 +1743,7 @@ open(sys.argv[2], "w", encoding="utf-8").write(sk)
 PY
 }
 # exp_try <plugin> <dir> <plan lines> <Expect lines> — rehearse such a baton; prints its rc, the output in $BT_OUT
-exp_try() { local f; f="$2/e$RANDOM$RANDOM.sh"; exp_baton "$1" "$f" "$3" "$4"; bt "$1" "$2" rehearse "$f" "$2/x.txt" hi; }
+exp_try() { local f; f="$2/e$RANDOM$RANDOM.sh"; exp_baton "$1" "$f" "$3" "$4"; printf 'hi\n' > "$2/b.txt"; bt "$1" "$2" rehearse "$f" dest="$2/x.txt" body="$2/b.txt"; }
 fam_expect_doc() {
   local P=$1 W f n ex verdict plan expect
   fresh_state; W=$(fresh)
@@ -1606,7 +1792,8 @@ PY
   eq "$(exp_try "$P" "$W" 'tag v1' 'tag v[a-z]')" 1 "[expect-doc] '[…]' outside the set: rc 1"
   # what go prints on a mismatch, as the core quotes it
   f="$W/eg.sh"; exp_baton "$P" "$f" 'create docs/a.txt' 'create'; bt "$P" "$W" mode auto >/dev/null
-  eq "$(bt "$P" "$W" go "$f" "$W/x.txt" hi)" 1 "[expect-doc] go on the FAIL example: rc 1"
+  printf 'hi\n' > "$W/b.txt"
+  eq "$(bt "$P" "$W" go "$f" dest="$W/x.txt" body="$W/b.txt")" 1 "[expect-doc] go on the FAIL example: rc 1"
   has "$(cat "$BT_OUT")" 'go: stopped at plan-vs-Expect (exit 1)' "[expect-doc] …go prints 'go: stopped at plan-vs-Expect (exit 1)'"
   has "$(tr -s ' \n' '  ' < "$P/skills/batonrun/SKILL.md")" '`go` ends `go: stopped at plan-vs-Expect (exit 1)`' "[expect-doc] …and the core quotes that line"
 }
@@ -1660,16 +1847,17 @@ PY
   eq "$doc" "$code" "[core-ops] the op list in the core equals the ops gh_write.py accepts"
   core=$(tr -s ' \n' '  ' < "$P/skills/batonrun/SKILL.md")
   has "$core" 'Labels, tags, releases, a push: hand-written.' "[core-ops] the core names what needs a hand-written baton"
-  has "$core" 'file-pr; never by hand.' "[core-ops] the core says the kit's ops are never hand-written"
+  has "$core" 'file-pr; never by hand (' "[core-ops] the core says the kit's ops are never hand-written"
   has "$core" 'an undo that cannot delete names what it leaves behind and exits non-zero' "[core-ops] the core says what an undo that cannot delete does"
 }
 
 # ── the bare-launcher trap; the hook warns on every launcher sign/run/go inside a compound command ──────────────────
-# trap_ctx <plugin> <app> <session id> <command> — the context the real PreToolUse Bash hook gives that command in that app repo
+# trap_ctx <plugin> <app> <session id> <command> — the context the real PreToolUse Bash hook of the rules (pre-bash.py, not the
+# guard of the owner's signature, which answers an owner sign with a decision of its own) gives that command in that app repo
 trap_ctx() {
   local pl; pl=$(python3 -c 'import json, sys; print(json.dumps({"session_id": sys.argv[1], "hook_event_name": "PreToolUse",
     "tool_name": "Bash", "tool_input": {"command": sys.argv[2]}}))' "$3" "$4")
-  ctx "$(CLAUDE_PROJECT_DIR="$2" CLAUDE_PLUGIN_ROOT="$1" run_cmds "$1/hooks/hooks.json" PreToolUse Bash "$pl")"
+  ctx "$(printf '%s' "$pl" | CLAUDE_PROJECT_DIR="$2" CLAUDE_PLUGIN_ROOT="$1" bash -c "$(hook_cmds "$1/hooks/hooks.json" PreToolUse Bash | grep pre-bash)" 2>/dev/null)"
 }
 fam_pipe_trap() {
   local P=$1 L=/state/vibemaestro/baton/bin/baton S A o
@@ -1897,11 +2085,11 @@ fam_run_line() {
     || bad "[run-line] the line is 'run: ok — 1 write — <run log>' ($(head -c 300 "$BT_OUT"))"
   l=$(sed -n 's/^run: ok — [0-9]* writes\{0,1\} — //p' "$BT_OUT")
   eq "$l" "$(logcol 12)" "[run-line] the line names this run's log"
-  grep -q '^DO create ' "$l" 2>/dev/null && ok "[run-line] the run log keeps the whole output (its DO line)" || bad "[run-line] the run log keeps the whole output (its DO line)"
+  grep -q '^  DO create ' "$l" 2>/dev/null && ok "[run-line] the run log keeps the whole output (its DO line)" || bad "[run-line] the run log keeps the whole output (its DO line)"
   f="$W/pc.sh"; cp "$A" "$f"; mutate "$f" $'postcheck() {\n  holds_text\n}' $'postcheck() {\n  false\n}'
   eq "$(sg "$P" "$W" owner "$f" "$W/b.txt" hello)" 0 "[run-line] sign a script whose post-check fails: rc 0"
   eq "$(bt "$P" "$W" run "$f" "$W/b.txt" hello)" 4 "[run-line] a failed run: rc 4"
-  grep -q '^DO create ' "$BT_OUT" && ok "[run-line] a failed run prints its whole output (its DO line)" || bad "[run-line] a failed run prints its whole output (its DO line)"
+  grep -q '^  DO create ' "$BT_OUT" && ok "[run-line] a failed run prints its whole output (its DO line)" || bad "[run-line] a failed run prints its whole output (its DO line)"
   has "$(cat "$BT_OUT")" "== run FAILED (postcheck-failed); undo put the state back" "[run-line] …and the run's end line"
   grep -q "^full output: $(baton_dir)/runs/" "$BT_OUT" && ok "[run-line] …and 'full output: <run log>'" || bad "[run-line] …and 'full output: <run log>'"
   hasnt "$(cat "$BT_OUT")" "run: ok" "[run-line] …and no 'run: ok'"
@@ -2028,7 +2216,7 @@ PY
 
 FAMILIES="fam_new fam_check_header fam_check_rehearse_path fam_check_undo fam_check_syntax fam_check_pipefail fam_check_fidelity
 fam_check_source fam_check_gate fam_check_unwrapped fam_check_round3 fam_check_round4 fam_check_set fam_check_stops fam_rehearse_expect fam_rehearse_verdict fam_run_signed fam_sign_seal fam_sign_by fam_run_edited fam_run_args fam_run_dir
-fam_run_env fam_run_diverged fam_run_pipe fam_run_plan fam_run_undo fam_run_interrupt fam_run_after_use fam_round2_streams fam_modes fam_mode_choice fam_log_env fam_state_place fam_rule fam_kit fam_kit_dep fam_plugin_script fam_plan_env fam_each
+fam_run_env fam_run_diverged fam_run_pipe fam_run_plan fam_run_undo fam_run_interrupt fam_start_interrupt fam_run_after_use fam_round2_streams fam_modes fam_mode_choice fam_log_env fam_state_place fam_rule fam_kit fam_kit_dep fam_plugin_script fam_plan_env fam_each
 fam_go_equiv fam_go_owner fam_go_attack fam_go_retry fam_go_fresh fam_check_refuses fam_skill_skeleton
 fam_stop_hint fam_gh_state fam_wait fam_skill_refs fam_expect_doc fam_expect_header fam_core_ops fam_pipe_trap fam_run_line fam_run_last fam_go_stdin fam_go_dash_guidance"
 
@@ -2063,8 +2251,8 @@ BRK verdict-not-required fam_rehearse_verdict '[rehearse-verdict] rc 0 and the p
 # run without a signature: a missing record is written on the fly (the bypass the signature exists to stop)
 BRK unsigned-runs fam_run_signed '[run-signed] unsigned: rc 3' \
     $'    rec = load_json(sig) if os.path.exists(sig) else None\n' \
-    $'    if not os.path.exists(sig):\n        _g, _p, _r = rehearse(s, args, [])\n        write_private(sig, json.dumps({"binding": binding, "script_sha256": s.sha, "args": args, "cwd": cwd, "env": env, "signed_by": "owner", "plan_sha256": plan_sha(_p)}))\n    rec = load_json(sig) if os.path.exists(sig) else None\n'
-BRK signature-reused fam_run_signed '[run-single-use] the same run again: rc 3' 'os.rename(sig, os.path.join(d, "used", "%s-%s.json" % (stamp, binding)))' 'os.path.exists(sig)'
+    $'    if not os.path.exists(sig):\n        _g, _p, _r = rehearse(s, args, [])\n        write_private(sig, json.dumps({"binding": binding, "script_sha256": s.sha, "args": args, "cwd": cwd, "env": env, "signed_by": "owner", "v": 2, "dialog": "planted", "plan_sha256": plan_sha(_p)}))\n    rec = load_json(sig) if os.path.exists(sig) else None\n'
+BRK signature-reused fam_run_signed '[run-single-use] the same run again: rc 3' 'os.rename(sig, os.path.join(d, "used", "%s-%s.json" % (stamp, binding)) if queued is None' 'os.path.exists(sig) or (sig, os.path.join(d, "used", "%s-%s.json" % (stamp, binding)) if queued is None'
 # the binding and the record check both ignore the script bytes / the arguments / the directory (two defences, so two edits)
 BRK bytes-unbound fam_run_edited '[run-edited] edited after signing: rc 3' \
     '{"v": 1, "script_sha256": script_sha, "args"' '{"v": 1, "script_sha256": "", "args"' \
@@ -2085,6 +2273,8 @@ BRKF() {
 }
 BRKF rule-misses-merge fam_rule "[rule] 'gh pr merge 12 --squash' reminds" rules/batonrun.instructions.md 'merge\b|' 'merge-never\b|'
 BRKF rule-exponential fam_rule '[rule] the applyWhen regex stays linear' rules/batonrun.instructions.md '\bclaude(?:\s+-{1,2}(?!-)' '\bclaude(?:\s+-{1,2}'
+BRKF rule-misses-ref-delete fam_rule "[rule] 'git -C /lab/remote.git update-ref -d" rules/batonrun.instructions.md \
+  'update-ref\b(?:[^|;&\n]*\s(?:-d\b|' 'update-ref\b(?:[^|;&\n]*\s(?:-never\b|'
 BRKF rule-reads-baton fam_rule "[rule] 'python3" rules/batonrun.instructions.md 'applyWhen: "' 'applyWhen: "baton\.py\s+run\b|'
 BRK unwrapped-lint-off fam_check_unwrapped '[check-unwrapped] a privileged command outside write()' 'unwrapped_writes(entries, TRUSTED_RUN, True) if s.kit else unwrapped_writes(entries, PLUGIN_SCRIPT_RUN, False)' '[]'
 BRK set-off-ignored fam_check_set "[check-set] a later 'set +e" '        flags = (flags | on) - off' '        flags = flags | on'
@@ -2096,7 +2286,12 @@ BRK by-defaults-owner fam_log_env '[usage] sign without --by' \
 BRK last-by-wins fam_sign_by '[sign-by] --by coordinator-auto --by owner' \
     '        if rest[0] == "--seal" and len(rest) > 1 and seal is None:' $'        if rest[0] == "--by" and len(rest) > 1:\n            by, rest = rest[1], rest[2:]\n        elif rest[0] == "--seal" and len(rest) > 1 and seal is None:'
 BRK interrupt-before-run-unknown fam_run_interrupt '[run-interrupt] an interrupt in the rehearse before the run' '            if not consumed:' '            if False:'
-BRK group-not-stopped fam_run_interrupt "[run-interrupt] the phase's process group was stopped" 'stderr=subprocess.STDOUT, env=env, start_new_session=True)' 'stderr=subprocess.STDOUT, env=env, start_new_session=False)'
+BRK group-not-stopped fam_run_interrupt "[run-interrupt] the phase's process group was stopped" 'stderr=subprocess.STDOUT, env=env, start_new_session=True,' 'stderr=subprocess.STDOUT, env=env, start_new_session=False,'
+BRK start-unmasked fam_start_interrupt "[start-interrupt] …the phase's group was stopped" '            signal.pthread_sigmask(signal.SIG_BLOCK, stops)' '            signal.pthread_sigmask(signal.SIG_BLOCK, set())'
+BRK start-int-unmasked fam_start_interrupt "[start-interrupt] …the phase's group was stopped: no late write (SIGINT)" 'stops = {signal.SIGTERM, signal.SIGHUP, signal.SIGINT}' 'stops = {signal.SIGTERM, signal.SIGHUP}'
+BRK start-cleanup-once fam_start_interrupt "[start-interrupt] …the phase's group was stopped: no late write (SIGTERM+HUP)" \
+    $'            try:\n                _stop_phase(proc, stops)\n            except BaseException:\n                try:' \
+    $'            if True:\n                _stop_phase(proc, stops)\n            if False:\n                try:'
 BRK gate-unchecked fam_check_gate '[check-gate] a write() that also executes' 'gate_body(s.text) != want:' 'False:'
 BRK branch-mask-allowed fam_check_gate "[check-gate] both branches run 'act || true'" 'if any(re.search(r"\|\||&&", st) or re.match(r"^(?:if|!)\s", st) for st in stmts):' 'if False:'
 BRK local-run-allowed fam_check_source '[check-source] running a local ./helper.sh' '        if LOCAL_RUN.match(raw) and not (trusted and trusted_outside and trusted.match(raw)):' '        if False:'
@@ -2114,7 +2309,7 @@ BRK verdict-echo-only fam_check_gate '[check-gate] control: printf verdicts' 'if
 BRK signals-unhandled fam_round2_streams "[round2] the stopped rehearse's script did not write late" '            signal.signal(sig, _on_term)' '            pass'
 BRK closed-stdout fam_round2_streams '[round2] run with stdout closed' 'stream = getattr(sys, name) or open(os.devnull, "w")' 'stream = getattr(sys, name)'
 BRK stdout-breaks fam_run_pipe "[run-pipe] 'run | head' of a failing run" '        setattr(sys, name, SafeOut(stream))' '        setattr(sys, name, stream)'
-BRK manual-run-unchecked fam_modes '[modes] manual again: a pending coordinator-auto signature is refused' $'    why = allowed(signer, mode, stops)\n    if why:\n        refuse(' $'    why = None\n    if why:\n        refuse('
+BRK manual-run-unchecked fam_modes '[modes] manual again: a pending coordinator-auto signature is refused' '    why = allowed(signer, mode, stops)' '    why = None'
 BRK substitutions-unsplit fam_check_round3 '[check-round3] a write inside local x=' 'SEPARATORS = re.compile(r"\|\||&&|;;|(?<![<>&])&(?![&>])|[;|\n`()]|\$\(\(?|[<>]\(")' 'SEPARATORS = re.compile(r"\|\||&&|;;|(?<![<>&])&(?![&>])|[;|\n]")'
 BRK path-prefix-missed fam_check_round3 '[check-round3] a write with a path prefix' 'prefix = re.match(r"\S*/", whole)' 'prefix = None'
 BRK xargs-arg-missed fam_check_round3 '[check-round3] a write behind xargs -I %' '"xargs": "ILnPdEsa", ' '"xargs": "", '
@@ -2146,7 +2341,7 @@ BRK consumed-ignored fam_run_after_use "[run-after-use] Ctrl-C after the signatu
 BRK term-after-run fam_run_after_use '[run-after-use] SIGTERM once the phases are over' $'                signal.signal(sig, signal.SIG_IGN)' $'                pass'
 BRK auto-in-manual fam_modes '[modes] manual: coordinator-auto cannot sign' '    if mode != "auto":' '    if False:'
 
-BRK kit-name-loose fam_kit '[kit] kit:a.b: rc 64' 'KIT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")' 'KIT_RE = re.compile(r"^[A-Za-z0-9./-]*$")'
+BRK kit-name-loose fam_kit '[kit] kit:a.b: rc 64' 'KIT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\Z")' 'KIT_RE = re.compile(r"^[A-Za-z0-9./-]*\Z")'
 BRK kit-link-followed fam_kit '[kit] kit:t-link: rc 64' '    if os.path.dirname(os.path.realpath(path)) != root:' '    if False:'
 BRK kit-root-unbound fam_kit '[kit] a signature from another plugin copy' '            self.bind_sha = sha256(self.sha + "\0kit:" + self.from_kit.batons)' '            self.bind_sha = self.sha'
 BRK kit-dep-dependency-unread fam_kit_dep '[kit-dep] a plugin without the dependency: refused' '            elif not depends_on_sdlc(' '            elif False and not depends_on_sdlc('
@@ -2230,14 +2425,14 @@ BRK go-rehearse-ignored fam_go_equiv '[go-equiv] verdict: go gives the separate 
 BRK go-expect-ignored fam_go_equiv '[go-equiv] expect: go gives the separate commands' $'        if seal is None:\n            sys.stdout.write(held.text())' $'        if seal is None and not all(r.startswith("plan line") for r in reasons):\n            sys.stdout.write(held.text())'
 BRK go-seal-at-sign fam_go_attack '[go-attack] the script edited inside rehearse 1' '            rc = signed("coordinator-auto", seal, path, args, sheld)' '            rc = signed("coordinator-auto", rehearsed(checked(path), args, Held())[2], path, args, sheld)'
 BRK go-sign-skipped fam_go_equiv '[go-equiv] good: go exits 0' '            rc = signed("coordinator-auto", seal, path, args, sheld)' '            rc = OK'
-BRK go-run-skipped fam_go_equiv '[go-equiv] good: go wrote the file' '            rc, result, _line, out_path = signed_run(path, args, quiet=rheld, preamble=held.text())' '            rc, result, _line, out_path = OK, "ok", "", ""'
+BRK go-run-skipped fam_go_equiv '[go-equiv] good: go wrote the file' '            rc, result, _line, out_path = signed_run(path, args, quiet=rheld, preamble=held)' '            rc, result, _line, out_path = OK, "ok", "", ""'
 BRK go-postcheck-misnamed fam_go_equiv '[go-steps] pcfail: stopped at post-check' '"post-check" if at_check else "run"' '"run"'
-BRK go-ok-noisy fam_go_equiv '[go-ok] good: one line, stdout and stderr together' 'signed_run(path, args, quiet=rheld, preamble=held.text())' 'signed_run(path, args, preamble=held.text())'
+BRK go-ok-noisy fam_go_equiv '[go-ok] good: one line, stdout and stderr together' 'signed_run(path, args, quiet=rheld, preamble=held)' 'signed_run(path, args, preamble=held)'
 BRK go-ok-on-pcfail fam_go_equiv "[go-ok] pcfail: no 'go: ok'" '        if rc != OK or result != "ok":' '        if result in ("run-failed", "run-diverged"):'
-BRK go-run-output-hidden fam_go_equiv "[go-fail] runfail: the run step's output is printed (its DO line)" $'            sys.stdout.write(rheld.text())\n            say("full output: " + out_path)' $'            say("full output: " + out_path)'
+BRK go-run-output-hidden fam_go_equiv "[go-fail] runfail: the run step's output is printed (its DO line)" $'            sys.stdout.write(rheld.text())\n            say("full output: %s", out_path)' $'            say("full output: %s", out_path)'
 BRK go-rehearse-output-hidden fam_go_equiv "[go-fail] verdict: the step's output is printed" $'        if seal is None:\n            sys.stdout.write(held.text())' $'        if seal is None:\n            pass'
 BRK go-sign-output-hidden fam_go_attack "[go-fail] sign: the sign step's output is printed" $'        except BaseException:\n            sys.stdout.write(sheld.text())' $'        except BaseException:\n            pass'
-BRK go-log-unnamed fam_go_equiv "[go-ok] good: the line names this run's log" '        say("go: ok — %d write%s — %s" % (len(plan), "" if len(plan) == 1 else "s", out_path))' '        say("go: ok — %d write%s — %s" % (len(plan), "" if len(plan) == 1 else "s", d))'
+BRK go-log-unnamed fam_go_equiv "[go-ok] good: the line names this run's log" '        say("go: ok — %d write%s — %s", len(plan), "" if len(plan) == 1 else "s", out_path)' '        say("go: ok — %d write%s — %s", len(plan), "" if len(plan) == 1 else "s", d)'
 BRK header-twice-allowed fam_check_refuses '[check-refuses] a header field given twice' \
     '            problems.append((i + 1, "header field %s is given twice" % key))' '            pass'
 BRK no-expect-allowed fam_check_refuses '[check-refuses] no Expect line' \
@@ -2257,24 +2452,37 @@ BRK go-reuse-dropped fam_go_fresh '[go-fresh] …and the exact command with --re
 BRK go-signs-stop-list fam_go_owner '[go-owner] auto-stops: exit 8' '        why = allowed("coordinator-auto", mode, stops)' '        why = None'
 BRK go-by-owner-accepted fam_go_attack '[go-attack] go --by owner: 64' 'if rest[0] != "--by" or len(rest) < 2 or rest[1] != "coordinator-auto":' 'if rest[0] != "--by" or len(rest) < 2 or rest[1] not in SIGNERS:'
 BRK go-card-after-detail fam_go_owner "[go-card] auto-stops: '== OWNER DECISION: ' on the card, in order" \
-    $'            for ln in decision_card(s, plan, stops, mode, chosen, question):\n                say(ln)\n            say("detail: %s (check and rehearse output)" % detail)' \
-    $'            say("detail: %s (check and rehearse output)" % detail)\n            for ln in decision_card(s, plan, stops, mode, chosen, question):\n                say(ln)'
+    $'            for ln in card:\n                say("%s", ln)\n            say("detail: %s (check and rehearse output)", detail)' \
+    $'            say("detail: %s (check and rehearse output)", detail)\n            for ln in card:\n                say("%s", ln)'
 BRK go-card-no-blast fam_go_owner "[go-card] auto-stops: '  Blast:    that one file' on the card" '"  Blast:    %s" % f("Blast"), ' ''
 BRK retry-absent fam_go_retry '[go-retry] a post-check that holds on its second reading' '    for k in range(len(waits) + 1):' '    for k in range(1):'
 BRK retry-reruns-run fam_go_retry '[go-retry] …one failed-attempt line, the run phase ran once' \
     $'        rc, lines, _w = run_phase(s, args, "postcheck", sinks)\n        if rc == 0 and verdict_ok(lines, "postcheck"):' \
     $'        if k:\n            run_phase(s, args, "run", sinks)\n        rc, lines, _w = run_phase(s, args, "postcheck", sinks)\n        if rc == 0 and verdict_ok(lines, "postcheck"):'
 BRK retry-fail-logs-ok fam_go_retry '[go-retry] a post-check that never holds: exit 4' $'                return False\n    return False\n' $'                return False\n    return True\n'
-BRK go-card-not-first fam_go_owner '[go-card] auto-stops: the output starts with the card' '        say("go: check ok", held)' '        say("go: check ok")'
+BRK go-card-not-first fam_go_owner '[go-card] auto-stops: the output starts with the card' '        say("go: check ok", out=held)' '        say("go: check ok")'
 BRK go-signature-left fam_go_attack '[go-attack] …the signature go made was withdrawn (2)' $'        except Stop:\n            sys.stdout.write(rheld.text())\n            withdraw()\n            raise' $'        except Stop:\n            raise'
-BRK go-card-raw fam_go_owner '[go-card] auto-stops: control characters on the card are escaped' '    n, f = len(plan), lambda key: log_value(s.field(key))' '    n, f = len(plan), lambda key: s.field(key)'
-BRK go-reason-dropped fam_go_attack '[go-attack] …the stop line gives the reason (1)' '        say("go: stopped at %s (exit %d): %s" % (step, e.rc, e))' '        say("go: stopped at %s (exit %d)" % (step, e.rc))'
+BRK go-card-raw fam_go_owner '[go-card] auto-stops: control characters on the card are escaped' '    n, f = len(plan), lambda key: log_value(s.field(key))' '    n, f = len(plan), lambda key: s.field(key)' \
+    $'            for ln in card:\n                say("%s", ln)' $'            for ln in card:\n                sys.stdout.write(ln + "\\n")'
+BRK go-reason-dropped fam_go_attack '[go-attack] …the stop line gives the reason (1)' '        say("go: stopped at %s (exit %d): %s", step, e.rc, e.text)' '        say("go: stopped at %s (exit %d)", step, e.rc)'
 BRK retry-wait-interrupt-unknown fam_go_retry '[go-retry] SIGTERM while waiting to read again: exit 4, undone' $'            except (KeyboardInterrupt, Interrupted):           # the failure is known' $'            except ():           # the failure is known'
 BRK go-interrupt-keeps-signature fam_go_attack '[go-attack] an interrupt between sign and run' $'        if step in ("sign", "run"):                     # an interrupt' $'        if False:                     # an interrupt'
 BRK go-withdraws-any fam_go_attack '[go-attack] …a signature file another signer rewrote' '            if f.read() != text:' '            if False:'
-BRK go-detail-printed fam_go_owner "[go-card] auto-stops: '== rehearse' is in the detail file, not printed" '            say("detail: %s (check and rehearse output)" % detail)' '            say("detail: %s (check and rehearse output)" % detail); sys.stdout.write(held.text())'
+BRK go-detail-printed fam_go_owner "[go-card] auto-stops: '== rehearse' is in the detail file, not printed" '            say("detail: %s (check and rehearse output)", detail)' '            say("detail: %s (check and rehearse output)", detail); sys.stdout.write(held.text())'
 BRK retry-longer-taken fam_go_retry '[go-retry] a longer wait is ignored' 'any(not 0 <= w <= d for w, d in' 'any(not 0 <= w for w, d in'
 BRK stop-hint-unnamed fam_stop_hint "[stop-hint] …the pattern's label" '"looks like stop category `%s`: matched `%s` (`%s`) in: %s; if the act does that, "' '"looks like stop category `%s`: %.0s%.0s in: %s; if the act does that, "'
+BRK stop-misses-update-ref-d fam_stop_hint '[stop-hint] write "delete feature/old" git -C /lab/remote.git update-ref -d' \
+  '(?:-d|--delete)\b"),' '(?:-never)\b"),'
+BRK stop-misses-quoted-refspec fam_stop_hint '[stop-hint] write "delete b" git push --force-with-lease=' \
+  '|\s[\"'"'"']?\+?:[^\s:\"'"'"']+)"),' '|\s:[^\s:]+)"),'
+BRK stop-misses-git-p fam_stop_hint '[stop-hint] write "delete x" git -P -C /lab/remote update-ref -d' '|-[pP](?!\S)|' '|'
+BRK stop-misses-stdin-file fam_stop_hint '[stop-hint] git -C /lab/remote.git update-ref --stdin < "$DEST.ops"' \
+  '(?=[^|;&\n]*?\s--stdin\b)[^|;&\n<]*<"),' '(?=[^|;&\n]*?\s--stdin\b)[^|;&\n<]*<<<never"),'
+BRK stop-misses-refs-dir fam_stop_hint '[stop-hint] write "drop all" rm -rf "$DEST"/refs/*' '|refs/?\*?' '|refs'
+BRK stop-misses-combined-flags fam_stop_hint '[stop-hint] write "drop x" git branch -Dq' \
+  'BR_FLAGS = r"[acCdDfilmMqrtuv]"' 'BR_FLAGS = r"[A-Z]"'
+BRK stop-kit-hint-dropped fam_stop_hint '[stop-hint] …the FAIL line names kit:branch-delete' \
+  '+ (BRANCH_KIT_HINT if label in BRANCH_DELETE_LABELS else "")))' '+ ""))'
 BRK stop-label-drift fam_stop_hint "[stop-hint] the pattern list (limits.md) equals" '("secrets", "gh secret", ' '("secrets", "gh secrets", '
 BRKF stop-label-doc-only fam_stop_hint "[stop-hint] the pattern list (limits.md) equals" skills/batonrun/limits.md '; `vault kv|read|write|delete`' ''
 BRKF gh-state-any-output fam_gh_state '[gh-state] a 404 JSON body without headers' skills/batonrun/SKILL.md '    "0 HTTP/"*" 200") GH_STATE=exists ;;' '    *) GH_STATE=exists ;;'
@@ -2328,8 +2536,8 @@ BRKF trap-wrapped-quadratic fam_pipe_trap '[pipe-trap] 20000 shells' scripts/vsd
     $'        for t in ([" ".join(args)] if os.path.basename(seg[j]) == "eval" else args):' $'        for t in (" ".join(seg[k + 1:]) for k in range(j, len(seg))):'
 BRKF trap-open-quote-hides fam_pipe_trap '[pipe-trap] warns (an apostrophe in a heredoc body before it)' scripts/vsdlc.py '    if sub is None and "\n" in cmd:' '    if False:'
 # PR E: run prints one line when it holds
-BRK run-streams fam_run_line '[run-line] a run that holds prints one line' '        rc, result, _line, out_path = signed_run(path, args, quiet=held)' '        rc, result, _line, out_path = signed_run(path, args)'
-BRK run-fail-hidden fam_run_line '[run-line] a failed run prints its whole output' $'    sys.stdout.write(held.text())\n    say("full output: " + out_path)\n    return rc' $'    say("full output: " + out_path)\n    return rc'
+BRK run-streams fam_run_line '[run-line] a run that holds prints one line' '        rc, result, _line, out_path = signed_run(path, args, quiet=held, queued=queued)' '        rc, result, _line, out_path = signed_run(path, args, queued=queued)'
+BRK run-fail-hidden fam_run_line '[run-line] a failed run prints its whole output' $'    sys.stdout.write(held.text())\n    say("full output: %s", out_path)\n    return rc' $'    say("full output: %s", out_path)\n    return rc'
 BRK last-pointer-unwritten fam_run_last '[last] the last log line is the run-start line' '        mark_started(d, out_path, signed_by=signer, **common)
 ' ''
 BRK last-start-is-run fam_run_last '[last] the last log line is the run-start line' 'log_event(d, event="run-start", output=out_path, **common)' 'log_event(d, event="run", output=out_path, **common)'
@@ -2339,11 +2547,11 @@ BRK last-not-replaced fam_run_last '[last] …prints that run log' 'os.replace(t
 BRK expect-header-order-free fam_expect_header '[expect-header] the same header with two Expect lines swapped' '    for i in range(max(len(plan), len(expect))):' $'    plan, expect = sorted(plan), sorted(expect)\n    for i in range(max(len(plan), len(expect))):'
 BRKF expect-header-no-star fam_expect_header '[expect-header] …exactly one of them uses' skills/batonrun/SKILL.md '# Expect: ref create refs/tags/v2 *' '# Expect: ref create refs/tags/v2'
 BRKF expect-header-three-lines fam_expect_header '[expect-header] instrument: the core holds one header example' skills/batonrun/SKILL.md $'# Expect: release create v2\n```' '```'
-BRKF core-ops-extra-in-core fam_core_ops '[core-ops] the op list in the core equals' skills/batonrun/SKILL.md 'file-pr; never by hand.' 'file-pr, label-create; never by hand.'
+BRKF core-ops-extra-in-core fam_core_ops '[core-ops] the op list in the core equals' skills/batonrun/SKILL.md 'file-pr; never by hand (' 'file-pr, label-create; never by hand ('
 BRKF core-ops-missing-in-core fam_core_ops '[core-ops] the op list in the core equals' skills/batonrun/SKILL.md 'pr-body-edit, issue-reopen' 'pr-body-edit'
 BRKF core-ops-extra-in-code fam_core_ops '[core-ops] the op list in the core equals' gates/gh_write.py '    "pr-ready": ({"pr", "head"}, set(), False),' $'    "pr-ready": ({"pr", "head"}, set(), False),\n    "label-create": ({"name"}, set(), False),'
 BRKF core-ops-undo-text fam_core_ops '[core-ops] the core says what an undo that cannot delete does' skills/batonrun/SKILL.md 'and exits non-zero' 'and exits zero'
-BRKF core-ops-never-by-hand fam_core_ops "[core-ops] the core says the kit's ops are never hand-written" skills/batonrun/SKILL.md 'file-pr; never by hand.' 'file-pr.'
+BRKF core-ops-never-by-hand fam_core_ops "[core-ops] the core says the kit's ops are never hand-written" skills/batonrun/SKILL.md 'file-pr; never by hand (' 'file-pr ('
 BRKF core-ops-handwritten-text fam_core_ops '[core-ops] the core names what needs a hand-written baton' skills/batonrun/SKILL.md 'Labels, tags, releases, a push: hand-written.' 'A push: hand-written.'
 
 # go - and the hook's one-call shape
@@ -2424,18 +2632,18 @@ carries "$AC" 'Print a remote read first, decide later' "A1 a remote read is pri
 carries "$RU" 'Run the launcher bare' "A2 the launcher runs bare"
 carries "$SK" 'no pipe, `| tail` or `| grep` after `sign`, `run` or `go`' "A2 no pipe after sign, run or go"
 carries "$TP" 'Each one bare, as its own call' "A2 the launcher runs bare"
-carries "$RU" 'No dialog, or a rejected one, is not a go' "A3 no dialog is not a go"
+carries "$RU" 'never unprompted, as a test, after a refusal or a rejected dialog, or another way' "A3 no dialog is not a go: a session never signs as the owner"
 carries "$MO" 'No dialog shown, or a rejected one, means not confirmed' "A3 no dialog is not confirmed"
 carries "$MO" 'at most seven short lines' "A3 the decision card"
 carries "$MO" "which the dialog shows, is the card's first line" "A3 the command's description heads the card"
 for f in "$SK" "$AC" "$MO" "$KI"; do hasnt "$(flat "$PLUGIN/$f")" 'small-context subagent' "[text] $f: C5 P3 (a baton's go in a subagent) is gone"; done
-carries "$SK" 'ONE worker subagent (model `agents.worker_model`), one Agent call' "PR D a delegated task goes to one worker"
-carries "$SK" 'In place by default, any number. Delegate 3 or more batons only when the main context is over ~400k tokens' "PR E in place by default, delegation only for a large main context"
-carries "$SK" 'a worker never delegates' "PR E a worker does not delegate again"
+carries "$AC" 'ONE worker subagent (model `agents.worker_model`), one Agent call' "PR D a delegated task goes to one worker"
+carries "$AC" 'In place by default, any number. Delegate 3 or more batons only when the main context is over ~400k tokens' "PR E in place by default, delegation only for a large main context"
+carries "$AC" 'a worker never delegates' "PR E a worker does not delegate again"
 carries "$SK" 'A hand-written baton needs only this file' "PR E the core is enough for a plain baton"
 carries "$RU" "hook warns on EVERY launcher \`sign\`, \`run\` or \`go\` sent with a pipe, chain or redirect" "PR E the launcher warning comes every time"
 carries "$AC" '`run`, like `go`, prints one line when it holds' "PR E run prints one line"
-carries "$SK" 'needs no tool call: end the turn' "PR D a late hand-back after the wait needs no tool call"
+carries "$AC" 'needs no tool call: end the turn' "PR D a late hand-back after the wait needs no tool call"
 carries "$SK" 'no dialog, or a rejected one, is not a yes' "A3 no dialog is not a yes (the core)"
 carries "$SK" 'Write the baton (from the skeleton) to a fresh path and `go <that path> <args>` in the same response' "C2 write and go in one response"
 carries "$SK" 'Never the baton in a heredoc on `go -`: Claude Code blocks it' "C2 a baton is not sent on go -"

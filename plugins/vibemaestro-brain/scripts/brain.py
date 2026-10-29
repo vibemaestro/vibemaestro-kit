@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """`brain`: the vibemaestro-brain CLI (B1.1: op, owner, claim, render, doctor; B1.3: matrix, cost).
 
-    brain op add --kind now|next|trap --text T [--expires ISO] [--link L]… [--anchor A]…
+    brain op add --kind now|next|trap|session|queue|fact --text T [--expires ISO] [--link L]… [--anchor A]… [--closes A]…
     brain op close ID --reason R [--pointer P] [--bulk]
-    brain op supersede ID --text T --reason R [--drop-anchor A]… [--anchor A]… [--shorter] [--bulk]
+    brain op supersede ID --text T --reason R [--drop-anchor A]… [--anchor A]… [--closes A]… [--shorter] [--bulk]
     brain op touch ID | brain op hit ID
+    brain op close-linked
     brain owner add --kind decision|window --text T --owner-quote Q --where W [--anchor A]… [--link L]… [--expires ISO]
     brain owner unpin ID | owner supersede ID --text T | owner promote ID POINTER
     brain claim [--take-over]
@@ -23,6 +24,7 @@ as the next token (no `--opt=value`; a value may start with `-`), and a single-v
 import argparse
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import brain_store as s  # noqa: E402
@@ -39,6 +41,8 @@ class Parser(argparse.ArgumentParser):
         sys.exit(64)
 
 
+CLOSES_HELP = ("owner/name#N or an issue or PR URL whose close means this item is done (not one it waits on, not a tracking "
+               "issue); at most 2, all must be done; for now, next, session and queue")
 OWNER_OPTIONS = {"add": ({"--kind", "--text", "--owner-quote", "--where", "--expires"}, {"--anchor", "--link"}),
                  "supersede": ({"--text"}, set()), "unpin": (set(), set()), "promote": (set(), set())}
 
@@ -85,11 +89,13 @@ def parser():
     op = sub.add_parser("op", help="one delta on a non-owner item").add_subparsers(dest="verb", parser_class=Parser)
     op.required = True
     a = op.add_parser("add")
-    a.add_argument("--kind", required=True)
+    a.add_argument("--kind", required=True, help="now, next or trap; session (a running session: its next step and "
+                   "pointers, ≤ 450), queue (what waits on the owner) or fact (a path in use, a fact)")
     a.add_argument("--text", required=True)
     a.add_argument("--expires")
     a.add_argument("--link", action="append", default=[])
     a.add_argument("--anchor", action="append", default=[])
+    a.add_argument("--closes", action="append", default=[], help=CLOSES_HELP)
     c = op.add_parser("close")
     c.add_argument("id")
     c.add_argument("--reason", required=True)
@@ -101,10 +107,12 @@ def parser():
     u.add_argument("--reason", required=True)
     u.add_argument("--drop-anchor", action="append", default=[])
     u.add_argument("--anchor", action="append", default=[])
+    u.add_argument("--closes", action="append", default=[], help=CLOSES_HELP + "; without it the item's own are carried over")
     u.add_argument("--shorter", action="store_true")
     u.add_argument("--bulk", action="store_true")
     for v in ("touch", "hit"):
         op.add_parser(v).add_argument("id")
+    op.add_parser("close-linked", help="close every item whose closes anchors are all done (fresh lookups)")
 
     ow = sub.add_parser("owner", help="owner decisions and windows, through the permission dialog")
     ov = ow.add_subparsers(dest="verb", parser_class=Parser)
@@ -142,13 +150,19 @@ def main(argv):
         ns = parser().parse_args(argv[:1] + owner_argv(argv[1:]))
     else:
         ns = parser().parse_args(argv)
+    note = s.session_note() if ns.cmd != "cost" else None
+    if note:
+        sys.stderr.write("brain: %s\n" % s.printable(note))
     if ns.cmd == "op":
         if ns.verb == "add":
-            return s.op_add(ns.kind, ns.text, ns.link, ns.anchor, ns.expires)
+            return s.op_add(ns.kind, ns.text, ns.link, ns.anchor, ns.expires, ns.closes)
         if ns.verb == "close":
             return s.op_close(ns.id, ns.reason, ns.pointer, ns.bulk)
         if ns.verb == "supersede":
-            return s.op_supersede(ns.id, ns.text, ns.reason, ns.drop_anchor, ns.anchor, ns.shorter, ns.bulk)
+            return s.op_supersede(ns.id, ns.text, ns.reason, ns.drop_anchor, ns.anchor, ns.shorter, ns.bulk, ns.closes)
+        if ns.verb == "close-linked":
+            import brain_stale
+            return brain_stale.close_linked()
         return s.op_counter(ns.id, ns.verb)
     if ns.cmd == "owner":
         return s.owner(argv[1:], ns.verb, ns)
@@ -193,16 +207,24 @@ def render(check):
         head, st = s.load(d)
         if s.cache_state(d, head) is None:
             s.write_caches(d, st, head)
-        text = s.render(st)
+        parts = s.render_parts(st)
+        text = s.join_parts(parts)
         s._write_file(os.path.join(d, "hot.md"), text)
     if check:
-        over = len(text) > s.RENDER_CAP
-        sys.stdout.write("hot memory render: %s of %s characters%s\n" % (
-            "{:,}".format(len(text)), "{:,}".format(s.RENDER_CAP), " — OVER the cap" if over else ""))
-        for letter, title in s.SECTIONS:
-            sys.stdout.write("  %s: %d of %d\n" % (title, len(s.live(st, letter)), s.CAPS[letter]))
+        over = []
+        for p, letters in s.PARTS:
+            cap = s.RENDER_CAP if p == "hot" else s.STRING_MAX
+            if len(parts[p]) > cap:
+                over.append(p)
+            sys.stdout.write("%s render: %s of %s characters%s\n" % (
+                {"hot": "hot memory", "sessions": "sessions", "plan": "plan"}[p], "{:,}".format(len(parts[p])),
+                "{:,}".format(cap), " — OVER the cap" if len(parts[p]) > cap else ""))
+            for letter in letters:
+                sys.stdout.write("  %s: %d of %d\n" % (dict(s.SECTIONS)[letter], len(s.live(st, letter)), s.CAPS[letter]))
+                if letter == "T":
+                    sys.stdout.write("  %s: %d\n" % (s.DONE_TITLE, len(s.done_items(st, time.time()))))
         if over:
-            raise s.Refused(1, "the render is over its cap")
+            raise s.Refused(1, "the render is over its cap: %s" % ", ".join(over))
         return None
     sys.stdout.write(text)
     return None

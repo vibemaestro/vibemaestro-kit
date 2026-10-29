@@ -21,7 +21,7 @@ TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 clean_env "$TMP"
 H0=$(tree_hash "$SRC_ROOT" 2>/dev/null)
-SKILLS="init-kb intake brainstorm spec plan ship install-gates batonrun coordinator-bootstrap release local-parallel"
+SKILLS="init-kb intake brainstorm spec plan ship install-gates batonrun coordinator-bootstrap release local-parallel owner-sign"
 
 echo "== phần 1: skill có mặt, đúng khuôn =="
 for s in $SKILLS; do
@@ -30,11 +30,12 @@ for s in $SKILLS; do
   eq "$(sed -n 1p "$F")" '---' "skills/$s: mở đầu bằng frontmatter"
   eq "$(sed -n 2p "$F")" "name: $s" "skills/$s: name khớp tên thư mục"
   has "$(sed -n 3p "$F")" 'description: "Use when:' "skills/$s: description 'Use when:'"
-  eq "$(sed -n 4p "$F")" '---' "skills/$s: frontmatter đóng ở dòng 4"
+  c=4; [ "$(sed -n 4p "$F")" = 'disable-model-invocation: true' ] && c=5   # một skill chỉ người dùng gọi: thêm đúng dòng đó
+  eq "$(sed -n ${c}p "$F")" '---' "skills/$s: frontmatter đóng ở dòng $c"
 done
 mkdir -p "$TMP/sk"; printf 'x\n' > "$TMP/sk/f"
 eq "$(sed -n 2p "$TMP/sk/f")" '' "đối chứng dụng cụ: sed -n 2p trên file một dòng trả rỗng (assert 'name:' có thể đỏ)"
-eq "$(ls "$PLUGIN/skills" | wc -l | tr -d ' ')" 11 "đúng mười một thư mục skill (không skill lạ)"
+eq "$(ls "$PLUGIN/skills" | wc -l | tr -d ' ')" 12 "đúng mười hai thư mục skill (không skill lạ)"
 for s in $SKILLS; do
   for ref in $(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9_./-]+' "$PLUGIN/skills/$s/SKILL.md" 2>/dev/null | sed 's|^\${CLAUDE_PLUGIN_ROOT}/||' | sort -u); do
     [ -f "$PLUGIN/$ref" ] && ok "skills/$s: \${CLAUDE_PLUGIN_ROOT}/$ref là file có thật" || bad "skills/$s trỏ tới \${CLAUDE_PLUGIN_ROOT}/$ref — KHÔNG có file"
@@ -67,15 +68,15 @@ NAME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])'
 O=$(cl plugin install "vibemaestro-sdlc@$NAME"); rc=$?
 eq "$rc" 0 "install từ marketplace cục bộ: rc 0"; has "$O" 'Successfully installed' "install: thành công"
 O=$(cl plugin details "vibemaestro-sdlc@$NAME")
-has "$O" 'Skills (11)' "details: 11 skill"
+has "$O" 'Skills (12)' "details: 12 skill"
 has "$O" 'Hooks (2)' "details: hook SessionStart + PreToolUse"
 for s in $SKILLS; do has "$O" "$s" "details: liệt kê skill $s"; done
-# đối chứng: bỏ một skill thì details đếm 10 (số 11 ở trên không phải cố định do CLI)
+# đối chứng: bỏ một skill thì details đếm 11 (số 12 ở trên không phải cố định do CLI)
 CP2="$TMP/repo2"; cp -r "$CP" "$CP2"; rm -rf "$CP2/plugins/vibemaestro-sdlc/skills/ship"
 export CLAUDE_CONFIG_DIR="$TMP/cfg2"; mkdir -p "$CLAUDE_CONFIG_DIR"
 cl plugin marketplace add "$CP2" >/dev/null; cl plugin install "vibemaestro-sdlc@$NAME" >/dev/null
 O=$(cl plugin details "vibemaestro-sdlc@$NAME")
-has "$O" 'Skills (10)' "đối chứng: bỏ skills/ship → details đếm 10 skill"
+has "$O" 'Skills (11)' "đối chứng: bỏ skills/ship → details đếm 11 skill"
 hasnt "$(printf '%s\n' "$O" | grep -F 'Skills (')" 'ship' "đối chứng: ship không còn trong dòng liệt kê skill"
 
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "G2: phần CLI không ghi vào cây repo (test chạy trên bản chép)"

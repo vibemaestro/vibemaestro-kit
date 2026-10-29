@@ -7,7 +7,7 @@
 #   [M] brain matrix: seven rows, each ≤ 300 bytes at its widest; the header names the axes; --json has the same rows
 #   [L] the code intelligence (external) row lists exactly the enabled `*-lsp`, `.lsp.json`/`lspServers` and `serena` plugins;
 #       a disabled one is not listed; CLAUDE_CODE_REMOTE=true says "not started"
-#   [H] the Know·hot row names the repo index (shared, sdlc, planned); skill matrix is user-only; brain's manifest carries no version
+#   [H] the Know·hot row names the repo index (shared, injected by sdlc when on); skill matrix is user-only; brain's manifest carries no version
 #   [D] "this session": hook lines, injected characters, compactions and loss of this session only
 #   [C] brain cost on a fabricated transcript reproduces a hand-computed split: one call per message.id (the largest value of a
 #       field), sidechain and <synthetic> records skipped, a non-JSON line and a cut last line skipped, the 5-minute and 1-hour
@@ -247,7 +247,8 @@ case_hot() {
   br matrix; local r; r=$(row "$OUT" "Hot Memory")
   c_has "$r" "repo index" "[H] the Know·hot row names the repo index"
   c_has "$r" "shared" "[H] as shared"
-  c_has "$r" "B1.7" "[H] and planned in B1.7"
+  c_has "$r" "injects it at SessionStart when current_state.inject is on" "[H] and says what B1.7 built, and that it is opt-in"
+  c_hasnt "$r" "planned" "[H] the row no longer calls the repo index planned"
   c_has "$(row "$OUT" "Artifact Index")" "not built" "[H] the Artifact Index is not built (B2.1)"
   local sk="$BROOT/skills/matrix/SKILL.md"
   c_has "$(cat "$sk" 2>/dev/null)" "disable-model-invocation: true" "[H] skill matrix is user-only"
@@ -577,7 +578,7 @@ plant end-no-cost-line case_sums $HK '    cost_line(s, d, inp)' '    pass'
 plant row-cap-raised case_rows $MX 'ROW_MAX = 300' 'ROW_MAX = 600'
 plant disabled-lsp-listed case_lsp $HK '        if enabled.get(key) is not True:' '        if False:'
 plant lsp-json-ignored case_lsp $MX '        if name.endswith("-lsp") or name == "serena" or os.path.isfile(os.path.join(path, ".lsp.json")):' '        if name.endswith("-lsp") or name == "serena":'
-plant repo-index-dropped case_hot $MX '"; repo index (shared, injected by sdlc; planned B1.7)"' '""'
+plant repo-index-dropped case_hot $MX '"; repo index (shared; sdlc injects it at SessionStart when current_state.inject is on)"' '""'
 plant other-sessions-counted case_did $MX '    mine = [e for e in eps if sid is None or e.get("session") == sid]' '    mine = eps'
 PR=tests/fixtures/brain-probe/probe.py
 plant_probe control-brain-on case_probe_pass $PR '    arm_env = {"BRAIN_OFF": "1"} if arm == "C" else dict(H_ENV)' '    arm_env = dict(H_ENV)'

@@ -69,6 +69,7 @@ If not, do `intake` first.
 
 5. **No code edit without an approval.** Approval is **the person's reply** through the person's channel; the machine has
    no "approved" mark, and silence is not approval. If the person asks for the spec to change, change it, run step 3 again, commit,
-   push, ask for approval again. With an approval, carry on: `vibemaestro-sdlc:plan` if the work must be split, or code in this
+   push, ask for approval again. With an approval, first run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" code` (the sandbox dashboard
+   shows coding started; the command does nothing without a sandbox and never fails), then carry on: `vibemaestro-sdlc:plan` if the work must be split, or code in this
    worktree and then `vibemaestro-sdlc:ship`. While working, if you find the spec wrong, fix the spec in a commit of its own and tell the person;
    do not silently work differently from the spec.

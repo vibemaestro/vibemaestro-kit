@@ -20,6 +20,8 @@
 #   [I] image: --require-image by tag and by full reference, missing, another image; the image-bump lane and its faults
 #   [O] options: --admin without admin_bypass (64), a short head (64), deny globs unset (65), the head's config has no effect
 #   [M] dry run makes no merge call; --merge makes one, pinned; a moved head; the merge log, one line per run, no title or body
+#   [Q] the deny floor follows rules.dirs: the config init writes for a rules folder under .vibemaestro/ with another name refuses
+#       its files, so does the floor of a first PR; .vibemaestro/batons still merges
 #   [L] the back-merge lane: a backmerge/* PR into the default branch (whatever its name) with its head on release merges with
 #       a merge commit; one whose head is not on release, or with no release, is refused; another PR whose head is on release is
 #       refused; every other PR squashes
@@ -179,8 +181,8 @@ fam_files() {
 for l in open(sys.argv[1]):
     lists = re.findall(r"`(\[.*?\])`", l) if "`merge.deny_globs`" in l else []
     if lists: print(" ".join(json.loads(lists[-1]))); break' "$SKILL")
-  case " $deny " in *" .vibemaestro/** "*) ok "[F] instrument: the skill proposes .vibemaestro/** as a deny glob";;
-                    *) bad "[F] instrument: the skill proposes .vibemaestro/** as a deny glob (got: $deny)";; esac
+  case " $deny " in *" .vibemaestro/* "*) ok "[F] instrument: the skill proposes .vibemaestro/* as a deny glob";;
+                    *) bad "[F] instrument: the skill proposes .vibemaestro/* as a deny glob (got: $deny)";; esac
   d=$(mkfx file=.vibemaestro/sdlc.json); guard "$PL" "$d" "${STD[@]}" --allow '.vibemaestro/**'
   eq "$RC:$(merges "$d")" "1:0" "[F] a PR that changes .vibemaestro/sdlc.json (to turn admin bypass on): rc 1, nothing merged"
   has "$OUT" "FAIL  deny:" "[F] …refused by the proposed deny globs"
@@ -281,6 +283,9 @@ fam_boot() {
   alone "[P] bootstrap: the brief still applies" brief bootstrap
   alone "[P] bootstrap: gate code the PR adds under .vibemaestro/ is denied (CI runs it)" deny bootstrap file=.vibemaestro/gates/pr_sensitive.py -- "${BA[@]}"
   alone "[P] bootstrap: an added config that denies nothing still gets the init default" deny bootstrap=empty-deny file=.github/workflows/ci.yml -- "${BA[@]}" --allow '.github/**'
+  d=$(mkfx bootstrap=empty-deny file=.vibemaestro/batons/x.sh); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 0 "[P] bootstrap: the init default leaves a project baton (.vibemaestro/batons/x.sh) to the guard: rc 0"
+  alone "[P] bootstrap: …while it still denies the rules directory" deny bootstrap=empty-deny file=.vibemaestro/rules/x.sh -- "${BA[@]}"
   d=$(mkfx bootstrap); guard "$PL" "$d" "${STD[@]}" "${BA[@]}" --require-image cc1-node22-r16
   eq "$RC" 64 "[P] bootstrap with --require-image (the registry would be the PR's own): rc 64"
   d=$(mkfx bootstrap=modified); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
@@ -478,6 +483,7 @@ PY
 BT_SWAP=()
 bt() {
   local pl=$1 d=$2; shift 2
+  if [ $# -eq 2 ] && [ "$1" = mode ]; then baton_set_mode "$d/state" "$2"; OUT=""; RC=0; return; fi
   OUT=$(cd "$d" && cenv XDG_STATE_HOME="$d/state" FAKE_GH_FX="$d/fx.json" FAKE_GH_LOG="$d/gh.log" FAKE_GH_STATE="$d/merged.json" \
         ${BT_SWAP[@]+"${BT_SWAP[@]}"} python3 -B "$pl/scripts/baton.py" "$@" 2>&1); RC=$?
 }
@@ -493,7 +499,7 @@ fam_baton() {
   eq "$RC" 0 "[T] rehearse kit:merge-pr: rc 0"
   has "$OUT" "  ok    head: headRefOid" "[T] …the rehearse is the guard's dry run (its condition lines)"
   has "$OUT" "PLAN merge acme/app#7 head $H into main@b0b0b0b0b0b0" "[T] …one PLAN line, the guard's merge-plan"
-  eq "$(printf '%s\n' "$OUT" | grep -c '^PLAN ')" 1 "[T] …exactly one planned write"
+  eq "$(printf '%s\n' "$OUT" | grep -c '^  PLAN ')" 1 "[T] …exactly one planned write"
   eq "$(merges "$d")" 0 "[T] …and rehearse makes no pr merge call"
   seal=$(seal_of); bt "$PL" "$d" mode auto
   bt "$PL" "$d" sign --by coordinator-auto --seal "${seal:-none}" "${KA[@]}"
@@ -679,20 +685,105 @@ fam_auto() {
   has "$OUT" " behind 2 auto " "[A] …the baton passes --behind auto to the guard (its PLAN line)"
 }
 
-# the stale test merge: real waits between the re-asks, so a family of its own
+# the stale test merge: GitHub does not always rebuild it after main moves, so the compare API decides and a stale one alone
+# never refuses; only a file both sides changed waits for it (real waits between the re-asks, so a family of its own)
 fam_auto_stale() {
   PL=$1; local d
+  d=$(mkfx auto=stale behind=docs/other.md,kb/notes.md); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
+  eq "$RC" 0 "[A] a stale test merge, main changed docs only: rc 0 (behind ok)"
+  has "$OUT" "(a) test merge not fresh: not needed" "[A] …the stale test merge is named and not needed"
+  eq "$(grep -c '"repos/acme/app/pulls/7"\]' "$d/gh.log")" 1 "[A] …GitHub was asked once, with no wait"
   d=$(mkfx planner auto=stale behind=lib/y.py); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
-  eq "$RC" 2 "[A] a stale test merge on every read: rc 2 (could not conclude)"
-  has "$OUT" "??    behind:" "[A] …behind is what could not be told"
-  has "$OUT" "still stale after 4 reads" "[A] …after the re-asks, named"
+  eq "$RC" 0 "[A] a stale test merge, the planner finds disjoint suites: rc 0 (was rc 2: the removed behaviour)"
+  alone "[A] a stale test merge, main changed a code file (no planner)" behind auto=stale behind=docs/other.md,lib/y.py -- "${AU[@]}"
+  has "$OUT" "base file(s) that are not docs may change what this PR's tests see: lib/y.py" "[A] …refused under (c), as with a fresh one"
+  alone "[A] a stale test merge, main changed a file that wakes the PR's suite" behind planner auto=stale behind=src/core/z.py -- "${AU[@]}"
+  has "$OUT" "wake the same suite(s): app" "[A] …refused under (c)"
+  alone "[A] a stale test merge, a code file both sides changed" behind planner shared=src/lib.py auto=stale -- "${AU[@]}"
+  has "$OUT" "src/lib.py (not docs" "[A] …refused under (b): code is not a clean class"
+  d=$(mkfx planner shared=$LED auto=stale); guard "$PL" "$d" "${STD[@]}" "${AT[@]}" "${AU[@]}"
+  eq "$RC" 2 "[A] a stale test merge, a docs file both sides changed: rc 2 (the second opinion is missing)"
+  has "$OUT" "$LED: cannot cross-check git's merge with GitHub's test merge" "[A] …the file is named"
+  has "$OUT" "still stale after 4 read(s)" "[A] …after the re-asks"
   eq "$(grep -c '"repos/acme/app/pulls/7"\]' "$d/gh.log")" 4 "[A] …GitHub was asked 4 times"
-  d=$(mkfx planner auto=late behind=lib/y.py); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
-  eq "$RC" 0 "[A] stale, then no test merge, then fresh on the third read: rc 0"
+  d=$(mkfx planner shared=$LED auto=late); guard "$PL" "$d" "${STD[@]}" "${AT[@]}" "${AU[@]}"
+  eq "$RC" 0 "[A] stale, then no test merge, then fresh on the third read, a docs file both sides changed: rc 0"
   eq "$(grep -c '"repos/acme/app/pulls/7"\]' "$d/gh.log")" 3 "[A] …three reads"
+  alone "[A] a stale test merge that says mergeable false" behind planner auto=stale-conflict behind=lib/y.py -- "${AU[@]}"
+  has "$OUT" "(a) GitHub reports this PR does not merge with its base" "[A] …is still a conflict: a refusal only asks for the base to be merged"
+  # names the compare lists cannot show as a conflict: a file where the other side has a directory, names that differ in case
+  for st in auto auto=stale; do
+    alone "[A] ($st) the base adds docs/x.md/sub.md, a directory where this PR adds the file docs/x.md" behind planner $st behind=docs/x.md/sub.md -- "${AU[@]}"
+    has "$OUT" "this PR's file docs/x.md is a directory in the base (docs/x.md/sub.md)" "[A] ($st) …the clash is named: a file of the PR, a directory in the base"
+    alone "[A] ($st) the base adds a file named docs, where this PR has the directory docs/" behind planner $st behind=docs -- "${AU[@]}"
+    has "$OUT" "the base's file docs is a directory in this PR (docs/x.md)" "[A] ($st) …the clash is named: a file of the base, a directory in the PR"
+    alone "[A] ($st) the base adds docs/X.md, this PR adds docs/x.md" behind planner $st behind=docs/X.md -- "${AU[@]}"
+    has "$OUT" "docs/X.md and docs/x.md differ only in case or Unicode form" "[A] ($st) …the clash is named: case only"
+  done
+  # a directory rename: a file moved out of a directory on one side, a path in that directory on the other
+  for st in auto auto=stale; do
+    alone "[A] ($st) the base moves docs/y.md to archive/y.md, this PR adds docs/x.md" behind planner $st base-rename=docs/y.md\>archive/y.md -- "${AU[@]}"
+    has "$OUT" "the base moved docs/y.md to archive/y.md, a directory rename git may apply to this PR's" "[A] ($st) …the base's move is named"
+    alone "[A] ($st) this PR moves docs/a/p.md to docs/b/p.md, the base changed docs/a/q.md" behind planner $st rename=docs/a/p.md:docs/b/p.md behind=docs/a/q.md -- "${AU[@]}"
+    has "$OUT" "this PR moved docs/a/p.md to docs/b/p.md, a directory rename git may apply to the base's docs/a/q.md" "[A] ($st) …the PR's move is named"
+  done
+  alone "[A] the base moves docs/a/b/c/f.md to docs/x/y/c/f.md, this PR adds docs/a/b/other.md (git: file location conflict)" behind auto=stale base-rename=docs/a/b/c/f.md\>docs/x/y/c/f.md file=docs/a/b/other.md -- "${AU[@]}"
+  has "$OUT" "the base moved docs/a/b/c/f.md to docs/x/y/c/f.md, a directory rename git may apply to this PR's docs/a/b/other.md" "[A] …the PR's file in an ancestor of the source directory is found"
+  alone "[A] this PR moves docs/a/b/c/f.md to docs/x/y/c/f.md, the base changed docs/a/b/other.md" behind auto=stale rename=docs/a/b/c/f.md:docs/x/y/c/f.md behind=docs/a/b/other.md -- "${AU[@]}"
+  has "$OUT" "this PR moved docs/a/b/c/f.md to docs/x/y/c/f.md, a directory rename git may apply to the base's docs/a/b/other.md" "[A] …and the same the other way round"
+  # a directory renamed to another case or Unicode form is a rename for git (a file-location conflict), whatever a checkout folds
+  alone "[A] the base renames docs/a/ to docs/A/, this PR adds docs/a/new.md" behind auto=stale base-rename=docs/a/f.md\>docs/A/f.md file=docs/a/new.md -- "${AU[@]}"
+  has "$OUT" "the base moved docs/a/f.md to docs/A/f.md, a directory rename git may apply to this PR's docs/a/new.md" "[A] …a case-only directory rename is found"
+  alone "[A] the base renames docs/café/ (NFC) to docs/café/ (NFD), this PR adds a file in the NFC one" behind auto=stale base-rename=$'docs/caf\xc3\xa9/f.md'\>$'docs/cafe\xcc\x81/f.md' file=$'docs/caf\xc3\xa9/new.md' -- "${AU[@]}"
+  has "$OUT" "a directory rename git may apply to this PR's" "[A] …a Unicode-form-only directory rename is found"
+  alone "[A] the base moves docs/a/b/f.md to docs/A/x/b/f.md, this PR adds docs/a/other.md" behind auto=stale base-rename=docs/a/b/f.md\>docs/A/x/b/f.md file=docs/a/other.md -- "${AU[@]}"
+  has "$OUT" "the base moved docs/a/b/f.md to docs/A/x/b/f.md, a directory rename git may apply to this PR's docs/a/other.md" "[A] …the ancestor reached only through a case difference is found"
+  d=$(mkfx auto=stale base-rename=docs/y.md\>docs/sub/y.md); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
+  eq "$RC" 0 "[A] the base moves docs/y.md down into docs/sub: no directory leaves, rc 0"
+  d=$(mkfx auto=stale base-rename=docs/y.md\>archive/y.md:copied); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
+  eq "$RC" 0 "[A] the base copies docs/y.md to archive/y.md: a copy is no move, rc 0"
+  d=$(mkfx auto=stale base-rename=docs/y.md\>docs/z.md); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
+  eq "$RC" 0 "[A] the base renames docs/y.md inside its directory: no directory rename, rc 0"
+  d=$(mkfx auto=stale base-rename=kb/a.md\>kb/b/a.md); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
+  eq "$RC" 0 "[A] the base moves a file out of a directory this PR does not touch: rc 0"
+  alone "[A] the base's é.md (NFD) and this PR's é.md (NFC)" behind auto=stale file=$'docs/\xc3\xa9.md' behind=$'docs/e\xcc\x81.md' -- "${AU[@]}"
+  has "$OUT" "differ only in case or Unicode form" "[A] …the clash is named: Unicode form"
+  alone "[A] the base lists docs/X.md and docs/x.md, this PR docs/x.md" behind auto=stale behind=docs/X.md,docs/x.md -- "${AU[@]}"
+  has "$OUT" "docs/X.md and docs/x.md differ only in case or Unicode form" "[A] …the case-only pair is named although docs/x.md is also an exact match"
+  d=$(mkfx auto behind=docs/xy.md,docs/x-y/z.md); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
+  eq "$RC" 0 "[A] names that only start alike (docs/xy.md, docs/x-y/z.md beside docs/x.md): no clash, rc 0"
 }
 
-FAMILIES="fam_conditions fam_checks fam_files fam_behind fam_clean fam_boot fam_image fam_options fam_merge fam_baton fam_backmerge fam_auto fam_auto_stale"
+# ── [Q] the deny floor follows rules.dirs: a rules folder under .vibemaestro/ with another name, batons still merge ─────────────────
+# init_cfg <plugin> <rules.dirs json> — the config `kb.py init` writes for those rules folders, in a file (its path is printed)
+init_cfg() {
+  local pl=$1 r f; r=$(fresh); f=$(fresh)/ans.json
+  git_ init -q -b main "$r"; echo x > "$r/a.txt"; git_ -C "$r" add -A; git_ -C "$r" commit -qm c
+  printf '{"rules": {"dirs": %s}}' "$2" > "$f"
+  (cd "$r" && cenv python3 "$pl/scripts/kb.py" init --answers "$f" >/dev/null 2>&1) || { bad "fixture: kb.py init --answers"; return 1; }
+  printf '%s' "$r/.vibemaestro/sdlc.json"
+}
+fam_floor() {
+  PL=$1; local d cfg dflt
+  dflt=$(init_cfg "$PL" '[]') || return
+  cfg=$(init_cfg "$PL" '[".vibemaestro/policies"]') || return
+  d=$(mkfx config-file="$dflt" file=.vibemaestro/rules/a.instructions.md); guard "$PL" "$d" "${STD[@]}" --allow '.vibemaestro/**'
+  eq "$RC" 1 "[Q] instrument: the config init wrote with no rules folder refuses an edit under .vibemaestro/rules: rc 1"
+  has "$OUT" "FAIL  deny:" "[Q] …named deny"
+  alone "[Q] the config init wrote for rules.dirs .vibemaestro/policies refuses an edit of a policy file" deny config-file="$cfg" file=.vibemaestro/policies/a.instructions.md -- --allow '.vibemaestro/**'
+  d=$(mkfx config-file="$cfg" file=.vibemaestro/batons/x.sh); guard "$PL" "$d" "${STD[@]}" --allow '.vibemaestro/**'
+  eq "$RC" 0 "[Q] …and still merges a project baton under .vibemaestro/batons: rc 0"
+  cfg=$(init_cfg "$PL" '[".vibemaestro/p[1]"]') || return
+  alone "[Q] a rules folder whose name holds a class character is denied too (fail closed)" deny config-file="$cfg" file='.vibemaestro/p[1]/a.instructions.md' -- --allow '.vibemaestro/**'
+  d=$(mkfx bootstrap=policies); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 0 "[Q] bootstrap with rules.dirs .vibemaestro/policies: its README is the scaffold: rc 0"
+  alone "[Q] bootstrap: …a policy file the PR adds below the folder's top is denied" deny bootstrap=policies file=.vibemaestro/policies/sub/p.md -- "${BA[@]}"
+  alone "[Q] bootstrap: …and so is a script the PR adds in the folder" deny bootstrap=policies file=.vibemaestro/policies/run.sh -- "${BA[@]}"
+  d=$(mkfx bootstrap=policies file=.vibemaestro/batons/x.sh); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 0 "[Q] bootstrap: …while a project baton under .vibemaestro/batons still merges: rc 0"
+}
+
+FAMILIES="fam_conditions fam_checks fam_files fam_behind fam_clean fam_boot fam_floor fam_image fam_options fam_merge fam_baton fam_backmerge fam_auto fam_auto_stale"
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
@@ -767,7 +858,9 @@ BRK mergeable-late fam_conditions '[C] …before the CI runs are read' $G '     
 BRK bootstrap-off fam_boot '[P] bootstrap: the base has no config, the PR adds one: rc 0' $G '        boot = bootstrap_config(a, self.base) if text is None else None' '        boot = None'
 BRK bootstrap-modified fam_boot '[P] the PR modifies (not adds) the config the base lacks: rc 65' $G 'f.get("filename") == C.CONFIG_REL and f.get("status") == "added" for f in files' 'f.get("filename") == C.CONFIG_REL for f in files'
 BRK bootstrap-scaffold-any fam_boot '[P] bootstrap: gate code the PR adds under .vibemaestro/ is denied (CI runs it): rc 1' $G '        if p == C.CONFIG_REL or (p.endswith(".md") and any(' '        if p.startswith(".vibemaestro/") or (p.endswith(".md") and any('
-BRK bootstrap-no-floor fam_boot '[P] bootstrap: an added config that denies nothing still gets the init default: rc 1' $G '                    deny = list(deny) + [g for g in C.MERGE_DENY_DEFAULT if g not in deny]' '                    deny = list(deny)'
+BRK bootstrap-no-floor fam_boot '[P] bootstrap: an added config that denies nothing still gets the init default: rc 1' $G '                    deny = list(deny) + [g for g in C.merge_deny_floor(self.cfg["rules"]["dirs"]) if g not in deny]' '                    deny = list(deny)'
+BRK floor-not-derived fam_floor '[Q] bootstrap: …a policy file the PR adds below the folder'"'"'s top is denied' $G '                    deny = list(deny) + [g for g in C.merge_deny_floor(self.cfg["rules"]["dirs"]) if g not in deny]' '                    deny = list(deny) + [g for g in C.MERGE_DENY_DEFAULT if g not in deny]'
+BRK floor-init-static fam_floor '[Q] the config init wrote for rules.dirs .vibemaestro/policies refuses an edit of a policy file' scripts/init_setup.py '"deny_globs" not in (inputs.get("merge") or {}):' 'False:'
 BRK bootstrap-image fam_boot '[P] bootstrap with --require-image (the registry would be the PR'"'"'s own): rc 64' $G '            if a.require_image is not None:
                 raise Usage("--require-image is refused' '            if False:
                 raise Usage("--require-image is refused'
@@ -807,8 +900,8 @@ BRK auto-pr-side-woken fam_auto '[A] the base changed an @always suite'"'"'s own
 BRK auto-old-dropped fam_auto '[A] main'"'"'s map moved src/new/* onto web, and the PR'"'"'s files are elsewhere: rc 0' $G '(["--old", os.path.join(d, "old")] if i == 0 and old is not None else [])' '[]'
 BRK auto-shared-off-base-side fam_auto '[A] a shared docs file that merges clean, but a suite reads it' $G '    verdict, detail = suites_apart(a, base_sha, cmp_, planner, base_files, paths, notes, cfg)' '    verdict, detail = suites_apart(a, base_sha, cmp_, planner, [f for f in base_files if f not in shared], paths, notes, cfg)'
 BRK auto-no-docs-class fam_auto '[A] a shared docs file that merges clean and that no suite reads' $G '    return (p.endswith(".md") and segs[0].lower()' '    return (False and segs[0].lower()'
-BRK auto-planner-data-class fam_auto '[A] …refused under (b): only docs merge clean' $G 'cfg, lambda p: doc_path(p, cfg), tm)' 'cfg, lambda p: doc_path(p, cfg) or p == "tests/suites.map", tm)'
-BRK auto-any-shared-file fam_auto '[A] …refused: code is not a clean class' $G 'cfg, lambda p: doc_path(p, cfg), tm)' 'cfg, lambda p: True, tm)'
+BRK auto-planner-data-class fam_auto '[A] …refused under (b): only docs merge clean' $G 'lambda p: doc_path(p, cfg), tm,' 'lambda p: doc_path(p, cfg) or p == "tests/suites.map", tm,'
+BRK auto-any-shared-file fam_auto '[A] …refused: code is not a clean class' $G 'lambda p: doc_path(p, cfg), tm,' 'lambda p: True, tm,'
 BRK auto-agent-md-docs fam_auto '[A] a shared CLAUDE.md that merges clean (an agent loads it as instructions): rc 1' $G 'segs[-1].lower().split(".")[0] not in AGENT_MD and' 'True and'
 BRK auto-pr-full-empty-base fam_auto '[A] a PR that edits the map, behind main by only a file the base map excludes: rc 1' $G '        meet = sorted(bs) or base_side' '        meet = sorted(bs)'
 BRK auto-agent-name-short fam_auto '[A] a shared QWEN.md that merges clean (no suite reads it): rc 1' $G '"gemini", "qwen", "crush", "skill")' '"gemini")'
@@ -832,8 +925,25 @@ BRK auto-planner-socket fam_auto '[A] the planner runs with no token' $G '"socke
 BRK auto-input-link-read fam_auto '[A] a planner input that is a symlink at the base: rc 2' $G '    bad = [p for p in rels if modes.get(p) not in ("100644", "100755") and not (absent_ok and modes.get(p) is None)]' '    bad = []'
 BRK auto-with-behind-ok fam_auto '[A] --behind auto with --behind-ok: rc 64' $G '    if a.auto and (a.behind_globs or a.clean_globs):' '    if False:'
 BRK auto-baton-drops-args fam_auto '[A] …the baton passes --behind auto to the guard' batons/merge-pr.sh 'guard_read() { python3 -I -B "$BATON_PLUGIN_ROOT/gates/merge_guard.py" ${ARGS[@]+"${ARGS[@]}"} "$@"; }' 'guard_read() { python3 -I -B "$BATON_PLUGIN_ROOT/gates/merge_guard.py" --repo acme/app --pr 7 --head a1b2c3d4e5f60718293a4b5c6d7e8f9001122334 --brief brief.txt "$@"; }'
-BRK auto-stale-accepted fam_auto_stale '[A] a stale test merge on every read: rc 2' $G '        if got != [base_sha, a.head]:' '        if False:'
-BRK auto-no-reask fam_auto_stale '[A] stale, then no test merge, then fresh on the third read: rc 0' $G 'TEST_MERGE_READS, TEST_MERGE_WAIT_S = 4, 2' 'TEST_MERGE_READS, TEST_MERGE_WAIT_S = 1, 2'
+BRK auto-stale-accepted fam_auto_stale '[A] a stale test merge, a docs file both sides changed: rc 2' $G '        if got != [base_sha, a.head]:' '        if False:'
+BRK auto-no-reask fam_auto_stale '[A] stale, then no test merge, then fresh on the third read, a docs file both sides changed: rc 0' $G 'TEST_MERGE_READS, TEST_MERGE_WAIT_S = 4, 2' 'TEST_MERGE_READS, TEST_MERGE_WAIT_S = 1, 2'
+BRK auto-stale-is-a-gate fam_auto_stale '[A] a stale test merge, main changed docs only: rc 0' $G '    if tm is None and why[0] == "FAIL":' '    if tm is None:'
+BRK auto-stale-waits fam_auto_stale '[A] …GitHub was asked once, with no wait' $G 'TEST_MERGE_READS if shared else 1)' 'TEST_MERGE_READS)'
+BRK auto-no-second-opinion fam_auto_stale '[A] …the file is named' $G '    if no_tm:' '    if False:'
+BRK auto-stale-conflict-ignored fam_auto_stale '[A] …is still a conflict: a refusal only asks for the base to be merged' $G '        if ok is False:' '        if ok is False and m and merge_parents(a, m) == [base_sha, a.head]:'
+BRK auto-clash-file-over-dir fam_auto_stale '[A] (auto) …the clash is named: a file of the base, a directory in the PR' $G '        if k in pdirs:' '        if False:'
+BRK auto-clash-dir-over-file fam_auto_stale '[A] (auto=stale) …the clash is named: a file of the PR, a directory in the base' $G '        if k in bdirs:' '        if False:'
+BRK auto-clash-base-move fam_auto_stale '[A] (auto) …the base'"'"'s move is named' $G '    for who, moves, other, where in (("the base", base_moves, paths, "this PR"), ("this PR", pr_moves, base_files, "the base")):' '    for who, moves, other, where in (("the base", (), paths, "this PR"), ("this PR", pr_moves, base_files, "the base")):'
+BRK auto-clash-pr-move fam_auto_stale '[A] (auto) …the PR'"'"'s move is named' $G '("this PR", pr_moves, base_files, "the base")):' '("this PR", (), base_files, "the base")):'
+BRK auto-clash-ancestor fam_auto_stale '[A] …the PR'"'"'s file in an ancestor of the source directory is found' $G '    out, d = [], posixpath.dirname(src)
+    while d:' '    out, d = [], posixpath.dirname(src)
+    while d and not out:'
+BRK auto-clash-copy-is-move fam_auto_stale '[A] the base copies docs/y.md to archive/y.md: a copy is no move, rc 0' $G '            if f.get("status") == "renamed" and f.get("previous_filename")' '            if f.get("previous_filename")'
+BRK auto-clash-down-is-leave fam_auto_stale '[A] the base moves docs/y.md down into docs/sub: no directory leaves, rc 0' $G '        if not (dst + "/").startswith(d + "/"):' '        if True:'
+BRK auto-clash-dir-rename-folded fam_auto_stale '[A] …the ancestor reached only through a case difference is found' $G '        if not (dst + "/").startswith(d + "/"):' '        if not (fold(dst) + "/").startswith(fold(d) + "/"):'
+BRK auto-clash-unicode fam_auto_stale '[A] …the clash is named: Unicode form' $G '    return unicodedata.normalize("NFC", p).casefold()' '    return p.casefold()'
+BRK auto-clash-fold-collision fam_auto_stale '[A] …the case-only pair is named although docs/x.md is also an exact match' $G '            out.setdefault(fold(p), set()).add(p)' '            out[fold(p)] = {p}'
+BRK auto-clash-case fam_auto_stale '[A] (auto) …the clash is named: case only' $G '                if pp != bp:' '                if False:'
 PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
 QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
 ok() { :; }; bad() { QN=$((QN+1)); }

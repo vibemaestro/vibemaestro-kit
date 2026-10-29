@@ -31,3 +31,4 @@ Mọi tài liệu của kit, mỗi tài liệu một dòng. Tiếng Anh là mặ
 |---|---|
 | [Nghiên cứu BatonRun](research/batonrun.vi.md) | Điều đã biết về chi phí và giới hạn của BatonRun, và điều các phép thử chưa cho thấy. |
 | [Nghiên cứu brain](research/brain.vi.md) | Điều đã biết về lợi ích của brain, và điều các phép thử chưa cho thấy. |
+| [Nghiên cứu sdlc](research/sdlc.vi.md) | Plugin sdlc tốn bao nhiêu và đem lại gì trên việc của app, đem lại gì khi câu trả lời chỉ được ghi trong `kb/`, và điều các phép đo chưa cho thấy. |

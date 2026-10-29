@@ -89,8 +89,10 @@ Các suite không cần secret, không cần repo nào khác, không cần đặ
   hành) không đánh thức suite nào, nên một thay đổi chỉ về tài liệu chỉ chạy các suite `@always`.
 - Kiểm manifest bằng `claude plugin validate plugins/<tên>` và marketplace bằng `claude plugin validate .`.
 
-CI: `.github/workflows/test.yml` chạy kế hoạch các suite đổi ở mỗi pull request và mỗi lần push vào `main`, trên runner do biến
-repo `CI_RUNNER` chỉ định (runner của GitHub khi biến chưa đặt). Các job cổng (`export-gate`, `pr-body`, `scan-terms`) chạy
+CI: `.github/workflows/test.yml` chạy kế hoạch các suite đổi ở mỗi pull request đã sẵn sàng; push vào `main` không chạy suite
+test nào, chỉ chạy các phép quét (`scan-terms`, `public-tree`). Nó chạy trên runner do biến repo `CI_RUNNER` chỉ định.
+Chưa đặt hoặc để trống thì lần chạy của repo riêng lỗi ngay (không bao giờ lùi về runner của GitHub) còn repo
+công khai dùng runner của GitHub. Các job cổng (`export-gate`, `pr-body`, `public-tree`, `scan-terms`) chạy
 trên biến repo tùy chọn `CI_GATE_RUNNER` (một runner nhẹ), không có thì dùng `CI_RUNNER`. `.github/workflows/test-full.yml` chạy đủ bộ test hai lần một
 tuần (Chủ nhật và thứ Tư, 19:00 UTC); một lần chạy đỏ mở một issue có nhãn `full-run-red`.
 

@@ -14,7 +14,10 @@
 #   5. exit code: the step's own shell block is RUN against scratch repos and a fake gh: a planted fault is red, a clean case is green,
 #      gh failing is not green, a PR that relaxes its own limit and neutralises its own gate is still judged by the base
 #   6. pins: every `uses:` is pinned by a full commit SHA (or local), and only actions/checkout is used
-#   7. runner: `runs-on: ${{ vars.CI_GATE_RUNNER || vars.<ci.runner_var> || '<ci.runner_default>' }}`, from flags, from config, or the defaults
+#   7. runner: `runs-on: ${{ vars.CI_GATE_RUNNER || vars.<ci.runner_var> || '<ci.runner_default>' }}`, from flags, from config, or the defaults;
+#      with ci.runner_default `self-hosted only` the last operand is a failing fromJSON instead of a label, in every job, and a kept old file is warned about
+#   8. the kit's OWN workflows (not the templates): each job's `runs-on` is evaluated, and in a private repository with the runner variables
+#      unset it fails instead of answering a hosted label (tests/fixtures/runs_on_check.py)
 # Then each fault above is planted in a copy of the rendered template and the checker must go red (a checker that cannot go red proves
 # nothing). The checker is tests/fixtures/workflow_check.py; it reads YAML with a parser, not grep. No network, no sleep.
 # =============================================================================
@@ -68,6 +71,86 @@ R3="$TMP/repo3"; mkdir -p "$R3"; git_ -C "$R3" init -q -b main; put_cfg "$R3" '{
 cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$R3" >/dev/null 2>&1
 grep -qxF "    runs-on: \${{ vars.CI_GATE_RUNNER || vars.CFG_RUNNER || 'cfg-label' }}" "$R3/.github/workflows/dead-branches.yml" && ok "config: ci.runner_var and ci.runner_default reach runs-on" || bad "the config did not reach runs-on"
 
+echo "== self-hosted only (ci.runner_default: \"self-hosted only\"): no hosted fallback, an unset variable fails the run =="
+# The form is opt-in: the generated runs-on has no label at all, so a repo whose organisation has no hosted runners never queues a job for ever.
+SH="self-hosted only"; ALL6="$KINDS pr-evidence"
+RS1="$TMP/repo-sho1"; mkdir -p "$RS1"; git_ -C "$RS1" init -q -b main; put_cfg "$RS1" '{"ci": {"runner_var": "TEAM_RUNNER", "runner_default": "self-hosted only"}}'
+O=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS1" 2>&1); eq "$?" 0 "the form in the config: the installer accepts it"
+RS2="$TMP/repo-sho2"; mkdir -p "$RS2"; git_ -C "$RS2" init -q -b main
+O5=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS2" --runner-default "$SH" 2>&1); eq "$?" 0 "the form on the command line: the installer accepts it"
+MSG="TEAM_RUNNER is not set and this repo runs on self-hosted runners only; set the repository variable TEAM_RUNNER to the label of one"
+for k in $ALL6; do
+  f="$RS1/.github/workflows/$k.yml"
+  [ "$(grep -c -F 'runs-on:' "$f")" = "$([ "$k" = pr-evidence ] && echo 2 || echo 1)" ] && ok "$k.yml: its runs-on lines are all there" || bad "$k.yml: unexpected number of runs-on lines"
+  [ -z "$(grep -F 'runs-on:' "$f" | grep -v -F "runs-on: \${{ vars.CI_GATE_RUNNER || vars.TEAM_RUNNER || fromJSON('$MSG') }}")" ] && ok "$k.yml: every runs-on is the two variables, then the failing guard (config)" || bad "$k.yml: a runs-on is not the self-hosted-only expression"
+  grep -i -E "ubuntu|windows|macos|hosted-label" "$f" >/dev/null && bad "$k.yml names a hosted runner" || ok "$k.yml: no hosted runner is named anywhere"
+  grep -q '@@' "$f" && bad "$k.yml still has a marker (self-hosted only)" || ok "$k.yml: no marker left (self-hosted only)"
+done
+grep -qxF "    runs-on: \${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || fromJSON('CI_RUNNER is not set and this repo runs on self-hosted runners only; set the repository variable CI_RUNNER to the label of one') }}" "$RS2/.github/workflows/pr-title.yml" && ok "flag: --runner-default \"self-hosted only\" writes the guard with the default variable" || bad "the flag did not write the guard"
+# an earlier install keeps its hosted fallback (install-gates never overwrites): switching to the form must say so, once per kept file
+RS3="$TMP/repo-sho3"; mkdir -p "$RS3"; git_ -C "$RS3" init -q -b main
+cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS3" >/dev/null 2>&1
+O3=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS3" --runner-default "$SH" 2>&1); eq "$?" 0 "…the warnings do not change the exit code"
+eq "$(printf '%s\n' "$O3" | grep -c '^WARNING .github/workflows/.*is kept, and its runs-on still has a fallback')" 6 "a repo installed with the hosted default, then asked for self-hosted only: one WARNING per kept workflow (6)"
+printf '%s\n' "$O3" | grep -F "WARNING .github/workflows/pr-title.yml" | grep -q "ubuntu-latest" && ok "…the warning names the fallback it found" || bad "…the warning does not name the fallback"
+eq "$(printf '%s\n' "$O" | grep -c 'is kept, and its runs-on still has a fallback')" 0 "control: a fresh self-hosted-only install warns about no kept file"
+O3=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS3" 2>&1)
+eq "$(printf '%s\n' "$O3" | grep -c 'still has a fallback')" 0 "control: the hosted default asked again (files kept as they are) prints no such warning"
+# what counts as a kept fallback: any runs-on key that is not the guard, whatever its spelling; a kept file that cannot be read is said, not a crash
+RS4="$TMP/repo-sho4"; mkdir -p "$RS4"; git_ -C "$RS4" init -q -b main; cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS4" --only pr-title >/dev/null 2>&1
+GOOD="runs-on: \${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || fromJSON('CI_RUNNER is not set and this repo runs on self-hosted runners only; set the repository variable CI_RUNNER to the label of one') }}"
+kept_case() {  # kept_case <label> <want warnings> <the runs-on text, one or more lines>
+  printf 'name: x\njobs:\n  a:\n%s\n' "$3" > "$RS4/.github/workflows/pr-title.yml"
+  local o rc; o=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS4" --only pr-title --runner-default "$SH" 2>&1); rc=$?
+  eq "$(printf '%s\n' "$o" | grep -c '^WARNING .github/workflows/pr-title.yml')" "$2" "kept file, $1: $2 warning(s)"; eq "$rc" 0 "…rc 0"
+}
+kept_case "the guard on every runs-on line" 0 "    $GOOD"
+kept_case "a hosted label" 1 "    runs-on: \${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}"
+kept_case "a guard in one job and a label in another" 1 "    $GOOD
+  b:
+    runs-on: ubuntu-latest"
+kept_case "a label with a trailing comment that mentions fromJSON(" 1 "    runs-on: ubuntu-latest # fromJSON(x)"
+kept_case "a quoted key" 1 "    \"runs-on\": ubuntu-latest"
+kept_case "a list item" 1 "  - runs-on: ubuntu-latest"
+kept_case "a space before the colon" 1 "    runs-on : ubuntu-latest"
+kept_case "a fromJSON that is not the guard" 1 "    runs-on: \${{ vars.A || fromJSON('\"ubuntu-latest\"') }}"
+rm -f "$RS4/.github/workflows/pr-title.yml"; ln -s /nonexistent-target "$RS4/.github/workflows/pr-title.yml"
+O4=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS4" --only pr-title --runner-default "$SH" 2>&1); eq "$?" 0 "kept file that is a dangling link: rc 0, no crash"
+has "$O4" "pr-title.yml is kept and could not be read" "…the warning says it could not be read"
+rm -f "$RS4/.github/workflows/pr-title.yml"; mkdir "$RS4/.github/workflows/pr-title.yml"
+O4=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RS4" --only pr-title --runner-default "$SH" 2>&1); eq "$?" 0 "kept file that is a directory: rc 0, no crash"
+has "$O4" "pr-title.yml is kept and could not be read" "…the warning says it could not be read"
+rmdir "$RS4/.github/workflows/pr-title.yml"
+# the hosted default and a label are not changed by the existence of the form
+for k in $ALL6; do grep -F 'runs-on:' "$R/.github/workflows/$k.yml" | grep -q -F "fromJSON" && bad "$k.yml (hosted default) carries the guard" || ok "$k.yml (hosted default) has no guard: the default form is as before"; done
+# evaluate every generated runs-on, as Actions does: neither variable set (or empty) fails; the first one set answers
+cat > "$TMP/ron_eval.py" <<'PYEOF'
+import sys, yaml
+sys.path.insert(0, sys.argv[1])
+import gh_expr
+bad = []
+for path in sys.argv[3:]:
+    for job, spec in yaml.safe_load(open(path))["jobs"].items():
+        ro = spec["runs-on"]
+        for vars_, want in (({}, None), ({"TEAM_RUNNER": ""}, None), ({"TEAM_RUNNER": "", "CI_GATE_RUNNER": ""}, None),
+                            ({"TEAM_RUNNER": "ours"}, "ours"), ({"CI_GATE_RUNNER": "gate"}, "gate"), ({"TEAM_RUNNER": "ours", "CI_GATE_RUNNER": "gate"}, "gate")):
+            for vis in ("public", "private", "internal"):
+                try:
+                    got = gh_expr.evaluate(ro, {"vars": vars_, "github": {"repository_visibility": vis}})
+                except gh_expr.EvalError as e:
+                    got = None
+                if got != want:
+                    bad.append("%s %s %s %s: wanted %r, got %r" % (path.split("/")[-1], job, vars_, vis, want, got))
+print("jobs evaluated; wrong answers: %d" % len(bad))
+for b in bad:
+    print("FAIL " + b)
+sys.exit(1 if bad else 0)
+PYEOF
+O=$(python3 "$TMP/ron_eval.py" "$HERE/fixtures" x $(for k in $ALL6; do echo "$RS1/.github/workflows/$k.yml"; done) 2>&1); rc=$?
+eq "$rc" 0 "self-hosted only: with both variables unset or empty the evaluation fails (no label, public or private), a set variable answers its own label ${O:+($(printf '%s' "$O" | head -3))}"
+O=$(python3 "$TMP/ron_eval.py" "$HERE/fixtures" x $(for k in $ALL6; do echo "$R/.github/workflows/$k.yml"; done) 2>&1); rc=$?
+[ "$rc" = 1 ] && ok "control: the same evaluation is red on the hosted-default workflows (they answer ubuntu-latest when nothing is set)" || bad "control: the hosted default passed the self-hosted-only evaluation"
+
 echo "== build the scratch repos, then check the real rendered workflows =="
 W="$TMP/work"; mkdir -p "$W"
 O=$(python3 "$CHECK" build "$W" "$PLUGIN" 2>&1); eq "$?" 0 "the scratch repos and fixtures are built ($O)"
@@ -77,9 +160,9 @@ done
 
 echo "== concurrency: only a new commit on a PR cancels (tests/fixtures/concurrency_check.py) =="
 CONC="$HERE/fixtures/concurrency_check.py"
-# the kit's own PR workflows get the block in a PR the owner signs (deny glob .github/workflows/**); until then they are a known gap,
-# and a gap that is already fixed is red too, so the list cannot outlive the fix
-KNOWN_GAP=".github/workflows/export-gate.yml .github/workflows/pr-body.yml .github/workflows/test.yml"
+# the kit's own PR workflows hold the block and the draft rule: no known gap is left; a gap listed here that already passes is red,
+# so the list cannot outlive the fix
+KNOWN_GAP=""
 for g in $KNOWN_GAP; do [ -f "$SRC_ROOT/$g" ] || bad "concurrency: KNOWN_GAP names $g, which does not exist: take it off"; done
 for f in "$TPL"/*.yml "$R"/.github/workflows/*.yml "$SRC_ROOT"/.github/workflows/*.yml; do
   rel=${f#"$SRC_ROOT/"}; rel=${rel#"$TMP/"}
@@ -335,5 +418,46 @@ PY
   else ok "planted fault '$kind/$name': red ($(printf '%s' "$O" | head -1 | sed 's/^ *FAIL //' | cut -c1-90))"; fi
 done < <(break_rows)
 [ "$N" -ge 40 ] && ok "instrument: $N faults were planted" || bad "instrument: only $N faults were planted"
+
+echo "== the kit's own workflows: no job can land on a hosted runner of a private repository (tests/fixtures/runs_on_check.py) =="
+# The owner rule: every job of a private repo runs on our runners; a missing CI_RUNNER fails the run, it never falls back to a paid hosted one.
+# The public repo (no runner of ours) falls back to ubuntu-latest. The templates install-gates writes into consumer repos are another matter (above).
+RON="$HERE/fixtures/runs_on_check.py"
+O=$(python3 "$RON" "$SRC_ROOT/.github/workflows" 2>&1); rc=$?
+eq "$rc" 0 "runs-on: every job of .github/workflows answers a runner of ours, or fails, in a private repository ($(printf '%s' "$O" | grep -c '^FAIL') jobs red)"
+has "$O" "jobs=7" "runs-on: the checker saw all 7 jobs (an empty glob cannot pass)"
+mkdir -p "$TMP/ron"
+ron_break() {  # ron_break <label> <file> <old> <new> <needle>: the checker must go red on a copy with one runs-on changed
+  rm -rf "$TMP/ron/wf"; cp -R "$SRC_ROOT/.github/workflows" "$TMP/ron/wf"
+  python3 - "$TMP/ron/wf/$2" "$3" "$4" <<'PY' || { bad "runs-on break $1: the anchor is gone, update the row"; return; }
+import sys
+f, old, new = sys.argv[1:4]
+t = open(f, encoding="utf-8").read()
+if t.count(old) != 1:
+    sys.exit(3)
+open(f, "w", encoding="utf-8").write(t.replace(old, new))
+PY
+  O=$(python3 "$RON" "$TMP/ron/wf" 2>&1); rc=$?
+  [ "$rc" = 1 ] && has "$O" "$5" "runs-on break $1: red ($5)" || bad "runs-on break $1: the checker stays green, the probe is blind"
+}
+GUARD="(github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository'))"
+ron_break literal-label test-full.yml "runs-on: \${{ vars.CI_RUNNER || $GUARD }}
+    # The suite took" "runs-on: ubuntu-latest
+    # The suite took" "a literal label"
+ron_break old-fallback test.yml "runs-on: \${{ vars.CI_RUNNER || $GUARD }}" "runs-on: \${{ vars.CI_RUNNER || 'ubuntu-latest' }}" "answers 'ubuntu-latest' (wanted '<the evaluation fails>')"
+ron_break old-gate-fallback pr-body.yml "vars.CI_RUNNER || $GUARD }}" "vars.CI_RUNNER || 'ubuntu-latest' }}" "answers 'ubuntu-latest' (wanted '<the evaluation fails>')"
+ron_break private-label export-gate.yml "fromJSON('CI_RUNNER is not set in a private repository')" "'our-runner'" "answers 'our-runner' (wanted '<the evaluation fails>')"
+ron_break ci-runner-ignored public-tree.yml "vars.CI_GATE_RUNNER || vars.CI_RUNNER || $GUARD" "vars.CI_GATE_RUNNER || $GUARD" "(wanted 'our-runner')"
+ron_break event-shortcut test-full.yml "runs-on: \${{ vars.CI_RUNNER || $GUARD }}
+    # The suite took" "runs-on: \${{ github.event_name == 'workflow_dispatch' && 'ubuntu-latest' || vars.CI_RUNNER || $GUARD }}
+    # The suite took" "not spelled as the kit's expression"
+ron_break internal-is-hosted test.yml "runs-on: \${{ vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}" "runs-on: \${{ vars.CI_RUNNER || (github.repository_visibility != 'private' && 'ubuntu-latest' || fromJSON('x y')) }}" "unset in a internal repository"
+ron_break null-is-not-a-failure pr-body.yml "fromJSON('CI_RUNNER is not set in a private repository')" "fromJSON('null')" "answers None (wanted '<the evaluation fails>')"
+# a workflow file named *.yaml is run by Actions too: the checker must read it, and must see its jobs
+rm -rf "$TMP/ron/wf"; cp -R "$SRC_ROOT/.github/workflows" "$TMP/ron/wf"; printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps: []\n' > "$TMP/ron/wf/zz.yaml"
+O=$(python3 "$RON" "$TMP/ron/wf" 2>&1); rc=$?
+[ "$rc" = 1 ] && has "$O" "FAIL zz.yaml x" "runs-on break yaml-extension: red (a job of a *.yaml file is judged)" || bad "runs-on break yaml-extension: the checker does not read *.yaml, the probe is blind"
+has "$O" "jobs=8" "runs-on break yaml-extension: …and it counted the extra job"
+ron_break public-loses-fallback pr-body.yml "(github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository'))" "fromJSON('CI_RUNNER is not set in a private repository')" "(wanted 'ubuntu-latest')"
 
 echo; summary

@@ -5,6 +5,7 @@
 # Undo: restores the backup the run record names, only when the record is this run's (it holds the sha256 of the signed plan baton hands undo) and the file still has the merged sha256; else it stops, exit 5
 # Pre: both files are JSON: the settings an object, the rules an object of allow, ask and deny string lists and an optional attribution object; the settings path is not a symbolic link
 # Stops: security-boundary
+# Usage: <settings.json> <rules.json>
 # Expect: backup *
 # Expect: record *
 # Expect: merge *
@@ -23,6 +24,8 @@
 # path's sha256 (two settings files, two records). A record stays after a run that held, so undo works from it only when its
 # plan sha256 is this run's, and only while the file still has the merged sha256. The restore, like the merge, goes through a
 # mktemp file next to the settings file, so a read-only settings file is put back too.
+# `kind:settings-merge` keeps its positional arguments (`# Usage:`). A copy meant to be kept with `baton pack` declares
+# `# Params:` instead, reads its values in a block of `P_<KEY>="$<n>"` lines and declares Targets as `{key}` patterns.
 # bash 3.2 (macOS) runs this file: no associative arrays, no ${var,,}, no mapfile.
 set -euo pipefail
 PHASE=${BATON_PHASE:-rehearse}

@@ -20,9 +20,19 @@ permissions:
   contents: read
   pull-requests: read
 
+# A new commit on the PR cancels the run of the head it replaces. Every other event (a comment, an edit, a label, a review,
+# ready, main, a dispatch) gets a group of its own, so it neither cancels a commit run nor replaces a pending one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
 jobs:
   pr-body:
-    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+    # No CI on a draft (ready_for_review starts the round)
+    if: github.event.pull_request.draft == false
+    # Light gate runner when CI_GATE_RUNNER is set, else CI_RUNNER; the same on every job: a private repository with neither variable fails at once
+    # (a self-hosted runner only serves a private repository), the public repository (no runner) uses GitHub-hosted ubuntu-latest
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

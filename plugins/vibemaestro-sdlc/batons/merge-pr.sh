@@ -9,6 +9,7 @@
 #   is its rehearse, so no-way-back (neither rehearsable nor reversible) does not apply. A PR that touches merge.deny_globs fails the
 #   guard at rehearse, so it is refused and never escalated to a signature. --admin passes only when merge.admin_bypass is true in
 #   the base branch's config, which is the repo owner's standing rule.
+# Usage: --repo <owner/name> --pr <n> --head <sha40> --brief <file> [--behind auto, never beside --behind-ok] [merge_guard.py options]
 # Expect: merge *
 #
 # The kit baton kit:merge-pr. Run it only through the baton runner; the coordinator's three commands:

@@ -3,6 +3,7 @@
   "schema": 1,
   "hooks": "auto",
   "language": "en",
+  "update_check": false,
   "branch": {
     "intent_prefix": "feature/",
     "protected": [

@@ -409,7 +409,7 @@ def need(cond, msg):
     if not cond:
         probs.append(msg)
 need(set(on) == {"pull_request", "workflow_dispatch"}, "triggers are %s" % sorted(on))
-need(not on.get("pull_request"), "the pull_request trigger has a filter: %r" % on.get("pull_request"))
+need(on.get("pull_request") == {"types": ["opened", "synchronize", "reopened", "ready_for_review"]}, "the pull_request trigger has a filter: %r" % on.get("pull_request"))
 need("pull_request_target" not in text, "pull_request_target appears")
 rev = ((on.get("workflow_dispatch") or {}).get("inputs") or {}).get("rev") or {}
 need(rev.get("required") is True, "dispatch input rev is not required")
@@ -418,8 +418,8 @@ need(text.count("secrets.") == 1 and text.count("secrets.KIT_TERMS") == 1, "the 
 jobs = y["jobs"]
 need(list(jobs) == ["export-gate"], "jobs are %s" % list(jobs))
 job = jobs["export-gate"]
-need(job.get("runs-on") == "${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}", "runs-on is %r" % job.get("runs-on"))
-need(job.get("if") == "github.event.repository.private", "the job's if is %r" % job.get("if"))
+need(job.get("runs-on") == "${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}", "runs-on is %r" % job.get("runs-on"))
+need(job.get("if") == "github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)", "the job's if is %r" % job.get("if"))
 steps = job["steps"]
 co = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
 need(len(co) == 1 and re.fullmatch(r"actions/checkout@[0-9a-f]{40}", co[0]["uses"]) is not None, "checkout is not pinned by sha")
@@ -458,8 +458,8 @@ PY
   case "$(cat "$TMP/w-$1.out")" in *"$4"*) ok "[W] planted break: $1 is red" ;;
     *) bad "[W] planted break: $1 is not red: $(head -c 200 "$TMP/w-$1.out")" ;; esac
 }
-wbreak path-filter $'  pull_request:\n' $'  pull_request:\n    paths:\n      - "plugins/**"\n' "has a filter"
-wbreak no-if $'    if: github.event.repository.private\n' '' "the job's if is None"
+wbreak path-filter $'    types: [opened, synchronize, reopened, ready_for_review]\n' $'    types: [opened, synchronize, reopened, ready_for_review]\n    paths:\n      - "plugins/**"\n' "has a filter"
+wbreak no-if $'    if: github.event.repository.private && (github.event_name != \'pull_request\' || github.event.pull_request.draft == false)\n' '' "the job's if is None"
 wbreak pr-head-rev "github.event_name == 'pull_request' && github.sha" "github.event_name == 'pull_request' && github.event.pull_request.head.sha" "REV is"
 
 echo "== [WR] the step's real run block, with a stub gate =="

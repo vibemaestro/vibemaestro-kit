@@ -5,6 +5,7 @@
 # Undo: removes the file, only while it holds exactly the text this act writes
 # Pre: the file is absent (an existing file with other content is refused, never overwritten)
 # Stops: none
+# Usage: <file> <text>
 # Each: create *
 #
 # Shaped like the gitops kits (publish-public, release-promote): it runs only through the baton runner of vibemaestro-sdlc,

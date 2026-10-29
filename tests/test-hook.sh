@@ -47,11 +47,12 @@ eq "$(vncount 'Bối cảnh')" 1 "instrument: the Vietnamese-letter class sees a
 eq "$(vncount '⚠ WARNING — plain English → ≤')" 0 "instrument: …and neither English nor its symbols"
 
 echo "== dây: hooks.json khai đúng ba hook =="
-eq "$(hook_cmds "$HOOKS" SessionStart '' | grep -c .)" 3 "[I0] SessionStart: 3 command (lõi quy trình / danh mục+nhắc / current-state index, mỗi cái một trần 10.000 ký tự riêng)"
-eq "$(hook_cmds "$HOOKS" PreToolUse Edit | grep -c .)" 1 "PreToolUse Edit: 1 command"
-eq "$(hook_cmds "$HOOKS" PreToolUse Write | grep -c .)" 1 "PreToolUse Write: 1 command"
-eq "$(hook_cmds "$HOOKS" PreToolUse NotebookEdit | grep -c .)" 1 "PreToolUse NotebookEdit: 1 command"
-eq "$(hook_cmds "$HOOKS" PreToolUse Bash | grep -c .)" 1 "PreToolUse Bash: 1 command"
+eq "$(hook_cmds "$HOOKS" SessionStart '' | grep -c .)" 4 "[I0] SessionStart: 4 command (lõi quy trình / danh mục+nhắc / current-state index, mỗi cái một trần 10.000 ký tự riêng; the update reminder, tests/test-update-check.sh)"
+eq "$(hook_cmds "$HOOKS" PreToolUse Edit | grep -c .)" 2 "PreToolUse Edit: 2 commands (the rules, and the settings guard)"
+eq "$(hook_cmds "$HOOKS" PreToolUse Write | grep -c .)" 2 "PreToolUse Write: 2 commands (the rules, and the settings guard)"
+eq "$(hook_cmds "$HOOKS" PreToolUse NotebookEdit | grep -c .)" 2 "PreToolUse NotebookEdit: 2 commands (the rules, and the settings guard)"
+eq "$(hook_cmds "$HOOKS" PreToolUse MultiEdit | grep -c .)" 1 "PreToolUse MultiEdit: 1 command (the settings guard)"
+eq "$(hook_cmds "$HOOKS" PreToolUse Bash | grep -c .)" 3 "PreToolUse Bash: 3 commands (the rules, the guard of the owner's baton signature, the settings guard)"
 eq "$(hook_cmds "$HOOKS" PreToolUse Read | grep -c .)" 0 "đối chứng: Read không có hook"
 
 echo "== A1: SessionStart ở repo app =="
@@ -597,14 +598,14 @@ for r in commit-unit pr-body-shape document-precedence measurement-commands docs
   has "$RBC" "$r.instructions.md" "C6: the session catalogue lists the rule $r"
 done
 
-# budget: a rule that is long is skimmed. New rules at most 40 lines, all rules together at most 363, the measured total of the rules directory (300 until the rule version-policy, whose 13 lines raised it to 313: no sdlc rule had a superseded bump line to drop; then the rules docs-final, 14 lines, public-tree, 13 lines, and config-compat, 12 lines: no rule text they supersede; then coordinated-work, 15 lines, which took 3 lines net out of workflow-core: 363).
+# budget: a rule that is long is skimmed. New rules at most 40 lines, all rules together at most 363, the measured total of the rules directory (300 until the rule version-policy, whose 13 lines raised it to 313: no sdlc rule had a superseded bump line to drop; then the rules docs-final, 14 lines, public-tree, 13 lines, and config-compat, 12 lines: no rule text they supersede; then coordinated-work, 15 lines, which took 3 lines net out of workflow-core: 363; then one line in batonrun, at the moment of exit 8 a session must not sign as the owner: 364; then one line in coordinated-work, the first step of a brief built from a plan row: 365).
 NEW_RULES="commit-unit pr-body-shape document-precedence measurement-commands docs-final public-tree config-compat coordinated-work"
 for r in $NEW_RULES; do
   n=$(wc -l < "$PLUGIN/rules/$r.instructions.md" | tr -d ' ')
   [ "$n" -le 40 ] && ok "C6 budget: $r is $n lines (max 40)" || bad "C6 budget: $r is $n lines (max 40)"
 done
 TOTAL=$(cat "$PLUGIN"/rules/*.instructions.md | wc -l | tr -d ' ')
-[ "$TOTAL" -le 363 ] && ok "C6 budget: all rules together are $TOTAL lines (max 363)" || bad "C6 budget: all rules together are $TOTAL lines (max 363)"
+[ "$TOTAL" -le 365 ] && ok "C6 budget: all rules together are $TOTAL lines (max 365)" || bad "C6 budget: all rules together are $TOTAL lines (max 365)"
 # control for the instrument: the count sees a rule that grows
 printf '%s\n' $(seq 1 60) > "$TMP/long.md"; [ "$(wc -l < "$TMP/long.md" | tr -d ' ')" -gt 40 ] && ok "C6 budget: control, a 60-line file is over the cap" || bad "C6 budget: the line count does not see a long file"
 

@@ -29,12 +29,14 @@
 #   [W] an untracked, a modified and a staged file in the work tree do not appear; the digest stays R1's
 #   R1, the fixture, is this tree in the private unreleased form whatever tree runs the suite: each `## X.Y.Z` section leaves the
 #       CHANGELOG (a private tree after a release cut, a released export); on the public export (fixtures/lib.sh tree_shape) each
-#       manifest also loses its `version` and a sibling dependency the export turned into >=0.1.0 is named bare again; a private
+#       manifest also loses its `version` and `repository`, and a sibling dependency the export turned into >=0.1.0 is named bare again; a private
 #       manifest is copied as it is, so a version there stays red (instrument lines in [V])
 #   [V] the version: a rev whose CHANGELOGs start with `## 0.1.0` exports
 #       each manifest with version 0.1.0 right after name and >=0.1.0 on each bare sibling dependency, the digest still the written
 #       tree; an unreleased rev exports each manifest byte for byte with a WARN; a manifest version that differs from its
-#       CHANGELOG's is refused; a pre-reset manifest whose version equals its CHANGELOG's is exported byte for byte
+#       CHANGELOG's is refused; a pre-reset manifest whose version equals its CHANGELOG's is exported as it is plus `repository`;
+#       each released manifest gets `repository`, https://github.com/ and --repository <owner/name> (default the kit's public
+#       repository), a value that is not owner/name is rc 2, and a source manifest with another `repository` is refused
 #   [B4] planted break: a copy of the script that ignores the CHANGELOG makes [V1] red
 #   [I] isolated install (`claude`, no login, no model): CLAUDE_CONFIG_DIR and HOME in scratch, `marketplace add <export>`, the two
 #       plugins install into the cache with their LICENSE and NOTICE; the export is deleted; the cached sdlc SessionStart hooks print
@@ -150,8 +152,9 @@ for n in names:
     m = json.load(open(p, encoding="utf-8"))
     deps = m.get("dependencies")
     ranged = lambda d: isinstance(d, dict) and set(d) == {"name", "version"} and d["name"] in names and d["version"] == RANGE["version"]
-    if shape == "export" and ("version" in m or any(ranged(d) for d in deps or [])):
+    if shape == "export" and ("version" in m or "repository" in m or any(ranged(d) for d in deps or [])):
         m.pop("version", None)
+        m.pop("repository", None)
         if deps is not None:
             m["dependencies"] = [d["name"] if ranged(d) else d for d in deps]
         open(p, "w", encoding="utf-8").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
@@ -406,6 +409,10 @@ done
 for n in vibemaestro-brain; do
   eq "$(mf "$OV" "$n" 'm["dependencies"]')" "[{'name': 'vibemaestro-sdlc', 'version': '>=0.1.0'}]" "[V1] $n: the bare sdlc dependency becomes >=0.1.0"
 done
+for n in $PLUGINS; do
+  eq "$(mf "$OV" "$n" 'm["repository"], list(m)[-1]')" "('https://github.com/vibemaestro/vibemaestro-kit', 'repository')" \
+    "[V1] $n: repository is the default public repository, last (the update reminder reads it)"
+done
 eq "$DIG" "$(plan_digest "$OV")" "[V1] the digest is still the tree of the written directory"
 OV2="$TMP/ov2"; ex "$RV" "$OV2"; eq "$(manifest "$OV2")" "$(manifest "$OV")" "[V1] …and a second export of the rev is the same tree"
 for n in $PLUGINS; do
@@ -417,8 +424,25 @@ RM=$(mkrev mismatch 'relcl 0.1.0 vibemaestro-sdlc; python3 -c "import json; p=\"
 OM="$TMP/om"; ex "$RM" "$OM"; refused "a manifest version that differs from its CHANGELOG's" "$OM"
 RP=$(mkrev prereset 'relcl 2.30.0 vibemaestro-sdlc; python3 -c "import json; p=\"plugins/vibemaestro-sdlc/.claude-plugin/plugin.json\"; m=json.load(open(p)); m[\"version\"]=\"2.30.0\"; json.dump(m, open(p, \"w\"), indent=2)"; git_ add -A')
 OP="$TMP/op"; ex "$RP" "$OP"
-eq "$RC:$(cmp -s "$OP/plugins/vibemaestro-sdlc/.claude-plugin/plugin.json" <(git_ -C "$FX" show "$RP:plugins/vibemaestro-sdlc/.claude-plugin/plugin.json") && echo same)" "0:same" \
-  "[V3] a manifest whose version equals its CHANGELOG's (a pre-reset rev) is exported byte for byte"
+eq "$RC:$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); b=json.loads(sys.stdin.read()); r=a.pop("repository", None); print(a == b and list(a) == list(b), r)' "$OP/plugins/vibemaestro-sdlc/.claude-plugin/plugin.json" < <(git_ -C "$FX" show "$RP:plugins/vibemaestro-sdlc/.claude-plugin/plugin.json"))" \
+  "0:True https://github.com/vibemaestro/vibemaestro-kit" \
+  "[V3] a manifest whose version equals its CHANGELOG's (a pre-reset rev) is exported as it is, plus repository"
+O4="$TMP/o4"; DIG=$(cd "$FX" && bash "$EXPORT" --repository acme/kit.x "$RV" "$O4" 2>"$TMP/ex.err"); RC=$?
+eq "$RC" 0 "[V4] --repository acme/kit.x: rc 0"
+for n in $PLUGINS; do
+  eq "$(mf "$O4" "$n" 'm["repository"]')" "https://github.com/acme/kit.x" "[V4] $n: repository is the one given"
+done
+eq "$DIG" "$(plan_digest "$O4")" "[V4] …and the digest is the written tree"
+for v in acme acme/kit/x -acme/kit acme/.. acme/. "acme/ki t" https://github.com/acme/kit "" acme/kit$'\n'; do
+  OX=$(mktemp -d "$TMP/o4x.XXXXXX"); OUT=$(cd "$FX" && bash "$EXPORT" --repository "$v" "$RV" "$OX" 2>/dev/null); RC=$?
+  eq "$RC:$OUT:$(ls -A "$OX" | wc -l | tr -d ' ')" "2::0" "[V4] --repository '$v': rc 2, no digest, nothing written"
+done
+OX=$(mktemp -d "$TMP/o4x.XXXXXX"); (cd "$FX" && bash "$EXPORT" "$RV" "$OX" --repository acme/kit >/dev/null 2>&1); RC=$?
+eq "$RC" 2 "[V4] --repository after the positional arguments: rc 2 (usage)"
+RR=$(mkrev ownrepo 'relcl 0.1.0 vibemaestro-sdlc; python3 -c "import json; p=\"plugins/vibemaestro-sdlc/.claude-plugin/plugin.json\"; m=json.load(open(p)); m[\"repository\"]=\"https://github.com/other/kit\"; json.dump(m, open(p, \"w\"))"; git_ add -A')
+ORP="$TMP/orepo"; ex "$RR" "$ORP"; refused "a source manifest whose repository is another one" "$ORP"
+ORP2="$TMP/orepo2"; DIG=$(cd "$FX" && bash "$EXPORT" --repository other/kit "$RR" "$ORP2" 2>/dev/null); RC=$?
+eq "$RC:$(mf "$ORP2" vibemaestro-sdlc 'm["repository"]')" "0:https://github.com/other/kit" "[V5] …and the same repository given: rc 0, kept"
 NOVER="$TMP/export-nover.sh"
 sed 's#^        released\[n\] = m.get("version") if isinstance(m, dict) and isinstance(m.get("version"), str) else rel$#        released[n] = m.get("version") if isinstance(m, dict) and isinstance(m.get("version"), str) else None#' "$EXPORT" > "$NOVER"
 cmp -s "$EXPORT" "$NOVER" && bad "[B4] the break did not change the copy (the released line moved?)" || ok "[B4] the copy ignores the CHANGELOG"

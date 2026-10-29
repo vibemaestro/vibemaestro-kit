@@ -15,6 +15,8 @@
 #   [M] run: exactly the planned calls, in order, with the planned bodies; every kind in one spec; the coordinator's four calls
 #   [L] trap 1, a list that lags behind a create   [N] trap 2, the trailing newline   [F] trap 3, nested fences
 #   [T] trap 4, write() byte-identical, Each anchored, no grep in a pipeline   [Q] trap 5, a created issue cited by a later op
+#   [C] issue-close with a closing comment: one op, the comment posted before the close, the plan line binds its text; the undo
+#       retracts the comment (never a deletion) and reopens, both checked before either is written
 #   [W] pr-close: a full head SHA only, a PR at its pinned head and open, one PATCH; undo reopens it, not over a merge
 #   [Y] pr-create, pr-ready, file-pr: pinned heads, base tip and content; refusals (branch shapes, a workflow path, a tag ref);
 #       each runs with exactly its calls; undo closes or drafts again, leaves a moved head alone, never deletes the branch
@@ -85,6 +87,7 @@ eng() {
 # bt <plugin> <dir> <baton args...> — baton.py from the case directory; OUT, RC
 bt() {
   local pl=$1 d=$2; shift 2
+  if [ $# -eq 2 ] && [ "$1" = mode ]; then baton_set_mode "$d/state" "$2"; OUT=""; RC=0; return; fi
   OUT=$(cd "$d" && cenv XDG_STATE_HOME="$d/state" FAKE_GH_STATE="$d/world.json" FAKE_GH_LOG="$d/gh.log" \
         python3 -B "$pl/scripts/baton.py" "$@" 2>&1); RC=$?
 }
@@ -113,7 +116,7 @@ import hashlib, sys
 print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
 PY
 }
-nplan() { printf '%s\n' "$OUT" | grep -c '^PLAN gh-write '; }
+nplan() { printf '%s\n' "$OUT" | grep -c '^  PLAN gh-write '; }   # baton relays a script's line under two spaces
 nfail() { printf '%s\n' "$OUT" | grep -c '^  FAIL  '; }
 # refuse <label> <name> <ops JSON> — the engine refuses the spec: rc 64, named, no write call
 refuse() {
@@ -326,6 +329,90 @@ fam_run() {
 }
 
 # pr-close closes a component PR, pinned to its head; its undo reopens it unless it was merged since
+# [C] issue-close with its closing comment: one op, the comment posted before the close, the undo retracts it and reopens
+CC='{"op": "issue-close", "repo": "acme/app", "issue": 62, "reason": "completed", "comment": "Done in the PR.\n<!-- m-cc -->", "marker": "<!-- m-cc -->"}'
+CCN='{"op": "issue-close", "repo": "acme/app", "issue": 62, "reason": "completed"'
+fam_closec() {
+  PL=$1; local d v
+  refuse "[C] a comment without its marker" refuse-spec "[$CCN, \"comment\": \"Done.\"}]"
+  refuse "[C] a marker without a comment" refuse-spec "[$CCN, \"marker\": \"<!-- m-cc -->\"}]"
+  refuse "[C] a comment and a comment_file" refuse-body "[$CCN, \"comment\": \"x <!-- m-cc -->\", \"comment_file\": \"c.md\", \"sha256\": \"$(printf '%064d' 0)\", \"marker\": \"<!-- m-cc -->\"}]"
+  refuse "[C] a comment_file pinned by a sha that is not 64 hex" refuse-body "[$CCN, \"comment_file\": \"c.md\", \"sha256\": \"abc\", \"marker\": \"<!-- m-cc -->\"}]"
+  refuse "[C] a body on an issue-close (the key is comment)" refuse-unknown-key "[$CCN, \"body\": \"x <!-- m-cc -->\", \"marker\": \"<!-- m-cc -->\"}]"
+  refuse "[C] a CR in the comment" refuse-body "[$CCN, \"comment\": \"a\\r\\nb <!-- m-cc -->\", \"marker\": \"<!-- m-cc -->\"}]"
+  refuse "[C] the same issue closed with a comment and commented by another op" refuse-same-target \
+    "[$CC, {\"op\": \"issue-comment\", \"repo\": \"acme/app\", \"issue\": 62, \"body\": \"x <!-- m-2 -->\", \"marker\": \"<!-- m-2 -->\"}]"
+  refuse "[C] a comment on a close, then an edit of the same issue" refuse-same-target \
+    "[$CC, {\"op\": \"issue-edit\", \"repo\": \"acme/app\", \"issue\": 62, \"title\": \"t\"}]"
+  refuse "[C] the marker of the close is in another op's body" refuse-spec \
+    "[$CC, {\"op\": \"issue-edit\", \"repo\": \"acme/app\", \"issue\": 61, \"body\": \"quotes <!-- m-cc -->\"}]"
+  alone "[C] a marker already on a comment of the target" marker-absent \
+    'W["repos"]["acme/app"]["comments"]["902"] = {"issue": 62, "body": "earlier <!-- m-cc -->", "user": "bot"}' "[$CC]"
+  alone "[C] a close with a comment of a closed issue" open '' '[{"op": "issue-close", "repo": "acme/app", "issue": 60, "reason": "completed", "comment": "x <!-- m-cc -->", "marker": "<!-- m-cc -->"}]'
+  # the plan line carries the comment's digest, so the signature binds its text
+  d=$(mkw); spec "$d" "[$CC]"; eng "$PL" "$d" --spec spec.json
+  eq "$RC" 0 "[C] the plan of a close with a comment: rc 0"
+  has "$OUT" " reason completed comment body " "[C] …the plan line names the comment's digest"
+  eq "$(nwrites "$d")" 0 "[C] …and it makes no write call"
+  d=$(mkw); spec "$d" "[{\"op\": \"issue-close\", \"repo\": \"acme/app\", \"issue\": 62, \"reason\": \"completed\"}]"; eng "$PL" "$d" --spec spec.json
+  hasnt "$OUT" " comment " "[C] a close without a comment keeps its plan line"
+  # the run: the comment first, then the close, and the post-check holds
+  d=$(mkw); spec "$d" "[$CC]"; full "$PL" "$d"
+  eq "$RC" 0 "[C] run a close with a comment: rc 0"
+  eq "$(writes "$d" | tr '\n' ';')" "POST repos/acme/app/issues/62/comments;PATCH repos/acme/app/issues/62;" "[C] …the comment is posted before the close, two write calls"
+  eq "$(wq "$d" 'R["issues"]["62"]["state"], R["issues"]["62"]["state_reason"]')" "('closed', 'completed')" "[C] …the issue is closed as completed"
+  eq "$(wq "$d" 'R["comments"]["5000"]["issue"], R["comments"]["5000"]["body"]')" "(62, 'Done in the PR.\n<!-- m-cc -->')" "[C] …the comment is on that issue with the posted body"
+  has "$(cat "$(printf '%s\n' "$OUT" | sed -n 's/^run: ok — [0-9]* writes\{0,1\} — //p')" 2>/dev/null)" "VERDICT postcheck ok" "[C] …the post-check held"
+  # the undo: a later op is refused by GitHub; the comment is retracted by an edit (never deleted) and the issue reopened
+  d=$(mkw 'W["faults"]["fail_write"] = 3'); spec "$d" "[$CC, $NEW]"; full "$PL" "$d"
+  eq "$RC" 4 "[C] a run that fails after a close with a comment: undo, rc 4"
+  eq "$(wq "$d" 'R["issues"]["62"]["state"]')" open "[C] …the issue is open again"
+  has "$(wq "$d" 'R["comments"]["5000"]["body"]')" "Retracted" "[C] …the comment is retracted by an edit"
+  eq "$(wq "$d" 'len(R["comments"])')" 3 "[C] …and no comment is gone"
+  eq "$(ndeletes "$d")" 0 "[C] …no DELETE or PUT call"
+  bt "$PL" "$d" rehearse kit:gh-write --spec spec.json
+  eq "$RC" 0 "[C] …after that undo the same spec rehearses again (the marker left the retracted comment)"
+  d=$(mkw 'W["faults"]["fail_write"] = 2'); spec "$d" "[$CC]"; full "$PL" "$d"
+  eq "$RC" 4 "[C] a close GitHub refuses after the comment landed: undo, rc 4"
+  has "$(wq "$d" 'R["comments"]["5000"]["body"]')" "Retracted" "[C] …the comment that landed is retracted"
+  eq "$(wq "$d" 'R["issues"]["62"]["state"]')" open "[C] …the issue was never closed"
+  # both are checked before either is written: one that changed since the run leaves both alone (rc 5)
+  d=$(mkw 'W["faults"].update(fail_write=3, swap_after_write=2, swap=[["acme/app", "issues", "62", {"state_reason": "not_planned"}]])')
+  spec "$d" "[$CC, $NEW]"; full "$PL" "$d"
+  eq "$RC" 5 "[C] an issue closed again for another reason: rc 5"
+  eq "$(wq "$d" 'R["issues"]["62"]["state"], R["comments"]["5000"]["body"]')" "('closed', 'Done in the PR.\n<!-- m-cc -->')" "[C] …the issue is not reopened and the comment is not retracted"
+  d=$(mkw 'W["faults"].update(fail_write=3, swap_after_write=2, swap=[["acme/app", "comments", "5000", {"body": "edited by a person"}]])')
+  spec "$d" "[$CC, $NEW]"; full "$PL" "$d"
+  eq "$RC" 5 "[C] a comment someone edited after the run: rc 5"
+  eq "$(wq "$d" 'R["issues"]["62"]["state"], R["comments"]["5000"]["body"]')" "('closed', 'edited by a person')" "[C] …their text stays and the issue is not reopened"
+  d=$(mkw 'W["faults"].update(fail_write=3, swap_after_write=2, swap=[["acme/app", "issues", "62", {"state": "open"}]])')
+  spec "$d" "[$CC, $NEW]"; full "$PL" "$d"
+  eq "$RC" 4 "[C] an issue someone reopened already: the comment is still retracted, rc 4"
+  has "$(wq "$d" 'R["comments"]["5000"]["body"]')" "Retracted" "[C] …the comment is retracted"
+  # an undo cut short (the reopen landed, its answer was lost) is finished by the recovery
+  d=$(mkw 'W["faults"].update(fail_write=3, land_then_fail=5)'); spec "$d" "[$CC, $NEW]"; full "$PL" "$d"
+  v=$(wq "$d" 'R["issues"]["62"]["state"], R["comments"]["5000"]["body"][:9]')
+  eq "$v" "('open', 'Retracted')" "[C] an undo whose last write's answer was lost: both parts are back"
+  bt "$PL" "$d" rehearse kit:gh-write --spec spec.json --recover; local seal; seal=$(seal_of)
+  bt "$PL" "$d" sign --by coordinator-auto --seal "${seal:-none}" kit:gh-write --spec spec.json --recover
+  bt "$PL" "$d" run kit:gh-write --spec spec.json --recover
+  eq "$RC" 0 "[C] …and its recovery finishes: rc 0, nothing left to do"
+  # a close the run never sent is not the run's to undo: the comment landed, its answer was lost, a person closed the issue meanwhile
+  d=$(mkw 'W["faults"].update(land_then_fail=1, swap_after_write=1, swap=[["acme/app", "issues", "62", {"state": "closed", "state_reason": "completed"}]])')
+  spec "$d" "[$CC]"; full "$PL" "$d"
+  eq "$(wq "$d" 'R["issues"]["62"]["state"]')" closed "[C] a comment landed, its answer lost, a person closed the issue: the undo does not reopen it"
+  has "$(wq "$d" 'R["comments"]["5000"]["body"]')" "Retracted" "[C] …and the comment is retracted"
+  # a close GitHub refused is not the run's either: the comment landed, the close was refused, a person closed the issue in between
+  d=$(mkw 'W["faults"].update(fail_write=2, swap_after_write=1, swap=[["acme/app", "issues", "62", {"state": "closed", "state_reason": "completed"}]])')
+  spec "$d" "[$CC]"; full "$PL" "$d"
+  eq "$(wq "$d" 'R["issues"]["62"]["state"]')" closed "[C] a close GitHub refused, then a person's close: the undo does not reopen it"
+  has "$(wq "$d" 'R["comments"]["5000"]["body"]')" "Retracted" "[C] …and the comment is retracted"
+  # the post-check reads the comment too: GitHub storing it with one newline more fails the run
+  d=$(mkw 'W["faults"]["store"] = "add-nl"'); spec "$d" "[$CC]"; full "$PL" "$d"
+  has "$OUT" "comment body differs" "[C] a comment GitHub stores with one newline more: the post-check names it"
+  [ "$RC" != 0 ] && ok "[C] …and the run does not end green" || bad "[C] …and the run does not end green"
+}
+
 fam_prclose() {
   PL=$1; local d
   refuse "[W] a pr-close without a full head SHA" refuse-spec '[{"op": "pr-close", "repo": "acme/app", "pr": 7, "head": "abc"}]'
@@ -902,7 +989,7 @@ fam_cost() {
   eq "$RC" 0 "[C2] the separate commands do not look at the spec's age (rehearse: rc 0)"
 }
 
-FAMILIES="fam_journal fam_spec fam_conditions fam_closed_ok fam_rehearse fam_run fam_prclose fam_prs fam_lag fam_newline fam_fence fam_trap4 fam_ref fam_undo fam_seal fam_inject fam_cost"
+FAMILIES="fam_journal fam_spec fam_conditions fam_closed_ok fam_rehearse fam_run fam_closec fam_prclose fam_prs fam_lag fam_newline fam_fence fam_trap4 fam_ref fam_undo fam_seal fam_inject fam_cost"
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
@@ -944,8 +1031,22 @@ BRK unknown-key-allowed fam_spec '[S] a deletion slipped in as a key: rc 64' $G 
 BRK fences-unchecked fam_fence '[F] trap 3' $G '    return fence is not None' '    return False'
 BRK journal-unchecked fam_conditions '[P] an unfinished run of the same spec' $G \
     '            self.cond("journal", not runs and not lost,' '            self.cond("journal", True,'
+BRK close-comment-edited-unchecked fam_closec '[C] a comment someone edited after the run: rc 5' $G '    if live not in (None, RETRACTED, e["comment_posted"]):' '    if False:'
+BRK close-reason-unchecked fam_closec '[C] an issue closed again for another reason: rc 5' $G '    if sent and obj.get("state") == "closed" and obj.get("state_reason") != e["reason"]:' '    if False:'
+BRK close-comment-not-posted fam_closec '[C] …the comment is posted before the close, two write calls' $G '    if op.kind == "issue-close" and text is not None:' '    if False:'
+BRK close-marker-unchecked fam_closec '[C] a marker already on a comment of the target: rc 1' $G '            if op.template is not None:
+                self.marker_absent(op, tag, num)' '            if False:
+                self.marker_absent(op, tag, num)'
+BRK close-rejected-forgets-comment fam_closec '[C] …the comment that landed is retracted' $G '        if commented:' '        if False:'
+BRK close-digest-dropped fam_closec "[C] …the plan line names the comment's digest" $G '" comment %s" % digest if digest else ""' '""'
+BRK close-reopens-unsent fam_closec '[C] a comment landed, its answer lost, a person closed the issue: the undo does not reopen it' $G '    if sent and obj.get("state") == "closed":' '    if obj.get("state") == "closed":'
+BRK close-refused-still-sent fam_closec "[C] a close GitHub refused, then a person's close: the undo does not reopen it" $G 'e["close_sent"] = False' 'pass'
+BRK close-comment-unread fam_closec '[C] a comment GitHub stores with one newline more: the post-check names it' $G '                        problems.extend(close_comment_problems(w, e))' '                        pass'
+BRK close-undo-reopens-only fam_closec '[C] …the comment is retracted by an edit' $G '    if live == e["comment_posted"]:
+        api("PATCH", "repos/%s/issues/comments/%d" % (repo, cid), {"body": RETRACTED})' '    if False:
+        pass'
 BRK marker-unchecked fam_conditions '[P] a comment whose marker a comment on the target already holds: rc 1' $G \
-    '            hit = [x.get("id") for x in (cs or []) if op.marker in body_of(x)]' '            hit = []'
+    '        hit = [x.get("id") for x in (cs or []) if op.marker in body_of(x)]' '        hit = []'
 BRK author-unchecked fam_conditions "[P] an edit of another author's comment: rc 1" $G '            self.cond("author", login == viewer,' '            self.cond("author", True,'
 BRK closed-always-ok fam_closed_ok '[K5] the same comment without closed_ok' $G \
     'self.cond("open", state == "open" or closed_ok,' 'self.cond("open", True,'

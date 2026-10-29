@@ -3,10 +3,11 @@
 # Targets: the workflow run the arguments name (its failed and cancelled jobs, and the jobs that need them); a run record under the baton state directory
 # Blast: one new attempt of that run and the CI time of its re-run jobs; nothing in the repository changes
 # Undo: cancels the new attempt while it is queued or in progress; a finished attempt stays (GitHub keeps every attempt); the run record is removed; an earlier run's record (another signed plan) is left alone
-# Pre: the repository is private (not internal, not public); the run is completed with conclusion failure, cancelled or timed_out
+# Pre: not a sandbox session (SEAT and INTENT_SLUG set: refused, ask the coordinator); the repository is private (not internal, not public); the run is completed with conclusion failure, cancelled or timed_out
 # Stops: none
 #   Why none: it re-runs, on the same commit, jobs CI already ran once, in a private repository: no code, no setting, nothing
 #   published, and the new attempt can be cancelled while it runs. A public or internal repository is refused at rehearse.
+# Usage: <owner/name> <run id>
 # Expect: record *
 # Expect: rerun-failed *
 #
@@ -19,6 +20,8 @@
 # rerun's write waits (up to 60 s) for the new attempt to show, so the post-check is not a race. The record holds the sha256 of
 # the signed plan (BATON_PLAN), which baton hands the run and its undo: a record stays after a run that held, and undo cancels
 # only for its own run's record.
+# `kind:ci-rerun-failed` keeps its positional arguments (`# Usage:`). A copy meant to be kept with `baton pack` declares
+# `# Params:` instead, reads its values in a block of `P_<KEY>="$<n>"` lines and declares Targets as `{key}` patterns.
 # bash 3.2 (macOS) runs this file: no associative arrays, no ${var,,}, no mapfile.
 set -euo pipefail
 PHASE=${BATON_PHASE:-rehearse}
@@ -108,9 +111,20 @@ rerun() {
   return 1
 }
 
+# in_sandbox — a sandbox pod session: SEAT and INTENT_SLUG both set and not blank (the test of in_sandbox() in baton.py: one alone
+# can sit in a laptop shell). Its token has no actions:write, so a write to Actions there ends in HTTP 403 after the owner's sign.
+in_sandbox() {
+  local s=${SEAT:-} i=${INTENT_SLUG:-}
+  [ -n "${s//[[:space:]]/}" ] && [ -n "${i//[[:space:]]/}" ]
+}
+
 # ── the act: every change through write() ──
 act() {
   local out vals priv vis status concl attempt head wf
+  if in_sandbox; then
+    echo "REFUSE a sandbox session (SEAT and INTENT_SLUG are set): its token cannot write to Actions (HTTP 403). Ask the coordinator to re-run the failed jobs of run $RUN of $REPO" >&2
+    return 3
+  fi
   out=$(gh api "repos/$REPO" 2>&1 || true)
   if ! vals=$(fields "$out" private visibility); then
     printf '%s\n' "$out"

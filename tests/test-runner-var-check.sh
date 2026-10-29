@@ -122,6 +122,14 @@ fam_unset() { PLX=$1; local d
   [ -f "$d/.github/workflows/pr-title.yml" ] && ok "[U1g] …the install itself happened" || bad "[U1g] the workflows were not written"
   d=$(mk_repo); ig "$d" "names:" "names:"
   eq "$(n_of '^WARNING')" 1 "[U2] two empty lists: a WARNING"; eq "$RC" 0 "[U2b] …rc 0"
+  d=$(mk_repo); ig "$d" "names:X" "names:" --runner-default "self-hosted only"
+  eq "$(n_of '^WARNING runner variable CI_RUNNER is not set')" 1 "[U12] self-hosted only, variable unset: one WARNING naming the variable"; eq "$RC" 0 "[U12b] …rc 0"
+  has "$OUT" "no fallback runner" "[U12c] …says there is no fallback runner"
+  has "$OUT" "fails at its start" "[U12d] …says the run fails at its start"
+  hasnt "$OUT" "fall back to runs-on" "[U12e] …and does not talk of a fallback label"
+  has "$OUT" "no fallback label (a run with neither variable set fails at its start)" "[U12f] …the runs-on summary line says there is no fallback label"
+  has "$OUT" "unless CI_GATE_RUNNER is set" "[U12h] …and that the gate variable, when set, still runs the jobs"
+  hasnt "$OUT" "'ubuntu-latest'" "[U12g] …and names no hosted label"
   d=$(mk_repo); ig "$d" "names:X" "names:" --runner-var MY_RUNNER --runner-default team-runners
   has "$OUT" "WARNING runner variable MY_RUNNER is not set" "[U3] --runner-var: the warning names that variable"
   has "$OUT" "'team-runners'" "[U3b] …and that fallback label"
@@ -233,6 +241,8 @@ fam_door() { PLX=$1; local d out
   d=$(fresh); git_ init -q -b main "$d"; echo seed > "$d/README.md"; git_ -C "$d" add -A; git_ -C "$d" commit -q -m seed
   out=$(cd "$d" && cenv python3 "$PLX/scripts/kb.py" init 2>&1); eq "$?" 0 "[I1] kb.py init: rc 0"
   eq "$(printf '%s\n' "$out" | grep -c 'install-gates.*CI_RUNNER')" 1 "[I2] …one line names the install-gates runner check"
+  has "$out" "a fallback runner label" "[I2b] …the note states the fallback-label form"
+  has "$out" '"self-hosted only" (no fallback' "[I2c] …and the self-hosted-only form, which has no fallback"
   out=$(cd "$d" && cenv python3 "$PLX/scripts/kb.py" init 2>&1)
   eq "$(printf '%s\n' "$out" | grep -c 'install-gates.*CI_RUNNER')" 1 "[I3] a rerun that creates nothing says it once too"
   out=$(cd "$d" && cenv python3 "$PLX/scripts/kb.py" init --dry-run 2>&1)
@@ -303,6 +313,10 @@ BRK no-timeout fam_cannot '[E7]' install_gates.py 'stdin=subprocess.DEVNULL, std
 BRK check-before-validation fam_call '[X12b]' install_gates.py '    cfg, probs, _present = sdlc_config.load(root)' '    print(runner_var_report(root, "CI_RUNNER", "x"))
     cfg, probs, _present = sdlc_config.load(root)'
 BRK door-silent fam_door '[I2]' init_setup.py 'out(RUNNER_NOTE' 'out(""); (RUNNER_NOTE'
+BRK door-form-missing fam_door '[I2c]' init_setup.py '(no fallback: every gate run ' '(every gate run '
+BRK self-hosted-warning-as-label fam_unset '[U12c]' install_gates.py '        if self_hosted_only(default):
+            return ("WARNING' '        if False:
+            return ("WARNING'
 BRK door-twice fam_door '[I3]' init_setup.py 'out(RUNNER_NOTE' 'out(RUNNER_NOTE % "CI_RUNNER" + "\n"); out(RUNNER_NOTE'
 
 PLC="$TMP/break-none"; mk_plugin_copy "$PLC"

@@ -3,8 +3,10 @@
 # Public kit export: the published tree of one rev, read from git objects only, and its one tree digest
 # =============================================================================
 # Usage (in the repository to export from):
-#   bash scripts/export-public.sh <rev> <outdir>
+#   bash scripts/export-public.sh [--repository <owner/name>] <rev> <outdir>
 #
+#   --repository  the public GitHub repository the export is published to, written into each released manifest (default
+#             vibemaestro/vibemaestro-kit, the publish baton's own default); owner/name only, else rc 2
 #   <rev>     a commit (sha, branch, tag); it is resolved with `rev-parse --end-of-options`, never read as an option
 #   <outdir>  created when missing; refused when it exists and is not an empty directory
 #
@@ -17,7 +19,9 @@
 #   the first `## X.Y.Z` heading of the same rev's plugins/<name>/CHANGELOG.md (the private repo carries no version),
 #   as its `version` after `name`; and each dependency on another plugin
 #   of the rev's marketplace that is released at that rev (a bare name, or an object with no `version` and no `marketplace`)
-#   becomes {"name": …, "version": ">=0.1.0"}. A manifest that needs neither keeps its bytes; a changed one is written as JSON
+#   becomes {"name": …, "version": ">=0.1.0"}; and a released plugin's manifest gets `repository`,
+#   https://github.com/<--repository>, last (the update reminder reads it; a source manifest that names another repository is
+#   refused, rc 3). A manifest that needs none of these keeps its bytes; a changed one is written as JSON
 #   (indent 2, UTF-8, key order kept) plus a newline, so the same rev still gives the same bytes. A plugin with no released
 #   version exports without one and one WARN line: a publish step must refuse that tree.
 # stdout: one line, the tree digest: the git tree id that `git init`, `git add -Af` and `git write-tree` give for <outdir> (the one
@@ -45,11 +49,15 @@
 #      printed; after writing, <outdir> holds an unusable tree: discard it.
 # =============================================================================
 set -uo pipefail
+REPOSITORY=vibemaestro/vibemaestro-kit   # the kit's public repository (kit:publish-public's --public default)
+if [ "${1:-}" = --repository ] && [ $# -ge 2 ]; then
+  REPOSITORY=$2; shift 2
+fi
 if [ $# -ne 2 ]; then
-  echo "usage: bash scripts/export-public.sh <rev> <outdir>" >&2
+  echo "usage: bash scripts/export-public.sh [--repository <owner/name>] <rev> <outdir>" >&2
   exit 2
 fi
-exec python3 -I -B - "$@" <<'PY'
+exec python3 -I -B - "$REPOSITORY" "$@" <<'PY'
 import os, shutil, subprocess, sys, tempfile
 
 KB = "kb/"                          # the private side of the repo: never exported (the root one only; a fixture's kb/ is a file like any)
@@ -152,6 +160,11 @@ def public_manifests(keep):
                     d = dict(d, version=DEPENDENCY_RANGE) if isinstance(d, dict) else {"name": name, "version": DEPENDENCY_RANGE}
                 fixed.append(d)
             new["dependencies"] = fixed
+        if released[n]:
+            have = new.get("repository")
+            if have is not None and have != repository_url:
+                die(3, "refused %s: plugins/%s/%s names repository %r, the export writes %s" % (sha, n, MANIFEST, have, repository_url))
+            new["repository"] = repository_url
         if not released[n]:
             sys.stderr.write("export-public: WARN plugins/%s has no released version at %s (no `## X.Y.Z` first in its "
                              "CHANGELOG.md): exported without one; the publish step refuses this tree\n" % (n, sha))
@@ -216,7 +229,12 @@ def private_list(entries):
     return rx
 
 
-rev, outdir = sys.argv[1], sys.argv[2]
+import re
+repository, rev, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
+hit = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9_.-]{1,100})", repository, re.ASCII)
+if not hit or hit.group(2) in (".", ".."):
+    die(2, "--repository %r is not a GitHub owner/name" % repository)
+repository_url = "https://github.com/" + repository
 r = src(["rev-parse", "--verify", "--quiet", "--end-of-options", rev + "^{commit}"])
 if r.returncode != 0:
     die(2, "not a commit: %r" % rev)

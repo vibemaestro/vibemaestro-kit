@@ -8,8 +8,12 @@ its content; otherwise the log is folded again.
 
 Owner items (`D` decisions, `W` windows) are written only by `brain owner …` with a fresh, matching, unused "asked" record
 (`record_asked`, called by B1.2's guard-owner hook). Like BatonRun, this guards against slips, not same-user forgery.
+
+The render has three parts, one SessionStart string each (spec R4): hot memory (D with its quote lines, W, N), sessions (S, Q)
+and plan (X, T, Done, F). Done is never written: it is the N, X, S and Q items the log closed in the last 24 hours.
 Standard library only.
 """
+import bisect
 import contextlib
 import datetime
 import fcntl
@@ -26,16 +30,35 @@ import sys
 import time
 import unicodedata
 
-KINDS = {"decision": "D", "window": "W", "now": "N", "next": "X", "trap": "T"}
+KINDS = {"decision": "D", "window": "W", "now": "N", "next": "X", "trap": "T", "session": "S", "queue": "Q", "fact": "F"}
 OWNER_LETTERS = ("D", "W")
-SECTIONS = (("D", "Pinned (owner)"), ("W", "Windows"), ("N", "Now"), ("X", "Next"), ("T", "Traps"))
-CAPS = {"D": 10, "W": 5, "N": 3, "X": 5, "T": 4}       # design values: 27 lines of ≤ 200 chars fit the render cap
-RENDER_CAP = 6000
+OP_LETTERS = ("N", "X", "T", "S", "Q", "F")         # the kinds `brain op` closes, supersedes and touches
+SECTIONS = (("D", "Pinned (owner)"), ("W", "Windows"), ("N", "Now"), ("S", "Sessions"), ("Q", "Owner queue"), ("X", "Next"),
+            ("T", "Traps"), ("F", "Facts"))
+# the coordinator's measured section sizes (spec R4 point 3); string 1 keeps D W N at the B1 caps
+CAPS = {"D": 10, "W": 5, "N": 3, "X": 10, "T": 13, "S": 12, "Q": 5, "F": 5}
+PARTS = (("hot", ("D", "W", "N")), ("sessions", ("S", "Q")), ("plan", ("X", "T", "F")))   # one SessionStart string each
+RENDER_CAP = 6000                                   # the hot memory part (string 1)
+STRING_MAX = 9500                                   # strings 2 and 3, by their own hard cut (Claude Code replaces one over 10,000)
 LINE_MAX = 200
 WARN_RATIO = 0.85
 TEXT_MAX = 150
-FIELD_MAX = {"text": TEXT_MAX, "quote": 300, "where": 60, "pointer": 60, "reason": 150, "anchor": 80, "link": 80}
+TEXT_CAPS = {"S": 450}                              # a running session's next step and pointers (spec R4 point 1)
+LINE_CAPS = {"S": 500}
+QUOTE_SHOWN, WHERE_SHOWN = 120, 30                  # a pin's quote line: `  "<quote>" · <where>`, ≤ 160 characters
+DONE_LETTERS = ("N", "X", "S", "Q")
+DONE_TITLE = "Done (24 h)"
+DONE_WINDOW = 86400                                 # seconds a closed item stays in Done
+DONE_SHOWN = 7                                      # Done lines, then one `(+N more: brain doctor)`
+STATUS_LETTERS = ("S", "Q")                         # status, not decisions: a supersede spends no budget and may shrink
+FIELD_MAX = {"text": TEXT_MAX, "quote": 300, "where": 60, "pointer": 80, "reason": 150, "anchor": 80, "link": 80}
 LIST_MAX = 8                                        # anchors, links
+CLOSES_MAX = 2                                      # `closes` anchors of one item
+CLOSES_LETTERS = ("N", "X", "S", "Q")
+# the log's format: 2 adds the machine op `link-close`, which a brain of format 1 refuses to fold (a line without it is 1); 3 adds
+# the kinds S, Q and F, whose ids a brain of format 2 refuses to fold
+FORMAT = 3
+LOCK_WAIT = 1.0                                     # seconds a SessionStart waits for the lock: to read, then to close by a link
 BUDGET_N, BUDGET_WINDOW = 5, 30 * 60                # retirements per session in any 30 minutes
 SHRINK_MIN = 0.6                                    # supersede keeps ≥ 60% of the first item of its chain
 RECORD_MAX_AGE = 600                                # seconds an "asked" record stays usable
@@ -61,7 +84,7 @@ EMOJI_BASES = frozenset((0x203C, 0x2049, 0x2139, 0x3030, 0x303D))   # emoji with
 GENESIS = "0" * 64
 NO_DIALOG = ("owner items need a session that can show Claude Code's permission dialog; ask the owner in an interactive "
              "session")
-ID_RE = re.compile(r"^[DWNXT][1-9][0-9]{0,5}$")
+ID_RE = re.compile(r"^[DWNXTSQF][1-9][0-9]{0,5}$")
 MANAGED_SETTINGS = ("/etc/claude-code/managed-settings.json", "/Library/Application Support/ClaudeCode/managed-settings.json")
 
 
@@ -115,7 +138,9 @@ def project_dir(cwd=None):
 
 
 def project_root(cwd=None):
-    cwd = cwd or os.getcwd()
+    """The work tree's top level of `cwd`; with no `cwd`, of this session's project (its record), else of the working directory."""
+    b = bound() if cwd is None else None
+    cwd = cwd or (b["project"] if b else os.getcwd())
     try:
         out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True, timeout=10)
         if out.returncode == 0 and out.stdout.strip():
@@ -126,11 +151,110 @@ def project_root(cwd=None):
 
 
 def state_dir(cwd=None):
-    """`<state root>/<base name>-<12 hex of the SHA-1 of the project path>`; not created here."""
+    """`<state root>/<base name>-<12 hex of the SHA-1 of the project path>`; not created here. With no `cwd`: this session's
+    project (its record), else the working directory's."""
+    if cwd is None:
+        b = bound()
+        if b:
+            return b["state"]
     p = project_dir(cwd)
     name = os.path.basename(os.path.dirname(p)) if os.path.basename(p) == ".git" else os.path.basename(p)
     name = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:40] or "project"
     return os.path.join(state_root(), "%s-%s" % (name, hashlib.sha1(p.encode("utf-8")).hexdigest()[:12]))
+
+
+# --- the session's own project ------------------------------------------------------------------------------------------------
+# A session works in one project, whatever directory its shell has moved to. The hooks know it (CLAUDE_PROJECT_DIR, the
+# directory the session started in) and record it under the session id; the CLI has only the session id in the Bash tool's
+# environment (CLAUDE_CODE_SESSION_ID, the same in a subagent), so it reads the record. No record, or no session: the cwd.
+
+SESSION_MAX_AGE = 30 * 86400           # seconds: a record this old is a crashed session's (SessionEnd removes the others)
+_BOUND = []
+
+
+def shell_dir():
+    """The working directory, or a phrase when it was deleted under the shell (os.getcwd() raises then)."""
+    try:
+        return os.getcwd()
+    except OSError:
+        return "a directory that no longer exists"
+
+
+def session_file(sid):
+    return os.path.join(state_root(), "sessions", hashlib.sha256(sid.encode("utf-8")).hexdigest()[:32])
+
+
+def read_session(sid):
+    """{"project", "state"} the session recorded, None when it recorded none; a record that cannot be trusted is refused, so
+    the CLI never falls back to another project in silence."""
+    p = session_file(sid)
+    try:
+        with open(p, encoding="utf-8") as f:
+            r = json.loads(f.read())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        raise Refused(1, "this session's project record %s cannot be read (%s); the shell is in %s; nothing was read or "
+                         "written" % (p, e.__class__.__name__, shell_dir()))
+    project, state = (r.get("project"), r.get("state")) if isinstance(r, dict) else (None, None)
+    if not (isinstance(project, str) and os.path.isabs(project) and isinstance(state, str)
+            and os.path.dirname(os.path.normpath(state)) == os.path.normpath(state_root())
+            and os.path.basename(state) not in ("", ".", "..", "pending", "sessions")):
+        raise Refused(1, "this session's project record %s does not name a project and its brain state directory; the shell "
+                         "is in %s; nothing was read or written" % (p, shell_dir()))
+    return {"project": project, "state": os.path.normpath(state)}
+
+
+def bound():
+    """This session's recorded project (read once per process), None outside a Claude Code session or without a record."""
+    if not _BOUND:
+        sid = session_id()
+        _BOUND.append(read_session(sid) if sid else None)
+    return _BOUND[0]
+
+
+def session_note():
+    """One line when the shell's directory belongs to another project than this session's record, else None."""
+    b = bound()
+    if not b:
+        return None
+    here = shell_dir()
+    if not os.path.isabs(here) or state_dir(here) != b["state"]:
+        return "this session's project is %s; the shell is in %s; using %s" % (b["project"], here, b["project"])
+    return None
+
+
+def record_session(sid, project, d):
+    """Record `project` (state directory `d`) as session `sid`'s; returns the other project it replaced, else None. Records
+    older than SESSION_MAX_AGE are swept."""
+    root = state_root()
+    sd = os.path.join(root, "sessions")
+    for q in (os.path.dirname(root), root, sd):
+        if not os.path.isdir(q):
+            os.makedirs(os.path.dirname(q), exist_ok=True)
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(q, 0o700)
+    p = session_file(sid)
+    try:
+        old = read_session(sid)
+    except Refused:
+        old = None
+    if old == {"project": project, "state": d}:
+        os.utime(p)
+        return None
+    _write_file(p, json.dumps({"project": project, "state": d}) + "\n")
+    now = time.time()
+    for name in os.listdir(sd):
+        with contextlib.suppress(OSError):
+            q = os.path.join(sd, name)
+            if now - os.lstat(q).st_mtime > SESSION_MAX_AGE:
+                os.unlink(q)
+    return old["project"] if old and old["state"] != d else None
+
+
+def drop_session(sid):
+    with contextlib.suppress(OSError):
+        os.unlink(session_file(sid))
 
 
 def ensure_dir(d):
@@ -153,11 +277,23 @@ def ensure_dir(d):
 
 
 @contextlib.contextmanager
-def locked(d):
+def locked(d, wait=None):
+    """The store lock; with `wait` seconds, Refused(1) when it is still held then (a hook must not hang on a writer)."""
     ensure_dir(d)
     fd = os.open(os.path.join(d, "lock"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if wait is None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            end = time.monotonic() + wait
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= end:
+                        raise Refused(1, "the store lock is held by another process")
+                    time.sleep(0.02)
         yield
     finally:
         os.close(fd)
@@ -291,20 +427,32 @@ def head_of(raw):
 
 
 def append(d, raw, op):
-    """Append one op after `raw` (already verified under the lock); returns the new raw list."""
+    """Append one op after `raw` (already verified under the lock); returns the new raw list. When the line or the head cannot
+    be written whole, the log is cut back to its old length before the error is raised: a line with no head stops every
+    read and write (rc 5), and a write from SessionStart must leave the log as it found it."""
     op = dict(op)
     op["seq"] = len(raw) + 1
     op["prev"] = line_hash(raw[-1]) if raw else GENESIS
     b = dumps(op).encode("utf-8")
     fd = os.open(os.path.join(d, "hot.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(fd, b + b"\n")
-        os.fsync(fd)
+        size = os.lseek(fd, 0, os.SEEK_END)
+        try:
+            if os.write(fd, b + b"\n") != len(b) + 1:
+                raise OSError("hot.jsonl: a short write")
+            os.fsync(fd)
+            _write_file(os.path.join(d, "head.json"), dumps(head_of(raw + [b])) + "\n")
+        except OSError as e:
+            try:
+                os.ftruncate(fd, size)
+                os.fsync(fd)
+            except OSError as e2:
+                raise OSError(e.errno, "hot.jsonl may be left past head.json: %s, and cutting it back failed (%s); run brain "
+                                       "doctor" % (e.strerror or e, e2.strerror or e2)) from e
+            raise
     finally:
         os.close(fd)
-    raw = raw + [b]
-    _write_file(os.path.join(d, "head.json"), dumps(head_of(raw)) + "\n")
-    return raw
+    return raw + [b]
 
 
 # --- the fold -----------------------------------------------------------------------------------------------------------------
@@ -313,11 +461,12 @@ def empty_state():
     return {"version": 0, "items": {}, "writer": None, "claimed": None, "takeovers": 0, "spent": [], "retirements": []}
 
 
-def _retire(st, op, it, status):
+def _retire(st, op, it, status, budget=True):
     it["status"] = status
     it["retired"] = op["t"]
     it["touched"] = op["seq"]
-    st["retirements"].append({"t": op["t"], "session": op["by"]["session"], "bulk": bool(op.get("bulk")), "op": op["op"]})
+    if budget:                                      # a machine op (link-close) has its own cap, not the session's budget
+        st["retirements"].append({"t": op["t"], "session": op["by"]["session"], "bulk": bool(op.get("bulk")), "op": op["op"]})
 
 
 def _new_item(st, op, item):
@@ -353,12 +502,17 @@ def apply(st, op):
         it = item()
         it["reason"], it["pointer"] = op.get("reason"), op.get("pointer")
         _retire(st, op, it, "closed")
+    elif kind == "link-close":
+        it = item()
+        it["reason"], it["pointer"] = op.get("reason"), op.get("pointer")
+        it["linked"] = {"t": op["t"], "anchors": op.get("anchors") or []}
+        _retire(st, op, it, "closed", budget=False)
     elif kind in ("supersede", "owner-supersede"):
         it = item()
         it["reason"] = op.get("reason")
         new = _new_item(st, op, op["item"])
         it["superseded_by"] = new["id"]
-        _retire(st, op, it, "superseded")
+        _retire(st, op, it, "superseded", budget=it["id"][0] not in STATUS_LETTERS)
     elif kind == "owner-unpin":
         it = item()
         it["reason"] = "unpinned by the owner"
@@ -408,11 +562,12 @@ def write_caches(d, st, head):
                 "\n".join([dumps({"folded_from": head, "digest": digest("\n".join(lines))})] + lines) + "\n")
     _write_file(os.path.join(d, "owner.json"), dumps({"folded_from": head, "session": st["writer"], "since": st["claimed"],
                                                        "takeovers": st["takeovers"]}) + "\n")
-    _write_file(os.path.join(d, "hot.md"), render(st))
+    _write_file(os.path.join(d, "hot.md"), render_all(st))
 
 
 _SIZE = re.compile(r" · [\d,]+/([\d,]+) chars")
-_ITEM = re.compile(r"^- ([DWNXT][1-9][0-9]{0,5}) ")
+_MORE = re.compile(r"\(\+[0-9]+ more: brain doctor\)")
+_ITEM = re.compile(r"^- ([DWNXTSQF][1-9][0-9]{0,5}) ")
 _LEFT = re.compile(r"expired|(\d+)d (\d+)h|(\d+)h (\d\d)m")
 
 
@@ -436,16 +591,25 @@ def _left_fits(left, it, now):
 
 def render_key(text, st, now=None):
     """A render reduced to what does not move with the clock, for comparing hot.md with a fresh render: a window's time left,
-    and so which of its links fit, changes as it nears expiry. An item line is reduced to its id when it is the state's line
-    without links, its time left (a window's, at its place) one the state could have shown by `now`, then the very tail
-    item_line writes after that much text; any other line is kept whole (the title without its size), so an edited id, text, date, time left or tail
-    cannot compare equal."""
+    and so which of its links fit, changes as it nears expiry, and Done holds what closed in the last 24 hours. An item line is
+    reduced to its id when it is the state's line without links, its time left (a window's, at its place) one the state could
+    have shown by `now`, then the very tail item_line writes after that much text; a line under Done is dropped when it is the
+    Done line of an item the log closed, or the count of the rest; any other line is kept whole (a title without its size), so an
+    edited id, text, date, time left or tail cannot compare equal."""
     now = time.time() if now is None else now
-    out = []
+    titles = {t for _, t in SECTIONS} | {DONE_TITLE}
+    out, section = [], None
     for line in text.splitlines():
+        if line in titles:
+            section = line
+        elif line.startswith("## "):
+            section = None
         m = _ITEM.match(line)
         it = st["items"].get(m.group(1)) if m else None
-        if it:
+        if section == DONE_TITLE and line != DONE_TITLE:
+            if (it and it["status"] == "closed" and it["id"][0] in DONE_LETTERS and line == done_line(it)) or _MORE.fullmatch(line):
+                continue
+        elif it:
             base = item_line(dict(it, links=[]), now)
             rest = None
             if it["id"][0] == "W" and it.get("expires"):
@@ -512,7 +676,8 @@ def load(d):
 
 # --- text guards --------------------------------------------------------------------------------------------------------------
 
-def check_text(field, value, required=True):
+def check_text(field, value, required=True, cap=None):
+    """Refuse (1) an empty, blank, control-holding or over-long field; `cap` overrides the field's own (a session's text)."""
     if value is None or value == "":
         if required:
             raise Refused(1, "%s is empty" % field)
@@ -526,7 +691,7 @@ def check_text(field, value, required=True):
     if bad:
         raise Refused(1, "%s holds a control or format character (U+%04X); refused so the render stays one clean line"
                       % (field, ord(bad[0])))
-    cap = FIELD_MAX[field]
+    cap = FIELD_MAX[field] if cap is None else cap
     if len(value) > cap:
         raise Refused(1, "%s is %d characters, over its cap of %d" % (field, len(value), cap))
 
@@ -547,9 +712,13 @@ def check_list(field, values):
         check_text(field, v)
 
 
+_IGNORABLE_STARTS = [a for a, _ in DEFAULT_IGNORABLE]     # the ranges are sorted and apart: one bisect finds the only candidate
+
+
 def ignorable(c):
     o = ord(c)
-    return any(a <= o <= b for a, b in DEFAULT_IGNORABLE)
+    i = bisect.bisect_right(_IGNORABLE_STARTS, o) - 1
+    return i >= 0 and o <= DEFAULT_IGNORABLE[i][1]
 
 
 def selector_fits(value, i):
@@ -572,6 +741,8 @@ def is_bad(c):
 
 def clean_line(s):
     """The render backstop: drop every control, format, noncharacter or invisible character."""
+    if isinstance(s, str) and s.isascii() and s.isprintable():     # nothing to drop, and the render's hot path
+        return s
     return "".join(c for c in str(s) if not is_bad(c))
 
 
@@ -582,7 +753,11 @@ def printable(s):
 
 def sdlc_filter():
     """Path of vibemaestro-sdlc's gates/pr_sensitive.py: the plugin registry first, then the marketplace layout; else None."""
-    rel = os.path.join("gates", "pr_sensitive.py")
+    return sdlc_file(os.path.join("gates", "pr_sensitive.py"))
+
+
+def sdlc_file(rel):
+    """Path of the file `rel` of vibemaestro-sdlc: the plugin registry first, then the marketplace layout; else None."""
     try:
         reg = json.load(open(os.path.join(config_dir(), "plugins", "installed_plugins.json"), encoding="utf-8"))
         for key, entries in sorted((reg.get("plugins") or {}).items()):
@@ -836,17 +1011,26 @@ def _left(seconds):
     return "%dd %dh" % (h // 24, h % 24) if h >= 48 else "%dh %02dm" % (h, m)
 
 
+def text_max(letter):
+    return TEXT_CAPS.get(letter, TEXT_MAX)
+
+
+def line_max(letter):
+    return LINE_CAPS.get(letter, LINE_MAX)
+
+
 def item_line(it, now):
-    text = clean_line(it["text"])[:TEXT_MAX]
-    if it["id"][0] == "W" and it.get("expires"):
+    letter = it["id"][0]
+    text = clean_line(it["text"])[:text_max(letter)]
+    if letter == "W" and it.get("expires"):
         ts = parse_iso(it["expires"]) or 0
         date = "until %s (%s)" % (now_iso(ts)[5:16].replace("T", " ") + "Z", _left(ts - now))
     else:
         date = "since %s" % str(it.get("created", ""))[5:10]
-    if it["id"][0] == "T":
+    if letter == "T":
         date += " (hits %d)" % it.get("hits", 0)
     line = "- %s %s · %s" % (clean_line(it["id"]), text, clean_line(date))
-    return (line + links_tail(len(line), it))[:LINE_MAX]
+    return (line + links_tail(len(line), it))[:line_max(letter)]
 
 
 def links_tail(used, it):
@@ -854,35 +1038,156 @@ def links_tail(used, it):
     links = [clean_line(l) for l in it.get("links") or []]
     if not links:
         return ""
+    cap = line_max(str(it.get("id", ""))[:1])
     shown = []
     for i, l in enumerate(links):
         rest = len(links) - i - 1
         cand = " · links " + ", ".join(shown + [l]) + (" +%d" % rest if rest else "")
-        if used + len(cand) > LINE_MAX:
+        if used + len(cand) > cap:
             break
         shown.append(l)
     more = len(links) - len(shown)
     tail = " · links " + ", ".join(shown) + (" +%d" % more if more else "") if shown else " · links +%d" % more
-    return tail if used + len(tail) <= LINE_MAX else ""
+    return tail if used + len(tail) <= cap else ""
 
 
-def render(st, now=None):
-    now = time.time() if now is None else now
-    body = []
-    for letter, title in SECTIONS:
-        body.append(title)
-        live = [it for it in st["items"].values() if it["id"][0] == letter and it["status"] == "live"]
-        body += [item_line(it, now) for it in sorted(live, key=lambda i: int(i["id"][1:]))]
-    body.append("Matrix: `brain matrix`")
+def quote_line(it):
+    """The line under a pin with the owner's words: `  "<quote, ≤ 120>" · <where, ≤ 30>`; None when its source holds no quote
+    (an owner supersede stores none)."""
+    src = it.get("source") if isinstance(it.get("source"), dict) else {}
+    q = clean_line(src.get("quote") or "") if it["id"][0] == "D" else ""
+    if not q.strip():
+        return None
+    if len(q) > QUOTE_SHOWN:
+        k = QUOTE_SHOWN - 1
+        while k > 0 and unicodedata.category(q[k]) in ("Mn", "Mc", "Me"):   # never part a letter from its marks (NFD accents,
+            # a variation selector, a vowel sign)
+            k -= 1
+        q = q[:k or QUOTE_SHOWN - 1] + "…"                   # a quote of one letter and its marks: the plain cut
+    where = clean_line(src.get("where") or "")[:WHERE_SHOWN]
+    return '  "%s"%s' % (q, " · " + where if where.strip() else "")
+
+
+def done_items(st, now):
+    """The N, X, S and Q items the log closed (`close` or `link-close`) in the last DONE_WINDOW seconds, newest first."""
+    out = []
+    for it in st["items"].values():
+        t = parse_iso(it.get("retired") or "")
+        if it["id"][0] in DONE_LETTERS and it["status"] == "closed" and t is not None and now - t < DONE_WINDOW:
+            out.append((-t, -it["touched"], it["id"], it))
+    return [x[3] for x in sorted(out)]
+
+
+def done_line(it):
+    """`- X5 owner/name#N a1b2c3d4e5f6 · <text>`: what closed it first (each anchor and merge commit of a link-close, else
+    the close's pointer), the text last, so a long text is what the line cap cuts."""
+    ln = it.get("linked")
+    if isinstance(ln, dict):
+        head = ", ".join(clean_line(a.get("anchor") or "") + (" " + clean_line(a["sha"]) if a.get("sha") else "")
+                         for a in ln.get("anchors") or [] if isinstance(a, dict))
+    else:
+        head = clean_line(it.get("pointer") or "")
+    return ("- %s%s · %s" % (clean_line(it["id"]), " " + head if head else "", clean_line(it["text"])))[:LINE_MAX]
+
+
+def done_lines(st, now):
+    done = done_items(st, now)
+    out = [done_line(it) for it in done[:DONE_SHOWN]]
+    if len(done) > DONE_SHOWN:
+        out.append("(+%d more: brain doctor)" % (len(done) - DONE_SHOWN))
+    return out
+
+
+def section_lines(st, letter, now):
+    """A section's title, then its live items by id, a pin's quote line under it."""
+    body = [dict(SECTIONS)[letter]]
+    for it in sorted((i for i in st["items"].values() if i["id"][0] == letter and i["status"] == "live"),
+                     key=lambda i: int(i["id"][1:])):
+        body.append(item_line(it, now))
+        q = quote_line(it)
+        if q:
+            body.append(q)
+    return body
+
+
+HOT_TITLE = ("## Brain · hot memory v%d · %s/%s chars   (re-injected after compaction; change only with `brain op` or "
+             "`brain owner`)")
+PART_TITLES = {"sessions": "## Brain · sessions v%d · %s/%s chars   (re-injected after compaction; change only with `brain op`)",
+               "plan": "## Brain · plan v%d · %s/%s chars   (re-injected after compaction; change only with `brain op`; Done is "
+                       "derived)"}
+
+
+def titled(fmt, version, cap, body):
+    """The title (version, own size, cap) above `body`, the size counted with the title in it."""
     size = 0
     for _ in range(3):
-        title = ("## Brain · hot memory v%d · %s/%s chars   (re-injected after compaction; change only with `brain op` or "
-                 "`brain owner`)" % (st["version"], "{:,}".format(size), "{:,}".format(RENDER_CAP)))
-        text = "\n".join([title] + body) + "\n"
+        text = "\n".join([fmt % (version, "{:,}".format(size), "{:,}".format(cap))] + body) + "\n"
         if len(text) == size:
             break
         size = len(text)
     return text
+
+
+def render(st, now=None):
+    """The hot memory part (string 1): Pinned with their quotes, Windows, Now."""
+    now = time.time() if now is None else now
+    body = []
+    for letter in dict(PARTS)["hot"]:
+        body += section_lines(st, letter, now)
+    body.append("Matrix: `brain matrix`")
+    return titled(HOT_TITLE, st["version"], RENDER_CAP, body)
+
+
+def render_part(st, part, now=None):
+    """One part with every title, empty sections too: `hot` (string 1), `sessions` (string 2) or `plan` (string 3)."""
+    now = time.time() if now is None else now
+    if part == "hot":
+        return render(st, now)
+    body = []
+    for letter in dict(PARTS)[part]:
+        if letter == "F":                           # Done sits between Traps and Facts
+            body += [DONE_TITLE] + done_lines(st, now)
+        body += section_lines(st, letter, now)
+    return titled(PART_TITLES[part], st["version"], STRING_MAX, body)
+
+
+def render_parts(st, now=None):
+    now = time.time() if now is None else now
+    return {p: render_part(st, p, now) for p, _ in PARTS}
+
+
+def join_parts(parts):
+    """hot.md and `brain render`: the three parts in order, one blank line between them."""
+    return "\n".join(parts[p] for p, _ in PARTS)
+
+
+def render_all(st, now=None):
+    return join_parts(render_parts(st, now))
+
+
+def render_one_part(st, now=None):
+    """The render an older brain (log format 2 or below) wrote to hot.md: D W N X T in one part, no quote lines."""
+    now = time.time() if now is None else now
+    body = []
+    for letter in ("D", "W", "N", "X", "T"):
+        body.append(dict(SECTIONS)[letter])
+        body += [item_line(it, now) for it in sorted((i for i in st["items"].values()
+                                                      if i["id"][0] == letter and i["status"] == "live"),
+                                                     key=lambda i: int(i["id"][1:]))]
+    body.append("Matrix: `brain matrix`")
+    return titled(HOT_TITLE, st["version"], RENDER_CAP, body)
+
+
+def part_of(letter):
+    return next((p for p, letters in PARTS if letter in letters), "plan")
+
+
+def part_empty(st, part, now=None):
+    """No live item of the part's kinds (and for plan, nothing in Done): SessionStart leaves the part out unless it has a note."""
+    letters = dict(PARTS)[part]
+    if any(it["status"] == "live" and it["id"][0] in letters for it in st["items"].values()):
+        return False
+    return part != "plan" or not done_items(st, time.time() if now is None else now)
 
 
 # --- writes -------------------------------------------------------------------------------------------------------------------
@@ -968,24 +1273,109 @@ def caches_after_append(d, st, raw):
     return ""
 
 
-def op_add(kind, text, links, anchors, expires):
+def episode_line(d, session, kind, **fields):
+    """Append one line to the Episode Log, `episodes.jsonl` (append-only, 0600, one write per line)."""
+    ensure_dir(d)
+    line = dict(fields, t=now_iso(), kind=kind, session=session or None)
+    fd = os.open(os.path.join(d, "episodes.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, (dumps(line) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def anchor_warning(letter, anchors):
+    """"\nwarning: …" when the anchors of the item just written (its id letter) hold a bare #N that no default repository can
+    resolve, else "". Only the kinds the stale check reads are warned about. A hint, never a refusal: whatever goes wrong here,
+    the write stands."""
+    try:
+        import brain_stale
+        w = brain_stale.bare_warning(anchors) if letter in brain_stale.LETTERS else ""
+    except Exception:  # noqa: BLE001
+        return ""
+    return "\n" + w if w else ""
+
+
+def closes_list(letter, values):
+    """The `--closes` anchors of an item whose id letter is `letter`, each as `owner/name#N`, duplicates dropped. Refused (64)
+    for a kind that never closes by a link, a bare `#N` or any other form, and more than CLOSES_MAX."""
+    if not values:
+        return []
+    if letter not in CLOSES_LETTERS:
+        raise Refused(64, "--closes is for a Now, Next, session or queue item: a decision or window is the owner's to retire, "
+                          "and a trap or a fact is closed by hand")
+    import brain_stale
+    out = []
+    for v in values:
+        a = brain_stale.closes_form(v)
+        if a.lower() not in [o.lower() for o in out]:
+            out.append(a)
+    if len(out) > CLOSES_MAX:
+        raise Refused(64, "at most %d --closes: name the issue or PR whose close means this item is done" % CLOSES_MAX)
+    check_list("anchor", out)
+    return out
+
+
+def with_closes(anchors, closes):
+    """`anchors` with each `closes` anchor added (a closes anchor is an anchor too: the loss score and the marks see it)."""
+    return anchors + [c for c in closes if c not in anchors]
+
+
+def closes_seen(named, kept=()):
+    """The write-time lookup of `closes` anchors: the lines to print. `named` are new to the item: Refused(1) for a 404 or one
+    already done. `kept` the item already names (carried over or named again): one already done is a warning, since the new
+    item may close at the next writer SessionStart."""
+    if not named and not kept:
+        return ""
+    import brain_stale
+    return "".join("\n" + l for l in brain_stale.closes_check(named, kept))
+
+
+def peek(iid=None, letter=None):
+    """The checks a write makes, run once before a slow lookup so that it is not paid for a write that would be refused: a
+    Claude Code session, the writer, a live item `iid` of `brain op`, room for one more `letter`. Returns the state read, under
+    the lock (a read between another write's line and its head would see a log that does not match)."""
+    check_caller()
+    d = state_dir()
+    st = empty_state()
+    if os.path.isdir(d):                             # no state yet: nothing to read, and no directory to create
+        with locked(d):
+            _, st = load(d)
+    check_writer(st)
+    if iid:
+        get_live(st, iid, OP_LETTERS)
+    if letter:
+        check_cap(st, letter)
+    return st
+
+
+def op_add(kind, text, links, anchors, expires, closes=()):
     letter = KINDS.get(kind)
     if letter is None:
         raise Refused(64, "--kind must be one of %s" % ", ".join(KINDS))
+    closes = closes_list(letter, list(closes))
     if letter in OWNER_LETTERS:
         raise Refused(1, "a %s is an owner item: only `brain owner add`, through the permission dialog, writes one" % kind)
-    check_text("text", text)
+    check_text("text", text, cap=text_max(letter))
     check_list("link", links)
+    anchors = with_closes(anchors, closes)
     check_list("anchor", anchors)
     if expires is not None and parse_iso(expires) is None:
         raise Refused(64, "--expires must be like 2026-10-17T22:00:00Z")
+    seen = ""
+    if closes:
+        peek(letter=letter)                           # before a lookup that may take its 2 seconds
+        seen = closes_seen(closes)
 
     def build(d, st):
         warn = check_cap(st, letter)
         iid = next_id(st, letter)
         item = {"id": iid, "kind": kind, "pinned": False, "text": text, "source": {"type": "coordinator"},
                 "expires": expires, "links": links, "anchors": anchors, "supersedes": None}
-        return {"op": "add", "item": item}, [text] + links + anchors, "added %s%s" % (iid, "\n" + warn if warn else ""), None
+        if closes:
+            item["closes"] = closes
+        return ({"op": "add", "item": item}, [text] + links + anchors,
+                "added %s%s%s%s" % (iid, "\n" + warn if warn else "", seen, anchor_warning(letter, anchors)), None)
     return write(build)
 
 
@@ -994,7 +1384,7 @@ def op_close(iid, reason, pointer, bulk):
     check_text("pointer", pointer, required=False)
 
     def build(d, st):
-        get_live(st, iid, ("N", "X", "T"))
+        get_live(st, iid, OP_LETTERS)
         if not bulk and budget_used(st, session_id(), time.time()) >= BUDGET_N:
             raise Refused(1, "retirement budget: %d retirements in 30 minutes already; add --bulk (logged) if this is a "
                              "deliberate sweep" % BUDGET_N)
@@ -1003,41 +1393,111 @@ def op_close(iid, reason, pointer, bulk):
     return write(build)
 
 
-def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk):
-    check_text("text", text)
+def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=()):
+    """A supersede of an S or Q item (a session's next step, a queue item's state) is status, not a decision: it spends no
+    retirement budget and may shrink (spec R4 point 1); it still keeps every anchor."""
+    status = iid[:1] in STATUS_LETTERS
+    check_text("text", text, cap=text_max(iid[:1]))
     check_text("reason", reason)
+    new_closes = closes_list(iid[:1], list(closes))
     check_list("anchor", drop + add_anchors)
+    declared = peek(iid)["items"][iid].get("closes") or []
+    final = new_closes or [c for c in declared if c not in drop]
+    seen = closes_seen([c for c in new_closes if c.lower() not in [x.lower() for x in declared]],
+                       [c for c in final if c.lower() in [x.lower() for x in declared]])
 
     def build(d, st):
-        old = get_live(st, iid, ("N", "X", "T"))
+        old = get_live(st, iid, OP_LETTERS)
         missing = [a for a in drop if a not in old.get("anchors", [])]
         if missing:
             raise Refused(1, "%s holds no anchor %r to drop" % (iid, missing[0]))
         anchors = [a for a in old.get("anchors", []) if a not in drop]
         anchors += [a for a in add_anchors if a not in anchors]
+        carried = [c for c in old.get("closes") or [] if c not in drop]     # a dropped anchor leaves `closes` too
+        closes = new_closes or carried
+        anchors = with_closes(anchors, closes)
         lost = [a for a in old.get("anchors", []) if a not in anchors and a not in drop]
         if lost:
             raise Refused(1, "the new item would lose anchor %r; name it with --drop-anchor and a --reason" % lost[0])
         check_list("anchor", anchors)
         root = chain_root(st, old)
-        if not shorter and len(text) < SHRINK_MIN * len(root["text"]):
+        if not shorter and not status and len(text) < SHRINK_MIN * len(root["text"]):
             raise Refused(1, "the new text is %d characters, under 60%% of the first item of its chain (%s, %d); a supersede "
                              "must not shrink meaning: pass --shorter with a --reason if it must"
                           % (len(text), root["id"], len(root["text"])))
-        if not bulk and budget_used(st, session_id(), time.time()) >= BUDGET_N:
+        if not bulk and not status and budget_used(st, session_id(), time.time()) >= BUDGET_N:
             raise Refused(1, "retirement budget: %d retirements in 30 minutes already; add --bulk (logged) if this is a "
                              "deliberate sweep" % BUDGET_N)
         nid = next_id(st, iid[0])
         item = {"id": nid, "kind": old["kind"], "pinned": False, "text": text, "source": {"type": "coordinator"},
                 "expires": old.get("expires"), "links": old.get("links", []), "anchors": anchors, "supersedes": iid}
+        if closes:
+            item["closes"] = closes
         op = {"op": "supersede", "id": iid, "item": item, "reason": reason, "drop": drop, "shorter": shorter, "bulk": bulk}
-        return op, [text, reason] + anchors, "superseded %s with %s" % (iid, nid), None
+        kept = "\ncloses carried: %s" % ", ".join(carried) if carried and not new_closes else ""
+        return op, [text, reason] + anchors, "superseded %s with %s%s%s%s" % (
+            iid, nid, kept, seen, anchor_warning(iid[0], anchors)), None
     return write(build)
+
+
+def why(e):
+    """An error in a few words for a note line: its class, and `run brain doctor` when the log may be left past its head."""
+    return e.__class__.__name__ + ("; run brain doctor" if "may be left past head.json" in str(e) else "")
+
+
+def link_reason(anchors):
+    """`<state> <anchor> <day>` per anchor, as many as fit the reason's cap, then `(+N more)`."""
+    parts = ["%s %s %s" % (a["state"], a["anchor"], a["at"][:10]) for a in anchors]
+    out = parts[0][:FIELD_MAX["reason"]]
+    for i, p in enumerate(parts[1:], 1):
+        rest = len(parts) - i - 1
+        if len(out) + 2 + len(p) + (len(" (+%d more)" % rest) if rest else 0) > FIELD_MAX["reason"]:
+            return out + " (+%d more)" % (len(parts) - i)
+        out += "; " + p
+    return out
+
+
+def link_close(d, session, closes, how, wait=LOCK_WAIT):
+    """Append one `link-close` per (item id, [anchor detail]) in `closes`, written as the writer `session` with `how` in its
+    `by` ({"hook": "SessionStart"} or {"cmd": "close-linked"}), under the lock (waiting at most `wait` seconds). An item that
+    is no longer live (closed or superseded after it was checked) is left alone; an item's `closes` never changes while it is
+    live. An append that fails after some closes stops the run there. Returns (the state after, the ids closed, warnings or
+    "": where it stopped first, then a cache warning)."""
+    with locked(d, wait):
+        raw, ops = verify(d)
+        st = fold(ops)
+        if not session or st["writer"] != session:
+            raise Refused(3, "this session does not write this project's hot memory")
+        done, err = [], None
+        for iid, anchors in closes:
+            it = st["items"].get(iid)
+            if it is None or it["status"] != "live" or iid[0] not in CLOSES_LETTERS or not anchors:
+                continue
+            op = {"op": "link-close", "id": iid, "anchors": anchors, "reason": link_reason(anchors),
+                  "pointer": anchors[0]["anchor"], "t": now_iso(), "by": dict(how, session=session)}
+            try:
+                check_text("reason", op["reason"])
+                check_text("pointer", op["pointer"])
+            except Refused:
+                continue
+            try:
+                raw = append(d, raw, op)
+            except OSError as e:                    # append cut the log back, or says it could not
+                if not done:
+                    raise
+                err = e
+                break
+            apply(st, json.loads(raw[-1].decode("utf-8")))
+            done.append(iid)
+        warn = caches_after_append(d, st, raw) if done else ""
+        if err is not None:
+            warn = "\nwarning: stopped after %s (%s): the others stay live%s" % (", ".join(done), why(err), warn)
+    return st, done, warn
 
 
 def op_counter(iid, verb):
     def build(d, st):
-        get_live(st, iid, ("N", "X", "T"))
+        get_live(st, iid, OP_LETTERS)
         if verb == "hit" and iid[0] != "T":
             raise Refused(1, "hit counts traps only")
         return {"op": verb, "id": iid}, [], "%s %s" % (verb, iid), None
@@ -1083,8 +1543,8 @@ def owner(args, verb, ns):
                     "source": {"type": "owner", "quote": ns.owner_quote, "where": ns.where},
                     "expires": ns.expires, "links": ns.link, "anchors": ns.anchor, "supersedes": None}
             texts = [ns.text, ns.owner_quote, ns.where] + ns.link + ns.anchor
-            return {"op": "owner-add", "item": item, "confirm": confirm}, texts, "pinned %s%s" % (
-                iid, "\n" + warn if warn else ""), after
+            return {"op": "owner-add", "item": item, "confirm": confirm}, texts, "pinned %s%s%s" % (
+                iid, "\n" + warn if warn else "", anchor_warning(letter, ns.anchor)), after
         old = get_live(st, ns.id, OWNER_LETTERS)
         if verb == "unpin":
             return {"op": "owner-unpin", "id": ns.id, "confirm": confirm}, [], "unpinned %s" % ns.id, after
@@ -1097,7 +1557,7 @@ def owner(args, verb, ns):
                 "expires": old.get("expires"), "links": old.get("links", []), "anchors": old.get("anchors", []),
                 "supersedes": ns.id}
         return ({"op": "owner-supersede", "id": ns.id, "item": item, "reason": "superseded by the owner", "confirm": confirm},
-                [ns.text], "superseded %s with %s" % (ns.id, nid), after)
+                [ns.text], "superseded %s with %s%s" % (ns.id, nid, anchor_warning(ns.id[0], item["anchors"])), after)
 
     owner_check(verb, ns)
     return write(build)
@@ -1145,6 +1605,38 @@ def _version_tuple(s):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+def format_lines(d, now=None):
+    """A `warn` per session whose last `session-start` episode line of the last 24 h has a log format below FORMAT (none is 1):
+    that session runs an older brain, which refuses the log once it holds an op of a newer format."""
+    now = time.time() if now is None else now
+    try:
+        with open(os.path.join(d, "episodes.jsonl"), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 262144))
+            data = f.read()
+    except OSError:
+        return []
+    last = {}                                       # session: its last start's format, or None once it ended
+    for b in data.split(b"\n"):
+        try:
+            o = json.loads(b)
+        except ValueError:
+            continue
+        kind = o.get("kind") if isinstance(o, dict) else None
+        t = parse_iso(o.get("t") or "") if kind in ("session-start", "session-end") else None
+        if t is not None and 0 <= now - t < 86400 and isinstance(o.get("session"), str):
+            last[o["session"]] = ("start", o.get("format")) if kind == "session-start" else None
+    out = []
+    for sid, v in sorted((k, v) for k, v in last.items() if v):
+        n = v[1] if isinstance(v[1], int) and not isinstance(v[1], bool) else 1
+        if n < FORMAT:
+            out.append(("warn", "session %s… last started on an older brain (log format %d, this one writes %d): restart it on "
+                                "this version, since an older brain refuses to write to a log that holds a session, queue or fact "
+                                "item or an item closed by a link, and stops injecting hot memory whenever it must read the "
+                                "log again" % (sid[:8], n, FORMAT)))
+    return out
+
+
 def doctor():
     """[(level, text)] with level ok | warn | problem | info."""
     out = []
@@ -1163,10 +1655,18 @@ def doctor():
                                         "this session" if st["writer"] == session_id() else "another session")))
             try:
                 md = open(os.path.join(d, "hot.md"), encoding="utf-8").read()
-                out.append(("ok", "hot.md matches a fresh render") if render_key(md, st) == render_key(render(st), st) else
+                key = render_key(md, st)
+                out.append(("ok", "hot.md matches a fresh render") if key == render_key(render_all(st), st) else
+                           ("warn", "hot.md holds an older brain's one-part render; `brain render` rewrites it, and so does "
+                                    "the next write") if key == render_key(render_one_part(st), st) else
                            ("problem", "hot.md does not match a fresh render of the log: it was edited or is stale"))
             except (OSError, ValueError):
                 out.append(("warn", "hot.md is missing or unreadable; `brain render` writes it"))
+            done = done_items(st, time.time())
+            out += [("info", "done (24 h), %d of %d: %s" % (i, len(done), done_line(it))) for i, it in enumerate(done, 1)]
+            import brain_stale
+            out += brain_stale.doctor_lines(st)
+            out += format_lines(d)
             stale = 0
             for p in glob.glob(os.path.join(d, "asked", "*.json")):
                 r = _json_file(p)

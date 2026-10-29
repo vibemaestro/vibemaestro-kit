@@ -10,6 +10,10 @@ markdown table whose header names a row column and a link column (any other tabl
     Must be true one line; `Title` and `Delivers` are read as it (older plans)
     Depends on   row ids of the same plan, comma-separated; `—` for none
     Version      `<plugin> x.y.z`, comma-separated when the PR bumps several
+    Current state @SHA   optional (the plan's recon; the header must hold `@`): one line ending in `@<sha>`, the `origin/main` it
+                 was read at; `—` for none
+    Shared files         optional: repo-root paths, `,` or `;` between them, that another row or an open PR touches too; `(merge main)` marks a row
+                 that runs in parallel and merges main before it is ready
     Link         `#N` (a PR), `intent/<slug>` (a branch), `kb/intent/<file>.md` (an intent), `dropped: <reason>`, or `—`
 
 The row is written before its PR is dispatched and is never edited for status. The work links ITSELF to the row: its intent (and
@@ -30,7 +34,9 @@ check links [--base REF | --all]
     The links between kb/ intents, specs and plans: a `plan:` resolves (file and row id); a spec's `Intent:` path exists and that
     intent names the spec (frontmatter `spec:` or the path in its text), and the reverse; an intent and its spec agree on `plan:`;
     in a plan, row ids are unique and well formed, `Depends on` ids exist, every `kb/…md` path in the rows and in `## Decisions`
-    exists (a `#<row>` anchor on a plan path must be a row), and an intent in a Link cell names that row. A problem FAILS when its
+    exists (a `#<row>` anchor on a plan path must be a row), and an intent in a Link cell names that row. In a table with the recon
+    columns: a Current state cell that is not `—` holds `@<7-40 hex>`, and two rows (not dropped) that share a file are ordered
+    through `Depends on` (either way, transitively) or one of the two marks it `merge main`. A problem FAILS when its
     file or the file it points to changed against the merge base of REF (default `origin/HEAD`, else `origin/main`; the working
     tree and untracked kb/ files count); otherwise it is an `OLD` line. No base that resolves, or `--all`: every problem fails.
 
@@ -56,6 +62,8 @@ COLUMNS = {                                   # header words (lower case, parent
     "depends on": "depends", "phụ thuộc": "depends",
     "version": "version", "phiên bản": "version",
     "model": "model",
+    "current state": "current", "hiện trạng": "current",
+    "shared files": "shared", "file chung": "shared",
     "link": "link", "liên kết": "link",
 }
 DECISIONS_RX = re.compile(r"\b(decisions?|quyết định)\b", re.I)   # a `## …` heading of owner decisions ("Decisions", "Owner decisions")
@@ -68,6 +76,8 @@ PR_RX = re.compile(r"(?<![\w#&/])#(\d+)\b")                               # `#N`
 PULL_RX = re.compile(r"https?://[^\s/]+/([^\s/]+/[^\s/]+)/pull/(\d+)\b")  # a PR URL: counted only when it is this repository's
 BRANCH_RX = re.compile(r"(?<![\w/.-])(intent/[A-Za-z0-9._/-]+)")          # the whole token: no backtracking to a shorter prefix
 VERSION_RX = re.compile(r"([A-Za-z][A-Za-z0-9_.-]*)\s+v?(\d+\.\d+\.\d+)\b")
+SHA_RX = re.compile(r"@([0-9a-f]{7,40})\b", re.I)                                # the recon SHA of a Current state cell
+MERGE_MAIN_RX = re.compile(r"\(?\s*merge main\s*\)?", re.I)
 DROPPED_RX = re.compile(r"^(?:dropped|bỏ)\b\s*:?\s*(.*)$", re.I)
 NONE_CELL = ("", "—", "–", "-", "none", "không")
 GH_TIMEOUT = 60
@@ -92,7 +102,8 @@ def _plain(cell):
 
 
 def _header_key(cell):
-    return COLUMNS.get(re.sub(r"\(.*?\)", "", _plain(cell)).strip().lower())
+    k = COLUMNS.get(re.sub(r"\(.*?\)|@\S*", "", _plain(cell)).strip().lower())
+    return None if k == "current" and "@" not in cell else k     # `Current state` without `@SHA`: an older plan's own column
 
 
 def kb_paths(text, src=""):
@@ -131,9 +142,18 @@ def _ids(cell):
     return [x for x in re.split(r"[,\s]+", p) if x and x.lower() not in NONE_CELL]
 
 
+def _shared(cell):
+    """(paths, merge main) of a Shared files cell."""
+    p = _plain(cell)
+    mm = bool(MERGE_MAIN_RX.search(p))
+    p = MERGE_MAIN_RX.sub("", p)
+    return [x for x in (y.strip() for y in re.split(r"[,;]", p)) if x and x.lower() not in NONE_CELL], mm
+
+
 def read_plan(root, rel):
     """{path, rows, problems, decision_lines} of a plan, or None when the file cannot be read. A row: {id, line, must, acceptance,
-    depends, versions, model, link, cells}; problems: [(line, message)] of the table itself."""
+    depends, versions, model, link, cells, cols, current_cell, current, shared, merge_main}; `current` is {sha, text} or None, `cols`
+    the column kinds its table has; problems: [(line, message)] of the table itself."""
     try:
         with open(os.path.join(root, *rel.split("/")), encoding="utf-8") as f:
             lines = f.read().split("\n")
@@ -184,9 +204,15 @@ def read_plan(root, rel):
                     if not ROW_ID_RX.match(rid):
                         probs.append((j + 1, "row id '%s' is not a short id (letters, digits, . _ -)" % rid))
                     else:
+                        cur = _plain(get("current"))
+                        sha = SHA_RX.search(cur)
+                        shared, mm = _shared(get("shared"))
                         rows.append({"id": rid, "line": j + 1, "must": _plain(get("must")), "acceptance": get("acceptance"),
                                      "depends": _ids(get("depends")), "versions": VERSION_RX.findall(_plain(get("version"))),
-                                     "model": _plain(get("model")), "link": parse_link(get("link"), rel), "cells": cells})
+                                     "model": _plain(get("model")), "link": parse_link(get("link"), rel), "cells": cells,
+                                     "cols": set(col), "current_cell": cur,
+                                     "current": {"sha": sha.group(1), "text": cur} if sha else None,
+                                     "shared": shared, "merge_main": mm})
                     j += 1
             else:
                 while j < len(lines) and lines[j].lstrip().startswith("|"):
@@ -442,7 +468,8 @@ def status(root, rel, gh=None):
                                     + back.get(r["id"], [])))
         row = {"id": r["id"], "line": r["line"], "must": r["must"], "depends": r["depends"],
                "version": ", ".join("%s %s" % v for v in r["versions"]), "model": r["model"],
-               "intents": linked, "prs": [], "state": None, "notes": []}
+               "intents": linked, "prs": [], "state": None, "notes": [],
+               "current": r["current"], "shared": r["shared"], "merge_main": r["merge_main"]}
         if not checked:
             row["state"] = "dropped" if link["dropped"] else "not checked"
             if link["dropped"]:
@@ -568,7 +595,8 @@ def render(st):
             known = ["#%d" % p["number"] for p in r["prs"]] + r["intents"]
             detail = ", ".join(known) if known else "no link written"
         else:
-            detail = ("depends on " + ", ".join(r["depends"])) if r["depends"] else ""
+            detail = " · ".join(([("depends on " + ", ".join(r["depends"]))] if r["depends"] else [])
+                                + (["@" + r["current"]["sha"][:7]] if r.get("current") else []))
         what = kb_index.cut(r["must"], 60)
         out.append("  %-*s  %-11s  %s%s" % (w, r["id"], s, detail, ("  — " + what) if what else ""))
         for n in r["notes"]:
@@ -681,6 +709,29 @@ def link_problems(root):
         for ln, msg in pl["problems"]:
             probs.append((p, ln, msg, []))
         lines = [(r["line"], " | ".join(r["cells"])) for r in pl["rows"]] + pl["decision_lines"] + pl["head_lines"]
+        deps = {r["id"]: r["depends"] for r in pl["rows"]}
+
+        def reach(a, b):
+            """row `a` depends on row `b`, directly or through other rows."""
+            todo, seen = list(deps.get(a, [])), set()
+            while todo:
+                x = todo.pop()
+                if x == b:
+                    return True
+                if x not in seen:
+                    seen.add(x)
+                    todo.extend(deps.get(x, []))
+            return False
+
+        live = [r for r in pl["rows"] if "shared" in r["cols"] and not r["link"]["dropped"]]
+        for n, a in enumerate(live):
+            for b in live[n + 1:]:
+                for f in [f for f in a["shared"] if f in b["shared"]]:
+                    if a["merge_main"] or b["merge_main"]:
+                        continue
+                    if not (reach(a["id"], b["id"]) or reach(b["id"], a["id"])):
+                        probs.append((p, b["line"], "rows %s and %s share %s but neither depends on the other: order them in "
+                                      "Depends on, or mark one `(merge main)` in Shared files" % (a["id"], b["id"], f), []))
         for r in pl["rows"]:
             if r["link"]["empty"]:
                 probs.append((p, r["line"], "row %s: its Link cell names no PR (#N), branch (intent/…) or intent (kb/intent/…), "
@@ -688,6 +739,10 @@ def link_problems(root):
             for d in r["depends"]:
                 if d not in ids:
                     probs.append((p, r["line"], "row %s depends on '%s', which is not a row of this plan" % (r["id"], d), []))
+            if ("current" in r["cols"] and r["current"] is None and _plain(r["current_cell"]).lower() not in NONE_CELL
+                    and not r["link"]["dropped"]):
+                probs.append((p, r["line"], "row %s: its Current state cell is not pinned to a SHA (@<sha> of origin/main when it "
+                              "was read)" % r["id"], []))
             for ip in r["link"]["intents"]:
                 if ip in texts:
                     ref = parse_plan_ref(fronts[ip].get("plan"))

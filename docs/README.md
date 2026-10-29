@@ -31,3 +31,4 @@ Every document of the kit, one line each. English is the default; each document 
 |---|---|
 | [BatonRun research](research/batonrun.md) | What is known about BatonRun's cost and limits, and what the tests did not show. |
 | [Brain research](research/brain.md) | What is known about the brain's benefit, and what the tests did not show. |
+| [sdlc research](research/sdlc.md) | What the sdlc plugin costs and gives on app work, what it gives when the answer is recorded only in `kb/`, and what the measurements did not show. |

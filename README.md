@@ -35,7 +35,9 @@ The plugins do not depend on any other repository at run time.
 
 ## Install
 
-Add the marketplace, then install both plugins:
+Add the marketplace, then install both plugins. Pick one of the two ways.
+
+### From GitHub
 
 ```bash
 claude plugin marketplace add vibemaestro/vibemaestro-kit
@@ -43,13 +45,36 @@ claude plugin install vibemaestro-sdlc@vibemaestro
 claude plugin install vibemaestro-brain@vibemaestro
 ```
 
-To use a local copy or a fork instead, give its directory to `claude plugin marketplace add`. Check the install. Both plugins should show `Status: ✔ enabled`; `claude plugin install` exits 0 even when a dependency is missing, so read this list:
+### From a clone
+
+Use this to read the source first, to try a fork, or when GitHub is not reachable at install time. Give the clone's directory (`./` or an absolute path) to `claude plugin marketplace add`:
+
+```bash
+git clone https://github.com/vibemaestro/vibemaestro-kit.git
+claude plugin marketplace add ./vibemaestro-kit
+claude plugin install vibemaestro-sdlc@vibemaestro
+claude plugin install vibemaestro-brain@vibemaestro
+```
+
+### Check the install
+
+Both plugins should show `Status: ✔ enabled`; `claude plugin install` exits 0 even when a dependency is missing, so read this list:
 
 ```bash
 claude plugin list
 ```
 
-To update later:
+### Update
+
+In a Claude Code session, run `/plugin`, open **Marketplaces**, choose `vibemaestro` and update it. Then run `/reload-plugins`, so the running session loads the new version (a new session loads it too).
+
+From a shell: for a clone install, pull the clone first:
+
+```bash
+git -C <clone> pull
+```
+
+Then, for either way:
 
 ```bash
 claude plugin marketplace update vibemaestro
@@ -57,14 +82,21 @@ claude plugin update vibemaestro-sdlc@vibemaestro
 claude plugin update vibemaestro-brain@vibemaestro
 ```
 
-Then open a new session.
+Then run `/reload-plugins` in a running session, or open a new one.
+
+**Auto-update.** Claude Code does not update a third-party marketplace by itself until you turn it on: `/plugin`, **Marketplaces**, `vibemaestro`, **Enable auto-update**. It then updates the plugins when a session starts and says so; run `/reload-plugins` to load the new version.
+
+**The update reminder.** When a newer public version of vibemaestro-sdlc or vibemaestro-brain exists, a session start shows one line: the plugin, the installed and the new version, how to update, and the link to the release notes. Each plugin reads the public repository's tags at most once a day, in the background, with no token, and sends nothing about you or your machine; so the line shows at the session after that read, at most once a day per plugin. An install whose manifest carries no version, such as a clone of a development tree, shows nothing. To turn it off:
+
+- everywhere: set `VIBEMAESTRO_NO_UPDATE_CHECK` to `1`, for example in the `env` block of `~/.claude/settings.json`; Claude Code's own `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turns it off too;
+- in one repository: `"update_check": false` in its `.vibemaestro/sdlc.json`.
 
 ## First use in your repository
 
 Do these once. Open a new Claude Code session in your application repository.
 
 1. **Set up `kb/`.** Ask Claude to run the skill `vibemaestro-sdlc:init-kb`. It asks a few questions, then writes a `kb` folder (intents, specs, plans, decisions and a current-state file) and a small config file `.vibemaestro/sdlc.json`, and overwrites nothing. One question is the language of the `kb` documents and pull request bodies: the skill recommends English (`en`), or Vietnamese (`vi`) if you write to it in Vietnamese, and records the answer in the config. The skill commits the result on the branch `chore/kb-init` and pushes it: open its pull request and merge it. Some error messages of the scripts are still in Vietnamese whatever you choose.
-2. **Set up BatonRun on this machine (recommended).** A privileged write outside the session (a merge, a GitHub comment, a force-push) runs as one baton script; a normal branch push and opening a pull request do not. Without this setup every baton command asks you; `local-parallel` merges through batons. Ask Claude to set up BatonRun on this machine (skill `vibemaestro-sdlc:batonrun`, its setup reference). It installs a small launcher and prints a block of permission rules; you add that block to your Claude Code user settings (`/permissions`, or `~/.claude/settings.json`). The plugin never writes your settings. The skill `vibemaestro-sdlc:coordinator-bootstrap` does the same setup in one run you sign. With the block, the routine baton commands run without a prompt, while your signature and a change of mode always ask you. Details: [BatonRun, permission setup](plugins/vibemaestro-sdlc/docs/batonrun.md#9-permission-setup).
+2. **Set up BatonRun on this machine (recommended).** A simple write outside the session (one step, undone by one direct call, such as a comment on an issue) is a direct call; a write flow, or a write that cannot be undone or that you sign (a merge, a force-push), runs as one baton script, kept and called by name when it comes back. A normal branch push and opening a pull request are not batons. Without this setup every baton command asks you; `local-parallel` merges through batons. Ask Claude to set up BatonRun on this machine (skill `vibemaestro-sdlc:batonrun`, its setup reference). It installs a small launcher and prints a block of permission rules; you add that block to your Claude Code user settings (`/permissions`, or `~/.claude/settings.json`). The plugin never writes your settings. The skill `vibemaestro-sdlc:coordinator-bootstrap` does the same setup in one run you sign. With the block, the routine baton commands run without a prompt, while your signature and a change of mode always ask you. Details: [BatonRun, permission setup](plugins/vibemaestro-sdlc/docs/batonrun.md#9-permission-setup).
 3. **Add a CI check (optional).** The guarded merge needs at least one green check on a pull request. The skill `vibemaestro-sdlc:install-gates` adds the process gates as GitHub workflows; it asks which gates and which runner, and never overwrites a file.
 
 ## The flow
@@ -91,7 +123,7 @@ You rarely type a brain command: Claude runs them, guided by the skill `vibemaes
 
 ## Safety model
 
-BatonRun is how a session performs an action that writes outside itself (full standard: [plugins/vibemaestro-sdlc/docs/batonrun.md](plugins/vibemaestro-sdlc/docs/batonrun.md)).
+BatonRun is how a session performs a write flow outside itself, beyond a simple write (full standard: [plugins/vibemaestro-sdlc/docs/batonrun.md](plugins/vibemaestro-sdlc/docs/batonrun.md)).
 
 - One baton script holds the whole series of commands. It is checked, rehearsed to show every write, and signed. The signature is bound to the script's hash, so any later edit voids it.
 - The run is then post-checked, undone when the result is wrong, and logged. You are never handed command lines to type.
@@ -103,11 +135,11 @@ The index is [docs/README.md](docs/README.md). It lists the two plugins, the AI-
 
 ## Evidence
 
-The research notes state what is known about BatonRun's token cost and about the brain's benefit, including what the tests did not show: the brain was not shown necessary at the size tested. They are in [docs/research/](docs/research/).
+The research notes state what is known about BatonRun's token cost and about the brain's benefit, including what the tests did not show: the brain was not shown necessary at the size tested. A third note measures what the sdlc plugin costs and gives on app work: no measurable difference in cost per working task (0.76–1.25 under the scoring fixed before the last task ran). They are in [docs/research/](docs/research/).
 
 ## Releases
 
-Each plugin has its own version. A release is tagged `<plugin>--v<version>` in the public repository `vibemaestro/vibemaestro-kit`, and its notes are the plugin's `CHANGELOG.md`. The kit is not listed in the Anthropic plugin directory.
+Each plugin has its own version. A release is tagged `<plugin>--v<version>` in the public repository `vibemaestro/vibemaestro-kit`, and has a GitHub Release of the same name. Its notes are that version's section of the plugin's `CHANGELOG.md`, with its **Upgrade notes** (what an existing user must do or will notice), and how to update. The kit is not listed in the Anthropic plugin directory.
 
 ## Contributing
 

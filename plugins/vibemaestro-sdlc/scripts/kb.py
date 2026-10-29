@@ -220,12 +220,13 @@ Intent: {fill}: kb/intent/… của chủ đề, hoặc bỏ> · Spec: {fill}: k
 
 Mỗi PR một hàng, ghi TRƯỚC khi giao PR đó và không sửa để ghi trạng thái: `kb.py plan status <file này>` đọc trạng thái từ GitHub.
 Phiên nhận một hàng ghi `plan: <file này>#<hàng>` vào frontmatter intent (và spec) của nó. PR mới → hàng mới; PR bị bỏ → `dropped: <lý do>` ở ô Link.
+Current state @SHA và Shared files là kết quả recon (skill plan); hai hàng chung file thì có thứ tự ở Depends on, hoặc một hàng ghi `(merge main)`.
 
 ## Rows
 
-| Row | Must be true | Acceptance | Depends on | Version | Model | Link |
-|---|---|---|---|---|---|---|
-| A | {fill}: một dòng> | `{fill}: lệnh>` → {fill}: kết quả> | — | {fill}: — hoặc, ở hàng release, plugin x.y.z> | {fill}: model, effort> | — |
+| Row | Must be true | Current state @SHA | Shared files | Acceptance | Depends on | Version | Model | Link |
+|---|---|---|---|---|---|---|---|---|
+| A | {fill}: một dòng> | {fill}: hiện trạng, một dòng> @{fill}: sha của origin/main lúc dò> | {fill}: file chung với hàng hay PR khác, hoặc —> | `{fill}: lệnh>` → {fill}: kết quả> | — | {fill}: — hoặc, ở hàng release, plugin x.y.z> | {fill}: model, effort> | — |
 
 ## Decisions
 
@@ -279,12 +280,13 @@ Intent: {fill}: kb/intent/… of the topic, or drop it> · Spec: {fill}: kb/spec
 One row per PR, written BEFORE that PR is dispatched and never edited for status: `kb.py plan status <this file>` reads it from GitHub.
 The session that takes a row writes `plan: <this file>#<row>` into its intent's (and spec's) frontmatter. A new PR → a new row; a dropped
 one → `dropped: <reason>` in its Link cell.
+Current state @SHA and Shared files are the recon's facts (skill plan); two rows sharing a file are ordered in Depends on, or one says `(merge main)`.
 
 ## Rows
 
-| Row | Must be true | Acceptance | Depends on | Version | Model | Link |
-|---|---|---|---|---|---|---|
-| A | {fill}: one line> | `{fill}: command>` → {fill}: expected> | — | {fill}: — or, on a release row, plugin x.y.z> | {fill}: model, effort> | — |
+| Row | Must be true | Current state @SHA | Shared files | Acceptance | Depends on | Version | Model | Link |
+|---|---|---|---|---|---|---|---|---|
+| A | {fill}: one line> | {fill}: current state, one line> @{fill}: sha of origin/main when read> | {fill}: files shared with another row or PR, or —> | `{fill}: command>` → {fill}: expected> | — | {fill}: — or, on a release row, plugin x.y.z> | {fill}: model, effort> | — |
 
 ## Decisions
 

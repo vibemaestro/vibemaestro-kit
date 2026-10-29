@@ -1,40 +1,51 @@
 ---
 name: batonrun
-description: "Use when: an action writes outside the session (a GitHub write: a merge, an API POST, a registry push, the user's Claude Code plugin config, a force-push, a deletion, a change on a live system), or when the owner asks to package commands into one script that runs as a block. BatonRun: one run of one baton script; the owner is never handed command lines to type."
+description: "Use when: writing or editing a baton script, for a write outside the session (GitHub, a registry, the user's plugin config, a deletion, a live system) that is not simple and that no baton list entry fits; keeping one with baton pack; or the owner asks to package commands to run as one block."
 ---
 
-# batonrun: privileged actions as runs
+# batonrun: write, keep and change a baton
 
-A write outside the session is one **run**, a fixed series in one baton script the session runs; never typed
-command by command, never handed to the owner as lines to type. A hand-written baton needs only this file: no
-reference, no `baton.py`. Standard: `docs/batonrun.md` in the plugin root.
+A write flow is one **run** of one baton script. A hand-written baton needs only this file.
+Standard: the plugin's `docs/batonrun.md`.
 
 ## Steps
 
-Each command is `<launcher> <subcommand> …` (`<state-dir>/bin/baton`; until installed `python3
-${CLAUDE_PLUGIN_ROOT}/scripts/baton.py`); baton's options before the script path, its arguments after. Run each bare, as its
-own call: no `cd <dir> &&` (set the directory in an earlier call), no pipe, `| tail` or `| grep` after `sign`, `run` or `go`:
-no permission rule matches a compound command. `go` and `run` print one line when they hold;
-read any other output whole.
+Each command is `<launcher> <subcommand> …` (`~/.local/state/vibemaestro/baton/bin/baton`; until installed `python3
+${CLAUDE_PLUGIN_ROOT}/scripts/baton.py`); baton's options before the script, its values after. Run each bare, as its
+own call: no `cd <dir> &&`, no pipe, `| tail` or `| grep` after `sign`, `run` or `go`.
 
-1. **A kind or a kit covers it: no script.** `go kind:install-file <source> <dir>`, `kind:settings-merge <settings.json>
-   <rules.json>`, `kind:ci-rerun-failed <owner/name> <run id>`. `go kit:gh-write --spec <file>` covers issue-create,
-   issue-comment, comment-edit, issue-edit, pr-body-edit, issue-reopen, issue-close, pr-close, pr-ready, pr-create,
-   file-pr; never by hand. Merge: `kit:merge-pr`. Labels, tags, releases, a push: hand-written.
-2. **Otherwise** Write the baton (from the skeleton) to a fresh path and `go <that path> <args>` in the same response.
-   Never the baton in a heredoc on `go -`: Claude Code blocks it (`limits.md`). Independent batons of one task go in the same response.
-3. **The act:**
+0. **A simple write is direct** (one comment, one ticket): one step, undone by one direct call, neither on the stop list
+   (below), not a flow met before. Never split a flow into such writes.
+1. **`list <keyword>` first.** One fits (purpose, targets, risk): `go <prefix>:<name> key='value'…`, values single-quoted;
+   a kit or kind takes its `Usage`. `go kit:gh-write --spec <file>` covers issue-create, issue-comment, comment-edit,
+   issue-edit, pr-body-edit, issue-reopen, issue-close, pr-close, pr-ready, pr-create, file-pr; never by hand (a lone comment or ticket: step 0). Merge:
+   `kit:merge-pr`; a merged branch: `kit:branch-delete`. Labels, tags, releases, a push: hand-written.
+2. **One is close: evolve it in place**: a fresh copy, changed, `go` it, `pack` it under the same name, never as a copy.
+   Other purpose or targets, a new `Stops` word, or a kit or kind: a new name (`new --from <kind>`).
+3. **None:** Write the baton (from the skeleton) to a fresh path and `go <that path> <args>` in the same response, args
+   `key='value'`. Never the baton in a heredoc on `go -`: Claude Code blocks it (`limits.md`). Independent batons of one
+   task go in the same response.
+4. **Met a second time: `pack <path> project:<name>`** (the repo's `.vibemaestro/batons/`, reviewed in its PR) or
+   **`user:<name>`** (this machine; a sandbox: `kits.md`); it needs an `ok` run of those bytes: write it keepable (`Params`, `Targets` patterns) at once.
+   Relay its `owner:` line in your next reply to the owner.
+5. **The act:**
    - every change through `write "<plan line>" <command…>`; reads outside it run in every phase, rehearse too;
    - resolved values in plan lines (full SHA, tag, absolute path, target repo or host), never a value the act moves;
-   - one `Expect` line per write (below);
-   - self-contained: no `source`, no local helper script; a file it reads goes into a plan line with its sha256;
+   - one `Expect` line per write (below); no `source` or local helper; a file it reads is a `file` value, or its sha256 in a plan line;
    - undo compares every target with its before-state, or `Undo:` names what it leaves; an undo that cannot delete names
      what it leaves behind and exits non-zero; a late after-state: the write waits for it.
-4. **`go`** runs check, rehearse (plan against Expect), seal, sign as `coordinator-auto`, run, post-check and log. A file
-   written over 120 s ago is rc 1, nothing ran: write a fresh path (a kept run, or a baton written twice: `kits.md`). One signature, one run: `go` again.
+6. **`go`** runs check, rehearse (plan vs Expect, Targets), seal, sign, run, post-check, log. A session baton or `input`
+   over 120 s old is rc 1: write a fresh path. A kept baton runs only at its pinned bytes.
 
-**Owner-only acts** (`modes.md`): `mode manual|auto` changes only on the owner's word; `sign --by owner` is the owner's click
-in a dialog, after a decision card; no dialog, or a rejected one, is not a yes: record it as pending, never retry `sign`.
+### Params
+
+`# Params: key=type …`: each key required, once, checked before anything runs. Types: `int`, `sha40`, `sha256`, `name`,
+`repo`, `ref`, `path` (absolute), `url` (https), `file`, `input` (written for this call), `under:<dir>`, `enum:<a>|<b>`.
+No value holds a space, quote or `$`: free text from outside (a title, a body) goes into an `input` file you Write. A path
+whose last segment starts with `-`, `+` or `@` is refused (exit 64); a middle segment may. After
+the gates, one line per key, in order: `P_DEST="$1"`; read only as `"$P_DEST"` (other tools: `limits.md`). `Targets`:
+patterns before ` — ` (`{dest} {dir}/** {repo}#{issue} — …`). Each plan line names one, and its absolute-path, repo, URL
+or `refs/` words all match one (file copies exempt). Targets not patterns: untested, and `pack` refuses them.
 
 ### How Expect matches the plan
 
@@ -58,34 +69,27 @@ Four writes, four `Expect` lines (`*` is a SHA):
 ### Exit codes
 
 - 0: `go: ok — <n> writes — <run log>` (`run` alike), the only line; report it.
-- 1: fails check or rehearse, or a stale file: write the fixed baton whole to a new path (a kept run: `kits.md`); a widening fix needs the owner.
-- 3: refused, nothing ran. 4: failed, undone. 5: the state is unknown: tell the owner at once.
-- 8: owner signs (Stops; mode `manual`, `not chosen yet`: ask once); none ran: `modes.md`.
-- 9: `log --wait-names` not met. 64: bad usage. 66: the script cannot be read.
-
-### Several batons
-
-In place by default, any number. Delegate 3 or more batons only when the main context is over ~400k tokens.
-Then ONE worker subagent (model `agents.worker_model`), one Agent call with the whole job and the exact script names
-`<prefix>-<act>.sh`, a prefix of its own; a worker never delegates. Then ONE call `<launcher> log --wait-names
-<prefix>-a.sh,… --timeout 580`: rc 0 once each name's latest run line since the wait's start − 300 s is ok (a fixed re-run
-counts), else rc 9 at the deadline. Once the wait passed, the worker's later hand-back needs no tool call: end the turn.
+- 1: fails check or rehearse, or stale: write the fixed baton to a new path; a widening fix needs the owner.
+- 3: refused, nothing ran (a kept baton not pinned or reviewed here). 4: failed, undone. 5: state unknown: tell the owner at once.
+- 8: the owner signs (Stops; mode `manual`; `not chosen yet`: ask once), none ran: the card, then the printed `sign --by
+  owner` once, alone (pod: hand off, no `sign`); no dialog, or a rejected one, is not a yes. Owner away, not in a pod: `go --queue`.
+- 9: a `log` wait not met. 64: bad usage, a call off `Params`. 66: script unreadable.
 
 ### The skeleton
 
-It passes `check` as written. Replace the header, act, post-check and undo; copy `write()`, `gh_state()` and the final `case`
-unchanged. Does a GitHub object exist: `gh_state <api path>` as a statement, then test `$GH_STATE` (`exists` or `absent`;
-anything else stops the script).
+It passes `check` and `pack` as written. Replace the header, values, act, post-check and undo; copy `write()`, `gh_state()` and
+the final `case` unchanged. `gh_state`: `act.md`.
 
 <!-- baton-skeleton -->
 ```bash
 #!/usr/bin/env bash
-# Purpose: create one file holding a text
-# Targets: the file named by the first argument
+# Purpose: create one file holding the bytes of an input file
+# Targets: {dest} — the file dest names
 # Blast: that one file
-# Undo: removes the file while it holds that text
+# Undo: removes the file while it holds those bytes
 # Pre: the file is absent
 # Stops: none
+# Params: dest=path body=input
 # Expect: create *
 set -euo pipefail
 PHASE=${BATON_PHASE:-rehearse}
@@ -121,84 +125,63 @@ gh_state() {
       ;;
   esac
 }
-DEST=$1
-TEXT=$2
-holds() { [ -f "$DEST" ] && cmp -s "$DEST" <(printf '%s\n' "$TEXT"); }
-put() { printf '%s\n' "$TEXT" > "$DEST"; }
+P_DEST="$1"
+P_BODY="$2"
+holds() { [ -f "$P_DEST" ] && cmp -s "$P_DEST" "$P_BODY"; }
+put() { cat -- "$P_BODY" > "$P_DEST"; }
 act() {
-  if [ -e "$DEST" ]; then
-    echo "REFUSE $DEST exists" >&2
-    return 3
-  fi
-  write "create $DEST" put
+  [ ! -e "$P_DEST" ] || { echo "REFUSE $P_DEST exists" >&2; return 3; }
+  write "create $P_DEST" put
 }
 postcheck() { holds; }
 undo() {
   if holds; then
-    write "remove $DEST" rm -f -- "$DEST"
+    write "remove $P_DEST" rm -f -- "$P_DEST"
   fi
   ! holds
 }
 case "$PHASE" in
-  rehearse)
-    act
-    echo "VERDICT rehearse ok"
-    ;;
-  run)
-    act
-    echo "VERDICT run ok"
-    ;;
-  postcheck)
-    postcheck
-    echo "VERDICT postcheck ok"
-    ;;
-  undo)
-    undo
-    echo "VERDICT undo ok"
-    ;;
-  *)
-    echo "unknown phase: $PHASE" >&2
-    exit 64
-    ;;
+  rehearse) act; echo "VERDICT rehearse ok" ;;
+  run) act; echo "VERDICT run ok" ;;
+  postcheck) postcheck; echo "VERDICT postcheck ok" ;;
+  undo) undo; echo "VERDICT undo ok" ;;
+  *) echo "unknown phase: $PHASE" >&2; exit 64 ;;
 esac
 ```
 <!-- /baton-skeleton -->
 
 ### What `check` refuses
 
-- A header without Purpose, Targets, Blast, Undo, Pre or Stops, a field given twice, no or an empty Expect, a Stops word
-  off the list below, `Each` outside a kit baton. No `set -euo pipefail` in force (a later `set +e`, `+u`, `+o pipefail`).
-- `write()` and `PHASE=${BATON_PHASE:-rehearse}` not exactly once, as the skeleton's; `$PHASE` read outside `write()` and
-  the final `case`.
-- A final `case "$PHASE" in` without `rehearse)`, `run)`, `postcheck)` and `undo)`, each printing `VERDICT <phase> ok`;
-  `rehearse)` and `run)` that differ; a branch that masks a failure (`||`, `&&`, `if`, `!`); no `postcheck()` or `undo()`.
-- A `PLAN` line printed, or a write run (`gh` writes, `gh api` with a write method or fields, `git push`, `docker push`, `kubectl apply`, `helm install|upgrade`,
-  `flux`, `claude plugin install`…), outside `write()`, or a function `write()` runs, called without it.
-- A local script run (`bash x.sh`, `python3 x.py`) or `source`/`.` of a file (a plugin script: `act.md`).
-- `diff`, `grep` or `cmp` in a pipeline: wrap it `{ diff … || true; } | head`.
-- A stop pattern of a category Stops lacks (below); `gh_state` in `$(…)`, backticks, a pipe, a subshell or `&`.
-- A `bash -n` error; a `shellcheck -S error` finding where installed.
+- A header field missing or twice, no Expect, a Stops word off the list, `Each` outside a kit; no `set -euo pipefail`.
+- `write()` or the `PHASE=` line not as the skeleton's; `$PHASE` read elsewhere; a final `case` unlike the skeleton's.
+- A `PLAN` line or a write (`gh`, `git push`, `kubectl apply`…) outside `write()`, or a function `write()` runs called without it.
+- A local script or `source` (`act.md`); `diff`, `grep` or `cmp` in a pipeline unwrapped (`{ … || true; } | head`).
+- A stop pattern Stops lacks (below); `gh_state` in `$(…)`, backticks, a pipe, a subshell or `&`.
+- `Params` off the grammar; no values block; a `P_` name set elsewhere, unquoted, in `eval`, a heredoc or `gh -F`.
+- A kept baton without a `Params` key or pattern `Targets`, or with `Usage`; a `bash -n` or `shellcheck -S error` finding.
 
 ## Stop list (the `Stops:` header; any of them means only the owner signs)
 
-- `irreversible-delete`: deletes data that cannot come back: volumes with data, namespaces, package versions, repositories, unmerged branches, tags, secret paths, databases
+- `irreversible-delete`: deletes what cannot come back: data volumes, namespaces, package versions, repositories, branches (a merged one: `kit:branch-delete`), tags, secret paths, databases
 - `secrets`: reads, prints, writes or rotates a secret
-- `security-boundary`: widens a boundary: RBAC, admission or network policy, making something public, an admin bypass outside an existing owner rule
+- `security-boundary`: widens a boundary: RBAC, admission or network policy, making something public, an admin bypass
 - `cluster-lane`: changes a live cluster outside an approved lane: suspending reconciliation, draining nodes
 - `history-rewrite`: force-pushes or rewrites history on a shared branch
 - `money-org`: billing, plans, organisation admin (create or rename a repository, members)
 - `publish`: posts outside: public places, other people's repositories
 - `no-way-back`: can be neither rehearsed nor undone
-- `owner-acts`: an earlier owner decision names the owner as the one who acts
+- `owner-acts`: an owner decision names the owner as the one who acts
 
-`check` flags a body line that looks like a stop act (patterns: `limits.md`); declare what the act does, not what the lint finds.
+`check` flags a body line that looks like a stop act (`limits.md`): declare what the act does, not what the lint finds.
+A refused or owner-held act (exit 8) is never done by another route (command, ref or file edit, script, tool); a
+passing check is not a yes. Report and wait.
 
-## Reference files (`baton help <topic>`)
+## Reference files
 
-- `act.md`: a remote program (`ssh`, `kubectl exec`), how undo restores what the act moves, a run record, a plugin script, `gh_state` paths.
+- `act.md`: remote programs, undo, run records, plugin scripts, `gh_state` paths, several batons.
 - `kinds.md`: running a kind.
-- `kits.md`: running a kit (also another plugin's), or a kit's refusal; keeping or changing a run.
-- `modes.md`: exit 8, `sign --by owner`, the decision card, the mode.
+- `kits.md`: a kit's refusals; places, `pack`, a sandbox, reviewed batons.
+- `modes.md`: exit 8, the owner's signature, queue, card, mode.
 - `permissions.md`: `permissions --check` fails.
-- `setup.md`: no launcher, or SessionStart says the check fails.
-- `limits.md`: what baton does not guard; the stop patterns.
+- `setup.md`: no launcher, or SessionStart's check fails.
+- `limits.md`: what baton does not guard; non-shell values; stop patterns.

@@ -40,6 +40,9 @@
 #   - RSS counts a shared page once per process, so a run of many small processes reads high (conservative); memory that is not process
 #     RSS (files in tmpfs such as /dev/shm) is not counted.
 #   - The watchdog is a sibling of the run; a break that kills its siblings (`pkill`, `kill -KILL -- -$$`) stops both caps.
+#   - Capped runs side by side (sibling subshells) never sweep each other: the token is unique among the runs alive at once and an
+#     environ entry must equal it exactly. Not covered: after the run is reaped, its pid is still used as the root and the group of
+#     the cleanup; a number reused within that moment would be signalled (it needs the PID counter to wrap during the run).
 #   - Where `ulimit -v` does not work (macOS) the backstop says so on stderr and the other caps hold; where `ps` gives no sizes the memory
 #     cap says it is not enforced and the time cap holds.
 #   - Side effects: it uses fd 9 for a moment; `$!` is the watchdog's pid afterwards; a run that reads a terminal is stopped by SIGTTIN
@@ -52,10 +55,11 @@ for _cap_v in PLANT_CAP_MEM_MB PLANT_CAP_SECS PLANT_CAP_VMEM_MB; do
 done
 unset _cap_v
 
-# _cap_sweep <token> — the pids of every process whose environment carries the token (Linux; prints nothing elsewhere)
+# _cap_sweep <token> — the pids of every process whose environment carries the token (Linux; prints nothing elsewhere). One
+# environ entry must equal CAPPED_RUN=<token> exactly: a substring match also took a run whose token merely starts with this one.
 _cap_sweep() {
   [ -d /proc/self ] || return 0
-  grep -laF "CAPPED_RUN=$1" /proc/[0-9]*/environ 2>/dev/null | sed 's|/proc/\([0-9]*\)/environ|\1|'
+  grep -lazxF "CAPPED_RUN=$1" /proc/[0-9]*/environ 2>/dev/null | sed 's|/proc/\([0-9]*\)/environ|\1|'
 }
 
 # _cap_tree <root pid> [<extra pids, whitespace separated>] — one line `rss_kb pid pid …`: the root's process group, every descendant
@@ -96,7 +100,9 @@ capped() {
   done
   local pid wd rc mark tok had_m=0 t0=$SECONDS
   mark=$(mktemp "${TMPDIR:-/tmp}/capped.XXXXXX")
-  tok="$$.$RANDOM$RANDOM.$SECONDS"
+  # unique among the capped runs alive at once: mktemp names the mark apart while it exists, and the caller waits for its run (bash
+  # 3.2 has no BASHPID). Not $$ and $RANDOM: sibling subshells share $$, and bash seeds their $RANDOM from the time and the pid.
+  tok="${BASHPID:-$$}.${mark##*/}"
   case $- in *m*) had_m=1;; esac
   set -m   # the run becomes the leader of a process group of its own
   { exec 9<&0; } 2>/dev/null || exec 9</dev/null   # a background job gets /dev/null for stdin; the run is given the caller's

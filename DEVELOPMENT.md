@@ -88,9 +88,11 @@ The suites need no secret, no other repository and no location setting. Prerequi
   no suite, so a documentation-only change runs only the `@always` suites.
 - Check the manifests with `claude plugin validate plugins/<name>` and the marketplace with `claude plugin validate .`.
 
-CI: `.github/workflows/test.yml` runs the plan of the changed suites on every pull request and every push to `main`, on the
-runner named by the repository variable `CI_RUNNER` (GitHub-hosted when it is unset). The gate jobs (`export-gate`,
-`pr-body`, `scan-terms`) run on the optional repository variable `CI_GATE_RUNNER` (a light runner), falling back to `CI_RUNNER`.
+CI: `.github/workflows/test.yml` runs the plan of the changed suites on every ready pull request; a push to `main` runs no test
+suite, only the scans (`scan-terms`, `public-tree`). It runs on the runner named by the repository variable `CI_RUNNER`.
+Unset or empty, a private repository's run fails at once (it never falls back to a
+GitHub-hosted runner) and the public repository uses a GitHub-hosted one. The gate jobs (`export-gate`, `pr-body`, `public-tree`,
+`scan-terms`) run on the optional repository variable `CI_GATE_RUNNER` (a light runner), falling back to `CI_RUNNER`.
 `.github/workflows/test-full.yml` runs the full suite twice a week (Sunday and Wednesday, 19:00 UTC); a red run opens one issue
 labelled `full-run-red`.
 

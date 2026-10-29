@@ -28,10 +28,18 @@
 #       enabled; the installed `brain` finds sdlc's sensitive-value filter through the real registry
 # =============================================================================
 set -uo pipefail
+# the brain's answerer check reads the HOME of every ancestor from its initial environment, which forked subshells share:
+# start again without the launcher's (clean_env then points HOME into the scratch tree; the user base is pinned first)
+if [ -z "${ACCOUNT_HOME_REEXEC:-}" ]; then
+  export PYTHONUSERBASE="${PYTHONUSERBASE:-$(python3 -m site --user-base 2>/dev/null)}"
+  exec env -u CLAUDE_CONFIG_DIR ACCOUNT_HOME_REEXEC=1 HOME=/nonexistent bash "$0" "$@"
+fi
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 # shellcheck source=fixtures/lib.sh
 . "$HERE/fixtures/lib.sh"
+# shellcheck source=fixtures/account-home.sh
+. "$HERE/fixtures/account-home.sh"
 
 DEP="$SRC_ROOT/tests/fixtures/dependent-plugin"; DEPN=dependent-fixture
 BRAIN="$SRC_ROOT/plugins/vibemaestro-brain"
@@ -106,6 +114,23 @@ for k, v in d.get("plugins", {}).items():
         print(v[0]["installPath"])
 PY
 }
+brain_store_isolate() {  # brain_store_isolate <brain_store.py> <dir> — as brain_kit does for the brain suites (a copy of its own: the installed one)
+  mkdir -p "$2/managed" "$2/account"
+  python3 - "$1" "$2/managed" "$2/account" "$$" <<'PY' || { bad "brain_store_isolate: a line to isolate was not found in $1"; return 1; }
+import re, sys
+p, m, a, pid = sys.argv[1:5]
+s = open(p, encoding="utf-8").read()
+subs = ((r"(?m)^MANAGED_SETTINGS = \(.*\)$", 'MANAGED_SETTINGS = ("%s/managed-settings.json",)\nSUITE_PID = %s' % (m, pid)),
+        (r"(?m)^        return pwd\.getpwuid\(os\.getuid\(\)\)\.pw_dir$", '        return "%s"' % a),
+        (r"(?m)^        if pid <= 1:$", "        if pid <= 1 or pid == SUITE_PID:"))
+for pat, new in subs:
+    s, n = re.subn(pat, lambda _: new, s)
+    if n != 1:
+        sys.exit(1)
+open(p, "w", encoding="utf-8").write(s)
+PY
+}
+
 APP="$TMP/app"; mk_app "$APP" >/dev/null
 block() {  # block <list output> <plugin id> — that plugin's lines of `claude plugin list`, from its `❯` line to the next one
   printf '%s\n' "$1" | awk -v id="$2" '/^  ❯ /{on = ($2 == id)} on'
@@ -235,6 +260,13 @@ O=$(cl plugin install $DEPN@vibemaestro); eq "$?" 0 "[E] install $DEPN@vibemaest
 L=$(cl plugin list)
 eq "$(printf '%s\n' "$L" | grep -c 'Status: ✔ enabled')" 3 "[E] claude plugin list: three plugins enabled"
 BP=$(ipath vibemaestro-brain)
+# [Y] the installed brain's answerer check reads .claude of the account's home and of every ancestor process (their initial HOME):
+# the copy in the scratch cache reads the scratch tree instead and stops at this shell (brain_store_isolate), measured by home_leaks (fixtures/account-home.sh),
+# and the suite itself was started with HOME=/nonexistent (top of the file), so a subshell carries no real HOME
+brain_store_isolate "$BP/scripts/brain_store.py" "$TMP/brain-iso"
+eq "$(grep -c '^SUITE_PID = ' "$BP/scripts/brain_store.py")" 1 "[Y1] the installed brain is isolated from the machine: its ancestor walk stops at the suite's shell"
+eq "$(home_leaks "$BP/scripts" brain_store _ancestors)" "True []" "[Y2] the ancestors the brain sees from below the suite: at least one, none with a HOME outside the scratch tree"
+has "$(HOME=/ctl-real home_leaks "$BP/scripts" brain_store _ancestors)" "'/ctl-real'" "[Y3] control: a bash above the call that was started with another HOME is named, so [Y2] can see a leak"
 O=$(cd "$APP" && XDG_STATE_HOME="$TMP/state-e" "$BP/bin/brain" doctor 2>&1)
 has "$O" "the sensitive-value filter runs (clean 0, token 1)" "[E] the installed brain finds sdlc's filter through the registry"
 hasnt "$O" "was not found" "[E] instrument: no missing-filter line"

@@ -53,7 +53,7 @@ newp() {  # newp — a fresh git project and a fresh state root; cd into the pro
   export XDG_STATE_HOME="$TMP/state$NP"
   cd "$P" || return 1
   SID=sA
-  unset INTENT_SLUG SEAT BRAIN_TEST BRAIN_TEST_PAUSE_MS
+  unset INTENT_SLUG SEAT BRAIN_TEST BRAIN_TEST_PAUSE_MS CLAUDE_PROJECT_DIR
 }
 
 br() {  # br <args…> — run the brain of BROOT as session SID; sets OUT (stdout+stderr) and RC

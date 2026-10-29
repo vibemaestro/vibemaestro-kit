@@ -98,6 +98,39 @@ if command -v setsid >/dev/null 2>&1; then
   sleep 0.3; eq "$(left 8)" 0 "…and none of the six is left"
 fi
 
+echo "== [A] sibling runs: the cleanup of one run never reaches another =="
+# sib <capped.sh> — two capped runs side by side from `( … ) &` subshells, the shape of tests/test-hub-shaped-flow.sh's faulty runs:
+# `short` ends while `long` is inside its second step; prints every step's code. Seen on CI as one step of a sibling ended 137.
+sib() {
+  bash -c '. "$1"
+flow() { python3 -c "import sys, time; time.sleep(float(sys.argv[1]))" "$1"; echo "$2-a $?"; python3 -c "import sys, time; time.sleep(float(sys.argv[1]))" "$3"; echo "$2-b $?"; }
+( capped flow 0.1 short 0.1 ) & ( capped flow 0.1 long 2 ) & wait' _ "$1" 2>/dev/null | sort | tr '\n' ' '
+}
+# planted <name> <old> <new> — writes $TMP/capped-<name>.sh, capped.sh with one text replaced; rc 1 and a FAIL when <old> is not there once
+planted() {
+  python3 -c 'import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+sys.exit(1) if s.count(old) != 1 else open(dst, "w").write(s.replace(old, new))' "$HERE/fixtures/capped.sh" "$TMP/capped-$1.sh" "$2" "$3" \
+    || { bad "planted $1: the text to replace is not in capped.sh once"; return 1; }
+}
+eq "$(sib "$HERE/fixtures/capped.sh")" "long-a 0 long-b 0 short-a 0 short-b 0 " "two sibling runs: every step of both ends by itself"
+toks=$(bash -c '. "$1"; ( capped sh -c "echo \$CAPPED_RUN" ) & ( capped sh -c "echo \$CAPPED_RUN" ) & wait' _ "$HERE/fixtures/capped.sh" | sort -u | wc -l | tr -d ' ')
+eq "$toks" 2 "…and their tokens differ"
+if [ -d /proc/self ]; then
+  if planted shared-token 'tok="${BASHPID:-$$}.${mark##*/}"' 'tok=shared'; then
+    eq "$(sib "$TMP/capped-shared-token.sh")" "long-a 0 long-b 137 short-a 0 short-b 0 " \
+      "…planted: one token for both runs → the first to end SIGKILLs the other's step (137), the CI signature"
+  fi
+  CAPPED_RUN="t$UNIQ.1" sleep "3$UNIQ.2" & a=$!; CAPPED_RUN="t$UNIQ.12" sleep "3$UNIQ.2" & b=$!; sleep 0.3
+  eq "$(_cap_sweep "t$UNIQ.1" | tr '\n' ' ')" "$a " "the token sweep takes the exact token, not a longer one that starts with it"
+  kill "$a" "$b" 2>/dev/null; { wait "$a" "$b"; } 2>/dev/null
+else
+  echo "  SKIP *** no /proc: the token checks (shared token, exact sweep) DID NOT RUN ***"
+fi
+out=$(bash -c 'unset BASHPID; set -u; . "$1"; capped echo hi' _ "$HERE/fixtures/capped.sh" 2>&1)
+eq "$out" "hi" "no BASHPID (bash 3.2) under set -u: capped still runs"
+
 echo "== [A] the arguments and the environment of the caps =="
 out=$(PLANT_CAP_SECS=2s capped sleep 1 2>&1); rc=$?
 eq "$rc" 2 "a cap that is not a whole number (2s) is refused: rc 2"; has "$out" "whole numbers" "…with a message"
@@ -217,7 +250,7 @@ lint() {  # lint <file> — one line per problem, empty when clean
     echo "$n: [L1] defines a planted-break helper and never calls capped, plant_break or expect_red"
   fi
   printf '%s\n' "$code" | grep -vE "^[0-9]+:[[:space:]]*(plant|plant_break)[[:space:]]" | grep -E 'python3( +-[A-Za-z]+)* +-I( |$)' |
-    grep -vE 'python3( +-[A-Za-z]+)* +-B( |$)' | sed "s/^/$n: [L2] python3 -I without -B: /"
+    grep -vE 'python3( +-[A-Za-z]+)* +-B([^[:alnum:]_-]|$)' | sed "s/^/$n: [L2] python3 -I without -B: /"
 }
 L="$TMP/lint"; mkdir -p "$L"
 printf '%s\n' 'plant() { "$@"; }' 'plant x' > "$L/test-l1-bad.sh"
@@ -227,13 +260,13 @@ printf '%s\n' 'show_defaults() { echo x; }' 'fam_default_off() { :; }' > "$L/tes
 printf '%s\n' 'mutant_probe python3 -I x.py' > "$L/test-l2-other-word.sh"
 { echo 'out=$(capped true)'; i=0; while [ $i -lt 20000 ]; do echo "echo padding line $i"; i=$((i + 1)); done; echo 'plant() { "$@"; }'; } > "$L/test-l1-big.sh"
 printf '%s\n' 'out=$(python3 -I "$x")' > "$L/test-l2-bad.sh"
-printf '%s\n' 'out=$(python3 -I -B "$x")' "plant \"a\" EP \"\$E\" 'setup() { python3 -I x' 'y'" '# python3 -I in a comment' > "$L/test-l2-ok.sh"
+printf '%s\n' 'out=$(python3 -I -B "$x")' '"[S] a label that names python3 -I -B: ask"' "plant \"a\" EP \"\$E\" 'setup() { python3 -I x' 'y'" '# python3 -I in a comment' > "$L/test-l2-ok.sh"
 has "$(lint "$L/test-l1-bad.sh")" "[L1]" "[L1] planted: a helper that runs its break uncapped is flagged"
 empty "$(lint "$L/test-l1-ok.sh")$(lint "$L/test-l1-ports.sh")" "[L1] control: plant_break and expect_red count as capped"
 empty "$(lint "$L/test-l1-big.sh")" "[L1] control: a capped call early and the helper late in a file bigger than a pipe buffer is not flagged (no SIGPIPE race)"
 empty "$(lint "$L/test-l1-default.sh")" "[L1] control: a name with \`default\` in it is not a planted-break helper (whole words)"
 has "$(lint "$L/test-l2-bad.sh")" "[L2]" "[L2] planted: python3 -I without -B is flagged"
-empty "$(lint "$L/test-l2-ok.sh")" "[L2] control: -I -B, a plant line's mutation text and a comment are not flagged"
+empty "$(lint "$L/test-l2-ok.sh")" "[L2] control: -I -B (also before a colon), a plant line's mutation text and a comment are not flagged"
 has "$(lint "$L/test-l2-other-word.sh")" "[L2]" "[L2] planted: only plant and plant_break lines are skipped, not any helper word"
 N=0; O=""
 for f in "$HERE"/test-*.sh "$HERE"/fixtures/*.sh; do

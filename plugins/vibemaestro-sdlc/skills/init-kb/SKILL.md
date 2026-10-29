@@ -33,7 +33,7 @@ baton `kit:merge-pr`). Only on a yes, ask these too; the guard reads them from t
 
 | # | Ask | Key | Default |
 |---|---|---|---|
-| 8 | changed paths the guarded merge refuses in its normal lane (globs; `[]` is a valid answer, unset makes the guard refuse to run) | `merge.deny_globs` | `[".github/workflows/**", ".vibemaestro/**", "**/*secret*"]` |
+| 8 | changed paths the guarded merge refuses in its normal lane (globs; `[]` is a valid answer, unset makes the guard refuse to run) | `merge.deny_globs` | `[".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*"]` |
 | 9 | checks that must be green on every merge (check names, or `<workflow>/<name>`; a skipped run counts as missing, a commit status never counts) | `merge.required_checks` | none: at least one green check |
 | 10 | may the guard pass `--admin` to GitHub (bypass branch rules as an admin)? | `merge.admin_bypass` | no |
 | 11 | an image-bump lane: files holding the image tag, the image build tree, the revision file and pattern, the registry (`ghcr` or `external:<path>`, host, image) | `merge.image_bump` | off |
@@ -43,8 +43,9 @@ baton `kit:merge-pr`). Only on a yes, ask these too; the guard reads them from t
 of question 8 (the report names it), so the guarded merge never refuses a repo's PRs for a missing list. A repo's first PR, the one
 adding the config, merges through the guard's bootstrap: the guard reads the added config at that PR's head for that one merge.
 
-Keep `.vibemaestro/**` in the deny globs: it is what stops a PR from turning `merge.admin_bypass` on, or emptying the deny list,
-for itself.
+Keep `.vibemaestro/*` in the deny globs: it is what stops a PR from turning `merge.admin_bypass` on, or emptying the deny list,
+for itself. The default leaves `.vibemaestro/batons/` out, so a project baton merges through the guard like other code; deny
+`.vibemaestro/**` instead to make every project baton an owner merge.
 
 A person who already has a full config may hand over a file that spells out every key; it is written as it is.
 Every other value (limits, tokens, thresholds, watched paths, UI paths) is written by hand into `.vibemaestro/sdlc.json` afterwards.

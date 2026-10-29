@@ -1,0 +1,15 @@
+== OWNER DECISION: settings-merge.sh needs the owner's signature; nothing was signed, nothing ran
+  What:     3 writes to the settings file named by the first argument; a backup and a run record under the baton state directory
+              1. backup <W>/settings.json sha256 9e1626c5ca21af5661a4ec844549bf291e06d9805ed556082b8766b786316cc0 to <W>/state/vibemaestro/baton/records/settings-merge-9e1626c5ca21af5661a4ec844549bf291e06d9805ed556082b8766b786316cc0.json
+              2. record <W>/state/vibemaestro/baton/records/settings-merge-<ID>.last: the backup, and sha256 7cf71a24e4e3e9c9fa270bec1d79fb0c28762b3bc988e514a2f51fd612feb8f3 once merged
+              3. merge allow +0, ask +1 ["Bash(rm:*)"], deny +0 into <W>/settings.json (rules sha256 17b157bcc8600a9acdf871474da3a82c12911f1a09bc79769ace4b51e2e99089)
+  Why:      add permission rules (and attribution keys that are absent) to a Claude Code settings file; remove none
+  Blast:    that one file; its other keys and rules are kept (it is rewritten as JSON with two-space indent)
+  Undo:     restores the backup the run record names, only when the record is this run's (it holds the sha256 of the signed plan baton hands undo) and the file still has the merged sha256; else it stops, exit 5
+  Stop:     security-boundary (a stop-list item: only the owner signs)
+  Checked:  check ok; rehearse ok; plan matches Expect (3 of 3 lines); 3 writes
+detail: <W>/state/vibemaestro/baton/runs/<STAMP>-settings-merge-owner.log (check and rehearse output)
+script: <P>/templates/baton-kinds/settings-merge.sh
+on the owner's go: python3 <P>/scripts/baton.py sign --by owner --seal <SEAL> kind:settings-merge <W>/settings.json <W>/rules.json
+then:              python3 <P>/scripts/baton.py run kind:settings-merge <W>/settings.json <W>/rules.json
+go: stopped after rehearse (exit 8, waiting for the owner): the mode is manual: only the owner signs (`baton mode` shows it; the owner sets it)

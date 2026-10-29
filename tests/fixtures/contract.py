@@ -3,7 +3,7 @@
 
     contract.py json <CONTRACT.md>                 the tables between the surface markers, as JSON:
                                                    {frozen_at, items:[[id, frozen, proof]], facts:[[id, fact, value]],
-                                                    codes:[[entry, rc, meaning]], keys:[key]}
+                                                    codes:[[entry, rc, meaning]], keys:[key], deps:[[call, holds]]}
     contract.py schema-keys <plugin scripts dir>   the leaf keys of sdlc_config.SCHEMA_TREE, one per line
     contract.py base-check <repo dir> [<base ref>] the change rule of the surface against a base ref (see base_check)
     contract.py version <plugin dir>               the plugin's version: its manifest `version` (a bootstrap-era manifest), else
@@ -24,8 +24,12 @@ CONTRACT_REL = "plugins/vibemaestro-sdlc/CONTRACT.md"
 MANIFEST_REL = "plugins/vibemaestro-sdlc/.claude-plugin/plugin.json"
 CHANGELOG_REL = "plugins/vibemaestro-sdlc/CHANGELOG.md"
 BEGIN, END = "<!-- surface:begin -->", "<!-- surface:end -->"
-SECTIONS = {"## Items": "items", "## Facts": "facts", "## Exit codes": "codes", "## Config keys of schema 1": "keys"}
-WIDTH = {"items": 3, "facts": 3, "codes": 3, "keys": 1}
+SECTIONS = {"## Items": "items", "## Facts": "facts", "## Exit codes": "codes", "## Config keys of schema 1": "keys",
+            "## Dependent calls": "deps"}
+WIDTH = {"items": 3, "facts": 3, "codes": 3, "keys": 1, "deps": 2}
+HEADERS = {"items": ["id", "frozen", "proof"], "facts": ["id", "fact", "value"], "codes": ["entry point", "rc", "meaning"],
+           "keys": ["key"], "deps": ["call", "holds"]}
+OPTIONAL = {"deps"}                 # a base older than the section has none; an empty one is the family's to refuse
 
 
 class Bad(Exception):
@@ -48,7 +52,7 @@ def parse(text):
     m = re.search(r"^Frozen at: (\d+\.\d+\.\d+)$", text, re.M)
     if not m or len(re.findall(r"^Frozen at:", text, re.M)) != 1:
         raise Bad("no single 'Frozen at: X.Y.Z' line")
-    out = {"frozen_at": m.group(1), "items": [], "facts": [], "codes": [], "keys": []}
+    out = {"frozen_at": m.group(1), "items": [], "facts": [], "codes": [], "keys": [], "deps": []}
     sect, seen = None, set()
     for line in surface(text).splitlines():
         if line.startswith("## "):
@@ -59,15 +63,16 @@ def parse(text):
             continue
         if not line.startswith("|") or sect is None:
             continue
-        cells = [cell(c) for c in line.strip().strip("|").split("|")]
+        inner = line.strip().strip("|")
+        cells = [cell(c.replace("\\|", "|")) for c in re.split(r"(?<!\\)\|", inner)]   # `\|` is a pipe inside a cell
         if all(re.fullmatch(r":?-+:?", c) for c in cells):
             continue
-        if cells[0] in ("id", "entry point", "key"):          # header rows
+        if cells == HEADERS[sect]:                            # the section's header row
             continue
         if len(cells) != WIDTH[sect]:
             raise Bad("a %s row has %d cells, not %d: %s" % (sect, len(cells), WIDTH[sect], line.strip()))
         out[sect].append(cells[0] if sect == "keys" else cells)
-    missing = set(SECTIONS.values()) - seen
+    missing = set(SECTIONS.values()) - seen - OPTIONAL
     if missing:
         raise Bad("sections missing from the surface: %s" % ", ".join(sorted(missing)))
     return out
@@ -187,9 +192,10 @@ def resolve_base(repo, given):
 
 
 def identities(t):
-    """What a breaking change removes: item ids, (id, fact, value) facts, (entry, rc) codes, keys. Wording is not identity."""
+    """What a breaking change removes: item ids, (id, fact, value) facts, (entry, rc) codes, keys, (call, holds) dependent calls.
+    Wording is not identity, except for a dependent call: what it holds is what a dependent relies on."""
     return {("item", r[0]) for r in t["items"]} | {("fact",) + tuple(r) for r in t["facts"]} | \
-        {("code", r[0], r[1]) for r in t["codes"]} | {("key", k) for k in t["keys"]}
+        {("code", r[0], r[1]) for r in t["codes"]} | {("key", k) for k in t["keys"]} | {("dep",) + tuple(r) for r in t["deps"]}
 
 
 LEVELS = ("patch", "minor", "major")
@@ -208,12 +214,12 @@ def release_module(repo):
     return mod
 
 
-def added_change_levels(repo, base, plugin):
-    """The levels of the change files under .changes/ that the working tree has and the base has not, naming `plugin`.
+def added_changes(repo, base, plugin):
+    """(level, line) of each change file under .changes/ that the working tree has and the base has not, naming `plugin`.
     A change file is read by the plugin's own release.py (`read_change`), so the two never disagree on its form."""
     mod = release_module(repo)
     d = os.path.join(repo, ".changes")
-    levels = []
+    found = []
     for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
         rel = ".changes/" + name
         if name == "README.md" or not name.endswith(".md") or git(repo, "cat-file", "-e", "%s:%s" % (base, rel))[0] == 0:
@@ -222,12 +228,12 @@ def added_change_levels(repo, base, plugin):
             continue
         try:
             with open(os.path.join(d, name), encoding="utf-8") as f:
-                plugins, level, _ = mod.read_change(f.read())
+                plugins, level, line = mod.read_change(f.read())
         except (OSError, ValueError, mod.Bad):
             continue
         if plugin in plugins:
-            levels.append(level)
-    return levels
+            found.append((level, line))
+    return found
 
 
 def base_check(repo, given):
@@ -293,7 +299,8 @@ def change_file_check(repo, base, cur, cur_ver, base_t, base_ver, same, lost):
         need = "major" if lost else "minor"
         with open(os.path.join(repo, MANIFEST_REL), encoding="utf-8") as f:
             plugin = json.load(f)["name"]
-        levels = added_change_levels(repo, base, plugin)
+        changes = added_changes(repo, base, plugin)
+        levels = [level for level, _ in changes]
         best = max(levels, key=LEVELS.index) if levels else None
         if best is None or LEVELS.index(best) < LEVELS.index(need):
             why = ("lost %d row(s), first: %s" % (len(lost), " ".join(lost[0]))) if lost else "changed"
@@ -301,11 +308,24 @@ def change_file_check(repo, base, cur, cur_ver, base_t, base_ver, same, lost):
                        % (why, plugin, need, ", ".join(levels) or "none"))
         else:
             print("ok: the surface changed and a change file names %s at %s (needs %s)" % (plugin, best, need))
+        for call in unnamed_calls(lost, [line for _, line in changes]):
+            bad.append("the dependent call `%s` was removed or changed and no change file added under .changes/ names it "
+                       "(its line holds the call in backticks)" % call)
     elif not bad:
         print("ok: the surface is the base's")
     for b in bad:
         print("red: " + b)
     return 1 if bad else 0
+
+
+def unnamed_calls(lost, lines):
+    """The calls of the lost dependent-call rows that no added change file's line names in backticks, each once, in order."""
+    out = []
+    for ident in lost:
+        call = ident[1] if ident[0] == "dep" else None
+        if call is not None and call not in out and not any("`%s`" % call in line for line in lines):
+            out.append(call)
+    return out
 
 
 def carried_check(kind, cur, base_t, same):

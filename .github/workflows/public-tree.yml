@@ -25,8 +25,9 @@ jobs:
   public-tree:
     name: public-tree
     if: github.event.repository.private && (github.event_name == 'push' || github.event.pull_request.draft == false)
-    # Light gate runner when CI_GATE_RUNNER is set, else CI_RUNNER, else GitHub-hosted
-    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+    # Light gate runner when CI_GATE_RUNNER is set, else CI_RUNNER; the same on every job: a private repository with neither variable fails at once
+    # (a self-hosted runner only serves a private repository), the public repository (no runner) uses GitHub-hosted ubuntu-latest
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}
     timeout-minutes: 10
     steps:
       # Full history: the base's baseline is read from git. On a pull request the checkout is the test-merge commit (what merges).

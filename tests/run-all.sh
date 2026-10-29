@@ -3,20 +3,28 @@
 # Chạy MỌI suite của repo: bash tests/run-all.sh
 # =============================================================================
 # Không cần secret, không cần repo nào khác, không cần checkout của hub, không đặt VIBEMAESTRO_HUB.
-#   bash tests/run-all.sh                 chạy tất cả tests/test-*.sh, song song (số job mặc định từ số CPU, trần 8)
+#   bash tests/run-all.sh                 chạy tất cả tests/test-*.sh, song song (số job mặc định từ số CPU, trần 8; under a cgroup v2 CPU
+#                                         quota, at most that many CPUs: nproc shows the node's CPUs in a pod, not the quota)
 #   bash tests/run-all.sh hook thu-tuc    chỉ các suite có tên chứa một trong các từ đó
 #   bash tests/run-all.sh --changed <base> [--head <ref>]
 #                                         only the suites tests/plan.py plans for the diff from the merge-base of <base> to <head>
 #                                         (no --head: the working tree, uncommitted and untracked files included); exact names, the
 #                                         planner's `plan:` line printed first. The planner exits non-zero, or names a suite with no
 #                                         file here: the full suite runs. Not with filter words. Without --changed: as before.
+#                                         <base> `@merge-parent:<pr head>` (test.yml on a PR): from the first parent of the merge
+#                                         commit checked out, full when HEAD is not a two-parent merge of <pr head> (tests/plan.py)
 #   bash tests/run-all.sh --jobs N …      N job song song; --jobs 1 = tuần tự đúng thứ tự cũ (bảng chữ cái)
 #   RUN_ALL_JOBS=N bash tests/run-all.sh  như --jobs N (cờ thắng biến)
 #   PLUGIN_REQUIRE_CLAUDE=1 bash …        thiếu CLI `claude` thì ĐỎ (mặc định: phần CLI SKIP, kêu to)
 #   RUN_ALL_SUITE_DIR=<dir>               chỉ dành cho tests/test-run-all.sh: thư mục chứa test-*.sh thay cho thư mục này
 #   RUN_ALL_PLANNER=<file>                only for tests/test-run-all.sh: the planner script run instead of tests/plan.py
-# Every suite gets RUN_ALL_MODE, always set here (an inherited value is overwritten): `plan` under --changed (test.yml on a PR and a
-# push to main, a worker's local run; also when the planner falls back to the full suite), `full` otherwise (the scheduled
+#   RUN_ALL_CGROUP_DIR=<dir>              only for tests/test-run-all.sh: the cgroup v2 directory read instead of /sys/fs/cgroup
+# Before its last line (and when INT/TERM stops it) the run prints `resources: …`: the jobs and why, and where the files exist the OOM
+# kills during the run (memory.events), the cgroup's memory and pids peaks with their limits (peaks since the cgroup began, not only
+# this run: on CI the job's container) and kernel.pid_max. Why: a suite stopped by SIGKILL (137) is an OOM only if that count moved;
+# on the k3s runner an OOM kills the whole container (memory.oom.group), not one step.
+# Every suite gets RUN_ALL_MODE, always set here (an inherited value is overwritten): `plan` under --changed (test.yml on a PR, a
+# worker's local run; also when the planner falls back to the full suite), `full` otherwise (the scheduled
 # test-full.yml, `bash tests/run-all.sh`).
 # A suite may leave its slow mutation-style checks (planted breaks) to the full run; only the exact value `plan` may skip them, so a
 # suite run alone, with no RUN_ALL_MODE, runs everything.
@@ -56,11 +64,24 @@ if [ "$CHANGED" = 0 ] && [ -n "$HEAD_REF" ]; then echo "FAIL: --head only goes w
 if [ "$CHANGED" = 1 ] && [ ${#FILTER[@]} -gt 0 ]; then echo "FAIL: --changed does not take filter words (${FILTER[*]})"; exit 2; fi
 if [ "$CHANGED" = 1 ]; then RUN_ALL_MODE=plan; else RUN_ALL_MODE=full; fi
 export RUN_ALL_MODE
+CGROUP_DIR=${RUN_ALL_CGROUP_DIR:-/sys/fs/cgroup}
 if [ -z "$JOBS" ]; then
   # CPU count (Linux, macOS), capped: more jobs than this only adds contention for the few slow suites.
   JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
   case "$JOBS" in ''|*[!0-9]*) JOBS=2;; esac
-  [ "$JOBS" -le 8 ] || JOBS=8
+  JOBS_WHY="$JOBS CPUs"
+  # A cgroup v2 CPU quota (cpu.max: "<quota> <period>", or "max <period>" for none) below that: no more suites than the CPUs the run
+  # may use. Past the quota the suites are throttled, which widens every timing race (measured: 8 jobs on a 6-CPU runner pod).
+  if { read -r CPU_Q CPU_P < "$CGROUP_DIR/cpu.max"; } 2>/dev/null; then
+    case "$CPU_Q.$CPU_P" in
+      *[!0-9.]*|.*|*.|*.0) ;;
+      *) CPU_N=$((CPU_Q / CPU_P)); [ "$CPU_N" -ge 1 ] || CPU_N=1
+         if [ "$CPU_N" -lt "$JOBS" ]; then JOBS_WHY="cpu quota $CPU_N of $JOBS CPUs"; JOBS=$CPU_N; fi;;
+    esac
+  fi
+  if [ "$JOBS" -gt 8 ]; then JOBS_WHY="cap 8 of $JOBS_WHY"; JOBS=8; fi
+else
+  JOBS_WHY="asked"
 fi
 case "$JOBS" in ''|*[!0-9]*|0) echo "FAIL: số job phải là số nguyên dương, được '$JOBS'"; exit 2;; esac
 
@@ -70,6 +91,19 @@ RUNNER_TMP_OWN=""
 if [ -n "${RUNNER_TEMP:-}" ] && [ -z "${TMPDIR:-}" ] && [ -d "$RUNNER_TEMP" ]; then
   if RUNNER_TMP_OWN=$(mktemp -d "$RUNNER_TEMP/run-all.XXXXXX" 2>/dev/null); then export TMPDIR="$RUNNER_TMP_OWN"; else RUNNER_TMP_OWN=""; fi
 fi
+
+# what the run had and used, from the cgroup v2 files that exist (none outside Linux): one line printed before the last one
+OOM_BEFORE=$(awk '$1 == "oom_kill" {print $2}' "$CGROUP_DIR/memory.events" 2>/dev/null)
+mib() { case "$1" in ''|*[!0-9]*) echo "$1";; *) echo "$(($1 / 1048576)) MiB";; esac; }
+resources() {
+  local line="resources: jobs $JOBS ($JOBS_WHY)" f v a
+  f=$CGROUP_DIR/memory.peak; [ -r "$f" ] && line="$line; cgroup memory peak $(mib "$(cat "$f")") of $(mib "$(cat "$CGROUP_DIR/memory.max" 2>/dev/null)")"
+  a=$(awk '$1 == "oom_kill" {print $2}' "$CGROUP_DIR/memory.events" 2>/dev/null)
+  case "$OOM_BEFORE.$a" in *[!0-9.]*|.*|*.) ;; *) line="$line; oom kills $((a - OOM_BEFORE))";; esac
+  f=$CGROUP_DIR/pids.peak; [ -r "$f" ] && line="$line; cgroup pids peak $(cat "$f") of $(cat "$CGROUP_DIR/pids.max" 2>/dev/null)"
+  v=$(cat /proc/sys/kernel/pid_max 2>/dev/null) && line="$line; pid_max $v"
+  echo "$line"
+}
 
 # Each suite leaves its "ok fail" counts here (lib.sh summary); tests/test-ledger.sh reads them rather than running the suites again.
 SUITE_RESULTS_DIR=$(mktemp -d); export SUITE_RESULTS_DIR
@@ -109,7 +143,7 @@ cleanup() { rm -rf "$SUITE_RESULTS_DIR" "$OUTDIR" ${RUNNER_TMP_OWN:+"$RUNNER_TMP
 trap cleanup EXIT
 PIDS=()
 # On INT/TERM the running suites are stopped too (not only run-all): a CI timeout must not leave orphans writing into a removed tree.
-stop() { local p; for p in ${PIDS[@]+"${PIDS[@]}"}; do kill -TERM "$p" 2>/dev/null; done; for p in ${PIDS[@]+"${PIDS[@]}"}; do wait "$p" 2>/dev/null; done; guard_check; exit "$1"; }
+stop() { local p; for p in ${PIDS[@]+"${PIDS[@]}"}; do kill -TERM "$p" 2>/dev/null; done; for p in ${PIDS[@]+"${PIDS[@]}"}; do wait "$p" 2>/dev/null; done; guard_check; resources; exit "$1"; }
 trap 'stop 130' INT
 trap 'stop 143' TERM
 
@@ -163,7 +197,7 @@ if [ "$TOTAL" -gt 0 ]; then
     # `ledger` once all the others are done. Why: the longest suite sets the wall time of the run only if it starts early; in
     # alphabetical order a 40-minute suite started after the first 50 and the run met its 45-minute timeout.
     # The list is a launch order only, never a filter: a name that is not in this run (a filter, a plan) is skipped.
-    SLOW_FIRST=(plugin-version baton baton-gh-write config)
+    SLOW_FIRST=(merge-guard plugin-version baton baton-gh-write config)
     ORDER=(); LEDGER=-1
     for n in "${SLOW_FIRST[@]}"; do
       for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = "$n" ] && ORDER+=("$i"); done
@@ -199,6 +233,7 @@ if [ "$TOTAL" -gt 0 ]; then
   fi
 fi
 
+resources
 echo "################"
 if [ "$TOTAL" -eq 0 ]; then echo "FAIL: không suite nào được chạy"; exit 1; fi
 RED=()

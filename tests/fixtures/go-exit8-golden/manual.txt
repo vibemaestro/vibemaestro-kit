@@ -1,0 +1,14 @@
+== OWNER DECISION: plain.sh needs the owner's signature; nothing was signed, nothing ran
+  What:     1 write to the file named by the first argument
+              1. create <W>/o.txt
+  Why:      example act, replace it: create one file holding the given text
+  Blast:    that one file; nothing else is read or written
+  Undo:     removes the file, only while it holds exactly the text this act writes
+  Stop:     mode manual (not chosen yet): ask the owner once which mode; auto is recommended on a solo machine (help modes)
+  Mode:     on the owner's answer the session runs `python3 <P>/scripts/baton.py mode <answer>` alone in its Bash call; the plugin's hook opens the owner's dialog
+  Checked:  check ok; rehearse ok; plan matches Expect (1 of 1 line); 1 write
+detail: <W>/state/vibemaestro/baton/runs/<STAMP>-plain-owner.log (check and rehearse output)
+script: <W>/plain.sh
+on the owner's go: python3 <P>/scripts/baton.py sign --by owner --seal <SEAL> <W>/plain.sh <W>/o.txt hello
+then:              python3 <P>/scripts/baton.py run <W>/plain.sh <W>/o.txt hello
+go: stopped after rehearse (exit 8, waiting for the owner): the mode is manual: only the owner signs (`baton mode` shows it; the owner sets it)

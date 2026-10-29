@@ -490,12 +490,12 @@ def fx_planner(fx, a):
 def fx_auto(fx, a):
     """GitHub's REST view of the PR for --behind auto: merge_commit_sha TM with the parents (B, H) and mergeable true. `a`:
     conflict (fresh, mergeable false), conflict-null (no test merge at all, mergeable false), stale (TM's parents are an
-    older base on every read), late (TM_OLD of an older base, then no test merge, then TM fresh: the third read)."""
+    older base on every read), stale-conflict (stale, and mergeable false), late (TM_OLD of an older base, then no test merge, then TM fresh: the third read)."""
     key = R + "pulls/%d" % PR
     pr = dict(fx["api"].get(key) or {"number": PR}, merge_commit_sha=TM if a != "conflict-null" else None,
-              mergeable=a not in ("conflict", "conflict-null"))
+              mergeable=a not in ("conflict", "conflict-null", "stale-conflict"))
     fx["api"].setdefault(R + "git/commits/" + TM, {"sha": TM, "parents": [{"sha": B}, {"sha": H}]})
-    if a == "stale":
+    if a in ("stale", "stale-conflict"):
         fx["api"][R + "git/commits/" + TM] = {"sha": TM, "parents": [{"sha": S2}, {"sha": H}]}
     if a == "late":
         fx["api"][R + "git/commits/" + TM_OLD] = {"sha": TM_OLD, "parents": [{"sha": S2}, {"sha": H}]}
@@ -507,6 +507,15 @@ def fx_base_also(fx, a):
     """main also changed these files (comma-separated), which the PR does not touch."""
     c = fx["api"][R + "compare/%s...%s" % (H, B)]
     c["files"] = (c.get("files") or []) + [{"filename": f, "status": "modified"} for f in a.split(",")]
+    c["ahead_by"] = max(c.get("ahead_by") or 0, 1)
+
+
+def fx_base_rename(fx, a):
+    """main renamed `<old>>new[:status]` since the merge base, which the PR does not touch."""
+    old, new = a.split(">")
+    new, _sep, status = new.partition(":")
+    c = fx["api"][R + "compare/%s...%s" % (H, B)]
+    c["files"] = (c.get("files") or []) + [{"filename": new, "previous_filename": old, "status": status or "renamed"}]
     c["ahead_by"] = max(c.get("ahead_by") or 0, 1)
 
 
@@ -554,12 +563,13 @@ def fx_bootstrap(fx, a):
     """main has no config; the PR adds it (the skill's deny globs, the rules directory init writes, admin bypass and the image lane
     on) and a rules file under .vibemaestro/. `a`: empty-deny (the added config denies nothing), modified (the
     PR modifies the config instead of adding it), external (the added config names an external CI adapter), no-deny (it sets
-    no merge.deny_globs), workflow (the PR also adds a workflow, which the added deny globs refuse)."""
+    no merge.deny_globs), workflow (the PR also adds a workflow, which the added deny globs refuse), policies (the rules
+    directory is .vibemaestro/policies, with its README as the scaffold)."""
     head = cfg_of(fx)                               # the base's rules, and a forged grant: admin bypass and the image lane on
     del fx["api"][CFG + B]
     head["merge"]["admin_bypass"] = True
     head["merge"]["image_bump"]["enabled"] = True
-    head["rules"] = {"dirs": [".vibemaestro/rules"]}
+    head["rules"] = {"dirs": [".vibemaestro/policies" if a == "policies" else ".vibemaestro/rules"]}
     if a == "empty-deny":
         head["merge"]["deny_globs"] = []
     if a == "external":
@@ -568,7 +578,7 @@ def fx_bootstrap(fx, a):
         head = {"schema": 1}
     fx["api"][CFG + H] = json.dumps(head)
     add_file(fx, ".vibemaestro/sdlc.json", status="modified" if a == "modified" else "added")
-    add_file(fx, ".vibemaestro/rules/README.md")
+    add_file(fx, ".vibemaestro/%s/README.md" % ("policies" if a == "policies" else "rules"))
     if a == "workflow":
         add_file(fx, ".github/workflows/ci.yml")
 
@@ -578,6 +588,12 @@ def fx_rules_dirs(fx, a):
     cfg = cfg_of(fx)
     cfg["rules"] = {"dirs": a.split(",")}
     set_cfg(fx, cfg)
+
+
+def fx_config_file(fx, a):
+    """the base config is the file `a` (a config `kb.py init` wrote), not the skill's list plus the fixture's own globs."""
+    with open(a, encoding="utf-8") as f:
+        fx["api"][CFG + B] = f.read()
 
 
 def fx_ledger(fx, a):

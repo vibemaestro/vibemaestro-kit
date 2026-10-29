@@ -107,6 +107,7 @@ Skill được gọi theo tên, `vibemaestro-sdlc:<tên>`. Chúng ghi vào `kb/`
 | `batonrun` | Chạy một hành động ghi ra ngoài phiên thành một baton script: kiểm, diễn tập, ký, chạy, kiểm sau, ghi log. | merge, đẩy registry, xóa, force-push, đổi cấu hình plugin của người dùng |
 | `coordinator-bootstrap` | Dựng một máy cho BatonRun trong một run do chủ ký: launcher và khối quyền. | một máy mới, hoặc kiểm quyền lúc mở phiên báo lỗi |
 | `local-parallel` | Chạy nhiều việc cùng lúc trên một máy: mỗi việc một subagent (worktree riêng, `intake` đến PR nháp, model `agents.worker_model`); phiên chính giữ hàng đợi, chuyển lời duyệt spec, hậu kiểm từng PR và merge bằng `kit:merge-pr`. | người dùng muốn làm nhiều việc song song |
+| `owner-sign` | Chỉ chủ gọi (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): liệt kê các run baton mà một phiên đã xếp hàng chờ chữ ký của chủ (`go --queue`) và mở một hộp thoại của chủ cho mỗi mục được chọn, trong phiên của chính chủ. | có run đang chờ chủ ký trong hàng chờ |
 
 Các cách đọc `kb/` mà không nạp cả file: `kb.py find <từ khóa>`, `kb.py list [--type T] [--status S]`, `kb.py outline <file>`. Cả ba chỉ đọc.
 
@@ -214,6 +215,7 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | `schema` | `1` | Số schema của config, phiên bản lớn của định dạng. Plugin từ chối số lớn hơn của nó và nêu lệnh cập nhật cần chạy. |
 | `hooks` | `"auto"` | `"off"` làm mọi hook của plugin im. |
 | `language` | `"vi"` | `"vi"` hoặc `"en"`: ngôn ngữ của tên mục spec, tiêu đề thân PR và các dòng luồng. `kb.py init` ghi khoá này vào mọi config mới, `"en"` nếu không được trả lời, nên chỉ config tạo từ trước mới dùng mặc định. |
+| `update_check` | `true` | `false` tắt lời nhắc cập nhật của bản cài public trong repo này, cho vibemaestro-sdlc và vibemaestro-brain (xem README của kit, mục Cập nhật). |
 | `branch.intent_prefix` | `"intent/"` | Tiền tố của branch intent. |
 | `branch.protected` | `["main", "master"]` | Các branch không bao giờ là head của PR và không bao giờ bị tính là chết. |
 | `branch.pattern` | `null` | Regex mà branch head ngoài tiền tố intent phải khớp. Do `pr-title` dùng. |
@@ -265,7 +267,7 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | `sensitive.scan` | `["pr_body", "pr_comments", "commit_messages"]` | Những gì `pr-sensitive` quét. |
 | `dead_branches.max_merged_on_remote` | `0` | Số branch remote đã merge mà còn sống tối đa trước khi `dead-branches` đỏ. |
 | `ci.runner_var` | `"CI_RUNNER"` | Tên biến repo chọn nhãn runner của các workflow đã cài. Các job cổng đã cài đọc trước biến tùy chọn `CI_GATE_RUNNER` (runner nhẹ cho các cổng) và lùi về biến này. |
-| `ci.runner_default` | `"ubuntu-latest"` | Nhãn runner khi biến đó chưa đặt. |
+| `ci.runner_default` | `"ubuntu-latest"` | Nhãn runner khi biến đó chưa đặt. Giá trị `"self-hosted only"` nghĩa là không có nhãn dự phòng: các workflow đã cài không ghi nhãn nào, và một lần chạy mà cả hai biến đều chưa đặt thì lỗi ngay từ đầu với thông báo nêu tên biến, thay vì chờ một máy hosted không bao giờ tới (cho tổ chức chỉ chạy runner self-hosted). Giá trị khác không phải nhãn (`[A-Za-z0-9._-]+`) thì cảnh báo, và install-gates từ chối. |
 | `ci.backend` | `"github-actions"` | Backend CI mà cổng merge có bảo vệ đọc check từ đó: `github-actions` (giá trị dựng sẵn duy nhất) hoặc `external:<đường dẫn>`. Các workflow đã cài là GitHub Actions trong cả hai trường hợp. |
 | `merge.deny_globs` | `null` | Các đường dẫn mà cổng merge có bảo vệ từ chối ở làn thường. `null` nghĩa là chưa đặt, và cổng từ chối chạy; `[]` là một câu trả lời hợp lệ. `kb.py init` ghi ba glob. |
 | `merge.admin_bypass` | `false` | `true` cho phép `--admin` ở cổng merge có bảo vệ. Nó không đổi điều kiện nào. |
@@ -313,12 +315,14 @@ Mục này áp dụng cho repo xuất bản plugin, như chính kit. Repo ứng 
   ---
   plugins: vibemaestro-sdlc
   level: patch
+  upgrade: Tuỳ chọn: điều người dùng hiện có phải làm hay sẽ thấy khi cập nhật.
   ---
   Một dòng mà người dùng plugin đã cài hiểu được: điều gì đổi với họ.
   ```
 
-  `level` là `patch` cho một bản vá, `minor` cho một tính năng, `major` cho thay đổi phá vỡ (với plugin này, một hàng của `CONTRACT.md` bị xóa hoặc đổi tên). Plugin 0.x được phép phá vỡ trong một bản minor.
-- **PR release** (skill `release`, do hàng release của plan khởi động) biến mọi file thay đổi đang chờ thành một bước version cho mỗi plugin, ghi các mục `CHANGELOG.md`, và đặt `Frozen at` trong `CONTRACT.md` khi bề mặt của nó đã đổi.
+  `level` là `patch` cho một bản vá, `minor` cho một tính năng, `major` cho thay đổi phá vỡ (với plugin này, một hàng của `CONTRACT.md` bị xóa hoặc đổi tên). Plugin 0.x được phép phá vỡ trong một bản minor. `upgrade` là tuỳ chọn; một file thay đổi đang chờ chỉ được sửa để thêm hay đổi dòng đó.
+- **PR release** (skill `release`, do hàng release của plan khởi động) biến mọi file thay đổi đang chờ thành một bước version cho mỗi plugin, ghi các mục `CHANGELOG.md` (các dòng `upgrade` dưới `### Upgrade notes`), và đặt `Frozen at` trong `CONTRACT.md` khi bề mặt của nó đã đổi. `release.py notes <plugin> <version>` in thân của bản phát hành công khai của version đó: mục CHANGELOG của nó và cách cập nhật.
+- **Một lần gộp** (`cut --fold --public <owner/name>`) dành cho một release đã cắt mà chưa công bố: các file thay đổi đang chờ vào mục `CHANGELOG.md` của chính version đó thay vì nâng version. Tag `<plugin>--v<version>` của repo công khai cho biết version đã công bố chưa; khi tag đã có, lần gộp bị từ chối.
 - **PR hotfix** rẽ từ nhánh `release`, nên tính năng chưa phát hành không bao giờ đi theo. Nó nâng một bản patch. Một PR back-merge từ `backmerge/<sha12>` đưa nó về main và merge bằng merge commit, không bao giờ squash.
 - **Sau khi một trong hai merge**, một baton script do bạn ký dời nhánh `release` tới commit release, hoặc, sau một hotfix, đẩy `backmerge/<sha12>` và mở pull request của nó; repo công bố bản phát hành theo cách riêng của mình. Bản phát hành công khai của chính kit ghi version đã phát hành của từng plugin vào `plugin.json` của nó và gắn tag `<plugin>--v<version>`.
 - Main luôn sẵn sàng phát hành sau mỗi lần merge, vì một release ship mọi file thay đổi đang chờ.
@@ -330,6 +334,7 @@ python3 "$SDLC/scripts/release.py" check          # thay đổi này có là tha
 python3 "$SDLC/scripts/release.py" plan           # một lần cắt sẽ làm gì ở đây
 python3 "$SDLC/scripts/release.py" cut            # ghi cây làm việc thành một release
 python3 "$SDLC/scripts/release.py" cut --hotfix   # tương tự cho một hotfix
+python3 "$SDLC/scripts/release.py" cut --fold --public <owner/name>   # gộp các file thay đổi đang chờ vào một version đã cắt mà chưa công bố
 ```
 
 `release.py check` chạy trong CI. Nó thoát 0 khi thay đổi khớp loại của nó, 1 khi đỏ, 3 khi phép kiểm không chạy được ở máy cục bộ (trong CI trường hợp đó là đỏ), 64 khi dùng sai.

@@ -31,8 +31,12 @@ cenv() {
 # reuse a path.
 fresh() { mktemp -d "$TMP/f.XXXXXX"; }
 
-# mk_plugin_copy <dir> — a copy of the real plugin, bytecode removed.
-mk_plugin_copy() { cp -r "$PLUGIN" "$1"; find "$1" -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null; }
+# mk_plugin_copy <dir> — a copy of the real plugin, bytecode removed; isolated from the machine (baton_isolate) in a suite that
+# signs as the owner and so defines it.
+mk_plugin_copy() {
+  cp -r "$PLUGIN" "$1"; find "$1" -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null
+  if declare -F baton_isolate >/dev/null; then baton_isolate "$1"; fi
+}
 
 # mutate <file> <old> <new> — replace exactly one occurrence; red when the anchor is gone, so a change of the core cannot
 # turn a planted break into a silent no-op.
@@ -74,6 +78,7 @@ expect_red() {
   local label=$1 fam=$2 dir=$3 needle=$4 rf QN QLAB crc scratch b
   rf=$(mktemp "${TMPDIR:-/tmp}/expect-red.XXXXXX"); scratch=$(mktemp -d "${TMPDIR:-/tmp}/er-scratch.XXXXXX")
   capped _expect_red_run "$fam" "$dir" "$needle" "$rf" "$scratch"; crc=$?
+  chmod -R u+w "$scratch" 2>/dev/null          # a baton's input copies are read-only (0400 in a 0500 directory)
   rm -rf "$scratch"
   case "$dir" in "$TMP"/break-*) b=${dir#"$TMP"/}; rm -rf "$TMP/${b%%/*}";; esac
   if cap_red "$crc" "break [$label]"; then rm -f "$rf"; return 0; fi

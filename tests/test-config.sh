@@ -80,6 +80,7 @@ fam_defaults() {
   rm -f "$PT/.vibemaestro/sdlc.json"
   J0=$(prd --closes 7 2>/dev/null); eq "$(pj "$J0" body | head -1)" "Closes #7" "[D2] …--closes writes the word Closes"
   eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; print(C.defaults()["kb"]["spec_warn_bytes"])' "$PLX/scripts")" 40000 "[D3] the default spec size warning is 40000 bytes"
+  eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; print(C.defaults()["ci"]["runner_default"])' "$PLX/scripts")" "ubuntu-latest" "[D3] the default runner label is still ubuntu-latest (the self-hosted-only form is opt-in)"
   eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; print(C.defaults()["commits"]["round_pattern"])' "$PLX/scripts")" '\bround\s*(\d+)\b' "[D3] the default round pattern is the English 'round N' (group 1 = the number)"
   eq "$(python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; print(C.defaults()["current_state"]["limits"]["lines"], C.defaults()["current_state"]["limits"]["bytes"], C.defaults()["current_state"]["limits"]["line_chars"])' "$PLX/scripts")" "120 12000 200" "[D3] the effective current-state limits are today's (120, 12000, 200)"
   eq "$(cd "$TMP" && cenv python3 "$PLX/scripts/sdlc_config.py" get agents.review_model --root "$(fresh)") $(cd "$TMP" && cenv python3 "$PLX/scripts/sdlc_config.py" get agents.search_model --root "$(fresh)") $(cd "$TMP" && cenv python3 "$PLX/scripts/sdlc_config.py" get agents.worker_model --root "$(fresh)")" "opus haiku sonnet" "[D4] no config: sdlc_config.py get agents.* prints the review, search and worker defaults (opus, haiku, sonnet)"
@@ -157,6 +158,12 @@ fam_validate() {
   vcase "token list with a non-string" '{"tokens": {"no_state_change": [1]}}' 'tokens.no_state_change[0]'
   vcase "sensitive scan with an unknown scope" '{"sensitive": {"scan": ["pr_body", "emails"]}}' 'sensitive.scan[1]'
   vcase "runner variable that is not an identifier" '{"ci": {"runner_var": "1a"}}' ci.runner_var
+  vcase "ci.runner_default: a runner label" '{"ci": {"runner_default": "team-runners"}}' 'quiet:is not a runner label'
+  vcase "ci.runner_default: the self-hosted-only form is a valid value, with no warning" '{"ci": {"runner_default": "self-hosted only"}}' 'quiet:is not a runner label'
+  vcase "ci.runner_default: neither a label nor the form (a near miss) warns, install-gates refuses it" '{"ci": {"runner_default": "self hosted"}}' 'warn:ci.runner_default: is not a runner label'
+  vcase "ci.runner_default: the warning names the form" '{"ci": {"runner_default": "self hosted"}}' 'warn:"self-hosted only"'
+  vcase "ci.runner_default: empty" '{"ci": {"runner_default": ""}}' ci.runner_default
+  vcase "ci.runner_default: null (an older reader refuses it too)" '{"ci": {"runner_default": null}}' ci.runner_default
   vcase "rebase identity with only a name" '{"rebase": {"identity": {"name": "ci"}}}' rebase.identity.email
   vcase "intent prefix with a space" '{"branch": {"intent_prefix": "a b/"}}' branch.intent_prefix
   vcase "intent prefix with an empty segment" '{"branch": {"intent_prefix": "intent//"}}' branch.intent_prefix
@@ -644,6 +651,25 @@ fam_merge() {
   eq "$out" "false" "[M] the plugin default of merge.admin_bypass is false"
   out=$(cd "$TMP" && cenv python3 "$PLX/scripts/sdlc_config.py" get merge.planner --default 2>&1)
   eq "$out" "null" "[M] the plugin default of merge.planner is null (no planner: --behind auto takes its docs-only fallback)"
+  # the deny floor follows the config's rules.dirs: merge_deny_floor(dirs) is the default plus <dir>/** for each folder under .vibemaestro/
+  fl() { (cd "$TMP" && cenv python3 -I -B -c 'import json, sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+import sdlc_config as C
+try:
+    got, base = list(C.merge_deny_floor(json.loads(sys.argv[2]))), list(C.MERGE_DENY_DEFAULT)
+except AttributeError:
+    print("no merge_deny_floor"); sys.exit()
+print(json.dumps(got[len(base):]) if got[:len(base)] == base else "not the default first")' "$PLX" "$1" 2>&1); }
+  eq "$(fl '[]')" "[]" "[M] floor: no rules.dirs gives the default and nothing more"
+  eq "$(fl '[".vibemaestro/rules"]')" "[]" "[M] floor: the scaffold's rules folder is in the default already (the init-kb list stays equal)"
+  eq "$(fl '[".vibemaestro/policies"]')" '[".vibemaestro/policies/**"]' "[M] floor: a rules folder under .vibemaestro/ with another name is added"
+  eq "$(fl '[".vibemaestro/policies/", ".vibemaestro/policies"]')" '[".vibemaestro/policies/**"]' "[M] floor: a trailing slash and a repeat add it once"
+  eq "$(fl '[".vibemaestro"]')" '[".vibemaestro/**"]' "[M] floor: .vibemaestro itself as the rules folder denies the whole directory (the owner's choice)"
+  eq "$(fl '["docs/rules", "kb/rules"]')" "[]" "[M] floor: a folder outside .vibemaestro/ adds nothing"
+  eq "$(fl '[".vibemaestro/a*b", ".vibemaestro/x?y"]')" '[".vibemaestro/a*b/**", ".vibemaestro/x?y/**"]' "[M] floor: * and ? in a folder name stay (it denies that folder and perhaps a neighbour: fail closed)"
+  eq "$(fl '[".vibemaestro/p[1]", ".vibemaestro/q{a}", ".vibemaestro/r]"]')" '[".vibemaestro/p?1?/**", ".vibemaestro/q?a?/**", ".vibemaestro/r?/**"]' "[M] floor: a class or brace character in a folder name becomes ? (the glob language cannot spell it, and a folder must not go undenied)"
+  eq "$(fl '[".vibemaestro/a**b"]')" '[".vibemaestro/a*b/**"]' "[M] floor: a run of * in a name is one *"
+  eq "$(fl '5')|$(fl '"x"')|$(fl '[5, null, ""]')" "[]|[]|[]" "[M] floor: rules.dirs that is not a list of paths adds nothing and does not crash"
 }
 
 FAMILIES="fam_defaults fam_validate fam_merge fam_exit fam_activation fam_hooks_warn fam_rules fam_check fam_knobs fam_timing"
@@ -670,6 +696,8 @@ BRK planner-script-unchecked fam_merge '[V] merge: a planner script outside the 
 BRK deprecation-unnoted fam_knobs '[V] pr.flow (deprecated): valid, with a warning that names it: a warning names' sdlc_config.py '        if not d.get("removed") and _lookup(data, key)[0]:' '        if False:'
 BRK unknown-key-refused fam_validate '[V] unknown key: a warning, not a problem (rule config-compat): valid, rc 0' sdlc_config.py '            out.append((_safe(dotted), Note(_deprecation_note(dotted, gone) if gone and gone.get("removed") else UNKNOWN_NOTE)))' '            out.append((dotted, "unknown key"))'
 BRK unknown-key-silent fam_validate "[V] unknown key: a warning, not a problem (rule config-compat): a warning names" kb.py '        lines = ["WARNING %s: %s" % (k, why) for k, why in C.load_notes(root)] + lines' '        pass'
+BRK runner-default-form-noted fam_validate '[V] ci.runner_default: the self-hosted-only form is a valid value, with no warning' sdlc_config.py '    if _text(rd) and rd != RUNNER_SELF_HOSTED_ONLY and not RUNNER_LABEL.fullmatch(rd):' '    if _text(rd) and not RUNNER_LABEL.fullmatch(rd):'
+BRK runner-default-near-miss-silent fam_validate '[V] ci.runner_default: neither a label nor the form (a near miss) warns, install-gates refuses it: a warning names' sdlc_config.py '    if _text(rd) and rd != RUNNER_SELF_HOSTED_ONLY and not RUNNER_LABEL.fullmatch(rd):' '    if False:'
 BRK wrong-type-ignored fam_validate '[V] a known key with a wrong type still refuses: rc 65' sdlc_config.py '    probs = [p for p in out if not isinstance(p[1], Note)]' '    probs = []'
 BRK kb-warn-zero-accepted fam_validate '[V] kb.spec_warn_bytes zero: rc 65' sdlc_config.py '    "kb": ("obj", {"spec_warn_bytes": ("intnull", 1)}),' '    "kb": ("obj", {"spec_warn_bytes": ("intnull", 0)}),'
 BRK newer-schema-accepted fam_validate "[V] schema above the plugin's: rc 65" sdlc_config.py 'if _is_int(schema) and schema > SCHEMA:' 'if False:'
@@ -691,6 +719,8 @@ BRK merge-glob-dotdot-accepted fam_merge '[V] merge: a deny glob with ..: rc 65'
 BRK merge-glob-class-accepted fam_merge '[V] merge: a deny glob with a class: rc 65' sdlc_config.py 'any(c in g for c in GLOB_BAD_CHARS)' 'False'
 BRK merge-glob-starstar-accepted fam_merge '[V] merge: a deny glob with ** inside a segment: rc 65' sdlc_config.py '    return all("**" not in seg or seg == "**" for seg in segs)' '    return True'
 BRK merge-lane-without-registry fam_merge '[V] merge: the lane on without a registry: rc 65' sdlc_config.py '    if v.get("enabled") is True and v.get("registry") is None:' '    if False:'
+BRK merge-floor-class-skipped fam_merge '[M] floor: a class or brace character in a folder name becomes ?' sdlc_config.py 'g = re.sub(r"\*+", "*", re.sub(r"[\[\]{}]", "?", norm)) + "/**"' 'g = norm + "/**"'
+BRK merge-floor-ignores-dirs fam_merge '[M] floor: a rules folder under .vibemaestro/ with another name is added' sdlc_config.py '    return list(MERGE_DENY_DEFAULT) + extra' '    return list(MERGE_DENY_DEFAULT)'
 BRK merge-deny-default-open fam_merge '[M] the plugin default of merge.deny_globs is null' sdlc_config.py '"merge": {"deny_globs": None,' '"merge": {"deny_globs": [],'
 BRK merge-log-any-path fam_merge '[V] merge: a log path into a subdirectory (the baton state is one): rc 65' sdlc_config.py 'if v is not None and (not isinstance(v, str) or not _LOG_NAME.fullmatch(v) or v.lower() == "baton"):' 'if v is not None and not _rel_ok(v):'
 BRK adapter-path-unnormalised fam_merge '[V] ci: an external CI adapter path with a ./ segment' sdlc_config.py '(v.startswith("external:") and _git_path_ok(v[len("external:"):]) and not v.endswith("/"))' '(v.startswith("external:") and _rel_ok(v[len("external:"):]))'

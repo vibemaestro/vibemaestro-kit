@@ -9,7 +9,8 @@
 # .vibemaestro/sdlc.json ({} on the public export, which does not carry it) and future-keys.json (keys a newer plugin may define): no problem, one note per unknown key. A known key
 # with a wrong type and a newer schema still refuse. The plugin's reader also gets old configs, and its schema is compared with
 # the floor's: a key the floor reads that vanished or changed type must be listed in DEPRECATED. The checks themselves are
-# tests/fixtures/config_compat/compat_check.py; each family runs on the real plugin, then on a copy with one planted break.
+# tests/fixtures/config_compat/compat_check.py; each family runs on the real plugin, then on a copy with one planted break. The
+# deny family holds the default deny globs (row d, Q2a): only .vibemaestro/batons/** left the default; an own list is kept.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -54,6 +55,7 @@ fam_forward()    { PLX=$1; compat forward; }
 fam_backward()   { PLX=$1; compat backward; }
 fam_deprecated() { PLX=$1; compat deprecated; }
 fam_migrate()    { PLX=$1; compat migrate; }
+fam_deny()       { PLX=$1; compat deny; }
 
 # the command line a person runs: kb.py config check warns and exits 0, a newer schema exits 65 naming the update
 fam_cli() {
@@ -76,7 +78,7 @@ fam_cli() {
   has "$out" "claude plugin update vibemaestro-sdlc@vibemaestro" "[C] …naming the update to run"
 }
 
-FAMILIES="fam_forward fam_backward fam_deprecated fam_migrate fam_cli"
+FAMILIES="fam_forward fam_backward fam_deprecated fam_migrate fam_cli fam_deny"
 
 echo "== the real plugin =="
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
@@ -140,6 +142,14 @@ BRK problem-key-raw fam_forward '[F] plugin reader: …a problem key from the fi
   '    return [(_safe(k), why) for k, why in probs], notes' '    return probs, notes'
 BRK cli-note-silent fam_cli '[C] …a WARNING line names the unknown section' scripts/kb.py \
   '        lines = ["WARNING %s: %s" % (k, why) for k, why in C.load_notes(root)] + lines' '        pass'
+BRK deny-batons-kept fam_deny '[D] the default leaves .vibemaestro/batons/merge-x.sh' scripts/sdlc_config.py \
+  'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/**", "**/*secret*")'
+BRK deny-config-open fam_deny '[D] the default denies .vibemaestro/sdlc.json' scripts/sdlc_config.py \
+  'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")'
+BRK deny-gates-open fam_deny '[D] the default denies .vibemaestro/gates/x.py' scripts/sdlc_config.py \
+  'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/rules/**", "**/*secret*")'
+BRK deny-own-merged fam_deny '[D] plugin reader: a config that sets merge.deny_globs keeps exactly its list' scripts/sdlc_config.py \
+  '    return _normalise(_merge(_with_preset(data), data))' '    out = _normalise(_merge(_with_preset(data), data)); out["merge"]["deny_globs"] = list(MERGE_DENY_DEFAULT); return out'
 PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
 QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
 ok() { :; }; bad() { QN=$((QN+1)); }

@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
-# Purpose: example act, replace it: create one file holding the given text
-# Targets: the file named by the first argument
+# Purpose: example act, replace it: create one file holding the bytes of an input file
+# Targets: {dest} — the file dest names
 # Blast: that one file; nothing else is read or written
-# Undo: removes the file, only while it holds exactly the text this act writes
+# Undo: removes the file, only while it holds exactly the bytes this act writes
 # Pre: the file is absent (an existing file with other content is refused, never overwritten)
 # Stops: none
+# Params: dest=path body=input
 # Expect: create *
 #
 # A baton script (BatonRun), written by `baton new __NAME__`. Run it only through the baton runner of vibemaestro-sdlc:
-#   python3 <plugin-root>/scripts/baton.py check|rehearse|run __NAME__.sh <args>
-#   python3 <plugin-root>/scripts/baton.py sign --by owner --seal <seal rehearse printed> __NAME__.sh <args>
+#   python3 <plugin-root>/scripts/baton.py check|rehearse|run __NAME__.sh dest='<path>' body='<file>'
+#   python3 <plugin-root>/scripts/baton.py sign --by owner --seal <seal rehearse printed> __NAME__.sh dest='<path>' body='<file>'
 # Each one bare, as its own call: no `cd … &&` before it, no pipe after sign, run or go (a compound command matches no rule).
 # `baton check` reads the header above: Purpose, Targets, Blast, Undo, Pre and Stops once each, and one Expect per planned write
 # (a shell glob, matched in order against the PLAN lines that rehearse prints). Stops is `none`, or a comma list of
 # irreversible-delete, secrets, security-boundary, cluster-lane, history-rewrite, money-org, publish, no-way-back, owner-acts;
 # any of them means only the owner may sign.
+# `# Params:` declares the values a call passes as key='value' words, each checked against its type before anything runs
+# (int, sha40, sha256, name, repo, ref, path, url, file, input, under:<dir>, enum:<a>|<b>). The script reads them once, in the
+# values block below: one top-level `P_<KEY>="$<n>"` per key, in the declared order, then only as "$P_<KEY>". Free text (a
+# title, a body) is an `input` file the session writes for this call; a file value arrives as a read-only copy. Targets are
+# patterns before ` — ` (`{dest}`, `{repo}#{issue}`): every plan line must hold one. `baton pack` keeps a script that ran ok.
 #
 # Phases (baton sets BATON_PHASE; a plain `bash __NAME__.sh` only rehearses):
 #   rehearse   reads and checks, prints one PLAN line per write; nothing changes
@@ -34,7 +40,7 @@
 # Under pipefail, a command whose non-zero exit is normal (diff, grep with no match, cmp) is wrapped in a pipeline:
 #   { diff -u old new || true; } | head -40
 # No `source` of other files: the signature covers this file only. Never pass a secret as an argument: arguments are logged.
-# A privileged command outside write() fails check: it would run in rehearse too. A helper that writes (put_text below) is
+# A privileged command outside write() fails check: it would run in rehearse too. A helper that writes (put_body below) is
 # called only through write(). Each phase runs in a process group of its own with stdin closed: nothing may prompt.
 # bash 3.2 (macOS) runs this file: no associative arrays, no ${var,,}, no mapfile.
 set -euo pipefail
@@ -63,37 +69,29 @@ write() {
 }
 
 # ── arguments and reads: every phase runs them ──
-if [ $# -ne 2 ]; then
-  echo "usage: bash __NAME__.sh <file> <text>" >&2
-  exit 64
-fi
-DEST=$1
-TEXT=$2
-case "$DEST" in
-  /*) ;;
-  *) DEST="$PWD/$DEST" ;;
-esac
+P_DEST="$1"
+P_BODY="$2"
 
 # byte for byte (`$(cat …)` would drop trailing newlines and call a different file the same)
-holds_text() { [ -f "$DEST" ] && cmp -s "$DEST" <(printf '%s\n' "$TEXT"); }
-put_text() { printf '%s\n' "$TEXT" > "$DEST"; }
+holds_body() { [ -f "$P_DEST" ] && cmp -s "$P_DEST" "$P_BODY"; }
+put_body() { cat -- "$P_BODY" > "$P_DEST"; }
 
 # ── the act: every change through write() ──
 act() {
-  if holds_text; then
-    echo "same $DEST (nothing to do)"
+  if holds_body; then
+    echo "same $P_DEST (nothing to do)"
     return 0
   fi
-  if [ -e "$DEST" ]; then
-    echo "REFUSE $DEST exists with other content" >&2
+  if [ -e "$P_DEST" ]; then
+    echo "REFUSE $P_DEST exists with other content" >&2
     return 3
   fi
-  write "create $DEST" put_text
+  write "create $P_DEST" put_body
 }
 
 # ── post-check: the expected after-state ──
 postcheck() {
-  holds_text
+  holds_body
 }
 
 # ── undo: back to the before-state, safe on a partial run; it fails when the act's bytes are still there ──
@@ -101,10 +99,10 @@ postcheck() {
 # from a read (a backup named after a sha the act changes), the act writes a record through write() and undo works from it
 # only while the target still matches it.
 undo() {
-  if holds_text; then
-    write "remove $DEST" rm -f -- "$DEST"
+  if holds_body; then
+    write "remove $P_DEST" rm -f -- "$P_DEST"
   fi
-  ! holds_text
+  ! holds_body
 }
 
 case "$PHASE" in

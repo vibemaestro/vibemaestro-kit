@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Purpose: the GitHub issue, comment and pull-request writes one JSON spec lists, each pinned, rehearsed and post-checked byte for byte (gates/gh_write.py)
 # Targets: the issues, comments, pull requests and new branches the spec names, in repositories that read private (not internal, not public)
-# Blast: the spec's ops only: create issues, add comments, edit a comment, an issue's title or body or a PR body, reopen or close an issue, close a PR, mark a draft PR ready, open a PR from a pushed branch, add one new branch whose one commit adds or replaces one file, and its PR; never a deletion, a moved ref, a tag, a repository, a label or a setting
-# Undo: puts saved bodies, titles and states back, closes created issues as not planned (their marker removed), retracts new comments by editing them, turns a PR it marked ready back into a draft, closes a PR it opened; it leaves alone what changed since the run, and a branch file-pr made, which it names (then rc 5); notifications already sent stay sent
+# Blast: the spec's ops only: create issues, add comments, edit a comment, an issue's title or body or a PR body, reopen or close an issue (with an optional closing comment, posted first), close a PR, mark a draft PR ready, open a PR from a pushed branch, add one new branch whose one commit adds or replaces one file, and its PR; never a deletion, a moved ref, a tag, a repository, a label or a setting
+# Undo: puts saved bodies, titles and states back, closes created issues as not planned (their marker removed), retracts new comments by editing them (a closing comment too, then the issue is reopened, both only while as the run left them), turns a PR it marked ready back into a draft, closes a PR it opened; it leaves alone what changed since the run, and a branch file-pr made, which it names (then rc 5); notifications already sent stay sent
 # Pre: each repository is private, each target exists in the state its op needs, markers are absent, labels exist, body and content files match their sha256, pinned heads and the base tip still hold, a new branch is absent, no unfinished run of the spec; read again inside each op's write
 # Stops: none
 #   Why none: every write is undone by undo (an edit, a reopen, a close, a PR back to draft) or retracted without a deletion (a
@@ -10,6 +10,7 @@
 #   a private repository's members. A new branch with one commit that adds or replaces one file is not undone: it changes no existing
 #   branch, its path may not be a workflow, and the undo names it so the owner may delete it. A deletion, a repository creation and a repository that is not
 #   private are refused at rehearse, so they are never escalated to a signature: those stay hand-written and owner-signed.
+# Usage: --spec <file> [--recover]  (a JSON spec Written this call; its format: python3 <plugin root>/gates/gh_write.py --help)
 # Each: gh-write *
 #
 # The kit baton kit:gh-write. Run it only through the baton runner; the coordinator's three commands:

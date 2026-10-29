@@ -66,8 +66,12 @@ pv() { OUT=$(cd "$W" && env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$PV" c
 expect() { eq "$RC" "$2" "[$1] $3: rc $2"; }
 
 fam_real() { PV=$1
-  # the CI environment is kept: GITHUB_BASE_REF picks the PR's base, and GITHUB_ACTIONS makes a check that cannot run red
-  OUT=$(cd "$SRC_ROOT" && python3 "$PV" check --repo "$SRC_ROOT" 2>&1); RC=$?
+  # the public export has one commit of its own, no origin, and carries released versions: a private-repo change has no meaning there
+  if [ "$(tree_shape "$SRC_ROOT")" = export ]; then echo "  (not counted: the public export has no base to compare, [R1] judges a change of the private repo)"; return; fi
+  # the CI environment is kept: GITHUB_BASE_REF picks the PR's base, and GITHUB_ACTIONS makes a check that cannot run red;
+  # --public is the repository the export publishes to (export-public.sh's default): only a fold reads its tags
+  local pub; pub=$(sed -n 's/^REPOSITORY=\([^ ]*\).*/\1/p' "$SRC_ROOT/scripts/export-public.sh")
+  OUT=$(cd "$SRC_ROOT" && python3 "$PV" check --repo "$SRC_ROOT" --public "${pub:?export-public.sh names no REPOSITORY}" 2>&1); RC=$?
   printf '%s\n' "$OUT" | sed 's/^/  /'
   case "$RC" in
     0) ok "[R1] the real change passes the version check of its kind";;
@@ -178,6 +182,8 @@ new_repo_o() {
 }
 # cfw <file> <plugins> <level> <line> — write .changes/<file>
 cfw() { mkdir -p "$W/.changes"; printf -- '---\nplugins: %s\nlevel: %s\n---\n%s\n' "$2" "$3" "$4" > "$W/.changes/$1"; }
+# cfwu <file> <plugins> <level> <line> <upgrade> — the same with the optional upgrade line
+cfwu() { mkdir -p "$W/.changes"; printf -- '---\nplugins: %s\nlevel: %s\nupgrade: %s\n---\n%s\n' "$2" "$3" "$5" "$4" > "$W/.changes/$1"; }
 
 fam_ordinary() { PV=$1
   new_repo_o; pv
@@ -212,6 +218,19 @@ fam_ordinary() { PV=$1
   expect O8a 1 "a pending change file of the base edited"
   new_repo_o; echo a2 >> "$W/plugins/alpha/a.txt"; cfw a.md alpha patch x; gw rm -q .changes/pend.md; cm "drop pending"; pv
   expect O8b 1 "a pending change file of the base deleted"
+  new_repo_o; echo a2 >> "$W/plugins/alpha/a.txt"; cfw a.md alpha patch x; cfwu pend.md beta patch "a pending fix of beta" "Run beta once."; cm "upgrade line"; pv
+  expect O8c 0 "a pending change file of the base gains only an upgrade line"
+  has "$OUT" "its upgrade line now: Run beta once." "[O8c] …and check names it"
+  new_repo_o; echo a2 >> "$W/plugins/alpha/a.txt"; cfw a.md alpha patch x; cfwu pend.md beta patch "a pending fix, reworded" "Run beta once."; cm "upgrade and body"; pv
+  expect O8d 1 "an upgrade line added with a changed body"
+  new_repo_o; echo a2 >> "$W/plugins/alpha/a.txt"; cfw a.md alpha patch x; cfwu pend.md beta minor "a pending fix of beta" "Run beta once."; cm "upgrade and level"; pv
+  expect O8e 1 "an upgrade line added with a changed level"
+  new_repo_o; echo a2 >> "$W/plugins/alpha/a.txt"; cfwu a.md alpha patch x "Restart once."; cm "new file with upgrade"; pv
+  expect O8f 0 "a new change file with an upgrade line"
+  new_repo_o; echo a2 >> "$W/plugins/alpha/a.txt"; cfwu a.md alpha patch x ""; cm "empty upgrade"; pv
+  expect O8g 1 "an empty upgrade line"
+  new_repo_o; echo a2 >> "$W/plugins/alpha/a.txt"; mkdir -p "$W/.changes"; printf -- '---\nplugins: alpha\nlevel: patch\nnote: y\n---\nx\n' > "$W/.changes/a.md"; cm "unknown key"; pv
+  expect O8h 1 "another unknown frontmatter key"
   new_repo_o; echo a2 >> "$W/plugins/alpha/a.txt"; cfw a.md alpha patch x; setm alpha ', "version": "2.9.0"'; cm "a version key"; pv
   expect O9 1 "a manifest that carries a version, with a change file"
   has "$OUT" "plugins/alpha/.claude-plugin/plugin.json carries a version" "[O9b] …names the manifest"
@@ -571,12 +590,16 @@ BRK lost-manifest-passes fam_scratch '[S21]' '            bad.append("plugin %s 
 BRK unresolved-base-passes fam_scratch '[S24]' '            print("red: base ref %s does not resolve" % given)
             return 1' '            return 0'
 BRK kind-always-bootstrap fam_ordinary '[O3]' '    if not ever_had(repo, base, CHANGES + "/README.md"):' '    if True:'
-BRK version-move-not-release fam_ordinary '[O6b]' '    return "release" if any_version_moved(repo, mb) else "ordinary"' '    return "ordinary"'
+BRK version-move-not-release fam_ordinary '[O6b]' '    if any_version_moved(repo, mb):
+        return "release"' '    if False:
+        return "release"'
 BRK change-file-optional fam_ordinary '[O2]' '        if name not in named:
             bad.append("plugin %s changed and no change file' '        if False:
             bad.append("plugin %s changed and no change file'
 BRK any-status-is-added fam_ordinary '[O8a]' '            if status == "A":' '            if True:'
 BRK pending-delete-passes fam_ordinary '[O8b]' 'and show(repo, mb, p) is not None:' 'and show(repo, mb, p) is not None and os.path.exists(os.path.join(repo, p)):'
+BRK upgrade-edit-any fam_ordinary '[O8d]' '    if now[:3] != old:' '    if now[:2] != old[:2]:'
+BRK upgrade-empty-ok fam_ordinary '[O8g]' '    if "upgrade" in head and not head["upgrade"]:' '    if False:'
 BRK any-level fam_ordinary '[O7 level]' '    if head["level"] not in LEVELS:' '    if False:'
 BRK unknown-plugin-passes fam_ordinary '[O7 unknown]' '        if unknown:
             bad.append("%s: plugins: %s' '        if False:
@@ -656,7 +679,9 @@ BRK hotfix-pre-reset fam_hotfix '[H11]' '        if hotfix and base_carries_vers
 BRK changelog-unchecked fam_release '[R7]' '            if missing:
                 bad.append("plugins/%s/%s `## %s` lacks %d' '            if False:
                 bad.append("plugins/%s/%s `## %s` lacks %d'
-BRK scope-unchecked fam_release '[R8]' '    release_scope(repo, mb, paths, bad)' '    pass'
+BRK scope-unchecked fam_release '[R8]' '                       % (name, old or "unreleased", now or "unreleased"))
+    release_scope(repo, mb, paths, bad)' '                       % (name, old or "unreleased", now or "unreleased"))
+    pass'
 BRK release-ancestor fam_release '[R9]' '    if rel and not is_ancestor(repo, rel, "HEAD"):
         bad.append(' '    if False:
         bad.append('

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Hook latency: the median of pre-bash.py is held under a ceiling
+# Hook latency: the median of pre-bash.py, and of the update reminder's SessionStart entries, is held under a ceiling
 # =============================================================================
 # Run: bash tests/test-hook-latency.sh
 #      HOOK_LATENCY_GATE=1 bash tests/test-hook-latency.sh    gate even where CI is set
@@ -128,6 +128,69 @@ if [ "$MODE" = gating ]; then   # on a loaded shared runner this check could fla
 fi
 RC=0; OUT=$(M "$PLUGIN" 5 1 1 gating 2>&1) || RC=$?
 [ "$RC" -eq 1 ] && ok "gating: a ceiling of 1 ms turns the real hook red (the ceiling is read, not ignored)" || bad "a ceiling of 1 ms did not turn the run red (rc $RC)"
+
+echo "== the update reminder's SessionStart entries (sdlc and brain), on their slowest path =="
+# Each run is the plugin's own hooks.json command, in a copy whose manifest has the export's form (version, repository), with a
+# cache seeded before each run (not timed), once the previous run's read has released its lock, so the run does all it can do:
+# take the lock, print the line and start the background read. The read
+# goes to a loopback port nothing listens on (VIBEMAESTRO_UPDATE_CHECK_API), so no network. A run must print the line: one
+# that printed nothing did not take the path, and its time is not a measurement (rc 2).
+cat > "$TMP/measure-ss.py" <<'PY2'
+import json, os, socket, statistics, subprocess, sys, tempfile, time
+root, cmd, runs, ceiling, mode, label = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4]), sys.argv[5], sys.argv[6]
+data = tempfile.mkdtemp(prefix="latency-data-")
+s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+name = json.load(open(os.path.join(root, ".claude-plugin", "plugin.json")))["name"]
+env = dict(os.environ, CLAUDE_PLUGIN_ROOT=root, CLAUDE_PLUGIN_DATA=data, CLAUDE_PROJECT_DIR=data,
+           VIBEMAESTRO_UPDATE_CHECK_API="http://127.0.0.1:%d" % port)
+def run():
+    lock = os.path.join(data, "update-check.lock")
+    for _ in range(300):                   # the previous run's background read holds the lock until it ends (not timed)
+        if not os.path.exists(lock):
+            break
+        time.sleep(0.01)
+    else:
+        print("%s: the lock of the previous run's read stayed 3 s" % label)
+        sys.exit(2)
+    json.dump({"v": 1, "checked": 0, "latest": "9.9.9", "shown": 0, "repo": "https://github.com/acme/kit", "plugin": name},
+              open(os.path.join(data, "update-check.json"), "w"))
+    t = time.perf_counter()
+    r = subprocess.run(["bash", "-c", cmd], input='{"hook_event_name": "SessionStart", "source": "startup"}', text=True, env=env,
+                       capture_output=True, timeout=30)
+    ms = (time.perf_counter() - t) * 1000
+    if r.returncode != 0 or "systemMessage" not in r.stdout:
+        print("%s: the hook did not answer (rc %d, %d characters of output): its time is not a measurement" % (label, r.returncode, len(r.stdout)))
+        sys.exit(2)
+    return ms
+for _ in range(3):
+    run()
+ts = [run() for _ in range(runs)]
+med, p90 = statistics.median(ts), sorted(ts)[min(int(len(ts) * 0.9), len(ts) - 1)]
+red = mode == "gating" and med > ceiling
+print("%s median %.1f ms, p90 %.1f ms (n=%d), ceiling %d ms, mode %s, verdict %s" % (label, med, p90, runs, ceiling, mode, "red" if red else "green"))
+sys.exit(1 if red else 0)
+PY2
+UC="$TMP/uc/plugins"; mkdir -p "$UC"
+for n in vibemaestro-sdlc vibemaestro-brain; do
+  cp -R "$SRC_ROOT/plugins/$n" "$UC/$n"; find "$UC/$n" -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null
+  python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.update(version="0.2.0", repository="https://github.com/acme/kit"); json.dump(m, open(p, "w"))' "$UC/$n/.claude-plugin/plugin.json"
+done
+for n in vibemaestro-sdlc vibemaestro-brain; do
+  C=$(hook_cmds "$UC/$n/hooks/hooks.json" SessionStart '' | grep -F update)
+  nonempty "$C" "[U] $n: hooks.json has the update reminder's SessionStart entry"
+  RC=0; OUT=$(python3 "$TMP/measure-ss.py" "$UC/$n" "$C" 15 "$CEILING_MS" "$MODE" "$n update reminder" 2>&1) || RC=$?
+  printf '  %s\n' "$OUT"
+  case "$OUT" in *" median "*" (n=15)"*) ok "[U] $n: one median line over 15 runs";; *) bad "[U] $n: no median line: ${OUT:0:200}";; esac
+  if [ "$MODE" = gating ]; then
+    [ "$RC" -eq 0 ] && ok "[U] $n: the update reminder entry is under the ${CEILING_MS} ms ceiling" || bad "[U] $n: above the ${CEILING_MS} ms ceiling (rc $RC)"
+  else
+    [ "$RC" -eq 0 ] && ok "[U] $n: report-only (CI): printed, not enforced" || bad "[U] $n: report-only run failed (rc $RC)"
+  fi
+done
+RC=0; OUT=$(python3 "$TMP/measure-ss.py" "$UC/vibemaestro-sdlc" "exit 0" 3 "$CEILING_MS" gating control 2>&1) || RC=$?
+[ "$RC" -eq 2 ] && ok "[U] control: an entry that prints nothing is rc 2, not a fast green median" || bad "[U] control: a silent entry read as a measurement (rc $RC)"
+RC=0; OUT=$(python3 "$TMP/measure-ss.py" "$UC/vibemaestro-sdlc" "sleep 0.3; $(hook_cmds "$UC/vibemaestro-sdlc/hooks/hooks.json" SessionStart '' | grep -F update)" 3 "$CEILING_MS" gating slow 2>&1) || RC=$?
+[ "$RC" -eq 1 ] && ok "[U] control: the entry made 0.3 s slower is red in gating mode" || bad "[U] control: a slow entry was not red (rc $RC): ${OUT:0:200}"
 
 CRASH="$TMP/crash-plugin"; mk_plugin_copy "$CRASH"
 printf 'raise SystemExit(3)\n' > "$CRASH/scripts/pre-bash.py"

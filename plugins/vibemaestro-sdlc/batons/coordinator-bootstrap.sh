@@ -3,9 +3,10 @@
 # Targets: <state-dir>/bin/baton; <claude-dir>/settings.json (created as {} when absent); backups and run records under <state-dir>/records
 # Blast: those two files only; no rule or key the settings already hold is removed or changed; the mode is never written
 # Undo: newest first, only what this signed run wrote and only while it is what the run left: the settings put back byte for byte by the kind settings-merge's undo (a file created as {} removed again), the old launcher put back or the new one removed; a target that changed since is left alone (LEAVE, exit 5)
-# Pre: vibemaestro-sdlc is installed in the plugin cache; the settings are JSON and not a symbolic link; adding rules reaches permissions --check rc 0 (else refused); something to do (else refused, rc 3)
+# Pre: vibemaestro-sdlc is installed in the plugin cache and this session runs the installed version (a session left on an older copy is refused at rehearse, rc 3: restart Claude Code); the settings are JSON and not a symbolic link; adding rules reaches permissions --check rc 0 but for the old broad ask rules, which kit:permissions-upgrade swaps after it (else refused); something to do (else refused, rc 3)
 # Stops: security-boundary
 #   Why: it adds allow rules, which widen what a session may do, so the owner signs, in every mode.
+# Usage: no arguments (every value is this machine's; a new machine runs it through the plugin's scripts/baton.py)
 # Each: bootstrap *
 #
 # The kit baton kit:coordinator-bootstrap. On a new machine there is no launcher yet, so the session calls baton.py of

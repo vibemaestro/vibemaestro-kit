@@ -309,6 +309,80 @@ fam_links() {
   has "$o" "FAIL kb/intent/2026-01-03-new.md:2: plan: $PLAN has no row 'Z'" "[L] an untracked new intent counts as changed"
 }
 
+# ── recon columns: Current state @SHA and Shared files, on an old plan (no such columns) and a new one ─────────────────────────────
+mk_recon_plan() {  # mk_recon_plan <repo> — a new-shape plan on main: A..E share files, each pair ordered, marked merge main or dropped
+  local r=$1
+  mkdir -p "$r/kb/records"
+  fm "$r/kb/records/2026-01-01-recon.md"
+  cat > "$r/$PLAN" <<'EOF'
+---
+description: "recon fixture"
+---
+
+# Plan
+
+| Row | Must be true | Current state @SHA | Shared files | Acceptance | Depends on | Version | Model | Link |
+|---|---|---|---|---|---|---|---|---|
+| A | one | absent; seam `read_plan` @abc1234 | `scripts/a.py` | `true` | — | — | — | — |
+| B | two | in part @abc1234def, kb/records/2026-01-01-recon.md | scripts/a.py, scripts/b.py | `true` | A | — | — | — |
+| C | three | — | scripts/b.py (merge main) | `true` | — | — | — | — |
+| D | four | absent @abc1234def0 | scripts/a.py | `true` | B | — | — | — |
+| E | five | absent @abc1234 | scripts/a.py | `true` | — | — | — | dropped: folded into A |
+EOF
+}
+
+recon_case() {  # recon_case <label> <expected rc> <expected text> <shell edit run in the repo>
+  local label=$1 want=$2 text=$3 edit=$4 r o rc; r=$(mktemp -d "$TMP/r.XXXXXX")
+  mk_links_repo "$r"
+  (cd "$r" && eval "$edit")
+  o=$(cd "$r" && python3 "$KBPY" check links 2>&1); rc=$?
+  eq "$rc" "$want" "[R] $label: rc $want"
+  has "$o" "$text" "[R] $label: names it"
+}
+
+fam_recon() {
+  echo "== [R] recon columns (Current state @SHA, Shared files) =="
+  local r o j
+  printf '{"prs": []}\n' > "$TMP/world-empty.json"
+  # an old plan: no recon column, so no recon check, and the status carries empty recon fields
+  recon_case "an old plan, changed" 0 "links: 0 failing" "echo >> $PLAN"
+  r=$(mktemp -d "$TMP/r.XXXXXX"); mk_links_repo "$r"
+  j=$(cd "$r" && FAKE_GH_WORLD="$TMP/world-empty.json" python3 "$KBPY" plan status "$PLAN" --json 2>&1)
+  eq "$(printf '%s' "$j" | python3 -c 'import json,sys; r=json.load(sys.stdin)["rows"][0]; print(r["current"], r["shared"], r["merge_main"])' 2>&1)" \
+     "None [] False" "[R] old plan --json: current None, shared [], merge_main False"
+  o=$(cd "$r" && FAKE_GH_WORLD="$TMP/world-empty.json" python3 "$KBPY" plan status "$PLAN" 2>&1)
+  hasnt "$o" "@" "[R] old plan: the printed status shows no recon SHA"
+  # a new plan: the columns are read, and two new FAILs apply
+  recon_case "a new plan, valid" 0 "links: 0 failing" "mk_recon_plan ."
+  recon_case "a Current state cell with no SHA" 65 "row A: its Current state cell is not pinned to a SHA (@<sha>" \
+    "mk_recon_plan .; sed -i 's/absent; seam \`read_plan\` @abc1234/absent; seam read_plan/' $PLAN"
+  recon_case "a SHA too short" 65 "row A: its Current state cell is not pinned to a SHA" \
+    "mk_recon_plan .; sed -i 's/seam \`read_plan\` @abc1234/seam @abc12/' $PLAN"
+  recon_case "two rows share a file with no order" 65 "rows A and B share scripts/a.py" \
+    "mk_recon_plan .; sed -i 's/^\(| B | .*\)| A | — | — | — |$/\1| — | — | — | — |/' $PLAN"
+  recon_case "a shared file with no order, marked merge main" 0 "links: 0 failing" \
+    "mk_recon_plan .; sed -i 's/^\(| B | .*\)| A | — | — | — |$/\1| — | — | — | — |/; s/^| A | one | \(.*\) | \`scripts\/a.py\` |/| A | one | \1 | scripts\/a.py (merge main) |/' $PLAN"
+  recon_case "a missing recon note" 65 "kb/records/2026-01-01-recon.md does not exist" "mk_recon_plan .; rm kb/records/2026-01-01-recon.md"
+  recon_case "Vietnamese headers" 65 "row A: its Current state cell is not pinned to a SHA" \
+    "mk_recon_plan .; sed -i 's/| Current state @SHA | Shared files |/| Hiện trạng @SHA | File chung |/; s/seam \`read_plan\` @abc1234/seam/' $PLAN"
+  recon_case "an old plan's Hiện trạng column with no @ in its header is not the recon column" 0 "links: 0 failing" \
+    "mk_recon_plan .; sed -i 's/| Current state @SHA |/| Hiện trạng |/; s/seam \`read_plan\` @abc1234/đang chạy/' $PLAN"
+  recon_case "an upper-case SHA" 0 "links: 0 failing" "mk_recon_plan .; sed -i 's/seam \`read_plan\` @abc1234/seam @ABC1234/' $PLAN"
+  recon_case "a dropped row with no SHA" 0 "links: 0 failing" "mk_recon_plan .; sed -i 's/^| E | five | absent @abc1234 |/| E | five | absent |/' $PLAN"
+  recon_case "shared files split on ;" 65 "rows C and D share scripts/b.py" \
+    "mk_recon_plan .; sed -i 's/^| D | four | \(.*\) | scripts\/a.py |/| D | four | \1 | scripts\/a.py; scripts\/b.py |/; s/scripts\/b.py (merge main)/scripts\/b.py/; s/^\(| C | .*\)| — | — | — | — |$/\1| B | — | — | — |/' $PLAN"
+  r=$(mktemp -d "$TMP/r.XXXXXX"); mk_links_repo "$r"; (cd "$r" && mk_recon_plan .)
+  j=$(cd "$r" && FAKE_GH_WORLD="$TMP/world-empty.json" python3 "$KBPY" plan status "$PLAN" --json 2>&1)
+  eq "$(printf '%s' "$j" | python3 -c 'import json,sys
+for r in json.load(sys.stdin)["rows"][:3]: print(r["id"], (r["current"] or {}).get("sha"), ",".join(r["shared"]), r["merge_main"])' 2>&1)" \
+     "A abc1234 scripts/a.py False
+B abc1234def scripts/a.py,scripts/b.py False
+C None scripts/b.py True" "[R] new plan --json: the SHA, the shared files without marks, merge main"
+  o=$(cd "$r" && FAKE_GH_WORLD="$TMP/world-empty.json" python3 "$KBPY" plan status "$PLAN" 2>&1)
+  has "$(row "$o" D)" "planned      depends on B · @abc1234  — four" "[R] new plan: a planned row shows its recon SHA after its dependencies, cut to 7"
+  hasnt "$(row "$o" C)" "@" "[R] new plan: a row with no recon SHA shows none"
+}
+
 fam_pr() {
   echo "== [P] the plan-row line of the PR body =="
   local r w o; r=$(mktemp -d "$TMP/p.XXXXXX")
@@ -328,7 +402,7 @@ fam_pr() {
   hasnt "$o" "Plan row:" "[P] an intent without plan: gets no line"
 }
 
-fam_status; fam_nogh; fam_links; fam_pr
+fam_status; fam_nogh; fam_links; fam_recon; fam_pr
 
 # ── [B] planted breaks: each on a copy of the plugin, each must turn its case red ───────────────────────────────────────────────────
 expect_red() {  # expect_red <label> <family> <plugin copy> <the case that must go red>
@@ -389,6 +463,11 @@ BRK partial-hidden fam_nogh "[N] gh failing after the PR list: the header says p
   '"checked (%d PRs read)" % len(prs) if not gh.errors' '"checked (%d PRs read)" % len(prs) if True'
 BRK deleted-row-old fam_links "[L] a deleted row an unchanged intent still names: rc 65" scripts/kb_plan.py \
   '        hard = changed is None or src in changed or any(t in changed for t in targets)' '        hard = changed is None or src in changed'
+BRK recon-sha-unchecked fam_recon "[R] a Current state cell with no SHA: rc 65" scripts/kb_plan.py \
+  '            if ("current" in r["cols"] and r["current"] is None and _plain(r["current_cell"]).lower() not in NONE_CELL' \
+  '            if (False'
+BRK recon-shared-unordered fam_recon "[R] two rows share a file with no order: rc 65" scripts/kb_plan.py \
+  '                    if not (reach(a["id"], b["id"]) or reach(b["id"], a["id"])):' '                    if False:'
 BRK no-plan-line fam_pr "[P] an intent with plan: gets one Plan row line, linked" scripts/open_pr.py \
   '    if plan:                                 # the plan row' '    if False:                                # the plan row'
 

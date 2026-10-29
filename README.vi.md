@@ -35,7 +35,9 @@ Lúc chạy, các plugin không phụ thuộc repo nào khác.
 
 ## Cài đặt
 
-Thêm marketplace, rồi cài cả hai plugin:
+Thêm marketplace, rồi cài cả hai plugin. Chọn một trong hai cách.
+
+### Từ GitHub
 
 ```bash
 claude plugin marketplace add vibemaestro/vibemaestro-kit
@@ -43,13 +45,36 @@ claude plugin install vibemaestro-sdlc@vibemaestro
 claude plugin install vibemaestro-brain@vibemaestro
 ```
 
-Muốn dùng một bản sao cục bộ hoặc một bản fork, hãy đưa thư mục của nó cho `claude plugin marketplace add`. Kiểm bản cài. Cả hai plugin phải hiện `Status: ✔ enabled`; `claude plugin install` trả về 0 cả khi thiếu dependency, nên hãy đọc danh sách này:
+### Từ bản clone
+
+Dùng cách này để đọc mã nguồn trước, để thử một bản fork, hoặc khi không vào được GitHub lúc cài. Đưa thư mục của bản clone (`./` hoặc đường dẫn tuyệt đối) cho `claude plugin marketplace add`:
+
+```bash
+git clone https://github.com/vibemaestro/vibemaestro-kit.git
+claude plugin marketplace add ./vibemaestro-kit
+claude plugin install vibemaestro-sdlc@vibemaestro
+claude plugin install vibemaestro-brain@vibemaestro
+```
+
+### Kiểm bản cài
+
+Cả hai plugin phải hiện `Status: ✔ enabled`; `claude plugin install` trả về 0 cả khi thiếu dependency, nên hãy đọc danh sách này:
 
 ```bash
 claude plugin list
 ```
 
-Cập nhật về sau:
+### Cập nhật
+
+Trong một phiên Claude Code, chạy `/plugin`, mở **Marketplaces**, chọn `vibemaestro` và cập nhật nó. Rồi chạy `/reload-plugins` để phiên đang chạy nạp bản mới (một phiên mới cũng nạp nó).
+
+Từ shell: với bản cài từ clone, hãy pull bản clone trước:
+
+```bash
+git -C <clone> pull
+```
+
+Rồi, với cả hai cách:
 
 ```bash
 claude plugin marketplace update vibemaestro
@@ -57,14 +82,21 @@ claude plugin update vibemaestro-sdlc@vibemaestro
 claude plugin update vibemaestro-brain@vibemaestro
 ```
 
-Rồi mở phiên mới.
+Rồi chạy `/reload-plugins` trong phiên đang chạy, hoặc mở phiên mới.
+
+**Tự cập nhật.** Claude Code không tự cập nhật một marketplace bên thứ ba cho đến khi bạn bật nó: `/plugin`, **Marketplaces**, `vibemaestro`, **Enable auto-update**. Khi đó nó cập nhật plugin lúc một phiên mở và báo lại; chạy `/reload-plugins` để nạp bản mới.
+
+**Lời nhắc cập nhật.** Khi có bản public mới hơn của vibemaestro-sdlc hay vibemaestro-brain, lúc mở phiên hiện một dòng: tên plugin, bản đang cài và bản mới, cách cập nhật, và link tới ghi chú phát hành. Mỗi plugin đọc tag của repo public tối đa một lần mỗi ngày, chạy nền, không token, và không gửi gì về bạn hay máy của bạn; nên dòng này hiện ở phiên sau lần đọc đó, tối đa một lần mỗi ngày cho mỗi plugin. Bản cài mà manifest không có version, như một clone của cây phát triển, không hiện gì. Để tắt nó:
+
+- mọi nơi: đặt `VIBEMAESTRO_NO_UPDATE_CHECK` là `1`, chẳng hạn trong khối `env` của `~/.claude/settings.json`; biến `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` của chính Claude Code cũng tắt nó;
+- trong một repo: `"update_check": false` trong `.vibemaestro/sdlc.json` của repo đó.
 
 ## Dùng lần đầu trong repo của bạn
 
 Làm một lần. Mở một phiên Claude Code mới trong repo ứng dụng của bạn.
 
 1. **Dựng `kb/`.** Bảo Claude chạy skill `vibemaestro-sdlc:init-kb`. Skill hỏi vài câu, rồi ghi thư mục `kb` (intent, spec, plan, quyết định và file hiện trạng) cùng một file cấu hình nhỏ `.vibemaestro/sdlc.json`, và không ghi đè gì. Một câu hỏi là ngôn ngữ của tài liệu `kb` và nội dung pull request: skill đề xuất tiếng Anh (`en`), hoặc tiếng Việt (`vi`) nếu bạn viết cho nó bằng tiếng Việt, và ghi câu trả lời vào cấu hình. Skill commit kết quả trên branch `chore/kb-init` và push lên: hãy mở pull request của nó và merge. Dù chọn ngôn ngữ nào, một số thông báo lỗi của script vẫn bằng tiếng Việt.
-2. **Thiết lập BatonRun trên máy này (nên làm).** Một lần ghi đặc quyền ra ngoài phiên (merge, comment GitHub, force-push) chạy thành một baton script; push branch thường và mở pull request thì không. Không thiết lập thì mọi lệnh baton đều hỏi bạn; `local-parallel` merge qua baton. Bảo Claude thiết lập BatonRun trên máy này (skill `vibemaestro-sdlc:batonrun`, phần tham chiếu setup). Nó cài một launcher nhỏ và in ra một khối luật quyền; bạn thêm khối đó vào user settings của Claude Code (`/permissions`, hoặc `~/.claude/settings.json`). Plugin không bao giờ ghi settings của bạn. Skill `vibemaestro-sdlc:coordinator-bootstrap` làm cùng việc thiết lập đó trong một run bạn ký. Có khối này, các lệnh baton thường ngày chạy không cần hỏi, còn chữ ký của bạn và việc đổi chế độ thì luôn hỏi bạn. Chi tiết: [BatonRun, cài đặt quyền](plugins/vibemaestro-sdlc/docs/batonrun.vi.md#9-cài-đặt-quyền).
+2. **Thiết lập BatonRun trên máy này (nên làm).** Một lần ghi đơn giản ra ngoài phiên (một bước, hoàn tác được bằng một lệnh trực tiếp, như một comment trên issue) là một lời gọi trực tiếp; một luồng ghi, hoặc một lần ghi không hoàn tác được hay cần bạn ký (merge, force-push), chạy thành một baton script, được giữ và gọi theo tên khi gặp lại. Push branch thường và mở pull request không phải baton. Không thiết lập thì mọi lệnh baton đều hỏi bạn; `local-parallel` merge qua baton. Bảo Claude thiết lập BatonRun trên máy này (skill `vibemaestro-sdlc:batonrun`, phần tham chiếu setup). Nó cài một launcher nhỏ và in ra một khối luật quyền; bạn thêm khối đó vào user settings của Claude Code (`/permissions`, hoặc `~/.claude/settings.json`). Plugin không bao giờ ghi settings của bạn. Skill `vibemaestro-sdlc:coordinator-bootstrap` làm cùng việc thiết lập đó trong một run bạn ký. Có khối này, các lệnh baton thường ngày chạy không cần hỏi, còn chữ ký của bạn và việc đổi chế độ thì luôn hỏi bạn. Chi tiết: [BatonRun, cài đặt quyền](plugins/vibemaestro-sdlc/docs/batonrun.vi.md#9-cài-đặt-quyền).
 3. **Thêm một CI check (tuỳ chọn).** Merge có bảo vệ cần ít nhất một check xanh trên pull request. Skill `vibemaestro-sdlc:install-gates` thêm các cổng quy trình thành GitHub workflow; nó hỏi cổng nào và runner nào, và không bao giờ ghi đè file.
 
 ## Luồng làm việc
@@ -91,7 +123,7 @@ Bạn hiếm khi gõ lệnh brain: Claude chạy chúng, theo skill `vibemaestro
 
 ## Mô hình an toàn
 
-BatonRun là cách phiên thực hiện một hành động ghi ra ngoài phiên (chuẩn đầy đủ: [plugins/vibemaestro-sdlc/docs/batonrun.vi.md](plugins/vibemaestro-sdlc/docs/batonrun.vi.md)).
+BatonRun là cách phiên thực hiện một luồng ghi ra ngoài phiên, vượt quá một lần ghi đơn giản (chuẩn đầy đủ: [plugins/vibemaestro-sdlc/docs/batonrun.vi.md](plugins/vibemaestro-sdlc/docs/batonrun.vi.md)).
 
 - Một baton script giữ cả chuỗi lệnh. Nó được kiểm, diễn tập để hiện từng lần ghi, rồi ký. Chữ ký gắn với hash của script nên mọi sửa đổi về sau làm nó mất hiệu lực.
 - Sau đó run được kiểm lại, hoàn tác nếu kết quả sai, và ghi nhật ký. Bạn không bao giờ phải gõ lệnh theo chỉ dẫn.
@@ -103,11 +135,11 @@ Mục lục là [docs/README.vi.md](docs/README.vi.md). Nó liệt kê hai plugi
 
 ## Bằng chứng
 
-Các ghi chú nghiên cứu nêu những gì đã biết về chi phí token của BatonRun và về lợi ích của brain, kể cả điều các phép thử chưa cho thấy: brain chưa được chứng minh là cần thiết ở cỡ đã thử. Chúng nằm ở [docs/research/](docs/research/).
+Các ghi chú nghiên cứu nêu những gì đã biết về chi phí token của BatonRun và về lợi ích của brain, kể cả điều các phép thử chưa cho thấy: brain chưa được chứng minh là cần thiết ở cỡ đã thử. Ghi chú thứ ba đo plugin sdlc tốn bao nhiêu và đem lại gì trên việc của app: không có khác biệt đo được về chi phí cho mỗi việc làm đúng (0,76–1,25 theo cách chấm đã đặt trước khi việc cuối chạy). Chúng nằm ở [docs/research/](docs/research/).
 
 ## Phát hành
 
-Mỗi plugin có version riêng. Một bản phát hành được gắn tag `<plugin>--v<version>` trong repo công khai `vibemaestro/vibemaestro-kit`, và ghi chú của nó là `CHANGELOG.md` của plugin. Kit không có trong thư mục plugin của Anthropic.
+Mỗi plugin có version riêng. Một bản phát hành được gắn tag `<plugin>--v<version>` trong repo công khai `vibemaestro/vibemaestro-kit`, và có một GitHub Release cùng tên. Ghi chú của nó là mục của version đó trong `CHANGELOG.md` của plugin, kèm **Upgrade notes** (điều người dùng hiện có phải làm hay sẽ thấy), và cách cập nhật. Kit không có trong thư mục plugin của Anthropic.
 
 ## Đóng góp
 

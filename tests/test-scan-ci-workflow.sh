@@ -58,8 +58,9 @@ if j is None:
     err("no job %s" % job); steps = []
 else:
     steps = j.get("steps") or []
-    if j.get("if", "github.event.repository.private") != "github.event.repository.private":
-        err("the job has an `if` other than github.event.repository.private: it could be skipped")
+    # private only, and not on a draft PR (the owner's rule: no CI on a draft; ready_for_review and every later commit run it)
+    if j.get("if", "github.event.repository.private") != "github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)":
+        err("the job has an `if` other than github.event.repository.private (and not-a-draft): it could be skipped")
     if "if" not in j: err("the job has no `if: github.event.repository.private`: a public copy would fail closed on every PR")
     if "continue-on-error" in j: err("the job has continue-on-error")
 scan = [s for s in steps if "scripts/scan-internal-terms.sh" in str(s.get("run", ""))]
@@ -124,12 +125,12 @@ plant no-env 's.replace("          KIT_TERMS: ${{ secrets.KIT_TERMS }}\n", "    
 plant no-ci 's.replace("--ci --terms", "--terms", 1)'
 plant no-exclude 's.replace(" --exclude kb/", "", 1)'
 plant no-control 's.replace("control: found 1/1; hits: 0", "hits: 0", 1)'
-plant no-if 's.replace("    if: github.event.repository.private\n", "", 1)'
+plant no-if 's.replace("    if: github.event.repository.private && (github.event_name != \x27pull_request\x27 || github.event.pull_request.draft == false)\n", "", 1)'
 # the scan job is the last checkout in the file (the tests job above it keeps no credentials either): remove the last one
 plant creds '"".join(s.rsplit("          persist-credentials: false\n", 1))'
 plant artifact 's + "      - uses: actions/upload-artifact@v4\n        with:\n          path: x\n"'
 plant summary 's.replace("          unset KIT_TERMS\n", "          unset KIT_TERMS\n          echo hi >> $GITHUB_STEP_SUMMARY\n", 1)'
-plant skippable 's.replace("    if: github.event.repository.private\n", "    if: github.event_name == \x27push\x27\n", 1)'
+plant skippable 's.replace("    if: github.event.repository.private && (github.event_name != \x27pull_request\x27 || github.event.pull_request.draft == false)\n", "    if: github.event_name == \x27push\x27\n", 1)'
 plant mask 's.replace("          unset KIT_TERMS\n", "          unset KIT_TERMS\n          echo ::add-mask::x\n", 1)'
 
 # ── the run block, run ───────────────────────────────────────────────────────────────────────────────────────────

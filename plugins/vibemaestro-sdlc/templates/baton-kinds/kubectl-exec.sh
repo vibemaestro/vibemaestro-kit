@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Purpose: create one file in a running pod over kubectl exec, holding the given text
-# Targets: the file at the given absolute path in the given pod, namespace and context
+# Purpose: create one file in a running pod over kubectl exec, holding the text of an input file
+# Targets: {ns}/{pod} {server} {rpath} — the file at that absolute path in that pod, on the cluster whose API server the context names
 # Blast: that one file in that pod; it lasts until the pod is replaced
 # Undo: removes the file, only while it holds exactly the text this act writes
-# Pre: the context names an API server; the pod exists and runs bash; the file is absent (other content is refused)
+# Pre: the context names the API server given; the pod exists and runs bash; the file is absent (other content is refused)
 # Stops: cluster-lane
+# Params: ctx=name ns=name pod=name server=url rpath=path body=input
 # Expect: pod * create *
 #
 # A baton script of kind kubectl-exec (BatonRun), written by `baton new __NAME__ --from kubectl-exec`. The contract (the header above,
 # the phases, the write() gate, check, rehearse, sign, run) is the one `baton new` writes without --from: its comments
-# explain each part. Run the launcher bare, one command per call: <launcher> go __NAME__.sh <args>
+# explain each part. Run the launcher bare, one command per call: <launcher> go __NAME__.sh ctx='<context>' ns='<namespace>'
+# pod='<pod>' server='<https API server>' rpath='<absolute path in the pod>' body='<file holding the text>'. The context is a
+# `name` value; the server must be the one the context names, so the call says which cluster it means.
 # A write in a live cluster: the owner signs it, the session runs it (Stops: cluster-lane, never none). The program goes through
 # stdin into `bash -s` in the pod; every read is printed first and decided on after. The plan carries the context, the API
 # server and the pod's uid read before the act, so a signature does not run against another cluster or a replaced pod.
@@ -40,24 +43,18 @@ write() {
 }
 
 # ── arguments and reads: every phase runs them ──
-if [ $# -ne 5 ]; then
-  echo "usage: bash __NAME__.sh <context> <namespace> <pod> <absolute path in the pod> <text>" >&2
-  exit 64
-fi
-CTX=$1
-NS=$2
-POD=$3
-RPATH=$4
-TEXT=$5
-case "$RPATH" in
-  /*) ;;
-  *) echo "usage: the path in the pod is absolute: $RPATH" >&2; exit 64 ;;
-esac
+P_CTX="$1"
+P_NS="$2"
+P_POD="$3"
+P_SERVER="$4"
+P_RPATH="$5"
+P_BODY="$6"
+TEXT=$(cat -- "$P_BODY")
 TSHA=$(printf '%s\n' "$TEXT" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
 
 # in_pod — the program on stdin (a quoted heredoc) through stdin into bash -s in the pod; the values go first, quoted
 in_pod() {
-  { printf 'RPATH=%q\nTEXT=%q\n' "$RPATH" "$TEXT"; cat; } | kubectl --context "$CTX" -n "$NS" exec -i "$POD" -- bash -s
+  { printf 'RPATH=%q\nTEXT=%q\n' "$P_RPATH" "$TEXT"; cat; } | kubectl --context "$P_CTX" -n "$P_NS" exec -i "$P_POD" -- bash -s
 }
 # a read: the file's state in the pod (same, other, absent); it ends with `true`, a miss is not a failure
 pod_state() {
@@ -86,24 +83,24 @@ value() { printf '%s\n' "$2" | sed -n "s/^$1=//p" | tail -n 1; }
 # signature for one cluster or one pod incarnation does not run against another.
 act() {
   local SERVER PUID OUT
-  SERVER=$(kubectl --context "$CTX" config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>&1 || true)
-  PUID=$(kubectl --context "$CTX" -n "$NS" get pod "$POD" -o jsonpath='{.metadata.uid}' 2>&1 || true)
+  SERVER=$(kubectl --context "$P_CTX" config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>&1 || true)
+  PUID=$(kubectl --context "$P_CTX" -n "$P_NS" get pod "$P_POD" -o jsonpath='{.metadata.uid}' 2>&1 || true)
   printf 'server=%s\nuid=%s\n' "$SERVER" "$PUID"
-  case "$SERVER" in
-    https://*) ;;
-    *) echo "REFUSE context $CTX names no API server (the read is above)" >&2; return 3 ;;
-  esac
+  if [ "$SERVER" != "$P_SERVER" ]; then
+    echo "REFUSE context $P_CTX names the API server $SERVER, not $P_SERVER (the read is above)" >&2
+    return 3
+  fi
   case "$PUID" in
-    "" | *" "*) echo "REFUSE pod $NS/$POD: no uid (the read is above)" >&2; return 3 ;;
+    "" | *" "*) echo "REFUSE pod $P_NS/$P_POD: no uid (the read is above)" >&2; return 3 ;;
   esac
   OUT=$(pod_state 2>&1 || true)
   printf '%s\n' "$OUT"
   case "$(value state "$OUT")" in
-    same) echo "same $RPATH in $NS/$POD (nothing to do)"; return 0 ;;
+    same) echo "same $P_RPATH in $P_NS/$P_POD (nothing to do)"; return 0 ;;
     absent) ;;
-    *) echo "REFUSE $RPATH in $NS/$POD exists with other content, or the pod did not answer" >&2; return 3 ;;
+    *) echo "REFUSE $P_RPATH in $P_NS/$P_POD exists with other content, or the pod did not answer" >&2; return 3 ;;
   esac
-  write "pod $NS/$POD (uid $PUID) on $SERVER (context $CTX) create $RPATH sha256 $TSHA" pod_put
+  write "pod $P_NS/$P_POD (uid $PUID) on $SERVER (context $P_CTX) create $P_RPATH sha256 $TSHA" pod_put
 }
 
 # ── post-check: the file in the pod holds the text ──
@@ -120,9 +117,9 @@ undo() {
   OUT=$(pod_state 2>&1 || true)
   printf '%s\n' "$OUT"
   case "$(value state "$OUT")" in
-    same) write "pod $NS/$POD remove $RPATH" pod_rm ;;
+    same) write "pod $P_NS/$P_POD remove $P_RPATH" pod_rm ;;
     absent) return 0 ;;
-    *) echo "LEAVE $RPATH in $NS/$POD: not the planned text, or the pod did not answer" >&2; return 1 ;;
+    *) echo "LEAVE $P_RPATH in $P_NS/$P_POD: not the planned text, or the pod did not answer" >&2; return 1 ;;
   esac
   OUT=$(pod_state 2>&1 || true)
   [ "$(value state "$OUT")" = absent ]

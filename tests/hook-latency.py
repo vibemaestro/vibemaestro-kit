@@ -2,7 +2,7 @@
 """Median wall time of the PreToolUse hooks (`pre-edit.py`, `pre-bash.py`) of two plugin trees, side by side.
 
     python3 tests/hook-latency.py --before <plugin dir> --after <plugin dir> [--runs 40] [--session-start] [--packs]
-    python3 tests/hook-latency.py --brain [--after <brain plugin dir>] [--runs 40]
+    python3 tests/hook-latency.py --brain [--after <brain plugin dir>] [--before <brain plugin dir>] [--runs 40]
 
 Not a suite (run-all.sh runs `test-*.sh` only): a measurement for a pull request that touches the hook path. It builds, in a
 temporary directory, a bare remote and two clones with a rules directory (`rules.dirs`), five repo rules and five decisions:
@@ -17,10 +17,17 @@ With --session-start it measures the `loi` SessionStart hook instead, in the up-
 (the rule catalogue) in the `manual` state.
 With --packs every case has a plugin registry under `$HOME/.claude` (CLAUDE_CONFIG_DIR is never passed on): 10 plugins, 2 of
 them rule packs of 7 rules each, none matching the measured edit or command, so every pack rule is read and tried.
-With --brain it measures vibemaestro-brain's hooks (`brain_hook.py`) of one tree (default: this checkout's), with no before:
-`session-start` in a project whose hot memory is at its count caps with full-length lines (seeded through the store library,
-as the probe seeds it), `guard-owner` on `git status` (the cost every Bash call pays), `guard-bash` on `brain op touch N1`
-without agent_id, and `guard-edit` on a project file; `python3 -c pass` is printed for scale.
+With --brain it measures vibemaestro-brain's hooks (`brain_hook.py`) of one tree (default: this checkout's): SessionStart
+in a project whose hot memory is at the tree's own count caps (every kind its store has) with full-length lines and quotes
+(seeded through the store library, as the probe seeds it), run as the store's writer, `guard-owner` on `git status` (the cost
+every Bash call pays), `guard-bash` on `brain op touch N1` without agent_id, and `guard-edit` on a project file; `python3 -c
+pass` is printed for scale. SessionStart is every `session-start…` command of the tree's hooks.json started at once, as Claude
+Code starts a plugin's commands of one event, timed until the last exits (`update-check` is left out: it is the same in both
+trees). Every item of a kind that can close by a link carries one anchor, as `closes` where the tree's store has it (log format
+2 or later) and as a plain anchor where it has not, and every pinned decision a plain one; texts are 150 characters in both
+trees; a stub `gh` first on PATH answers every lookup `open`, and the anchors' answers are cached before the runs (warm). With
+--before, SessionStart of that tree runs too, interleaved with the after tree's, each in its own project seeded the same way,
+and the delta is printed with each tree's item count.
 """
 import argparse
 import json
@@ -190,50 +197,117 @@ def session_start(a, trees, repo, env, tmp):
     return 0
 
 
-def brain_seed(plugin, project):
-    """Hot memory at its count caps, every text 150 characters with 8 links, appended through the store library."""
-    sys.path.insert(0, os.path.join(plugin, "scripts"))
-    import brain_store as s
-    d = s.state_dir(project)
-    links = ["kb/" + "l" * 77] * 8
-    with s.locked(d):
-        raw = s.append(d, [], {"op": "claim", "t": s.now_iso(), "by": {"session": "lat", "agent": None}, "takeover": False})
-        for letter, n in s.CAPS.items():
-            kind = [k for k, v in s.KINDS.items() if v == letter][0]
-            for i in range(1, n + 1):
-                item = {"id": "%s%d" % (letter, i), "kind": kind, "pinned": letter == "D", "text": "t" * 150,
-                        "source": {"type": "owner" if letter in "DW" else "coordinator"}, "links": links, "anchors": [],
-                        "expires": "2099-01-02T22:00:00Z" if letter == "W" else None, "supersedes": None}
-                raw = s.append(d, raw, {"op": "owner-add" if letter in "DW" else "add", "t": s.now_iso(), "item": item,
-                                        "by": {"session": "lat", "agent": None}})
-        ops = [json.loads(b) for b in raw]
-        s.write_caches(d, s.fold(ops), s.head_of(raw))
+SEED = r"""
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import brain_store as s
+d = s.state_dir(sys.argv[2])
+links = ["kb/" + "l" * 77] * 8
+closes = getattr(s, "FORMAT", 1) >= 2                  # the store knows `closes`: a base before it gets plain anchors
+linked = tuple(getattr(s, "CLOSES_LETTERS", ("N", "X")))
+n = items = 0
+with s.locked(d):
+    raw = s.append(d, [], {"op": "claim", "t": s.now_iso(), "by": {"session": "lat", "agent": None}, "takeover": False})
+    for letter, cap in s.CAPS.items():
+        kind = [k for k, v in s.KINDS.items() if v == letter][0]
+        for i in range(1, cap + 1):
+            items += 1
+            src = ({"type": "owner", "quote": "q" * 300, "where": "w" * 60} if letter in "DW" else {"type": "coordinator"})
+            item = {"id": "%s%d" % (letter, i), "kind": kind, "pinned": letter == "D", "text": "t" * 150, "source": src,
+                    "links": links, "anchors": [], "expires": "2099-01-02T22:00:00Z" if letter == "W" else None,
+                    "supersedes": None}
+            if letter in linked + ("D",):
+                n += 1
+                item["anchors"] = ["acme/app#%d" % n]
+                if closes and letter in linked:
+                    item["closes"] = item["anchors"]
+            raw = s.append(d, raw, {"op": "owner-add" if letter in "DW" else "add", "t": s.now_iso(), "item": item,
+                                    "by": {"session": "lat", "agent": None}})
+    ops = [json.loads(b) for b in raw]
+    s.write_caches(d, s.fold(ops), s.head_of(raw))
+print(n, items)
+"""
+GH_STUB = """#!/bin/sh
+# stub gh for the brain's lookups: every issue or PR is open, in the --jq shape the caller asks for
+case "$*" in
+  *state_reason*) printf 'open\\t\\t\\t\\tpr\\n' ;;
+  *) printf 'open\\t\\t\\n' ;;
+esac
+"""
+
+
+def brain_seed(plugin, project, env):
+    """Hot memory at its count caps, every text 150 characters with 8 links, an anchor on every Now, Next and pinned item,
+    appended through the tree's own store library (a subprocess, so two trees' libraries never meet). Returns the anchors."""
+    r = subprocess.run((sys.executable, "-c", SEED, os.path.join(plugin, "scripts"), project), env=env, capture_output=True,
+                       text=True, check=True)
+    return [int(x) for x in r.stdout.split()]
+
+
+def start_events(plugin):
+    """The SessionStart commands of a brain tree that inject (`session-start…`), from its hooks.json."""
+    h = json.load(open(os.path.join(plugin, "hooks", "hooks.json"), encoding="utf-8"))
+    cmds = [c.get("command", "") for g in h["hooks"]["SessionStart"] for c in g["hooks"]]
+    return [c.rsplit(" ", 1)[1] for c in cmds if c.rsplit(" ", 1)[-1].startswith("session-start")]
 
 
 def brain(a):
     plugin = os.path.abspath(a.after or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                      "plugins", "vibemaestro-brain"))
+    trees = {"after": plugin}
+    if a.before:
+        trees = {"before": os.path.abspath(a.before), "after": plugin}
     tmp = tempfile.mkdtemp(prefix="hook-latency-b-")   # no hook word in the paths the input carries
     try:
         gcfg = os.path.join(tmp, "gitconfig")
         with open(gcfg, "w") as f:
             f.write("[user]\n\tname = t\n\temail = t@t\n[init]\n\tdefaultBranch = main\n")
+        stub = os.path.join(tmp, "bin")
+        os.makedirs(stub)
+        with open(os.path.join(stub, "gh"), "w") as f:
+            f.write(GH_STUB)
+        os.chmod(os.path.join(stub, "gh"), 0o755)
         env = dict(os.environ, GIT_CONFIG_GLOBAL=gcfg, GIT_CONFIG_NOSYSTEM="1", HOME=tmp, XDG_STATE_HOME=os.path.join(tmp, "state"),
-                   PYTHONDONTWRITEBYTECODE="1")
-        for k in ("CLAUDE_CONFIG_DIR", "BRAIN_OFF", "INTENT_SLUG", "SEAT", "BRAIN_TEST", "BRAIN_TEST_PAUSE_MS"):
+                   PYTHONDONTWRITEBYTECODE="1", PATH=stub + os.pathsep + os.environ.get("PATH", ""))
+        for k in ("CLAUDE_CONFIG_DIR", "BRAIN_OFF", "INTENT_SLUG", "SEAT", "BRAIN_TEST", "BRAIN_TEST_PAUSE_MS", "BRAIN_DEFAULT_REPO",
+                  "CLAUDE_PROJECT_DIR", "CLAUDE_CODE_SESSION_ID"):
             env.pop(k, None)
         os.environ.update(GIT_CONFIG_GLOBAL=gcfg, GIT_CONFIG_NOSYSTEM="1", HOME=tmp, XDG_STATE_HOME=env["XDG_STATE_HOME"])
-        proj = os.path.join(tmp, "proj")
-        os.makedirs(os.path.join(proj, "src"))
-        git("init", "-q", "-b", "main", proj)
-        brain_seed(plugin, proj)
-        hook = os.path.join(plugin, "scripts", "brain_hook.py")
-        cases = [
-            ("session-start", "session-start", {"source": "compact", "hook_event_name": "SessionStart"}),
-            ("guard-owner", "guard-owner", {"tool_name": "Bash", "tool_input": {"command": "git status"}, "permission_mode": "default"}),
-            ("guard-bash", "guard-bash", {"tool_name": "Bash", "tool_input": {"command": "brain op touch N1"}}),
-            ("guard-edit", "guard-edit", {"tool_name": "Edit", "tool_input": {"file_path": os.path.join(proj, "src", "main.py")}}),
-        ]
+        projs, anchors, items, events = {}, {}, {}, {}
+        for name, tree in trees.items():
+            projs[name] = os.path.join(tmp, "proj-" + name)
+            os.makedirs(os.path.join(projs[name], "src"))
+            git("init", "-q", "-b", "main", projs[name])
+            anchors[name], items[name] = brain_seed(tree, projs[name], env)
+            events[name] = start_events(tree)
+        start = {"source": "compact", "hook_event_name": "SessionStart"}
+
+        def run(tree, event, extra, sid):
+            data = json.dumps(dict({"hook_event_name": "PreToolUse"}, session_id=sid, cwd=projs[tree], **extra))
+            t = time.perf_counter()
+            r = subprocess.run((sys.executable, os.path.join(trees[tree], "scripts", "brain_hook.py"), event), input=data,
+                               text=True, env=env, cwd=projs[tree], capture_output=True, timeout=30)
+            return (time.perf_counter() - t) * 1000, r.stdout
+
+        def run_start(tree):
+            """Every SessionStart command of the tree at once; (wall ms until the last exits, [the strings injected])."""
+            data = json.dumps(dict(start, session_id="lat", cwd=projs[tree]))
+            t = time.perf_counter()
+            ps = [subprocess.Popen((sys.executable, os.path.join(trees[tree], "scripts", "brain_hook.py"), e), stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env, cwd=projs[tree])
+                  for e in events[tree]]
+            for p in ps:                                # every command gets its input at once, as Claude Code gives it
+                p.stdin.write(data)
+                p.stdin.close()
+            outs = [p.stdout.read() for p in ps]        # a string is ≤ 10,000 characters: no pipe fills
+            for p in ps:
+                p.wait(timeout=30)
+            ms = (time.perf_counter() - t) * 1000
+            return ms, [json.loads(o)["hookSpecificOutput"]["additionalContext"] if o.strip() else "" for o in outs]
+
+        for name in trees:                              # warm: every anchor answered and cached (12 lookups per start)
+            for _ in range(2 + anchors[name] // 12):
+                run_start(name)
         here = os.path.relpath(plugin, os.getcwd())
         print("vibemaestro-brain hooks, %s; median ms of %d runs (p90 in brackets)" % (
             here if not here.startswith("..") else os.path.basename(plugin), a.runs))   # no local path in a PR body
@@ -243,21 +317,31 @@ def brain(a):
             subprocess.run((sys.executable, "-c", "pass"), env=env, capture_output=True)
             base.append((time.perf_counter() - t) * 1000)
         print("%-14s %8.1f [%5.1f]" % ("python3 -c pass", statistics.median(base), sorted(base)[int(len(base) * 0.9) - 1]))
-        for label, event, extra in cases:
-            ts, out = [], ""
-            for _ in range(a.runs):
-                data = json.dumps(dict({"hook_event_name": "PreToolUse"}, session_id="lat-" + uuid.uuid4().hex, cwd=proj, **extra))
-                t = time.perf_counter()
-                r = subprocess.run((sys.executable, hook, event), input=data, text=True, env=env, cwd=proj,
-                                   capture_output=True, timeout=30)
-                ts.append((time.perf_counter() - t) * 1000)
-                out = r.stdout
-            if event == "session-start" and "hot memory" not in out:
-                print("session-start injected no hot memory: the measurement is void")
+        ts, outs = {k: [] for k in trees}, {}
+        for _ in range(a.runs):                         # the writer's SessionStart, the trees interleaved
+            for name in trees:
+                ms, outs[name] = run_start(name)
+                ts[name].append(ms)
+        for name in trees:
+            if "hot memory" not in outs[name][0] or "checked" in outs[name][0]:
+                print("SessionStart (%s) injected no hot memory, or not from a warm cache: the measurement is void" % name)
                 return 1
-            print("%-14s %8.1f [%5.1f]%s" % (label, statistics.median(ts), sorted(ts)[int(len(ts) * 0.9) - 1],
-                                             "  (%d characters injected)" % len(json.loads(out)["hookSpecificOutput"]["additionalContext"])
-                                             if event == "session-start" else ""))
+        med = {k: statistics.median(v) for k, v in ts.items()}
+        for name in trees:
+            print("%-14s %8.1f [%5.1f]  (%s; %d command%s; %s characters injected; writer, warm cache, %d items, %d anchors)" % (
+                "SessionStart", med[name], sorted(ts[name])[int(len(ts[name]) * 0.9) - 1], name, len(events[name]),
+                "" if len(events[name]) == 1 else "s", " + ".join("{:,}".format(len(o)) for o in outs[name]), items[name],
+                anchors[name]))
+        if a.before:
+            print("%-14s %+8.1f  (after - before)" % ("delta", med["after"] - med["before"]))
+        cases = [
+            ("guard-owner", "guard-owner", {"tool_name": "Bash", "tool_input": {"command": "git status"}, "permission_mode": "default"}),
+            ("guard-bash", "guard-bash", {"tool_name": "Bash", "tool_input": {"command": "brain op touch N1"}}),
+            ("guard-edit", "guard-edit", {"tool_name": "Edit", "tool_input": {"file_path": os.path.join(projs["after"], "src", "main.py")}}),
+        ]
+        for label, event, extra in cases:
+            ts1 = [run("after", event, extra, "lat-" + uuid.uuid4().hex)[0] for _ in range(a.runs)]
+            print("%-14s %8.1f [%5.1f]" % (label, statistics.median(ts1), sorted(ts1)[int(len(ts1) * 0.9) - 1]))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return 0

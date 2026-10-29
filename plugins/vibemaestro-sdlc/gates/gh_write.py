@@ -21,7 +21,7 @@ kind:
   issue-edit     issue, title and/or body
   pr-body-edit   pr, body
   issue-reopen   issue
-  issue-close    issue, reason (completed | not_planned)
+  issue-close    issue, reason (completed | not_planned) [comment, or comment_file with sha256, and marker: a closing comment]
   pr-close       pr, head (the full 40-hex head SHA the PR must still have)
   pr-ready       pr, head: a draft pull request, open at that head, marked ready for review
   pr-create      base, branch, head, title, draft, body: a pull request from the existing branch of the same repository, open
@@ -52,6 +52,11 @@ pull request stays in the history). file-pr's branch stays: this baton never del
 names it and fails (the run ends with rc 5 and the owner, who may delete a branch, is told); once the branch is gone it holds.
 issue-comment, issue-edit, issue-close, pr-body-edit and pr-close refuse a closed issue or a closed or merged pull request, except an issue-comment with `"closed_ok": true`: it passes there, and its plan line says
 `on a closed target (closed_ok)`, so the signed plan and the baton log show it (a measured result posted after an auto-close or a merge).
+
+An issue-close with a `comment` (read like a body, pinned the same way) and its `marker` posts the comment first and closes after it,
+in one op: the plan line carries the comment's digest, the post-check reads both, and the undo retracts the comment (an edit, as
+for issue-comment, never a deletion) and reopens the issue, only while the comment holds the posted body (or its retraction) and
+the issue is closed as the run closed it (or already open); if either changed since the run, both are left alone (rc 5).
 
 The scope fence: a deletion (`refuse-delete`), a repository creation (`refuse-repo-create`), an unknown kind or key, and a spec
 that breaks the rules above are misuse (rc 64), refused before any call. A repository that is not private, or is internal
@@ -108,13 +113,14 @@ KINDS = {
     "issue-edit": ({"issue"}, {"title"}, None),
     "pr-body-edit": ({"pr"}, set(), True),
     "issue-reopen": ({"issue"}, set(), False),
-    "issue-close": ({"issue", "reason"}, set(), False),
+    "issue-close": ({"issue", "reason"}, {"marker"}, None),     # its body keys are `comment`, `comment_file` (BODY_KEYS_CLOSE)
     "pr-close": ({"pr", "head"}, set(), False),
     "pr-ready": ({"pr", "head"}, set(), False),
     "pr-create": ({"base", "branch", "head", "title", "draft"}, set(), True),
     "file-pr": ({"base", "branch", "path", "content_file", "content_sha256", "title", "draft"}, set(), True),
 }                                                       # kind: (required keys, optional keys, body: required / optional / none)
 BODY_KEYS = {"body", "body_file", "sha256"}
+BODY_KEYS_CLOSE = {"comment", "comment_file", "sha256"}      # issue-close's closing comment is a body under these names
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 ID_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
 TOKEN_RE = re.compile(r"\{\{issue:([^{}]*)\}\}")
@@ -342,7 +348,8 @@ class Op:
             raise Refuse("refuse-unknown-op", "op %d is %r; the kinds are %s" % (i, kind, ", ".join(sorted(KINDS))))
         self.kind = kind
         req, opt, body = KINDS[kind]
-        allowed_keys = {"op", "repo"} | req | opt | (BODY_KEYS if body is not False else set())
+        self.bkey, self.fkey = ("comment", "comment_file") if kind == "issue-close" else ("body", "body_file")
+        allowed_keys = {"op", "repo"} | req | opt | ((BODY_KEYS_CLOSE if kind == "issue-close" else BODY_KEYS) if body is not False else set())
         extra = sorted(set(d) - allowed_keys)
         if extra:
             raise Refuse("refuse-unknown-key", "op %d (%s) has %s; it takes %s" % (i, kind, ", ".join(extra), ", ".join(sorted(allowed_keys))))
@@ -410,16 +417,17 @@ class Op:
                 raise Refuse("refuse-spec", "op %d: %s %r is not a positive number%s" % (
                     i, key, v, " or @<id>" if kind == "issue-comment" else ""))
         self.template, self.pin = None, None
-        has = [k for k in ("body", "body_file") if k in d]
+        bkey, fkey = self.bkey, self.fkey
+        has = [k for k in (bkey, fkey) if k in d]
         if body is True and len(has) != 1 or body is None and len(has) > 1:
-            raise Refuse("refuse-body", "op %d (%s): give exactly one of body and body_file" % (i, kind))
-        if "sha256" in d and "body_file" not in d:
-            raise Refuse("refuse-body", "op %d: sha256 pins a body_file" % i)
-        if "body" in d:
-            if not isinstance(d["body"], str):
-                raise Refuse("refuse-body", "op %d: body is a string" % i)
-            self.template = d["body"]
-        elif "body_file" in d:
+            raise Refuse("refuse-body", "op %d (%s): give %s one of %s and %s" % (i, kind, "exactly" if body else "at most", bkey, fkey))
+        if "sha256" in d and fkey not in d:
+            raise Refuse("refuse-body", "op %d: sha256 pins a %s" % (i, fkey))
+        if bkey in d:
+            if not isinstance(d[bkey], str):
+                raise Refuse("refuse-body", "op %d: %s is a string" % (i, bkey))
+            self.template = d[bkey]
+        elif fkey in d:
             self.template = self.read_body(d, spec_dir)
         if self.template is not None:
             if "\x00" in self.template or "\r" in self.template:
@@ -429,6 +437,8 @@ class Op:
             for t in TOKEN_RE.findall(self.template):
                 if t not in creates:
                     raise Refuse("refuse-ref", "op %d: {{issue:%s}} names no earlier issue-create" % (i, t))
+        if kind == "issue-close" and (self.template is None) != (self.marker is None):
+            raise Refuse("refuse-spec", "op %d (issue-close): a comment and its marker go together" % i)
         if kind == "issue-edit" and self.title is None and self.template is None:
             raise Refuse("refuse-spec", "op %d (issue-edit) changes nothing: give a title or a body" % i)
         self.fence_open = self.template is not None and fence_open_at_end(self.template)
@@ -456,12 +466,12 @@ class Op:
         return data, (rel, pin, sha256(data))
 
     def read_body(self, d, spec_dir):
-        i, rel = self.i, d["body_file"]
-        data, self.pin = self.read_pinned("refuse-body", "body_file", "sha256", rel, d.get("sha256"), spec_dir)
+        i, rel = self.i, d[self.fkey]
+        data, self.pin = self.read_pinned("refuse-body", self.fkey, "sha256", rel, d.get("sha256"), spec_dir)
         try:
             return data.decode("utf-8")
         except UnicodeDecodeError:
-            raise Refuse("refuse-body", "op %d: body_file %s is not UTF-8" % (i, rel))
+            raise Refuse("refuse-body", "op %d: %s %s is not UTF-8" % (i, self.fkey, rel))
 
     def read_path(self, d):
         i, path = self.i, d["path"]
@@ -901,13 +911,20 @@ class Plan:
                 continue
             self.lines[op.i] = self.one(op, viewer)
 
+    def marker_absent(self, op, tag, num):
+        """No comment on the target holds the op's marker (an issue-comment's, or an issue-close's closing comment)."""
+        cs = self.w.read("repos/%s/issues/%d/comments?per_page=100" % (op.repo, num), pages=True)
+        hit = [x.get("id") for x in (cs or []) if op.marker in body_of(x)]
+        self.cond("marker-absent", not hit, "%s: %s" % (tag, "no comment on %s#%d holds the marker" % (op.repo, num)
+                                                        if not hit else "comment %s already holds the marker" % hit[0]))
+
     def one(self, op, viewer):
         w, sp = self.w, self.spec
         tag = "op %d (%s)" % (op.i, op.kind)
         if op.pin:
             rel, pin, actual = op.pin
-            self.cond("pinned", pin == actual, "%s: body_file %s sha256 %s%s" % (
-                tag, rel, actual[:16], "" if pin == actual else ", pinned %s" % pin[:16]))
+            self.cond("pinned", pin == actual, "%s: %s %s sha256 %s%s" % (
+                tag, op.fkey, rel, actual[:16], "" if pin == actual else ", pinned %s" % pin[:16]))
         text, digest = self.render(op)
         if op.template is not None:
             self.cond("fences", not op.fence_open, "%s: %s" % (
@@ -970,7 +987,9 @@ class Plan:
         closed_ok = op.kind == "issue-comment" and op.closed_ok and state == "closed"
         self.cond("open", state == "open" or closed_ok, "%s: %s#%d is %s%s" % (tag, op.repo, num, state, " (closed_ok)" if closed_ok else ""))
         if op.kind == "issue-close":
-            return "%s %s%s reason %s" % (head, op.repo, target, op.reason)
+            if op.template is not None:
+                self.marker_absent(op, tag, num)
+            return "%s %s%s reason %s%s" % (head, op.repo, target, op.reason, " comment %s" % digest if digest else "")
         if op.kind in ("pr-close", "pr-ready"):
             live = (obj.get("head") or {}).get("sha")
             self.cond("head", live == op.head, "%s: %s#%d head %s%s" % (tag, op.repo, num, live, "" if live == op.head
@@ -980,10 +999,7 @@ class Plan:
                     tag, op.repo, num, "a draft" if obj.get("draft") is True else "not a draft: nothing to mark ready"))
             return "%s %s%s head %s" % (head, op.repo, target, op.head)
         if op.kind == "issue-comment":
-            cs = w.read("repos/%s/issues/%d/comments?per_page=100" % (op.repo, num), pages=True)
-            hit = [x.get("id") for x in (cs or []) if op.marker in body_of(x)]
-            self.cond("marker-absent", not hit, "%s: %s" % (tag, "no comment on %s#%d holds the marker" % (op.repo, num)
-                                                            if not hit else "comment %s already holds the marker" % hit[0]))
+            self.marker_absent(op, tag, num)
             return "%s %s%s %s%s" % (head, op.repo, target, "on a closed target (closed_ok) " if closed_ok else "", digest)
         was = body_of(obj)
         if op.kind == "pr-body-edit":
@@ -1165,12 +1181,34 @@ def mode_do(spec, i, plan_file):
             payload["state"] = "open"
         else:
             payload.update(state="closed", state_reason=op.reason)
+            if text is not None:
+                e["comment_posted"] = text
     j["entries"][str(i)] = e
     save_journal(j)                                     # the before-state is on disk before the write
+    commented = False
+    if op.kind == "issue-close" and text is not None:   # the closing comment lands first, its id in the journal before the close
+        try:
+            res = api("POST", "repos/%s/issues/%d/comments" % (op.repo, op.number), {"body": text})
+        except (Rejected, NotFound):
+            e["status"] = "rejected"
+            save_journal(j)
+            raise
+        cid = res.get("id") if isinstance(res, dict) else None
+        if not isinstance(cid, int):
+            raise G.Infra("the closing comment of op %d returned no comment id" % i)
+        e["comment"] = cid
+        save_journal(j)
+        commented = True
+    if commented:
+        e["close_sent"] = True                          # the undo reopens only a close this run sent (a person's close is not its to undo)
+        save_journal(j)
     try:
         res = api(method, path, payload)
     except (Rejected, NotFound):
-        e["status"] = "rejected"                        # GitHub said no: nothing landed, nothing to undo
+        if commented:
+            e["close_sent"] = False                     # refused: nothing closed; the entry stays open so the undo retracts the comment
+        else:
+            e["status"] = "rejected"                    # GitHub said no: nothing landed, nothing to undo
         save_journal(j)
         raise
     if op.kind == "issue-create":
@@ -1299,6 +1337,19 @@ def pr_problems(w, e):
     return out
 
 
+def close_comment_problems(w, e):
+    """What differs from the closing comment an issue-close posted: it is there, on that issue, byte for byte."""
+    c = w.read("repos/%s/issues/comments/%s" % (e["repo"], e.get("comment")))
+    if c is None:
+        return ["the closing comment %s is not there" % e.get("comment")]
+    url = str(c.get("issue_url") or "")
+    on = url.rsplit("/repos/", 1)[-1] if "/repos/" in url else ""
+    out = [differ("comment body", body_of(c), e["comment_posted"])]
+    if not same_repo(on, "%s/issues/%d" % (e["repo"], e["number"])):
+        out.append("comment %s is not on %s#%d" % (e.get("comment"), e["repo"], e["number"]))
+    return out
+
+
 def mode_postcheck(spec_path):
     j = the_open_run(spec_path)
     if not j:
@@ -1341,6 +1392,8 @@ def mode_postcheck(spec_path):
                         problems.append("merged, not closed")
                     if k == "issue-close" and obj.get("state_reason") != e["reason"]:
                         problems.append("closed as %s, not %s" % (obj.get("state_reason"), e["reason"]))
+                    if k == "issue-close" and e.get("comment_posted") is not None:
+                        problems.extend(close_comment_problems(w, e))
                     if k == "issue-create":
                         have = set(x.get("name") for x in obj.get("labels") or [] if isinstance(x, dict))
                         if not set(e.get("labels") or []) <= have:
@@ -1368,7 +1421,8 @@ def describe_undo(e):
             "issue-edit": "put back the title and body of %s" % num,
             "pr-body-edit": "put back the body of %s" % num,
             "issue-reopen": "close %s again" % num,
-            "issue-close": "reopen %s" % num,
+            "issue-close": ("retract comment %s on %s, then reopen it (closed by op %d)" % (e.get("comment") or "?", num, e["op"])
+                            if e.get("comment_posted") is not None else "reopen %s" % num),
             "pr-close": "reopen pull request %s (closed by op %d)" % (num, e["op"]),
             "pr-ready": "turn pull request %s back into a draft (marked ready by op %d)" % (num, e["op"]),
             "pr-create": "close pull request %s (opened by op %d)" % (num, e["op"]),
@@ -1491,6 +1545,8 @@ def undo_entry(j, i):
     b = e["before"]
     if obj is None:
         return "%s#%d is gone: left alone" % (repo, e["number"])
+    if k == "issue-close" and e.get("comment_posted") is not None:
+        return undo_close_comment(w, e, obj, path)
     if k == "issue-edit":
         mine = (e.get("title") is None or obj.get("title") == e["title"]) and ("posted" not in e or body_of(obj) == e["posted"])
         if obj.get("title") == b["title"] and body_of(obj) == b["body"]:
@@ -1515,6 +1571,35 @@ def undo_entry(j, i):
     if obj.get("state_reason") != e["reason"]:
         return "closed as %s since the run: left alone" % obj.get("state_reason")
     api("PATCH", path, {"state": "open"})
+    return "undone"
+
+
+def undo_close_comment(w, e, obj, path):
+    """Undo an issue-close that posted a closing comment. Both parts are checked before either is written: the comment must hold
+    the posted body (or its retraction, or be gone), and an issue the run closed must still be closed as the run closed it (or be
+    open: an earlier undo or a person reopened it); one that changed leaves both alone. The issue is reopened only if the run sent
+    the close (`close_sent`): a close the run never sent, or one GitHub refused, is somebody else's. The comment is retracted first,
+    then the issue reopened, so a run cut short after either write is finished by the next undo from the live state alone."""
+    repo, num = e["repo"], e["number"]
+    cid = e.get("comment")
+    if not cid:
+        hits = find_by_marker("repos/%s/issues/%d/comments?per_page=100" % (repo, num), e["marker"])
+        if len(hits) > 1:
+            return "%d comments hold the marker: left alone" % len(hits)
+        if not hits:
+            return LOST
+        cid = e["comment"] = hits[0].get("id")
+    c = w.read("repos/%s/issues/comments/%d" % (repo, cid))
+    live = body_of(c) if c is not None else None
+    if live not in (None, RETRACTED, e["comment_posted"]):
+        return "comment %d changed since the run: left alone (the issue stays as it is)" % cid
+    sent = e.get("close_sent") is True
+    if sent and obj.get("state") == "closed" and obj.get("state_reason") != e["reason"]:
+        return "closed as %s since the run: left alone (the comment stays as it is)" % obj.get("state_reason")
+    if live == e["comment_posted"]:
+        api("PATCH", "repos/%s/issues/comments/%d" % (repo, cid), {"body": RETRACTED})
+    if sent and obj.get("state") == "closed":
+        api("PATCH", path, {"state": "open"})
     return "undone"
 
 

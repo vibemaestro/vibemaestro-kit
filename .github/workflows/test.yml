@@ -1,22 +1,31 @@
 name: test
 
-# Every PR and every push to main runs the PLAN of its change: the suites tests/plan.py picks from tests/suites.map, plus the
-# coverage guard (test-plan.sh). The full suite runs on a schedule, twice a week: test-full.yml.
+# Every ready PR runs the PLAN of its change: the suites tests/plan.py picks from tests/suites.map, plus the coverage guard
+# (test-plan.sh). A push to main runs no suite: the full suite runs on a schedule, twice a week (test-full.yml). The term scan
+# runs on PRs and on push.
 # Job `tests` needs no secret and no other repo; job `scan-terms` reads the secret KIT_TERMS (the internal-term list).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
 permissions:
   contents: read
 
+# A new commit on the PR cancels the run of the head it replaces. Every other event (a comment, an edit, a label, a review,
+# ready, main, a dispatch) gets a group of its own, so it neither cancels a commit run nor replaces a pending one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
 jobs:
   tests:
     name: bash tests/run-all.sh   # the check name branch protection may require: kept as it was
-    # Self-hosted runner when the repo variable CI_RUNNER is set; otherwise GitHub-hosted (the fallback).
-    # A self-hosted runner only serves a private repository: remove CI_RUNNER before the repository goes public.
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    # Self-hosted runner when the repo variable CI_RUNNER is set. Unset: a private repository fails at once (the expression errors; it never
+    # falls back to a paid hosted runner), the public repository uses GitHub-hosted ubuntu-latest. Remove CI_RUNNER before the repository goes public.
+    runs-on: ${{ vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}
     timeout-minutes: 45   # a plan can be the full suite (a planner change, an unmapped file): 18-30 minutes on the runner
     steps:
       # Full history: the planner diffs from the merge-base, and tests/test-contract.sh compares with origin/main (which a full
@@ -31,13 +40,16 @@ jobs:
       - name: Cài CLI claude (không đăng nhập)
         run: npm install -g @anthropic-ai/claude-code@2.1.290
 
-      # The plan of this change: the PR's base (the checkout is the merge commit, so the plan is what merging changes), or for a
-      # push the commit before it. A base that does not resolve (a new branch, a force-push) gives the full suite.
+      # The plan of this change: the checkout is GitHub's merge commit of the PR head into the current main, so the plan is the
+      # diff from its first parent, what merging changes. Not the event's base.sha: that is the main of the PR's last push, and a
+      # diff from it also counts what other PRs merged since. A checkout that is not a two-parent merge whose second parent is the
+      # event's head.sha gives the full suite. PR_HEAD is unset before the run: the suites inherit the step's environment, and one
+      # of them (test-export-gate.sh) runs a workflow step that reads a PR_HEAD of its own.
       - name: Chạy bộ test (the plan of this change)
         env:
           PLUGIN_REQUIRE_CLAUDE: "1"
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-        run: bash tests/run-all.sh --changed "$BASE"
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: pr_head=$PR_HEAD; unset PR_HEAD; bash tests/run-all.sh --changed "@merge-parent:$pr_head"
 
   # The internal-term scan: the owner's term list (repository secret KIT_TERMS) over the tracked tree.
   # Why a secret: the list holds the very names it hunts, so it is never committed.
@@ -47,8 +59,10 @@ jobs:
   # Only where the term list lives: a public copy of this file skips the job instead of failing closed on every PR.
   scan-terms:
     name: internal-term scan
-    if: github.event.repository.private
-    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    # Light gate runner when CI_GATE_RUNNER is set, else CI_RUNNER; the same on every job: a private repository with neither variable fails at once
+    # (a self-hosted runner only serves a private repository), the public repository (no runner) uses GitHub-hosted ubuntu-latest
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

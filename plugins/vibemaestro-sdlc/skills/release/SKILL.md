@@ -31,8 +31,8 @@ until then a release can be cut and merged, but `release` cannot move).
    `CONTRACT.md` whose surface moved since `release`, or whose plugin is released for the first time, gets `Frozen at` = its new
    version. A version that is not what the plan row expects means a change file says another level: fix that change file in an
    ordinary PR first, never the numbers.
-3. **Cut, check, commit** (cut writes the working tree only: the `CHANGELOG.md` sections, the change files removed, `Frozen at`;
-   no manifest and no kb page):
+3. **Cut, check, commit** (cut writes the working tree only: the `CHANGELOG.md` sections, with the change files' `upgrade:` lines
+   under `### Upgrade notes`, the change files removed, `Frozen at`; no manifest and no kb page):
 
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" cut
@@ -44,6 +44,27 @@ until then a release can be cut and merged, but `release` cannot move).
    tip, a `release` that holds a hotfix main lacks (merge its back-merge PR first), nothing pending, or a surface change named
    below `minor`. When main moves before the PR merges, merge main and cut again: CI is red while a pending change file is not shipped.
 4. **Open the PR into main** with `vibemaestro-sdlc:ship`; the PR body names the versions. It merges through `kit:merge-pr` like any PR.
+
+## A fold (the top version is cut but not published)
+
+When a release was cut and merged but never published, and the changes merged since must ship under that same version, fold
+them into it instead of cutting the next one. Whether a version is published is read from the public repository's tags
+`<plugin>--v<version>` (`REPO` is its `owner/name` on GitHub, or a git URL): the branch `release` cannot tell it, because it moves
+before anything is published.
+
+1. A worktree of its own from the tip of main, as for a release.
+2. `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" plan --fold --public REPO`: each plugin a change file names reads
+   `X.Y.Z -> X.Y.Z (fold, <level>)`.
+3. `release.py cut --fold --public REPO`, then `release.py check --public REPO` (kind: fold, rc 0), then commit as for a release.
+   The cut adds each change file's line after the lines of the plugin's top section and its `upgrade:` line under that section's
+   `### Upgrade notes`. A line the section already holds is not written again. It refuses when a version's tag already exists
+   (published: cut the next version without `--fold`), when the tags cannot be read, when a plugin was never released, and when
+   the folded levels ask another version than the section carries (a minor into a patch section). In those cases a plain cut is
+   the way.
+4. A line the section already held may be reworded in the same PR (one fix commit after the cut), since the version is not
+   published: it keeps its `- <level>:`, and the section keeps its count of entries and notes. `check --public REPO` then says
+   how many lines it rewords. A published section and every older section stay frozen.
+5. Open the PR and, after it merges, move `release` to it, as for a release. The check in CI needs `--public REPO` to pass a fold.
 
 ## A hotfix
 
@@ -74,4 +95,6 @@ Never squash it, never update its branch from main.
 
 Nothing here exports or publishes. What the public form of a release carries: each plugin's released version written into its
 exported `plugin.json`, the range `>=0.1.0` on each dependency on a released sibling, and tags `<plugin>--v<version>`, the form
-Claude Code resolves a dependency range against.
+Claude Code resolves a dependency range against. The body of a public release (a GitHub Release on each new tag) is what
+`release.py notes <plugin> <version> [--repo DIR]` prints: that version's CHANGELOG section, then an `### Updating` paragraph
+(rc 1 when the CHANGELOG has no such section).

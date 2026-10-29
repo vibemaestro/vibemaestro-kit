@@ -7,6 +7,7 @@ name: export-gate
 # term-list size is printed, no artifact, no summary. In a public repository (no secret, and nothing left to export) the job is skipped.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       rev:
@@ -17,13 +18,20 @@ on:
 permissions:
   contents: read
 
+# A new commit on the PR cancels the run of the head it replaces. Every other event (a comment, an edit, a label, a review,
+# ready, main, a dispatch) gets a group of its own, so it neither cancels a commit run nor replaces a pending one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
 jobs:
   export-gate:
     name: export-gate
     # only where the private term list lives: a public copy of this file skips the job instead of failing closed on every PR
-    if: github.event.repository.private
-    # Light gate runner when CI_GATE_RUNNER is set, else CI_RUNNER, else GitHub-hosted (a self-hosted runner only serves a private repository)
-    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    # Light gate runner when CI_GATE_RUNNER is set, else CI_RUNNER; the same on every job: a private repository with neither variable fails at once
+    # (a self-hosted runner only serves a private repository), the public repository (no runner) uses GitHub-hosted ubuntu-latest
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}
     timeout-minutes: 15
     steps:
       # Full history: the rev to export is the test-merge commit the checkout holds, or any commit a dispatch names.

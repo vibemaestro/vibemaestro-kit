@@ -8,7 +8,7 @@
 #      issues: write; the CI_RUNNER runner; the full `bash tests/run-all.sh` (no --changed, no filter) with PLUGIN_REQUIRE_CLAUDE=1
 #      and its own timeout; the issue step runs unless cancelled and is the only place the token appears; no other secret;
 #      the optional export_rev input: the `full` job runs only when it is empty, the `export` job only when it is given
-#      (ubuntu-latest, contents: read, no token, no secret, no issue, its own concurrency group, the suite run inside the export),
+#      (vars.CI_RUNNER like `full`, contents: read, no token, no secret, no issue, its own concurrency group, the suite run inside the export),
 #      and the 40-hex check's own shell block is run against good and hostile values;
 #   2. the issue step against a fake `gh` that keeps issues and labels in a JSON file: a failing run opens ONE issue (creating the
 #      label when missing), a second failing run comments on it, a green run closes it, a green run with no issue writes nothing,
@@ -97,7 +97,7 @@ has "$O" "cron=['0 19 * * 0,3']" "cron 0 19 * * 0,3 (Monday and Thursday 02:00 +
 has "$O" "perms=[('contents', 'read'), ('issues', 'write')]" "permissions: exactly contents: read and issues: write"
 has "$O" "jobs=['export', 'full']" "two jobs: full (as before) and export"
 has "$O" "jobperms=None" "the job does not widen permissions"
-has "$O" "runs-on=\${{ vars.CI_RUNNER || 'ubuntu-latest' }}" "runner: vars.CI_RUNNER, falling back to ubuntu-latest"
+has "$O" "runs-on=\${{ vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}" "runner: vars.CI_RUNNER; unset, a private repo fails and the public repo uses ubuntu-latest (judged for every workflow by tests/test-gates-workflows.sh)"
 has "$O" "fullsteps=1" "one step runs run-all.sh"
 has "$O" "fullrun=['bash tests/run-all.sh 2>&1 | tee \"\$RUNNER_TEMP/full.log\"']" "it runs the FULL suite: bash tests/run-all.sh, no --changed, no filter word"
 has "$O" "fullenv={'PLUGIN_REQUIRE_CLAUDE': '1'}" "the full step requires the claude CLI and gets no token"
@@ -118,14 +118,14 @@ has "$O" "dispatch={'inputs': {'export_rev': {'description': " "workflow_dispatc
 has "$O" "'required': False, 'type': 'string', 'default': ''}}}" "…optional, a string, empty by default"
 has "$O" "concurrency={'group': \"test-full\${{ inputs.export_rev && format('-export-{0}', inputs.export_rev) || '' }}\", 'cancel-in-progress': False}" "concurrency: group test-full with the input empty (as before), its own group with a rev; never cancels"
 has "$O" "xif=\${{ inputs.export_rev != '' }}" "the export job runs only when export_rev is given"
-has "$O" "xruns-on=ubuntu-latest" "the export job runs on ubuntu-latest, not on the CI_RUNNER variable"
+has "$O" "xruns-on=\${{ vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}" "the export job runs on vars.CI_RUNNER like the full job: never a literal hosted label"
 has "$O" "xperms={'contents': 'read'}" "the export job asks for contents: read only (no issues: write)"
 has "$O" "xconc=None" "no job-level concurrency (a job-level group would not release the workflow-level one)"
 has "$O" "xsoft=None" "the export job has no continue-on-error"
 has "$O" "xuntimed=[]" "every export step has its own timeout"
 has "$O" "xcheckout=[{'fetch-depth': 0, 'persist-credentials': False}]" "the export job checks out every branch and keeps no credentials"
 has "$O" "xcheck_first=True" "the 40-hex check is the first step, before checkout and export"
-has "$O" "xexport=['bash scripts/export-public.sh \"\$REV\" \"\$RUNNER_TEMP/export\"']" "the rev is exported with scripts/export-public.sh to a directory of the runner"
+has "$O" "xexport=['rm -rf -- \"\${RUNNER_TEMP:?}/export\"\\nbash scripts/export-public.sh \"\$REV\" \"\$RUNNER_TEMP/export\"']" "the rev is exported with scripts/export-public.sh to a directory of the runner, cleared first (the script refuses a target that is not empty)"
 has "$O" "xgit=[3]|['\${{ runner.temp }}/export']" "the export is made a git work tree (git init) inside the export directory, after the export"
 has "$O" "xjobtimeout=105" "the export job's timeout holds the 90-minute suite step plus the install and export steps"
 has "$O" "xgitcmds=['git init -q .', 'git add -Af', 'git -c user.name=export -c user.email=export@localhost -c commit.gpgsign=false commit -qm \"public export\"']" "the work tree is made with git init, git add -Af (ignored files too, as the export digest does) and one commit"
@@ -139,7 +139,7 @@ XJOB=$(python3 -c 'import sys,yaml,json; print(json.dumps(yaml.safe_load(open(sy
 hasnt "$XJOB" "github.token" "the export job holds no token"
 hasnt "$XJOB" "GITHUB_TOKEN" "…no GITHUB_TOKEN"
 hasnt "$XJOB" "secrets." "…no secret"
-hasnt "$XJOB" "vars." "…no repository variable"
+hasnt "$(python3 -c 'import sys,json; j=json.loads(sys.argv[1]); j.pop("runs-on"); print(json.dumps(j))' "$XJOB")" "vars." "…no repository variable (runs-on apart: the runner is the one thing it takes from vars)"
 hasnt "$XJOB" "full-run-issue" "…and no issue step"
 
 # the check's own shell block, run the way Actions runs it (bash -e), on good and hostile values

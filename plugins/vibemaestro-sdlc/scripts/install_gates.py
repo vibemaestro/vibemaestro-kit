@@ -8,9 +8,13 @@ Skills ask, scripts do: the `install-gates` skill collects the answers, this scr
 
 - Never overwrites. A file that exists is KEPT, byte for byte: `kept` when it equals what would be written, `kept (differs)` when it does
   not (the repo changed it on purpose, or the plugin has moved on: a person decides). A second run is a no-op.
-- The workflow templates (`gates/workflows/*.yml`) get `runs-on: ${{ vars.<runner var> || '<runner default>' }}`. The two values come from
-  the flags, else from `ci.runner_var` / `ci.runner_default` of the repo's `.vibemaestro/sdlc.json`, else `CI_RUNNER` / `ubuntu-latest`.
+- The workflow templates (`gates/workflows/*.yml`) get `runs-on: ${{ vars.CI_GATE_RUNNER || vars.<runner var> || '<runner default>' }}`. The two
+  values come from the flags, else from `ci.runner_var` / `ci.runner_default` of the repo's `.vibemaestro/sdlc.json`, else `CI_RUNNER` / `ubuntu-latest`.
   A runner label that is not `[A-Za-z0-9._-]+` and a variable that is not an identifier are refused before anything is written.
+- The runner default `self-hosted only` (`sdlc_config.RUNNER_SELF_HOSTED_ONLY`) is the form for an organisation that has no hosted runner: the
+  workflows get no label at all, `... || fromJSON('<var> is not set and ...')`, so with both variables unset or empty the run fails when it is
+  created, with that message, instead of a job that waits for a machine that never comes. A workflow kept from an earlier install keeps its
+  fallback: with this form the installer prints a WARNING for each kept file whose runs-on has no guard.
 - The gate scripts, the config loader and the message table (`messages.py`) are copied to `.vibemaestro/gates/` (the workflows run
   them from there, from the BASE branch).
 - The allowlist of the sensitive-info gate is written as a header-only file at `sensitive.allowlist` (default `.pr-sensitive-allow`).
@@ -145,6 +149,33 @@ def _find(rows, want):
     return None
 
 
+def self_hosted_only(default):
+    return default == sdlc_config.RUNNER_SELF_HOSTED_ONLY
+
+
+# the words the failing guard carries; a kept workflow without them on a runs-on line is judged to have a fallback
+GUARD_MARK = "is not set and this repo runs on self-hosted runners only"
+_RUNS_ON_KEY = re.compile(r"""^\s*(?:-\s+)?["']?runs-on["']?\s*:""")
+
+
+def kept_fallbacks(path):
+    """The `runs-on` lines of the kept workflow `path` that do not carry the failing guard (a line that is not exactly the guard counts as a
+    fallback: a warning too many is safe, one too few queues a job), or None when the file cannot be read."""
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
+            return [ln.strip() for ln in f if _RUNS_ON_KEY.match(ln) and GUARD_MARK not in ln]
+    except OSError:
+        return None
+
+
+def runner_fallback(var, default):
+    """The last operand of the runs-on expression: the quoted fallback label, or in the self-hosted-only form a `fromJSON` of text that is not
+    JSON, which fails the evaluation (the run is refused with the text in its error) and names no machine at all."""
+    if self_hosted_only(default):
+        return "fromJSON('%s %s; set the repository variable %s to the label of one')" % (var, GUARD_MARK, var)
+    return "'%s'" % default
+
+
 def runner_var_report(root, var, default):
     """The one line to print about the runner variable `var`: set, WARNING (unset or empty), or skipped. Names compare case-insensitively
     (GitHub stores them upper-cased). The repo's variables first, the organization's visible to the repo only when the repo's do not list
@@ -165,6 +196,10 @@ def runner_var_report(root, var, default):
         if got:
             return "runner variable %s: set (%s)" % (var, scope)
         state = "is set but empty on the %s" % scope if got is not None else "is not set on this repo or its organization"
+        if self_hosted_only(default):
+            return ("WARNING runner variable %s %s: the workflows have no fallback runner (ci.runner_default is \"%s\"), so a gate run "
+                    "fails at its start with a message naming the variable unless CI_GATE_RUNNER is set. Set it to the label of your runner: gh variable set %s --body "
+                    "<label> (this script never sets it)" % (var, state, default, var))
         return ("WARNING runner variable %s %s: the workflows fall back to runs-on '%s'. If that is a GitHub-hosted runner whose minutes "
                 "are locked, the gates never start and read as failed. Set it to the label of your runner: gh variable set %s --body "
                 "<label> (this script never sets it)" % (var, state, default, var))
@@ -178,7 +213,8 @@ def render(text, var, default, exception="COMMIT EXCEPTION:"):
     if "@@COMMIT_EXCEPTION@@" in text and ("${{" in exception or "}}" in exception):
         raise ValueError("tokens.commit_exception holds ${{ or }}: it cannot sit inside a workflow expression")
     tok = exception.replace("'", "''").replace("\\", "\\\\").replace('"', '\\"')
-    return text.replace("@@RUNNER_VAR@@", var).replace("@@RUNNER_DEFAULT@@", default).replace("@@COMMIT_EXCEPTION@@", tok)
+    return (text.replace("'@@RUNNER_DEFAULT@@'", runner_fallback(var, default)).replace("@@RUNNER_VAR@@", var)
+            .replace("@@RUNNER_DEFAULT@@", default).replace("@@COMMIT_EXCEPTION@@", tok))
 
 
 def write_new(path, data, mode, dry):
@@ -228,8 +264,8 @@ def main(argv):
     default = a.runner_default or cfg["ci"]["runner_default"]
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var):
         return die(64, "the runner variable must be an identifier ([A-Za-z_][A-Za-z0-9_]*), not %r" % var)
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", default):
-        return die(64, "the runner label must match [A-Za-z0-9._-]+, not %r" % default)
+    if not self_hosted_only(default) and not re.fullmatch(r"[A-Za-z0-9._-]+", default):
+        return die(64, "the runner label must match [A-Za-z0-9._-]+, or be %r (no fallback), not %r" % (sdlc_config.RUNNER_SELF_HOSTED_ONLY, default))
 
     plan = []   # (relative path, bytes, mode)
     for n in names:
@@ -267,6 +303,15 @@ def main(argv):
         res = write_new(os.path.join(root, *rel.split("/")), data, mode, a.dry_run)
         counts[res] = counts.get(res, 0) + 1
         print("%-16s %s" % (res, rel))
+        if res == "kept (differs)" and self_hosted_only(default) and rel.startswith(".github/workflows/"):
+            hosted = kept_fallbacks(os.path.join(root, *rel.split("/")))
+            if hosted is None:
+                print("WARNING %s is kept and could not be read, so it is not known whether its runs-on has a fallback: look at it, or delete it "
+                      "and install again." % rel)
+            elif hosted:
+                print("WARNING %s is kept, and its runs-on still has a fallback (%s) although ci.runner_default is \"%s\": a run with the "
+                      "variable unset can still go to that runner and queue without an error. Delete the file and install again to write "
+                      "the version with no fallback." % (rel, hosted[0], sdlc_config.RUNNER_SELF_HOSTED_ONLY))
         if res == "kept (differs)" and rel.endswith("/commit-discipline.yml"):
             with open(os.path.join(root, *rel.split("/")), "rb") as f:
                 have = f.read()
@@ -276,7 +321,8 @@ def main(argv):
                       "exemption token than tokens.commit_exception): an edit that adds the configured token may not run "
                       "the gate. Delete the file and install again to write the current one." % rel)
     print("install-gates: %s" % ", ".join("%s %d" % (k, v) for k, v in sorted(counts.items())))
-    print("runs-on in the workflows: ${{ vars.%s || '%s' }}  (set it in ci.runner_var / ci.runner_default of .vibemaestro/sdlc.json to keep it there)" % (var, default))
+    print("runs-on in the workflows: ${{ vars.CI_GATE_RUNNER || vars.%s || %s }}  (set it in ci.runner_var / ci.runner_default of .vibemaestro/sdlc.json to keep it there)"
+          % (var, "no fallback label (a run with neither variable set fails at its start)" if self_hosted_only(default) else "'%s'" % default))
     print(runner_var_report(root, var, default))
     print("config keys the gates read:")
     for n in names:

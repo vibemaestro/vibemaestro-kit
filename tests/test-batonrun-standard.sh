@@ -1,6 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# The BatonRun skill and rule: they name the standard docs/batonrun.md, and the skill's stop list is the runner's
+# The BatonRun skill and rule: they name the standard docs/batonrun.md, the skill's stop list is the runner's, and the
+# always-on text (at most 1,396 bytes) and the rule (at most 23 lines) stay within their budgets
 # =============================================================================
 # Run: bash tests/test-batonrun-standard.sh
 #
@@ -30,7 +31,7 @@ eq "$rc" 0 "the real tree passes (rc 0)"
 [ "$rc" = 0 ] || printf '%s\n' "$O" | sed 's/^/       /'
 LAST=$(printf '%s\n' "$O" | tail -1)
 N=$(printf '%s\n' "$LAST" | sed -n 's/^\([0-9]*\) checks, 0 problems$/\1/p')
-[ "${N:-0}" -ge 6 ] && ok "instrument: the checker ran $N checks (at least 6)" || bad "instrument: the last line is '$LAST'"
+[ "${N:-0}" -ge 9 ] && ok "instrument: the checker ran $N checks (at least 9)" || bad "instrument: the last line is '$LAST'"
 
 # copy: a fresh tree holding the files the checker reads
 copy() {
@@ -67,6 +68,11 @@ plant stop-baton plugins/vibemaestro-sdlc/scripts/baton.py '"money-org", ' "" "i
 plant ptr-skill "$K" "docs/batonrun.md" "docs/x.md" "$K: does not name the standard"
 plant ptr-rule plugins/vibemaestro-sdlc/rules/batonrun.instructions.md "docs/batonrun.md" "docs/x.md" "batonrun.instructions.md: does not name"
 plant ptr-core plugins/vibemaestro-sdlc/rules/workflow-core.instructions.md "docs/batonrun.md" "docs/x.md" "the BatonRun bullet does not name the standard"
+plant always-on plugins/vibemaestro-sdlc/rules/workflow-core.instructions.md "delivered as BatonRun.**" \
+  "delivered as BatonRun.** $(printf 'x%.0s' $(seq 1 400))" "the always-on text is"
+plant always-on-desc "$K" "description: \"" "description: \"$(printf 'y%.0s' $(seq 1 400))" "the always-on text is"
+plant rule-lines plugins/vibemaestro-sdlc/rules/batonrun.instructions.md "Run the launcher bare" $'one more line\nRun the launcher bare' \
+  "batonrun.instructions.md: 24 lines, over 23"
 
 echo "== instrument controls =="
 python3 -I -B "$CHECK" >/dev/null 2>&1; eq "$?" 2 "control: no root is bad usage (rc 2)"

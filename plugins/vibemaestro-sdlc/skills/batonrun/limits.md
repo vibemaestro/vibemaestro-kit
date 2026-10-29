@@ -12,6 +12,54 @@ then do not match and the classifier decides. A warning, not a block; a launcher
 heredoc on `go -` with a quoted delimiter and nothing after the closing line, though a baton on it is blocked (below), and names any
 other (an unquoted delimiter lets the shell expand the body before baton reads a byte; a line after the closing one is a command of its own).
 
+**Never another route.** An act that check refused, or that waits for the owner (exit 8), is never done by another
+route: another command, a direct file or ref edit (the remote's own directory, `packed-refs`), a second script, a
+different tool. A check that passes is not a yes either: `Stops:` declares what the act does, whatever the lint finds (a
+`Stops: none` baton the lint does not flag can still delete). No pattern sees every route, and the rule's reminder
+names only some bare ref deletes (`push --delete|:<ref>`, `update-ref -d|--stdin` or a zero value,
+`branch -D`, `tag -d`) once per session; the session reports the refusal and waits for the owner.
+
+**A settings file is guarded outside a baton.** The plugin's hook `settings-guard.py` denies a plain-tool write that widens a
+Claude Code settings file (`settings*.json` in a `.claude` directory or `$CLAUDE_CONFIG_DIR`, any case, through a link too),
+in every mode, on the owner's laptop as in a pod, whatever the repository's `hooks` setting says; also the file a settings
+link points to. The one way is
+`kind:settings-merge`; a change the kind does not make waits for the owner.
+- Edit, Write, MultiEdit, judged on the exact after-state. Denied: an allow rule or additional directory added, an ask or deny
+  rule removed, `defaultMode` moved up (`plan` < `dontAsk` < `default` < `acceptEdits` < `auto` < `bypassPermissions`, unknown
+  is the top), `disableBypassPermissionsMode: "disable"` dropped, another `permissions` key changed, a file that is not a JSON
+  object, a top-level key changed other than `$schema`, `model`, `outputStyle`, `attribution`, `includeCoAuthoredBy`,
+  `cleanupPeriodDays`, `language`, `alwaysThinkingEnabled`, `spinnerTipsEnabled`, `theme`, an Edit that does not match the
+  file exactly (Claude Code matches more loosely). Passes: the narrowings.
+- NotebookEdit on a settings file: denied.
+- Bash, by text, every write found onto a settings name, a narrowing included: `>`, `tee`, `sponge`, `cp|install|rsync` onto
+  it, `cp|mv|ln|install|rsync` of a settings-named file into `.claude/` (`-t` too), `mv`, `ln`, `rm`, `truncate`, `dd of=`, `patch`, in-place `sed|perl|awk|yq`, an editor,
+  `git checkout|restore|rm|mv|stash`, `curl -o`, `wget -O`, `find -delete|-exec <writer>`, `xargs <writer>`, inline
+  interpreter code that names it and writes. Words split as the shell splits them (a quoted sentence is one word); the
+  first word is the command, and after a runner (`sudo`, `timeout`, `env`, `xargs`, `find -exec` …) any later writer word;
+  `bash -c`, `eval`, `su -c`, `$(…)`, backticks, a heredoc fed to a shell and a string literal in inline code are read again, any other heredoc body is data;
+  only a file whose own directory is `.claude` counts (not a `.claude/worktrees/…` checkout). Reads pass; so do `go kind:settings-merge` and `kit:coordinator-bootstrap`
+  (their writes run inside the baton process).
+- Not seen: a name built at run time (a variable, `$(…)`, glue, a glob without `settings`), a script file run, a baton the
+  session wrote (`check` has no settings pattern), `git apply|am`, an archive, a checkout or merge that does not name the
+  file, a directory copied whole, a write through a link made earlier, an MCP tool, a write on another host (`ssh`),
+  `~/.claude.json`. A Bash text that names a settings file and cannot be read (an error) is denied. Also denied though
+  harmless: a `python -c` that reads the settings and writes elsewhere; a `.claude/settings*.json` backup, example or fixture;
+  a writer word after a runner that is only an argument (`sudo grep rm .claude/settings.json`).
+
+**The ask rules show the dialog; the records guard.** The permission block's ask rules start with a real program word
+(`permissions.md`), so a command that only mentions a sign or a mode call asks nothing, and a wrapped call (`env`, `bash -c`, a
+script) matches no ask rule. Such a call still gets no record of the owner's dialog, so `sign --by owner` and a mode change refuse
+it (rc 3): the rules decide when a dialog shows, never whether the call runs. An older copy of `baton.py` checks no record,
+but the mode and remote list it writes carry no `dialog <id>` line, so this version reads them as not chosen (`modes.md`).
+
+**A sandbox cannot get the owner's signature.** In a pod `sign --by owner` is refused, so a stop-list flow never runs there:
+`go` it to the card, `pack` it as `project:`, open the PR and hand the call to the coordinator (`kits.md`). There, exit 8
+prints that call to hand over, not a sign line: no sign, `run` or `go --queue` is a next step in a pod.
+
+**"Reviewed" trusts the local view of origin.** A `project:` baton runs without a keep record when its bytes are the blob at its
+path on `refs/remotes/origin/HEAD` and origin's fetch URL is on the owner's list (`kits.md`). The ref is local: moving it by hand
+(`git update-ref`, a fetch from a URL other than the one checked) is forgery, as editing the state directory is.
+
 **`go -` with a baton is blocked** (tested with Claude Code 2.1.303, `-p --permission-mode default`, allow rule
 `Bash(<launcher> go:*)`): the allow rule matches a short `go -` heredoc, but a heredoc that
 holds the baton skeleton is denied before any rule applies, by a built-in check of Claude Code ("Contains brace with quote
@@ -31,13 +79,45 @@ see through, or a write by an arbitrary process (Edit rules cover the write tool
 recognises) can pass them. They hold the honest path; a session that games them is forging. `permissions --check` reads the
 permission rules only: not `defaultMode`, a `--dangerously-skip-permissions` launch, or the classifier's own settings.
 
+**The owner's dialog** (`modes.md`) proves that Claude Code showed a dialog for that very `sign --by owner` call in a mode where a
+human answers. It does not cover: a session that writes the record or the signature file with a shell command, or runs an older `baton.py`
+for both `sign` and `run` (the deny `Edit` rule on the state directory covers the write tools only); something that answers the
+dialog that no settings file or process shows (an SDK host's permission callback, a mod); a human who clicks without reading;
+another call the same Claude Code process starts after the ask and before the session's next Bash call or the record's expiry,
+a rejected dialog included (one in the same response as the asked one, or a tool that runs a shell outside the Bash tool, which
+no Bash hook sees); on a system
+without `/proc`, a process started within the same second as the ask; a wrong version read for `auto` (the `(Claude Code)`
+line of `$CLAUDE_CODE_EXECPATH --version`, else of `claude --version`; unknown counts as too old). Where no Claude Code process
+can be found above the hook (no `CLAUDE_PID`, an unrecognised program name), the hook denies, so the owner cannot sign there;
+nor can a baton whose arguments, script path or launcher path need quoting (a space in the home or state directory), or one
+signed through a `baton.py` other than the installed plugin's. Same-user changes the guard does not see: a file or link on the
+checked path swapped between the hook and the run, the launcher's content, `python3` found through `PATH`, `PYTHON*` variables.
+
+**Values in tools that are not shells.** A `Params` value is checked against its type and reaches the script as one argv
+word: it cannot end a shell word or start an option there. The tool it is handed to may still read it as code or as a
+file. `check` refuses a `P_` name in `eval`, `trap`, `bash -c`, a heredoc body, as a command name, and after `gh -F|--field`
+or `curl -d|--data…|--json|-F` (both read `@<file>`). It does not see the other sinks; use the safe form:
+- `jq`: `--arg k "$P_X"`, never the value inside the filter text;
+- `gh api`: `-f key="$P_X"` (a string), not `-F`;
+- `--` before operands (`rm -- "$P_X"`, `git … -- "$P_X"`), even though a value cannot start with `-`;
+- a segment of a value (a middle one may start with `-`): `check` refuses `basename` of a value or its copy unless the
+  result reads `./<name>` or follows the reading command's `--`, and a prefix trim, substring or replacement of a copy;
+- `sed`, `awk`, `find -name`, `grep -e` and other program or pattern text: no value inside it; compare in the shell, or pass
+  it as data (`awk -v` reads escapes: avoid it too).
+Free text from outside (a title, a message, a body) never goes on the command line: it is an `input` file the session writes,
+and the script reads the file.
+
+**A flow split into simple writes.** A simple write (one step, undone by one direct call, neither on the stop list, not a flow
+met before) is done directly. Nothing can tell a flow cut into such writes from honest single writes, so the cut is not made:
+a flow of several writes is one run.
+
 ## The stop patterns
 
 The patterns `check` flags: a backstop, not a proof (an `echo` of the words counts; a stop act may match none). Declare what
 the act does, not what the lint finds.
 
 <!-- stop-patterns -->
-- `irreversible-delete`: `gh repo|release delete`; `kubectl … delete ns|pvc|pv`; `git push --delete|-d|:<ref>`; `gh api -X DELETE`; `git push --mirror`
+- `irreversible-delete`: `gh repo|release delete`; `kubectl … delete ns|pvc|pv`; `git push --delete|-d|:<ref>`; `gh api -X DELETE`; `git push --mirror`; `git update-ref -d|--delete`; `git update-ref <ref> 0{40}`; `update-ref --stdin: delete <ref>|update <ref> 0{40}|<heredoc or file>`; `git branch -D|-d -f|--delete --force`; `git -C|--git-dir|--work-tree|GIT_DIR=<dir> branch -d|-f|-M|-C|--delete|--force`; `git tag -d|--delete`; `rm|unlink|mv|truncate|shred|find -delete|-exec rm|> … refs/`; `packed-refs written: >|tee|sed -i|perl -i|dd of=|rm|mv|truncate|cp onto`
 - `secrets`: `gh secret`; `kubectl … secret`; `vault kv|read|write|delete`
 - `security-boundary`: `kind: Role|RoleBinding|ClusterRole…|NetworkPolicy|ValidatingAdmissionPolicy`; `gh pr merge --admin`; `private=false|visibility=public`; `--visibility public`
 - `cluster-lane`: `flux suspend`; `kubectl … drain|cordon`
@@ -45,3 +125,15 @@ the act does, not what the lint finds.
 - `money-org`: `gh repo create|rename|transfer|archive`; `gh api /orgs/<org>/members|memberships|teams|billing|settings`
 - `publish`: `--visibility public`; `npm publish`; `gh gist create --public|-p`; `private=false|visibility=public`
 <!-- /stop-patterns -->
+
+A ref deletion is flagged in any repository, the session's own clone too (`branch -D`, `tag -d`, `update-ref -d`): the stop
+list counts a branch and a tag as gone for good wherever they live, since check cannot prove a branch merged. The lint
+leaves a merged-only `git branch -d` in the session's own clone unflagged (git refuses it on an unmerged branch), but the
+act is still declared; it flags `-d`, and a forced `branch -f|-M|-C`, when pointed at another repository (`-C <dir>` counts,
+even the session's own worktree). Also flagged though harmless: an `update-ref --stdin` fed by a heredoc, a file or `cat`
+(the lint cannot read the lines), an argument word `cat` (or ending in `/cat`) right before that pipe, a directory named
+`refs` removed. Not seen: a ref of another repository moved backward with `update-ref` (`git -C <dir> update-ref <ref>
+<older sha>`, which reads like a ref moved in the session's own clone), a zero value or a `delete` behind a variable
+(`printf 'update %s %s' "$REF" "$ZERO" | …`), a `cat` or `<` that ends before a `;` in a group piped into `update-ref
+--stdin` (`{ cat ops; } | …`), `cd <dir>/refs` then a relative `rm`, `xargs rm`, a disguised `git` or `cat` (quoted, glued
+to `''` or `$IFS`, behind a variable).

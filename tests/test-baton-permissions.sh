@@ -80,7 +80,7 @@ out.append("deny=%d/%s/%s" % (len(p["deny"]), "Edit(/%s/**)" % plugins in p["den
 print("|".join(out))
 PY
 )
-  has "$v" "allow=['check', 'go', 'log', 'new', 'rehearse', 'run', 'sign --by coordinator-auto']" "[print] allow: new, check, rehearse, run, go, log and sign --by coordinator-auto, through the launcher"
+  has "$v" "allow=['check', 'go', 'list', 'log', 'new', 'pack', 'rehearse', 'run', 'sign --by coordinator-auto']" "[print] allow: new, check, rehearse, run, go, list, pack, log and sign --by coordinator-auto, through the launcher"
   has "$v" "allow-other=0" "[print] no other allow rule"
   has "$v" "ask-owner=True|ask-mode=True" "[print] ask: sign --by owner and mode, through the launcher"
   has "$v" "deny=2/True/True" "[print] deny: Edit on the plugins directory and the state directory, // absolute, nothing else"
@@ -96,20 +96,6 @@ print(" ".join(str(sum(baton.bash_matches(a, c) for a in asks)) for c in benign)
 PY
 )
   eq "$v" "0 0 0 0 0 0" "[print] the ask rules leave ordinary commands and normal batons alone (commit messages, greps, a 'mode' argument)"
-  v=$(python3 - "$P/scripts" "$PB_OUT" "$L" <<'PY'
-import json, sys
-sys.path.insert(0, sys.argv[1])
-import baton
-asks = [r[len("Bash("):-1] for r in json.load(open(sys.argv[2]))["permissions"]["ask"]]
-real, L = "/x/plugins/cache/vibemaestro/vibemaestro-sdlc/2.1.0/scripts/baton.py", sys.argv[3]
-spelled = ['python3 "%s" sign --by owner --seal S a.sh' % real, "python3 '%s' sign --by owner --seal S a.sh" % real,
-           '"%s" sign --by owner --seal S a.sh' % L, "'%s' sign --by owner --seal S a.sh" % L, "cd /x && ./baton sign --by owner".split(" && ")[1],
-           'python3 "%s" mode auto' % real, "'%s' mode auto" % L, '"%s" mode manual' % L, "python3 scripts/baton.py mode auto"]
-print(" ".join(str(int(any(baton.bash_matches(a, c) for a in asks))) for c in spelled))
-PY
-)
-  v="$v $(python3 -c 'import json, sys; sys.path.insert(0, sys.argv[1]); import baton; print(int(any(baton.bash_matches(r[5:-1], "baton mode auto") for r in json.load(open(sys.argv[2]))["permissions"]["ask"])))' "$P/scripts" "$PB_OUT")"
-  eq "$v" "1 1 1 1 1 1 1 1 1 1" "[print] the ask rules catch quoted and relative spellings of sign --by owner and mode"
   # the one-time mode question (skill batonrun, modes.md): the session runs `<launcher> mode <answer>` only after the person's answer,
   # and the printed rules still turn that command into the person's dialog; the mode file itself cannot be edited
   v=$(python3 - "$P/scripts" "$PB_OUT" "$L" "$ST/vibemaestro/baton/mode" <<'PY'
@@ -157,6 +143,15 @@ fam_check() {
   eq "$(chk "$G" "$s")/$(kinds)" "0/" "[check] a rule naming the running copy's own git-subdir directory: rc 0, no finding"
   jedit "$PJ/good.json" "$s" 'p["ask"].append("Bash(%s sign:*)" % L)'
   eq "$(chk "$P" "$s")/$(kinds)" "7/STALE" "[check] broad sign ask: an ask on every sign: rc 7, STALE"
+  jedit "$PJ/good.json" "$s" 'p["ask"] += ["Bash(*baton* sign --by owner*)"] + ["Bash(*%s%s mode *)" % (g, q) for g in ("baton.py", "/baton") for q in ("", "\"", "'"'"'")]'
+  eq "$(chk "$P" "$s")/$(kinds)" "7/STALE" "[check] the old broad ask rules: rc 7, STALE"
+  eq "$(grep -c 'the old broad ask rule .*kit:permissions-upgrade' "$PB_OUT")" 7 "[check] …each of the 7 named, with the kit that replaces them"
+  has "$(cat "$PB_OUT")" "\`Bash(*baton.py' mode *)\`" "[check] …the finding names the rule as it is written"
+  jedit "$PJ/good.json" "$s" 'p["ask"].append("Bash(*baton.py sign*)")'
+  eq "$(chk "$P" "$s")/$(kinds)" "7/STALE" "[check] another broad ask on baton.py: rc 7, STALE"
+  has "$(cat "$PB_OUT")" "only mentions a sign or a mode call" "[check] …it asks for a command that only mentions a call"
+  jedit "$PJ/good.json" "$s" 'p["ask"] += ["Bash(git commit:*)", "Bash(gh issue create:*)", "Bash(grep:*)", "Bash(echo:*)", "Bash(cat:*)"]'
+  eq "$(chk "$P" "$s")/$(kinds)" "0/" "[check] the owner's own ask rules on git commit, gh, grep, echo, cat (no sign or mode call): rc 0"
   jedit "$PJ/good.json" "$s" 'p["allow"].append("Bash(%s sign:*)" % L)'
   eq "$(chk "$P" "$s")/$(kinds)" "7/UNSAFE" "[check] unsafe allow: an allow on every sign, behind the owner ask: rc 7, UNSAFE"
   jedit "$PJ/good.json" "$s" 'p["ask"] = []; p["allow"].append("Bash(%s sign:*)" % L)'
@@ -199,7 +194,7 @@ fam_space() {
   fresh_env; ST="$(fresh)/st ate"; L="$ST/vibemaestro/baton/bin/baton"; good_settings "$P"
   has "$(cat "$PJ/good.json")" "Bash('$L' sign --by owner:*)" "[space] the rules name the launcher quoted"
   eq "$(chk "$P" "$PJ/good.json")" 0 "[space] the printed rules pass the check: rc 0"
-  pb "$P" new act --dir "$PJ" >/dev/null; pb "$P" rehearse "$PJ/act.sh" "$PJ/a.txt" hi >/dev/null
+  cp "$SRC_ROOT/tests/fixtures/baton-positional.sh" "$PJ/act.sh"; pb "$P" rehearse "$PJ/act.sh" "$PJ/a.txt" hi >/dev/null
   has "$(cat "$PB_OUT")" "After the owner's go: '$L' sign --by owner" "[space] rehearse prints the launcher as the rules name it"
 }
 
@@ -302,7 +297,7 @@ fam_launcher() {
   eq "$(head -n 1 "$PB_OUT" | cut -d: -f1)" "MARK 2.10.0" "[launcher] CLAUDE_CONFIG_DIR and HOME pointing elsewhere: still the installed plugin"
   [ ! -e "$H/EVIL" ] && [ ! -e "$(dirname "$X")/EVIL" ] && ok "[launcher] …and the other baton.py never ran" || bad "[launcher] …and the other baton.py never ran"
   rm -f "$H/EVIL" "$(dirname "$X")/EVIL"
-  pb "$P" mode auto >/dev/null
+  baton_set_mode "$ST" auto
   eq "$( (cd "$PJ" && cenv HOME="$H" XDG_STATE_HOME="$(fresh)" "$L" mode) 2>/dev/null)" auto "[launcher] XDG_STATE_HOME pointing elsewhere: baton still reads the installed state"
   u=$(cenv HOME="$H" python3 -c 'import site; print(site.getusersitepackages())'); mkdir -p "$u" "$H/pp"
   printf 'import os\nopen(os.path.join(os.environ["HOME"], "EVIL"), "w").close()\n' | tee "$u/usercustomize.py" > "$H/pp/sitecustomize.py"
@@ -366,15 +361,22 @@ fam_session() {
   fresh_env
   out=$(ss "$P" loi); nonempty "$(ctx "$out")" "[session] instrument: the loi hook delivers the process core"
   eq "$(lines "$out")" "0/0" "[session] manual, no rules: silent (every baton command opening a dialog is the intended manual behaviour)"
-  mkdir -p "$ST/vibemaestro/baton"; echo auto > "$ST/vibemaestro/baton/mode"
+  baton_set_mode "$ST" auto
   out=$(ss "$P" loi)
   eq "$(lines "$out")" "1/1" "[session] auto, no rules: one line, to the owner and to the session"
   has "$(sysm "$out")" "permissions --print" "[session] auto, no rules: the line names the command that prints the fix"
   nonempty "$(ctx "$out" | grep -v 'baton permissions')" "[session] auto, no rules: the process core is still delivered"
   eq "$(lines "$(ss "$P" boi-canh)")" "0/0" "[session] the second hook does not repeat the line"
+  # a state directory whose path holds a newline: the finding names the launcher under it, and the line stays one line
+  local st0=$ST; ST="$(fresh)/st"$'\n'"FORGED: ok"; baton_set_mode "$ST" auto
+  out=$(ss "$P" loi)
+  eq "$(lines "$out")" "1/1" "[session] a newline in the state path: still one line"
+  eq "$( { sysm "$out"; ctx "$out"; } | grep -c '^FORGED')" 0 "[session] a newline in the state path: no line of the message or context starts with FORGED"
+  has "$(sysm "$out")" 'st\u{a}FORGED: ok' "[session] …the newline is written as \\u{a}"
+  ST=$st0
   good_settings "$P"; cp "$PJ/good.json" "$H/.claude/settings.json"
   eq "$(lines "$(ss "$P" loi)")" "0/0" "[session] auto, the printed rules and the launcher: silent"
-  echo manual > "$ST/vibemaestro/baton/mode"
+  baton_set_mode "$ST" manual
   jedit "$PJ/good.json" "$H/.claude/settings.json" 'p["allow"].append("Bash(python3 /x/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)")'
   eq "$(lines "$(ss "$P" loi)")" "1/1" "[session] manual, a stale rule: one line"
   echo '{"permissions": {"allow": ["Bash(*)"]}}' > "$H/.claude/settings.json"
@@ -420,44 +422,116 @@ PY
   eq "$(printf '%s\n' "$v" | sed -n 2p)" "allow allow allow allow ask ask allow allow allow allow ask ask" \
      "[tilde] kit:gh-write: the same rules cover it, no rule of its own (rehearse, sign --by coordinator-auto, run, go allowed; owner sign and mode ask)"
   fresh_env; good_settings "$P"
-  hasnt "$(cat "$PJ/good.json")" '"Bash(~/' "[tilde] a state directory outside HOME: no ~/ rule"
+  hasnt "$(grep -F '"Bash(~/' "$PJ/good.json" | grep -F '/bin/baton')" "baton" "[tilde] a state directory outside HOME: no ~/ rule for the launcher"
 }
 
-# the card of a mode nobody chose (skill batonrun, modes.md): the session runs `mode <answer>` only where `permissions --check`
-# is clean, so the ask rule makes it the owner's dialog; on a fresh HOME without the rules the owner runs it themselves
+# the launcher as the kit's text tells a session to type it: the core, the rule and the skill name one spelling, which bash
+# resolves to the installed launcher with no baton on PATH and the printed rules allow; a bare `baton` is neither. SessionStart
+# names this machine's launcher only where it lies away from that spelling.
+fam_documented() {
+  local P=$1 v T="~/.local/state/vibemaestro/baton/bin/baton" NP out V
+  v=$(python3 - "$P" <<'PY'
+import re, sys
+out = []
+for rel in ("rules/workflow-core.instructions.md", "rules/batonrun.instructions.md", "skills/batonrun/SKILL.md"):
+    t = open(sys.argv[1] + "/" + rel, encoding="utf-8").read()
+    spell = sorted(set(re.findall(r"`(\S*/bin/baton)[` ]", t)))
+    bare = re.findall(r"`baton (?:list|go|pack|help|new|run|sign|log|check|rehearse)\b", t)
+    bare += re.findall(r"`help <topic>`", t)      # no allow rule has `help`, and bare it is bash's builtin
+    out.append("%s=%s/%d" % (rel.split("/")[-1], ",".join(spell), len(bare)))
+core = open(sys.argv[1] + "/rules/workflow-core.instructions.md", encoding="utf-8").read()
+for sub, tail in (("list", " <keyword>`"), ("go", " <prefix>:<name>")):
+    m = re.search(r"`(\S+) %s%s" % (sub, re.escape(tail)), core)
+    out.append(m.group(1) if m else "none")
+print(" ".join(out))
+PY
+)
+  eq "$(printf '%s' "$v" | cut -d' ' -f1-3)" "workflow-core.instructions.md=$T/0 batonrun.instructions.md=$T/0 SKILL.md=$T/0" \
+     "[documented] the core, the rule and the skill name one launcher spelling, and no bare baton command"
+  eq "$(printf '%s' "$v" | cut -d' ' -f4-)" "$T $T" "[documented] the core's list and go commands use that spelling"
+  fresh_env; ST="$H/.local/state"; L="$ST/vibemaestro/baton/bin/baton"; V="$H/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc"
+  good_settings "$P"; cp "$PJ/good.json" "$H/.claude/settings.json"; ver "$P" "$V" 1.0.0; reg "$V/1.0.0"
+  eq "$(pb "$P" permissions --check)" 0 "[documented] instrument: the printed rules in the user settings: permissions --check rc 0"
+  NP="$(dirname "$(command -v python3)"):/usr/bin:/bin"
+  eq "$(env -i PATH="$NP" HOME="$H" bash -c 'command -v baton || echo none')" none "[documented] instrument: no baton on the PATH the commands run with"
+  eq "$(env -i PATH="$NP" HOME="$H" bash -c "printf %s $T")" "$L" "[documented] bash resolves the spelling to the installed launcher"
+  out=$(cd "$PJ" && env -i PATH="$NP" HOME="$H" bash -c "$T list settings-merge" 2>&1); v=$?
+  eq "$v/$(printf '%s\n' "$out" | head -n 1 | cut -d' ' -f1)" "0/kind:settings-merge" "[documented] the documented list command runs the launcher on the first try"
+  ( cd "$PJ" && env -i PATH="$NP" HOME="$H" bash -c "baton list settings-merge" ) >/dev/null 2>&1; v=$?
+  eq "$v" 127 "[documented] control: a bare baton list is not found (rc 127)"
+  v=$(python3 - "$P/scripts" "$H/.claude/settings.json" "$T" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import baton
+rules, _probs = baton.read_rules([("user", sys.argv[2])])
+T = sys.argv[3]
+print(" ".join(baton.decide(rules, c)[0] or "none" for c in (
+    "%s list settings-merge" % T, "%s go kind:settings-merge .claude/settings.json rules.json" % T,
+    "%s go kit:gh-write --spec spec.json" % T, "%s pack act.sh project:act" % T,
+    "baton list settings-merge", "baton go kit:gh-write --spec spec.json")))
+PY
+)
+  eq "$v" "allow allow allow allow none none" \
+     "[documented] the documented list, go and pack commands are allowed by the printed rules; the bare ones match no rule"
+  out=$(ss "$P" loi)
+  eq "$( { sysm "$out"; ctx "$out"; } | grep -c 'baton launcher')" 0 "[documented] SessionStart is silent at the default place"
+  ST="$H/other"; pb "$P" permissions --install-launcher >/dev/null
+  has "$(ctx "$(ss "$P" loi)")" "baton launcher: here it is ~/other/vibemaestro/baton/bin/baton; type it where the kit's text says $T" \
+      "[documented] SessionStart names ~/other/vibemaestro/baton/bin/baton for a state directory at HOME/other"
+  ST="$(fresh)/st"; pb "$P" permissions --install-launcher >/dev/null
+  has "$(ctx "$(ss "$P" loi)")" "baton launcher: here it is $ST/vibemaestro/baton/bin/baton;" \
+      "[documented] SessionStart names the absolute path for a state directory outside HOME"
+  ST="$(fresh)/none"
+  eq "$(ctx "$(ss "$P" loi)" | grep -c 'baton launcher')" 0 "[documented] no launcher installed: no launcher line"
+}
+
+# the card of a mode nobody chose (skill batonrun, modes.md): on the owner's answer the session runs `mode <answer>` alone; the
+# plugin's hook opens the owner's dialog whatever the rules say (a mode change takes its record), so no `!` command is offered
 fam_mode_question() {
   local P=$1 A
   fresh_env
-  pb "$P" new act --dir "$PJ" >/dev/null; A="$PJ/act.sh"
+  cp "$SRC_ROOT/tests/fixtures/baton-positional.sh" "$PJ/act.sh"; A="$PJ/act.sh"
   eq "$(pb "$P" permissions --check)" 7 "[mode-question] instrument: a fresh HOME without rules: permissions --check rc 7"
   eq "$(pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] no rules, mode not chosen: go rc 8"
-  has "$(cat "$PB_OUT")" "the baton rules are not in force in the user or managed settings: the owner runs \`! python3 " \
-    "[mode-question] no rules: the owner runs mode themselves"
-  hasnt "$(cat "$PB_OUT")" "the session runs" "[mode-question] no rules: the session is not told to run mode"
-  good_settings "$P"; mkdir -p "$PJ/.claude"; cp "$PJ/good.json" "$PJ/.claude/settings.json"
-  eq "$(pb "$P" permissions --check)" 0 "[mode-question] instrument: the printed rules in the project only: permissions --check rc 0"
-  touch "$A"
-  eq "$(pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] rules in the project only: go rc 8"
-  has "$(cat "$PB_OUT")" "the owner runs \`! $L mode <answer>\` themselves" \
-    "[mode-question] rules in the project only (they follow go's directory, not the session's project): the owner runs mode"
-  rm -f "$PJ/.claude/settings.json"; echo '{"permissions": {"ask": 5}}' > "$H/.claude/settings.json"
-  touch "$A"
-  eq "$(pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] a malformed user settings file: go still gives the card, rc 8"
-  has "$(cat "$PB_OUT")" "the owner runs \`! $L mode <answer>\` themselves" "[mode-question] a malformed user settings file: the owner runs mode"
-  python3 -c 'print("[" * 100000 + "]" * 100000)' > "$H/.claude/settings.json"; touch "$A"
-  eq "$(pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] a deeply nested user settings file: go still gives the card, rc 8"
-  has "$(cat "$PB_OUT")" "the owner runs \`! $L mode <answer>\` themselves" "[mode-question] a deeply nested user settings file: the owner runs mode"
-  cp "$PJ/good.json" "$H/.claude/settings.json"
+  has "$(cat "$PB_OUT")" "on the owner's answer the session runs \`python3 " "[mode-question] no rules: the session runs mode (the hook asks)"
+  hasnt "$(cat "$PB_OUT")" "\`! " "[mode-question] no rules: no \`!\` command for the owner (a mode call with no record is refused)"
+  good_settings "$P"; cp "$PJ/good.json" "$H/.claude/settings.json"
   eq "$(pb "$P" permissions --check)" 0 "[mode-question] instrument: the printed rules and the launcher: permissions --check rc 0"
   touch "$A"
   eq "$(pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] rules in force, mode not chosen: go rc 8"
-  has "$(cat "$PB_OUT")" "on the owner's answer the session runs \`$L mode <answer>\`; the ask rule opens the owner's dialog" \
-    "[mode-question] rules in force: the session runs mode through the launcher, which asks"
+  has "$(cat "$PB_OUT")" "on the owner's answer the session runs \`$L mode <answer>\` alone in its Bash call; the plugin's hook opens the owner's dialog" \
+    "[mode-question] rules in force: the session runs mode through the launcher, alone; the hook opens the dialog"
   [ ! -e "$ST/vibemaestro/baton/mode" ] && [ ! -e "$PJ/o.txt" ] && ok "[mode-question] go sets no mode and writes nothing" \
     || bad "[mode-question] go sets no mode and writes nothing"
 }
 
-FAMILIES="fam_print fam_check fam_space fam_attribution fam_scopes fam_launcher fam_session fam_tilde fam_mode_question"
+# the ask rules are anchored: each starts with a real program word, every real spelling of `sign --by owner` and of a mode
+# change asks, and a command that only mentions one asks nothing (tests/fixtures/ask_forms.py writes both lists from the paths)
+fam_anchor() {
+  local P=$1 af="$SRC_ROOT/tests/fixtures/ask_forms.py" v n
+  for where in outside home; do
+    fresh_env; [ "$where" = home ] && { ST="$H/.local/state"; L="$ST/vibemaestro/baton/bin/baton"; }
+    good_settings "$P"
+    eq "$(python3 "$af" "$P/scripts" "$PJ/good.json" "$L" "$H/.claude" "$H" lead)" "" "[anchor] $where: no ask rule starts with *"
+    v=$(cd "$PJ" && cenv HOME="$H" python3 "$af" "$P/scripts" "$PJ/good.json" "$L" "$H/.claude" "$H" real)
+    n=$(printf '%s\n' "$v" | grep -c .)
+    [ "$n" -ge 60 ] && ok "[anchor] $where: instrument: $n real spellings probed" || bad "[anchor] $where: instrument: $n real spellings probed"
+    eq "$(printf '%s\n' "$v" | grep -v '^ask ' | head -n 3)" "" "[anchor] $where: every real spelling of the owner's sign and of a mode change asks"
+    eq "$(cd "$PJ" && cenv HOME="$H" python3 "$af" "$P/scripts" "$PJ/good.json" "$L" "$H/.claude" "$H" mention)" "" \
+       "[anchor] $where: no ask rule catches a command that only mentions them (printf, echo, heredoc, quoted string, gh body, commit message, grep)"
+  done
+  # the instrument: the old block's broad rules do catch the mentions, and a rule with a bare /*/ catches a gh call by its path
+  jedit "$PJ/good.json" "$PJ/old.json" 'p["ask"] += ["Bash(*baton* sign --by owner*)", "Bash(*baton.py mode *)"]'
+  has "$(cd "$PJ" && cenv HOME="$H" python3 "$af" "$P/scripts" "$PJ/old.json" "$L" "$H/.claude" "$H" mention)" "<- printf" \
+      "[anchor] instrument: the old broad rule catches the printf"
+  jedit "$PJ/good.json" "$PJ/root.json" 'p["ask"] = ["Bash(/*/scripts/baton.py mode *)"]'
+  has "$(cd "$PJ" && cenv HOME="$H" python3 "$af" "$P/scripts" "$PJ/root.json" "$L" "$H/.claude" "$H" mention)" "<- /usr/bin/gh" \
+      "[anchor] /*/ is any text in the matcher (segments and spaces): a star after a bare / catches a gh call by its path"
+  v=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import baton; print(baton.wildcard_re("/h/.claude/plugins/*/scripts/baton.py mode *").pattern)' "$P/scripts")
+  eq "$v" '^/h/\.claude/plugins/.*/scripts/baton\.py\ mode\ .*$' "[anchor] the star of the cache rule follows the literal plugins directory"
+}
+
+FAMILIES="fam_print fam_check fam_space fam_attribution fam_scopes fam_launcher fam_session fam_tilde fam_documented fam_mode_question fam_anchor"
 
 echo "== the real plugin =="
 for f in $FAMILIES; do
@@ -519,6 +593,10 @@ BRK manual-warns fam_session '[session] manual, no rules: silent' $B \
     '    if mode == "manual" and not baton_rules_present(sources):' '    if False:'
 BRK manual-unsafe-silent fam_session '[session] manual, no baton rule but an allow Bash(*)' $B \
     '        found = [f for f in found if f[0] != "MISSING"]' '        found = []'
+BRK line-raw fam_session '[session] a newline in the state path: no line of the message or context starts with FORGED' $B \
+    '        parts.insert(0, shown("baton permissions (mode %s): %d %s (first: %s); print the fix with: %s",' \
+    '        parts.insert(0, (lambda f, *a: f % a)("baton permissions (mode %s): %d %s (first: %s); print the fix with: %s",' \
+    '    return shown_join("; ", parts) if parts else None' '    return "; ".join(parts) if parts else None'
 BRK line-twice fam_session '[session] the second hook does not repeat the line' scripts/session-start.py \
     '    if mode in vsdlc.CORE_MODES:                    # one of the two hooks' '    if True:                                        # one of the two hooks'
 BRK read-deny-counted fam_check '[check] Read(path) deny rules in place of Edit' $B \
@@ -536,20 +614,49 @@ BRK write-deny-any fam_check '[check] an unrelated Write(path) deny' $B \
     'if tool == "Write" and k == "deny" and any(path_matches(content, p) for p in guarded):' 'if tool == "Write" and k == "deny":'
 BRK launcher-unquoted fam_space '[space] the printed rules pass the check' $B \
     '    L, plugins, st = shlex.quote(launcher_path()), os.path.join' '    L, plugins, st = launcher_path(), os.path.join'
-BRK broad-mode-ask fam_print '[print] the ask rules leave ordinary commands' $B \
-    $'"Bash(*%s%s mode *)" % (prog, q) for prog in ("baton.py", "/baton") for q in ("", \'"\', "\'")]' $'"Bash(*baton* mode *)"]'
-BRK quoted-sign-missed fam_print '[print] the ask rules catch quoted' $B '"Bash(*baton* sign --by owner*)", "Bash(baton mode:*)"]' '"Bash(*baton.py sign --by owner*)", "Bash(*/baton sign --by owner*)", "Bash(baton mode:*)"]'
-BRK quoted-mode-missed fam_print '[print] the ask rules catch quoted' $B $'for q in ("", \'"\', "\'")]' 'for q in ("",)]'
+BRK broad-mode-ask fam_anchor '[anchor] outside: no ask rule catches a command that only mentions' $B \
+    '            out.append("Bash(%s %s *)" % (prog, sub) if wild else "Bash(%s %s:*)" % (prog, sub))' \
+    '            out.append("Bash(*%s %s *)" % (prog, sub) if wild else "Bash(%s %s:*)" % (prog, sub))'
+BRK leading-star-back fam_anchor '[anchor] outside: no ask rule starts with *' $B '    return out
+
+
+def snippet():' '    return out + ["Bash(*baton* sign --by owner*)"]
+
+
+def snippet():'
+BRK quoted-form-dropped fam_anchor '[anchor] outside: every real spelling' $B $'        out.append(\'"%s"\' % path)' '        pass'
+BRK python-form-dropped fam_anchor '[anchor] outside: every real spelling' $B \
+    '    return progs + pys + [("python3 " + w, wild) for w, wild in pys]' '    return progs + pys'
+BRK home-form-dropped fam_anchor '[anchor] home: every real spelling' $B $'    return ["~/" + rel, "$HOME/" + rel, \'"$HOME/%s"\' % rel]' '    return ["~/" + rel]'
+BRK star-at-root fam_anchor '[anchor] outside: no ask rule catches a command that only mentions' $B \
+    '            pys.append((w.replace(plugins, lit) + tail, True))' '            pys.append((tail, True))'
+BRK old-set-blind fam_check '[check] the old broad ask rules: rc 7, STALE' $B \
+    '        if k == "ask" and tool == "Bash" and text in OLD_ASKS:' '        if False:' \
+    '            if k == "ask" and tool == "Bash" and text not in OLD_ASKS and serves(content) and bash_matches(content, cmd):' '            if False:'
+BRK mention-check-off fam_check '[check] another broad ask on baton.py' $B \
+    '            if k == "ask" and tool == "Bash" and text not in OLD_ASKS and serves(content) and bash_matches(content, cmd):' '            if False:'
+BRK mention-check-unscoped fam_check "[check] the owner's own ask rules on git commit" $B ' and serves(content) and ' ' and '
 BRK attribution-blind fam_attribution '[attribution] commit trailer set' $B 'commits and PRs carry it" % ", ".join(on)] if on else []' 'commits and PRs carry it" % ", ".join(on)] if False else []'
 BRK attribution-whole-object fam_attribution '[attribution] keys merge across scopes: a partial object' $B \
     '                got[k] = (a[k], where)' $'                got[k] = (a[k], where)\n        break'
-BRK bare-mode-missed fam_print '[print] the ask rules catch quoted' $B ', "Bash(baton mode:*)"] + [' '] + ['
+BRK bare-mode-missed fam_anchor '[anchor] outside: every real spelling' $B $'    progs = [(w, False) for w in spellings(lp) + home_spellings(lp) + ["baton"]]' '    progs = [(w, False) for w in spellings(lp) + home_spellings(lp)]'
 BRK attribution-precedence fam_attribution "[attribution] the project's local file wins" $B '"project local": 1, "project": 2, "user": 3}' '"project local": 3, "project": 2, "user": 1}'
 BRK attribution-unprinted fam_attribution '[attribution] --print' $B ', "attribution": dict(ATTRIBUTION_OFF)}' '}'
 BRK tilde-unprinted fam_tilde '[tilde] --print allows the ~/ spelling of run' $B '        allow += ["Bash(%s %s:*)" % (T, sub) for sub, _a in ALLOWED_SUBS] + ["Bash(%s sign --by coordinator-auto:*)" % T]' '        pass'
 BRK tilde-unchecked fam_tilde '[tilde] the 2.5.0 block (no ~/ allow): rc 7, MISSING' $B '        probes += ["%s %s %s" % (T, sub, a) for sub, a in ALLOWED_SUBS] + ["%s sign --by coordinator-auto %s" % (T, SEAL_PROBE)]' '        pass'
 BRK tilde-outside-home fam_tilde '[tilde] a state directory outside HOME: no ~/ rule' $B '    if rel == ".." or rel.startswith("../") or shlex.quote(rel) != rel:' '    if shlex.quote(rel) != rel:'
 
+BRK text-bare fam_documented '[documented] the core, the rule and the skill name one launcher spelling' rules/workflow-core.instructions.md \
+    '`~/.local/state/vibemaestro/baton/bin/baton list <keyword>`' '`baton list <keyword>`'
+BRK text-help-heading fam_documented '[documented] the core, the rule and the skill name one launcher spelling' skills/batonrun/SKILL.md \
+    '## Reference files' '## Reference files (`help <topic>`)'
+BRK text-other-spelling fam_documented "[documented] the core's list and go commands use that spelling" rules/workflow-core.instructions.md \
+    '`~/.local/state/vibemaestro/baton/bin/baton go <prefix>' '`~/.local/state/vibemaestro/baton/baton go <prefix>'
+BRK documented-unallowed fam_documented '[documented] the documented list, go and pack commands are allowed' $B '        allow += ["Bash(%s %s:*)" % (T, sub) for sub, _a in ALLOWED_SUBS] + ["Bash(%s sign --by coordinator-auto:*)" % T]' '        pass'
+BRK launcher-line-always fam_documented '[documented] SessionStart is silent at the default place' $B '    if typed == TEXT_LAUNCHER:' '    if False:'
+BRK launcher-line-never fam_documented '[documented] SessionStart names ~/other' $B '    if typed == TEXT_LAUNCHER:' '    if True:'
+BRK launcher-line-dropped fam_documented '[documented] SessionStart names the absolute path' $B '    parts = [launcher_line()]' '    parts = []'
+BRK launcher-line-uninstalled fam_documented '[documented] no launcher installed' $B '    if not os.path.isfile(launcher_path()):' '    if False:'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

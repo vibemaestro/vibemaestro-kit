@@ -107,6 +107,7 @@ Skills are called by name, `vibemaestro-sdlc:<name>`. They write into the `kb/` 
 | `batonrun` | Runs an action that writes outside the session as one baton script: checked, rehearsed, signed, run, post-checked, logged. | a merge, a registry push, a deletion, a force-push, a change to the user's plugin config |
 | `coordinator-bootstrap` | Sets up a machine for BatonRun in one owner-signed run: the launcher and the permission block. | a new machine, or the session-start permission check fails |
 | `local-parallel` | Runs several tasks at once on one machine: one subagent per task (its own worktree, `intake` to a draft PR, model `agents.worker_model`); the main session keeps the queue, relays spec approvals, post-checks each PR and merges it with `kit:merge-pr`. | the person wants several tasks done in parallel |
+| `owner-sign` | For the owner only (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): lists the baton runs a session queued for the owner's signature (`go --queue`) and opens one owner dialog per item picked, in the owner's own session. | runs wait in the queue for the owner |
 
 Useful reads of `kb/` that do not load whole files: `kb.py find <words>`, `kb.py list [--type T] [--status S]`, `kb.py outline <file>`. All three are read-only.
 
@@ -214,6 +215,7 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | `schema` | `1` | Config schema number, the major version of the format. The plugin refuses a number above its own and names the update to run. |
 | `hooks` | `"auto"` | `"off"` silences every hook of the plugin. |
 | `language` | `"vi"` | `"vi"` or `"en"`: the language of the spec section names, PR-body headings and flow lines. `kb.py init` records it in every new config, `"en"` unless answered, so only a config made before has the default. |
+| `update_check` | `true` | `false` turns off the update reminder of a public install in this repository, for vibemaestro-sdlc and vibemaestro-brain (see the kit README, Update). |
 | `branch.intent_prefix` | `"intent/"` | Prefix of an intent branch. |
 | `branch.protected` | `["main", "master"]` | Branches that are never a PR head and never counted as dead. |
 | `branch.pattern` | `null` | A regex that a head branch outside the intent prefix must match. Used by `pr-title`. |
@@ -265,7 +267,7 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | `sensitive.scan` | `["pr_body", "pr_comments", "commit_messages"]` | What `pr-sensitive` scans. |
 | `dead_branches.max_merged_on_remote` | `0` | Most merged-but-alive remote branches before `dead-branches` goes red. |
 | `ci.runner_var` | `"CI_RUNNER"` | Name of the repository variable that picks the runner label of the installed workflows. The installed gate jobs first read the optional variable `CI_GATE_RUNNER` (a light runner for the gates) and fall back to this one. |
-| `ci.runner_default` | `"ubuntu-latest"` | Runner label when that variable is unset. |
+| `ci.runner_default` | `"ubuntu-latest"` | Runner label when that variable is unset. The value `"self-hosted only"` means no fallback: the installed workflows name no label, and a run with neither variable set fails at its start with a message naming the variable, instead of waiting for a hosted machine that never comes (for an organisation that runs only self-hosted runners). Any other value that is not a label (`[A-Za-z0-9._-]+`) warns, and install-gates refuses it. |
 | `ci.backend` | `"github-actions"` | The CI backend the guarded merge reads checks from: `github-actions` (the only built-in value) or `external:<path>`. The installed workflows are GitHub Actions in either case. |
 | `merge.deny_globs` | `null` | Paths the guarded merge refuses in its normal lane. `null` means unset, and the guard refuses to run; `[]` is a valid answer. `kb.py init` writes three globs. |
 | `merge.admin_bypass` | `false` | `true` allows `--admin` on the guarded merge. It changes no condition. |
@@ -313,12 +315,14 @@ This section applies to a repository that publishes plugins, such as the kit its
   ---
   plugins: vibemaestro-sdlc
   level: patch
+  upgrade: Optional: what an existing user must do or will notice when they update.
   ---
   One line a user of the installed plugin understands: what changes for them.
   ```
 
-  `level` is `patch` for a fix, `minor` for a feature, `major` for a breaking change (for this plugin, a `CONTRACT.md` row removed or renamed). A 0.x plugin may break in a minor.
-- **A release pull request** (skill `release`, started by a plan's release row) turns every pending change file into one version step per plugin, writes the `CHANGELOG.md` entries, and sets `Frozen at` in `CONTRACT.md` when its surface moved.
+  `level` is `patch` for a fix, `minor` for a feature, `major` for a breaking change (for this plugin, a `CONTRACT.md` row removed or renamed). A 0.x plugin may break in a minor. `upgrade` is optional; a pending change file may be edited only to add or change it.
+- **A release pull request** (skill `release`, started by a plan's release row) turns every pending change file into one version step per plugin, writes the `CHANGELOG.md` entries (the `upgrade` lines under `### Upgrade notes`), and sets `Frozen at` in `CONTRACT.md` when its surface moved. `release.py notes <plugin> <version>` prints the body of that version's public release: its CHANGELOG section and how to update.
+- **A fold** (`cut --fold --public <owner/name>`) is for a release that was cut but not published yet: the pending change files join that version's `CHANGELOG.md` sections instead of raising it. The public repository's tags `<plugin>--v<version>` tell whether it was published; when one exists, the fold is refused.
 - **A hotfix pull request** branches from the branch `release`, so unreleased features never ride it. It raises one patch. A back-merge pull request from `backmerge/<sha12>` brings it to main and merges with a merge commit, never a squash.
 - **After either merges**, a baton script you sign moves the branch `release` to the release commit, or, after a hotfix, pushes `backmerge/<sha12>` and opens its pull request; the repository publishes the release its own way. The kit's own public release writes each released version into its `plugin.json` and tags `<plugin>--v<version>`.
 - Main stays shippable after every merge, because a release ships every pending change file.
@@ -330,6 +334,7 @@ python3 "$SDLC/scripts/release.py" check          # is this change a valid ordin
 python3 "$SDLC/scripts/release.py" plan           # what a cut would do here
 python3 "$SDLC/scripts/release.py" cut            # writes the working tree into a release
 python3 "$SDLC/scripts/release.py" cut --hotfix   # the same for a hotfix
+python3 "$SDLC/scripts/release.py" cut --fold --public <owner/name>   # joins the pending change files to a version cut but not published
 ```
 
 `release.py check` runs in CI. It exits 0 when the change fits its kind, 1 when it is red, 3 when the check could not run locally (in CI that case is red), 64 on bad usage.

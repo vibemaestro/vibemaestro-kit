@@ -70,7 +70,7 @@ fam_app() {
   for f in kb/README.md kb/current-state.md kb/intent/.gitkeep kb/specs/.gitkeep kb/plans/.gitkeep kb/decisions/.gitkeep .vibemaestro/sdlc.json .vibemaestro/rules/README.md .vibemaestro/rules/example.instructions.md; do
     [ -f "$R/$f" ] && ok "[a] written: $f" || bad "[a] missing: $f"
   done
-  printf '{"schema":1,"language":"en","rules":{"dirs":[".vibemaestro/rules"]},"current_state":{"template":"ledger"},"merge":{"deny_globs":[".github/workflows/**",".vibemaestro/**","**/*secret*"]}}\n' > "$TMP/app-expect.json"
+  printf '{"schema":1,"language":"en","rules":{"dirs":[".vibemaestro/rules"]},"current_state":{"template":"ledger"},"merge":{"deny_globs":[".github/workflows/**",".vibemaestro/*",".vibemaestro/gates/**",".vibemaestro/rules/**","**/*secret*"]}}\n' > "$TMP/app-expect.json"
   jeq "$R/.vibemaestro/sdlc.json" "$TMP/app-expect.json" && ok "[a] the config holds schema, the scaffold keys and nothing else (not a copy of the defaults)" || bad "[a] the config differs from the scaffold keys: $(cat "$R/.vibemaestro/sdlc.json")"
   has "$(cat "$R/.vibemaestro/rules/example.instructions.md")" "status: example" "[a] the example rule is status: example"
   eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import rules; print(len(rules.load_dir(sys.argv[2], rules.RULE_SUFFIX)))' "$PLX/scripts" "$R/.vibemaestro/rules")" 0 "[a] …so the engine delivers none of the files of the directory"
@@ -136,7 +136,7 @@ fam_adopt() {
   R=$(mk_repo); mkdir -p "$R/.github/workflows"
   printf 'jobs:\n  a:\n    runs-on: ${{ github.event_name == %spush%s && %sbig%s || %ssmall%s }}\n  b:\n    runs-on: &anchor x\n  c:\n    runs-on: [self-hosted, linux]\n' "'" "'" "'" "'" "'" "'" > "$R/.github/workflows/w.yml"
   git_ -C "$R" add -A; git_ -C "$R" commit -qm wf; kbi "$R" --adopt --detect --dry-run
-  hasnt "$OUT" "runner_default" "[c] a conditional expression, a YAML anchor and a list are not runner labels"
+  hasnt "$OUT" '"runner_default"' "[c] a conditional expression, a YAML anchor and a list are not runner labels"
   # the table width is proposed only when every table has it
   R=$(mk_repo); mkdir -p "$R/kb"; printf '# State\n\n## One\n\n| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |\n\n## Two\n\n| D | E | F |\n|---|---|---|\n| 4 | 5 | 6 |\n' > "$R/kb/current-state.md"
   git_ -C "$R" add -A; git_ -C "$R" commit -qm cs
@@ -265,12 +265,12 @@ PY
 
 # ── [m] merge.deny_globs in a new config ───────────────────────────────────────────────────────────
 fam_merge() {
-  PLX=$1; local R skill got
+  PLX=$1; local R skill got want
   skill=$(python3 -c 'import json,re,sys
 for l in open(sys.argv[1]):
     lists = re.findall(r"`(\[.*?\])`", l) if "`merge.deny_globs`" in l else []
     if lists: print(json.dumps(json.loads(lists[-1]))); break' "$PLX/skills/init-kb/SKILL.md")
-  case "$skill" in '['*'.vibemaestro/**'*) ok "[m] instrument: the skill proposes a deny list ($skill)";; *) bad "[m] instrument: no deny list read from the skill: $skill";; esac
+  case "$skill" in '['*'.vibemaestro/*"'*) ok "[m] instrument: the skill proposes a deny list ($skill)";; *) bad "[m] instrument: no deny list read from the skill: $skill";; esac
   for mode in app adopt; do
     R=$(mk_repo); if [ "$mode" = adopt ]; then kbi "$R" --adopt; else kbi "$R"; fi
     eq "$RC" 0 "[m] $mode, no answers: rc 0"
@@ -287,6 +287,29 @@ for l in open(sys.argv[1]):
   R=$(mk_repo); mkdir -p "$R/.vibemaestro"; printf '%s\n' '{"schema": 1}' > "$R/.vibemaestro/sdlc.json"
   kbi "$R"; eq "$(cat "$R/.vibemaestro/sdlc.json")" '{"schema": 1}' "[m] an existing config is not rewritten to add it"
   hasnt "$OUT" "merge.deny_globs = " "[m] …and the report does not claim it wrote one"
+  # a rules folder under .vibemaestro/ with another name: its glob is added to the list the skill proposes
+  want=$(python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]) + [".vibemaestro/policies/**"]))' "$skill")
+  printf '{"rules": {"dirs": [".vibemaestro/policies"]}}' > "$TMP/ans-policies.json"
+  for mode in app adopt; do
+    R=$(mk_repo); if [ "$mode" = adopt ]; then kbi "$R" --adopt --answers "$TMP/ans-policies.json"; else kbi "$R" --answers "$TMP/ans-policies.json"; fi
+    got=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])).get("merge", {}).get("deny_globs")))' "$R/.vibemaestro/sdlc.json")
+    eq "$RC:$got" "0:$want" "[m] $mode: rules.dirs .vibemaestro/policies adds .vibemaestro/policies/** to the proposed list"
+    has "$OUT" ".vibemaestro/policies/**" "[m] $mode: …and the report names it"
+  done
+  printf '{"rules": {"dirs": [".vibemaestro/p[1]"]}}' > "$TMP/ans-class.json"
+  R=$(mk_repo); kbi "$R" --answers "$TMP/ans-class.json"
+  got=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])).get("merge", {}).get("deny_globs")[-1]))' "$R/.vibemaestro/sdlc.json")
+  eq "$RC:$got" '0:".vibemaestro/p?1?/**"' "[m] a rules folder with a class character in its name still gets a deny glob (fail closed)"
+  printf '{"rules": {"dirs": 5}}' > "$TMP/ans-dirs5.json"
+  R=$(mk_repo); kbi "$R" --answers "$TMP/ans-dirs5.json"
+  eq "$RC" 65 "[m] rules.dirs that is not a list: refused as invalid (rc 65), not a crash"
+  printf '{"rules": {"dirs": [".vibemaestro/policies"]}, "merge": {"deny_globs": ["x/**"]}}' > "$TMP/ans-own.json"
+  R=$(mk_repo); kbi "$R" --answers "$TMP/ans-own.json"
+  got=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["merge"]["deny_globs"]))' "$R/.vibemaestro/sdlc.json")
+  eq "$RC:$got" '0:["x/**"]' "[m] an answer for merge.deny_globs is kept exactly, whatever rules.dirs says"
+  printf '{"rules": {"dirs": [".vibemaestro/policies"]}, "merge": {"deny_globs": null}}' > "$TMP/ans-null2.json"
+  R=$(mk_repo); kbi "$R" --answers "$TMP/ans-null2.json"
+  has "$OUT" "merge.deny_globs is unset" "[m] an answer of null stays unset next to a rules folder"
 }
 
 FAMILIES="fam_app fam_adopt fam_exist fam_bad fam_flags fam_full fam_merge"
@@ -303,7 +326,8 @@ BRK() {  # BRK <label> <family> <needle> <file under scripts/> <old> <new>
 }
 BRK deny-not-written fam_merge '[m] app: the new config holds merge.deny_globs' init_setup.py '"current_state": {"template": "ledger"}, "merge": {"deny_globs": DENY_DEFAULT}}' '"current_state": {"template": "ledger"}}'
 BRK deny-not-written-adopt fam_merge '[m] adopt: the new config holds merge.deny_globs' init_setup.py 'ADOPT_SCAFFOLD = {"schema": 1, "language": NEW_LANGUAGE, "merge": {"deny_globs": DENY_DEFAULT}}' 'ADOPT_SCAFFOLD = {"schema": 1, "language": NEW_LANGUAGE}'
-BRK deny-drifts-from-skill fam_merge '[m] app: the new config holds merge.deny_globs' sdlc_config.py 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**",)'
+BRK deny-drifts-from-skill fam_merge '[m] app: the new config holds merge.deny_globs' sdlc_config.py 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**",)'
+BRK deny-floor-not-derived fam_merge '[m] app: rules.dirs .vibemaestro/policies adds .vibemaestro/policies/** to the proposed list' init_setup.py '"deny_globs" not in (inputs.get("merge") or {}):' 'False:'
 BRK deny-note-silent fam_merge '[m] app: …and the report names it' init_setup.py '        out((DENY_NOTE % j(deny)) if deny is not None else DENY_UNSET_NOTE)' '        out("")'
 BRK deny-null-claimed fam_merge '[m] an answer of null: the report says unset' init_setup.py '        out((DENY_NOTE % j(deny)) if deny is not None else DENY_UNSET_NOTE)' '        out(DENY_NOTE % j(deny))'
 BRK overwrites-existing-files fam_app '[b] after edits by a person' init_setup.py 'open(path, "x", encoding="utf-8")' 'open(path, "w", encoding="utf-8")'

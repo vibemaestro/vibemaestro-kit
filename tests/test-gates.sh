@@ -245,7 +245,7 @@ BRKS installer-follows-symlinks fam_install '[I] .github is a symlink to a direc
 BRKG import-guard-gone fam_install '[I] commit_discipline.py without gate_common.py' commit_discipline.py '    sys.exit(2)
 ' '    raise
 '
-BRKS installer-label-unchecked fam_install '[I] a runner label with a quote' install_gates.py '    if not re.fullmatch(r"[A-Za-z0-9._-]+", default):' '    if False:'
+BRKS installer-label-unchecked fam_install '[I] a runner label with a quote' install_gates.py '    if not self_hosted_only(default) and not re.fullmatch(r"[A-Za-z0-9._-]+", default):' '    if False:'
 BRKS installer-existing-reported-wrote fam_install '[I] a second run' install_gates.py '        return "kept" if same else "kept (differs)"' '        return "wrote"'
 PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
 QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL

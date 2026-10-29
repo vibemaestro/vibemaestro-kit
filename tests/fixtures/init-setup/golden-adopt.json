@@ -122,7 +122,9 @@
   "merge": {
     "deny_globs": [
       ".github/workflows/**",
-      ".vibemaestro/**",
+      ".vibemaestro/*",
+      ".vibemaestro/gates/**",
+      ".vibemaestro/rules/**",
       "**/*secret*"
     ]
   }

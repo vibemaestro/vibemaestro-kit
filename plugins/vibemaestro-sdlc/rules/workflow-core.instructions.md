@@ -18,9 +18,9 @@ be split) → `ship`. Everything is written into the `kb/` of the repo you stand
   `search_model` for a read-only search, `review_model` for the fresh-context review (`agents.worker_model`, `agents.search_model`, `agents.review_model`). If the read fails, use the plugin default
   (the same command with `--default`), tell the person what `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" config check` names, and do not edit the config for them; if the `--default` read fails too,
   ask the person which model to use.
-- **A privileged action follows CodeAct, delivered as BatonRun.** An action that writes outside the session (a GitHub write, a registry push, the user's plugin config, a deletion, a change on a live
-  system) is one run, a fixed series in one baton script (rule and skill `batonrun`; what a run is: `docs/batonrun.md` in the plugin root): shown to the owner with what it changes and how to undo it, run by the
-  session itself after the owner's go for that run (in `auto` mode it confirms a normal run itself and asks only for a big risk or a stop-list run, see `batonrun`), then post-checked. Never hand the owner command lines to type for it.
+- **A privileged action follows CodeAct, delivered as BatonRun.** A write outside the session (GitHub, a registry, the user's plugin config, a deletion, a live system): a simple write (one step, reversible, not on the stop
+  list, not met before: one comment, one ticket) is done directly; a task of two or more writes is a flow: never split it into simple writes. Otherwise `~/.local/state/vibemaestro/baton/bin/baton list <keyword>`; one fits: `~/.local/state/vibemaestro/baton/bin/baton go <prefix>:<name> key='value'…`; one is close: evolve it in place; none: write it (skill `batonrun`;
+  `docs/batonrun.md` in the plugin root) and keep it with `pack` the second time. Adding a permission rule: `go kind:settings-merge`, never an Edit. A stop-list act waits for the owner; a refused act is never done another way. Never hand the owner command lines to type.
 - **Name a pull request or issue as a markdown link.** When you ask the person to review, merge or act on one, write the full URL inside the
   sentence, one link per item, next to the action asked: `[PR <n>](https://<host>/<org>/<repo>/pull/<n>)`. A bare number is not enough.
 - **Check the instrument before trusting a measurement.** The costliest diagnostic mistakes share one shape: the command ran, a number

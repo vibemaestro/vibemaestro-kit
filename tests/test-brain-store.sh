@@ -18,7 +18,8 @@
 #   [K] a hand-edited hot.json is ignored: the render matches a fresh fold, doctor names the cache
 #   [U] control characters are refused in every field, and the render drops them as a backstop
 #   [A] close and supersede leave the retired item in archive.jsonl with its reason and pointer
-#   [R] at every count cap with maximum-length lines, the render is ≤ 6,000 characters and `render --check` is rc 0
+#   [R] at every count cap with maximum-length lines, the hot memory part is ≤ 6,000 characters, the sessions and plan parts ≤ 9,500,
+#       and `render --check` is rc 0
 #   [L] two writers at once (a paused critical section) keep the chain intact; the pause needs BRAIN_TEST=1; doctor warns
 #   [G] round 1: the log and head deleted while caches remain stop writes; hot.md follows every write and doctor names an
 #       edited one; damaged files give a named refusal, never a traceback; Cn and invisible fillers are refused; an escape in an
@@ -37,6 +38,9 @@
 #   [Z5] round 5: a selector after a letter is refused (FE0E/FE0F there would be hidden bits); dropping links from an item line
 #       or writing a time left the render never writes is caught
 #   [Z6] round 6: the five emoji bases outside So and Sm (‼ ⁉ ℹ 〰 〽) take U+FE0F
+#   [Q] the CLI in a session with a project record writes that project from another directory and names both; no session id:
+#       the cwd, as before; a damaged record, or one whose state is not right under the state root: rc 1 naming the record and
+#       the shell's directory, nothing written anywhere
 #   [X] planted breaks: each case goes red on a copy with one break
 # =============================================================================
 set -uo pipefail
@@ -278,7 +282,9 @@ PY
 )
   c_eq "$R" "['N1', 'X1'] closed merged PR #160 1a2b3c4 superseded scope grew" "[A] archive.jsonl holds the closed and the superseded item with reason and pointer"
   br render
-  c_hasnt "$OUT" "ship the store" "[A] a closed item is not rendered"
+  c_hasnt "$(printf '%s\n' "$OUT" | sed -n '/^Now$/,/^Matrix/p')" "ship the store" "[A] a closed item is not rendered as live"
+  c_has "$OUT" "- N1 PR #160 1a2b3c4 · ship the store" "[A] it is in Done, with its pointer (derived from the close)"
+  c_hasnt "$(printf '%s\n' "$OUT" | sed -n '/^Done (24 h)$/,/^Facts$/p')" "- X1 " "[A] a superseded item is not in Done"
 }
 
 case_render() {
@@ -291,22 +297,63 @@ case_render() {
   for i in $(seq 1 5); do t=$(python3 -c "print(('W$i ' + 'w' * 150)[:150])")
     owner_ok add --kind window --text "$t" --owner-quote "q$i" --where "prompt $i" --expires 2099-01-01T00:00:00Z $L; done
   c_rc 0 "[R] instrument: the fifth window is written"
-  for k in "now 3" "next 5" "trap 4"; do set -- $k
-    for i in $(seq 1 "$2"); do t=$(python3 -c "print(('$1$i ' + 'n' * 150)[:150])"); br op add --kind "$1" --text "$t" $L; done
+  for k in "now 3 150" "next 10 150" "trap 13 150" "session 12 450" "queue 5 150" "fact 5 150"; do set -- $k
+    for i in $(seq 1 "$2"); do t=$(python3 -c "print(('$1$i ' + 'n' * $3)[:$3])"); br op add --kind "$1" --text "$t" $L; done
     c_rc 0 "[R] instrument: the last $1 item is written"; done
   br op hit T1
   br render; c_rc 0 "[R] render rc 0"
-  R=$(printf '%s\n' "$OUT" | python3 -c 'import sys; t = sys.stdin.read(); print(len(t) <= 6000, max(len(l) for l in t.splitlines()) <= 200)')
-  c_eq "$R" "True True" "[R] at every cap, the render is ≤ 6,000 characters and no line is over 200"
+  R=$(printf '%s\n' "$OUT" | python3 -c 'import re, sys; t = sys.stdin.read(); hot = t.split("\n## Brain · sessions")[0]
+parts = re.split(r"(?m)^(?=## Brain · )", t)[1:]
+print(len(hot) <= 6000, [len(p) <= 9500 for p in parts[1:]], max(len(l) for l in t.splitlines() if not l.startswith("- S")) <= 200,
+      max(len(l) for l in t.splitlines() if l.startswith("- S")) <= 500)')
+  c_eq "$R" "True [True, True] True True" "[R] at every cap, the hot memory part ≤ 6,000, the others ≤ 9,500; no line over 200, an S line ≤ 500"
   c_has "$OUT" "/6,000 chars" "[R] the title names the cap"
+  c_has "$OUT" "/9,500 chars" "[R] and the others' titles theirs"
   c_has "$OUT" "+" "[R] links that do not fit are cut to +N"
-  R=$(printf '%s\n' "$OUT" | grep -nE '^(Pinned|Windows|Now|Next|Traps)' | cut -d: -f2 | tr '\n' ' ')
-  c_eq "$R" "Pinned (owner) Windows Now Next Traps " "[R] fixed sections in a fixed order"
+  R=$(printf '%s\n' "$OUT" | grep -nE '^(Pinned|Windows|Now|Sessions|Owner queue|Next|Traps|Done|Facts)' | cut -d: -f2 | tr '\n' ' ')
+  c_eq "$R" "Pinned (owner) Windows Now Sessions Owner queue Next Traps Done (24 h) Facts " "[R] fixed sections in a fixed order"
   c_has "$OUT" "until 01-01 00:00Z" "[R] a window shows its expiry"
   c_has "$OUT" "(hits 1)" "[R] a trap shows its hits"
   br render --check; c_rc 0 "[R] render --check rc 0"
   c_has "$OUT" "6,000" "[R] --check prints the size against the cap"
   [ -f "$(sdir)/hot.md" ] && _c 1 "[R] render writes hot.md" || _c 0 "[R] render writes hot.md" "no hot.md"
+}
+
+case_record() {  # the CLI reads this session's project record; one it cannot trust is refused, never another project
+  newp
+  local A=$P B="$TMP/other$NP" dA f
+  mkdir -p "$B"; git_ -C "$B" init -q -b main
+  br op add --kind now --text "in A"
+  dA=$(sdir)
+  bpy "s.record_session('sA', '$A', s.state_dir('$A'))"
+  f=$(bpy 'print(s.session_file("sA"))')
+  cd "$B" || return 1
+  br op add --kind next --text "from B"
+  c_rc 0 "[Q] a recorded session in B: rc 0"
+  c_has "$(cat "$dA/hot.jsonl")" "from B" "[Q] it writes the recorded project"
+  c_has "$OUT" "this session's project is $A; the shell is in $B" "[Q] and names both"
+  OUT=$(env -u CLAUDE_CODE_SESSION_ID "$BROOT/bin/brain" doctor --path 2>&1)
+  c_eq "$OUT" "$(env -u CLAUDE_CODE_SESSION_ID python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import brain_store as s, os; print(s.state_dir(os.getcwd()))' "$BROOT/scripts")" "[Q] no session id in B: today's rule, B's state directory"
+  c_hasnt "$OUT" "this session's project" "[Q] and no note"
+  printf '{not json' > "$f"
+  br op add --kind next --text "damaged"
+  c_rc 1 "[Q] a damaged record: refused"
+  c_has "$OUT" "$f" "[Q] naming the record"
+  c_has "$OUT" "the shell is in $B" "[Q] and the shell's directory"
+  c_hasnt "$(cat "$dA/hot.jsonl")" "damaged" "[Q] nothing written to A"
+  c_eq "$(cd "$B" && env -u CLAUDE_CODE_SESSION_ID python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import brain_store as s, os; print(os.path.isdir(s.state_dir(os.getcwd())))' "$BROOT/scripts")" False "[Q] nor to B"
+  printf '{"project": "%s", "state": "%s"}\n' "$A" "$TMP/elsewhere" > "$f"
+  br doctor --path
+  c_rc 1 "[Q] a record whose state is not under the state root: refused"
+  c_has "$OUT" "does not name a project and its brain state directory" "[Q] with the reason"
+  printf '{"project": "%s", "state": "%s"}\n' "$A" "$dA" > "$f"
+  br doctor --path; c_eq "$(printf '%s\n' "$OUT" | tail -n 1)" "$dA" "[Q] the record mended: doctor --path in B is A's"
+  mkdir -p "$TMP/gone$NP"; cd "$TMP/gone$NP" && rmdir "$TMP/gone$NP"
+  br doctor --path
+  c_rc 0 "[Q] the shell's directory deleted under it: rc 0, no internal error"
+  c_eq "$(printf '%s\n' "$OUT" | tail -n 1)" "$dA" "[Q] and the session's project"
+  c_has "$OUT" "the shell is in a directory that no longer exists" "[Q] the note says so"
+  cd "$TMP" || return 1
 }
 
 case_lock() {
@@ -607,7 +654,7 @@ PY
 
 echo "== cases =="
 for c in case_selbits case_mdlinks case_selectors case_timeleft case_ignorable case_mdtail case_flap case_cachefail case_blank case_nonchar case_abbrev case_repair case_reset case_wipe case_hotmd case_damage case_chars2 case_modes case_fold case_supersede case_shrink case_dw case_budget case_cap case_sensitive case_nofilter case_writer case_edit \
-         case_tail case_cache case_control case_archive case_render case_lock; do run_case $c; done
+         case_tail case_cache case_control case_archive case_render case_lock case_record; do run_case $c; done
 cd "$TMP" || exit 1
 
 echo "== planted breaks =="
@@ -641,9 +688,9 @@ plant cache-digest-not-checked case_cache $ST '        if c.get("folded_from") =
 plant control-chars-allowed case_control $ST '    bad = [c for c in value if is_bad(c)]' '    bad = []'
 plant render-backstop-removed case_control $ST '    return "".join(c for c in str(s) if not is_bad(c))' '    return str(s)'
 plant cache-seq-not-checked case_wipe $ST '    if cs > len(raw):' '    if False:'
-plant hot-md-not-written case_hotmd $ST '    _write_file(os.path.join(d, "hot.md"), render(st))
+plant hot-md-not-written case_hotmd $ST '    _write_file(os.path.join(d, "hot.md"), render_all(st))
 ' ''
-plant hot-md-not-checked case_hotmd $ST '                out.append(("ok", "hot.md matches a fresh render") if render_key(md, st) == render_key(render(st), st) else' '                out.append(("ok", "hot.md matches a fresh render") if True else'
+plant hot-md-not-checked case_hotmd $ST '                out.append(("ok", "hot.md matches a fresh render") if key == render_key(render_all(st), st) else' '                out.append(("ok", "hot.md matches a fresh render") if True else'
 plant hot-md-key-is-the-line case_flap $ST '                out.append("item %s" % it["id"])' '                out.append(line)'
 plant hot-md-key-ignores-tail case_mdtail $ST '            if rest is not None and rest == links_tail(len(line) - len(rest), it):' '            if rest is not None:'
 plant any-k-of-n-tail case_mdlinks $ST '            if rest is not None and rest == links_tail(len(line) - len(rest), it):' '            if rest is not None and (rest == "" or rest.startswith(" · links ")):'
@@ -688,12 +735,21 @@ plant dirs-default-mode case_modes $ST '            os.mkdir(p, 0o700)
         os.chmod(p, 0o700)' '            os.mkdir(p)
         except FileExistsError:
             continue'
-plant touch-on-owner-item case_dw $ST '        get_live(st, iid, ("N", "X", "T"))
+plant touch-on-owner-item case_dw $ST '        get_live(st, iid, OP_LETTERS)
         if verb == "hit"' '        if verb == "hit"'
 plant archive-empty case_archive $ST 'for _, it in sorted(st["items"].items(), key=lambda kv: kv[1]["touched"]) if it["status"] != "live"]' 'for _, it in sorted(st["items"].items(), key=lambda kv: kv[1]["touched"]) if False]'
+plant damaged-record-ignored case_record $ST '    except (OSError, ValueError) as e:
+        raise Refused(1, "this session' '    except (OSError, ValueError) as e:
+        return None
+        raise Refused(1, "this session'
+plant gone-cwd-crashes case_record $ST '    here = shell_dir()
+    if not os.path.isabs(here) or' '    here = os.getcwd()
+    if not os.path.isabs(here) or'
+plant record-state-unchecked case_record $ST '            and os.path.dirname(os.path.normpath(state)) == os.path.normpath(state_root())' '            and True'
 plant line-cap-400 case_render $ST 'LINE_MAX = 200' 'LINE_MAX = 400'
-plant lock-removed case_lock $ST '        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield' '        yield'
+plant lock-removed case_lock $ST '        if wait is None:
+            fcntl.flock(fd, fcntl.LOCK_EX)' '        if wait is None:
+            pass'
 plant pause-without-guard case_lock $ST '    if os.environ.get("BRAIN_TEST") != "1":
         return' '    pass'
 

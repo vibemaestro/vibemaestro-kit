@@ -87,8 +87,8 @@ if [ -f "$WF" ]; then
   python3 -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); assert "secrets." not in str(d["jobs"]["tests"])' "$WF" && ok "job tests không dùng secret nào" || bad "job tests dùng một secret"
   hasnt "$(cat "$WF")" 'token:' "workflow không truyền token tự chọn"
   has "$(cat "$WF")" 'PLUGIN_REQUIRE_CLAUDE' "workflow buộc phần CLI claude phải chạy (thiếu CLI thì đỏ, không bỏ qua êm)"
-  uses_var_runner() { grep -qxF "    runs-on: \${{ vars.CI_RUNNER || 'ubuntu-latest' }}" "$1"; }
-  uses_var_runner "$WF" && ok "workflow: runs-on lấy từ vars.CI_RUNNER, lùi về ubuntu-latest khi chưa đặt (runs-on)" || bad "workflow: runs-on không theo vars.CI_RUNNER (runs-on)"
+  uses_var_runner() { grep -qxF "    runs-on: \${{ vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}" "$1"; }
+  uses_var_runner "$WF" && ok "workflow: runs-on lấy từ vars.CI_RUNNER; chưa đặt thì repo riêng lỗi ngay, repo công khai dùng ubuntu-latest (runs-on)" || bad "workflow: runs-on không theo vars.CI_RUNNER (runs-on)"
   printf 'jobs:\n  tests:\n    runs-on: ubuntu-latest\n' > "$TMP/wf-hardcoded.yml"
   uses_var_runner "$TMP/wf-hardcoded.yml" && bad "đối chứng âm: runs-on cứng ubuntu-latest vẫn qua phép kiểm runs-on" || ok "đối chứng âm: runs-on cứng ubuntu-latest bị phép kiểm runs-on bắt"
   python3 -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); assert d["jobs"]["tests"]["steps"]' "$WF" && ok "workflow: YAML hợp lệ, có bước" || bad "workflow YAML hỏng"

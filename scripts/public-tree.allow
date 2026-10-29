@@ -8,6 +8,14 @@ tests/fixtures/language/vi/body-long.md	ref	#98
 tests/fixtures/merge_fx.py	ref	/pull/7
 tests/fixtures/workflow_check.py	ref	PR #7
 tests/test-ban-cai.sh	ref	#42
+tests/test-baton-branch-delete.sh	ref	#12
+tests/test-baton-branch-delete.sh	ref	#15
+tests/test-baton-branch-delete.sh	ref	/pull/12
+tests/test-baton-branch-delete.sh	ref	/pull/15
+tests/test-baton-branch-delete.sh	ref	/pull/7
+tests/test-baton-branch-delete.sh	ref	PR #12
+tests/test-baton-branch-delete.sh	ref	PR #15
+tests/test-baton-branch-delete.sh	ref	PR #7
 tests/test-baton-gh-write.sh	ref	#100
 tests/test-baton-gh-write.sh	ref	/issues/100
 tests/test-baton-gh-write.sh	ref	/issues/59
@@ -17,6 +25,8 @@ tests/test-baton-gh-write.sh	ref	/issues/62
 tests/test-baton-gh-write.sh	ref	acme/app#100
 tests/test-baton-gh-write.sh	ref	acme/app#61
 tests/test-baton-gh-write.sh	ref	acme/app#7
+tests/test-baton-params.sh	ref	o/r#1
+tests/test-baton-params.sh	ref	o/r#7
 tests/test-brain-hooks.sh	ref	#12
 tests/test-brain-hooks.sh	ref	#123
 tests/test-brain-hooks.sh	ref	PR #123

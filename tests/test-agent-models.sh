@@ -37,6 +37,9 @@ SPAWN = re.compile(r"\bagents?\b(?!\.[a-z_*<])|\bsub-?agents?\b|\bTask tool\b|\b
 NOT_SPAWN = (
     "What a subagent returns is a claim, not evidence: run the acceptance command again yourself before you believe it.",
     "This rule is for a session that owns the work and may edit files; a session or subagent working from a brief stops and asks about anything outside it.",
+    # a GitHub workflow_dispatch run, the kit baton that makes one: no agent
+    "`kit:workflow-dispatch` dispatches one `workflow_dispatch` run of a workflow of a private repository, on a branch:",
+    "<launcher> go kit:workflow-dispatch --repo <owner/name> --workflow <file.yml> --ref <branch> [--input <key>=<value>]...",
 )
 used = set()
 KEY = re.compile(r"\bagents\.([a-z_]+)\b")

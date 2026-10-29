@@ -1,5 +1,5 @@
 {
-  "description": "Delivers the plugin's process and rules into a session opened in an app repo; silent when the config sets hooks: off",
+  "description": "Delivers the plugin's process and rules into a session opened in an app repo; silent when the config sets hooks: off, except the guard of the owner's baton signature",
   "hooks": {
     "SessionStart": [
       {
@@ -17,6 +17,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.py\" index",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/update_check.py\" session-start",
             "timeout": 10
           }
         ]
@@ -39,6 +44,26 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-bash.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/baton-guard.py\"",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/settings-guard.py\"",
             "timeout": 10
           }
         ]

@@ -5,15 +5,23 @@
                           exactly one `${{ … }}` keeps the value's type (a boolean `cancel-in-progress` stays a boolean)
 
 Supported: literals ('str' with '' as a quote, numbers, true, false, null), context paths (github.event.pull_request.number,
-a.b['c']), ( ), !, ==, !=, <, <=, >, >=, &&, ||, and the functions contains, startsWith, endsWith, format, toJSON. Semantics follow the
+a.b['c']), ( ), !, ==, !=, <, <=, >, >=, &&, ||, and the functions contains, startsWith, endsWith, format, toJSON, fromJSON. Semantics follow the
 Actions documentation: a missing property is null; && and || return an operand, not a boolean; == on two strings ignores case;
 null, false, 0 and '' are falsy; a value interpolated into a string is '' for null. Anything else raises ValueError, so a test fails
 closed on an expression it cannot judge instead of guessing.
+
+&& and || evaluate their right operand only when the left one does not decide the result, as Actions does; the one effect that matters is
+fromJSON of text that is not JSON, which makes the evaluation fail (EvalError: the run fails at once, as Actions reports a bad expression)
+and is skipped, not raised, in an operand that is not reached. Any other unsupported function raises ValueError in a skipped operand too.
 """
 import re
 
 TOKEN = re.compile(r"\s*(?:(?P<num>-?\d+(?:\.\d+)?)|(?P<str>'(?:[^']|'')*')|(?P<op>==|!=|<=|>=|&&|\|\||[!<>().,\[\]])"
                    r"|(?P<id>[A-Za-z_][A-Za-z0-9_-]*))")
+
+
+class EvalError(ValueError):
+    """The expression is valid but its evaluation fails (fromJSON of text that is not JSON): Actions fails the run."""
 
 
 def _tokens(src):
@@ -73,6 +81,7 @@ def _num(v):
 class _P:
     def __init__(self, toks, ctx):
         self.t, self.i, self.ctx = toks, 0, ctx
+        self.skip = 0   # >0 while parsing an operand that && or || does not reach
 
     def peek(self):
         return self.t[self.i] if self.i < len(self.t) else (None, None)
@@ -84,11 +93,21 @@ class _P:
         self.i += 1
         return tok
 
+    def operand(self, parse, reached):
+        """`parse()` the right operand; when `reached` is false it is parsed but its fromJSON failures do not count."""
+        if reached:
+            return parse()
+        self.skip += 1
+        try:
+            return parse()
+        finally:
+            self.skip -= 1
+
     def expr(self):
         v = self.and_()
         while self.peek()[1] == "||":
             self.take()
-            r = self.and_()
+            r = self.operand(self.and_, not truthy(v))
             v = v if truthy(v) else r
         return v
 
@@ -96,7 +115,7 @@ class _P:
         v = self.cmp()
         while self.peek()[1] == "&&":
             self.take()
-            r = self.cmp()
+            r = self.operand(self.cmp, truthy(v))
             v = r if truthy(v) else v
         return v
 
@@ -175,6 +194,14 @@ class _P:
         if low == "tojson" and len(args) == 1:
             import json
             return json.dumps(args[0], indent=2)
+        if low == "fromjson" and len(args) == 1:
+            import json
+            if self.skip:
+                return None
+            try:
+                return json.loads(_str(args[0]))
+            except ValueError:
+                raise EvalError("fromJSON: not JSON: %r" % _str(args[0])[:60])
         if low == "format" and args:
             return re.sub(r"\{(\d+)\}", lambda m: _str(args[int(m.group(1)) + 1]), _str(args[0]))
         raise ValueError("unsupported function %s/%d" % (name, len(args)))

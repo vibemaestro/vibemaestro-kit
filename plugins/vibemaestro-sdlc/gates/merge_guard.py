@@ -23,7 +23,8 @@ widen its own rules or pick its own adapter code. `merge.deny_globs` unset is rc
 which paths it refuses (an empty list is a valid answer). Bootstrap, the one exception: when the base has no config file at all
 and the PR adds `.vibemaestro/sdlc.json` (status added), that file is read at the PR's head for this one merge (printed, logged
 and in the plan line as `bootstrap`); it must set `merge.deny_globs` and name no `external:` adapter (else rc 65), `--admin`,
-`--image-bump` and `--require-image` are rc 64, deny adds the init default (sdlc_config.MERGE_DENY_DEFAULT) to the PR's globs and
+`--image-bump` and `--require-image` are rc 64, deny adds the init default (sdlc_config.merge_deny_floor: MERGE_DENY_DEFAULT plus each `rules.dirs` folder of the added config under
+`.vibemaestro/`) to the PR's globs and
 lets through only the config and Markdown files under its `.vibemaestro/` rules directory, and the brief applies as always.
 
 Conditions:
@@ -59,8 +60,14 @@ Conditions:
                      (caps included); each accepted file is printed and logged. A docs glob ends in `.md` and starts with a
                      literal segment other than tests, test, plugins, .github, .vibemaestro (else rc 64); it also counts as a
                      --behind-ok glob. --behind auto (alone: with --behind-ok or --behind-ok-clean it is rc 64) lists nothing
-                     and accepts a behind PR when (a) GitHub's test merge has the parents base tip and head and is mergeable
-                     in the same answer (stale: asked again 3 times, 2 s apart, then ??; mergeable false: FAIL at once); (b)
+                     and accepts a behind PR from the compare API alone (the merge base, behind_by and the files the base
+                     changed since): GitHub's test merge, which GitHub does not always rebuild after the base moves, is no gate and
+                     a stale one never refuses; it is read where it still adds information: (a) `mergeable` false is FAIL at once,
+                     and a file both sides changed needs a fresh test merge (parents base tip and head, mergeable true) as the
+                     second opinion on git's merge (stale: asked again 3 times, 2 s apart, then ??; a PR sharing no file reads it
+                     once and does not wait); a base path that is a file where the PR has a directory of that name (or the
+                     reverse), that differs from a PR path only in case or Unicode form, or that sits in a directory (at any level) the PR
+                     moved a file out of (or the reverse: a directory rename), is FAIL; (b)
                      every file both sides changed is a docs path (the docs-glob rule applied to the path, in no dot-directory
                      or agent-instruction directory, not CLAUDE.md, AGENTS.md or the like) and passes the --behind-ok-clean
                      checks above; (c) with
@@ -107,6 +114,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.parse
 
 sys.dont_write_bytecode = True
@@ -607,29 +615,39 @@ MERGE_BASE = "; merge the base into the branch"
 
 
 def behind_auto(a, base_sha, cmp_, files, paths, base_files, cfg, ahead, notes, V):
-    """--behind auto: a behind PR passes when (a) GitHub's test merge is fresh and mergeable, (b) every file both sides changed
-    is a docs file that merges clean, and (c) the base's files and the PR's wake no suite in common (the base's planner), or,
-    with no planner (or in bootstrap), the base's files are all docs. Returns the shared files accepted clean."""
+    """--behind auto: a behind PR passes when (b) every file both sides changed is a docs file that merges clean, and (c) the
+    base's files and the PR's wake no suite in common (the base's planner), or, with no planner (or in bootstrap), the base's
+    files are all docs. The decision reads the compare API only (the merge base, the base's files since it, behind_by): GitHub's
+    test merge is not a gate, since GitHub does not always rebuild it after the base moves. It is read where it still adds
+    information, and only when fresh (parents base tip and head): `mergeable` false is a conflict; and a file both sides changed
+    needs it as the second opinion on git's merge. A stale test merge on its own never refuses. Returns the shared files accepted
+    clean."""
     head = "behind the base by %d commit(s); --behind auto" % ahead
+    shared = sorted(set(base_files) & set(paths))
+    clash = path_clashes(base_files, paths, dir_moves(cmp_.get("files")), dir_moves(files))
+    if clash:
+        notes.append("(b) and (c) not read")
+        V.cond("behind", False, "%s: (b) a path of the base clashes with one of this PR: %s%s" % (head, "; ".join(clash[:4]), MERGE_BASE), notes)
+        return []
+    # a disjoint PR needs no test merge: one read, no waiting; a shared file waits for GitHub to rebuild it
     try:
-        tm, why = fresh_test_merge(a, base_sha)
+        tm, why = fresh_test_merge(a, base_sha, TEST_MERGE_READS if shared else 1)
     except G.Infra as e:
         tm, why = None, ("??", "GitHub's test merge cannot be read: %s" % e)
-    if tm is None:
+    if tm is None and why[0] == "FAIL":
         notes.append("(b) and (c) not read")
-        if why[0] == "FAIL":
-            V.cond("behind", False, "%s: (a) %s%s" % (head, why[1], MERGE_BASE), notes)
-        else:
-            V.unknown("behind", "%s: (a) %s" % (head, why[1]), notes)
+        V.cond("behind", False, "%s: (a) %s%s" % (head, why[1], MERGE_BASE), notes)
         return []
-    notes.append("(a) GitHub's test merge %s: parents base tip and head, mergeable" % tm[:12])
+    a_say = "(a) test merge %s fresh" % tm[:12] if tm else "(a) test merge not fresh: not needed"
+    notes.append("(a) GitHub's test merge %s: parents base tip and head, mergeable" % tm[:12] if tm else
+                 "(a) GitHub's test merge is not fresh (%s): the compare API decides" % why[1])
     planner = None if getattr(a, "boot", False) else cfg["merge"]["planner"]
     if getattr(a, "boot", False) and cfg["merge"]["planner"]:
         notes.append("(c) bootstrap: merge.planner is in the config this PR adds, so it is not used")
-    shared = sorted(set(base_files) & set(paths))
     accepted, refused, unknown = [], [], []
     if shared:
-        accepted, refused, unknown = clean_shared(a, base_sha, cmp_, files, shared, cfg, lambda p: doc_path(p, cfg), tm)
+        accepted, refused, unknown = clean_shared(a, base_sha, cmp_, files, shared, cfg, lambda p: doc_path(p, cfg), tm,
+                                                  None if tm else "cannot cross-check git's merge with GitHub's test merge: %s" % why[1])
         refused = ["%s (not docs: a clean merge of code, config or a planner's map is not a tested whole)" % p
                    if p in shared else p for p in refused]
     notes += ["(b) accepted clean: %s (%s)" % acc for acc in accepted]
@@ -647,16 +665,84 @@ def behind_auto(a, base_sha, cmp_, files, paths, base_files, cfg, ahead, notes, 
     if verdict == "??":
         V.unknown("behind", "%s: %s; (c) %s" % (head, b, detail), notes)
         return []
-    V.cond("behind", verdict == "ok", "%s: (a) fresh; %s; (c) %s%s" % (head, b, detail, "" if verdict == "ok" else MERGE_BASE), notes)
+    V.cond("behind", verdict == "ok", "%s: %s; %s; (c) %s%s" % (head, a_say, b, detail, "" if verdict == "ok" else MERGE_BASE), notes)
     return accepted if verdict == "ok" else []
 
 
-def fresh_test_merge(a, base_sha):
-    """(a) of --behind auto: (test merge SHA, None) when GitHub's test merge has the parents [base tip, head] and `mergeable`
-    is true in the same answer; else (None, (verdict, why)): FAIL for a fresh test merge with a conflict, ?? while it stays
-    stale (asked again TEST_MERGE_READS - 1 times, TEST_MERGE_WAIT_S apart: the read itself makes GitHub recompute it)."""
+def fold(p):
+    """A path as a case-insensitive, normalising checkout (macOS, Windows) sees it: NFC, case-folded."""
+    return unicodedata.normalize("NFC", p).casefold()
+
+
+def dir_moves(entries):
+    """[(source, destination)] of the renames in a compare or PR file list whose destination is outside some directory of the
+    source: git may apply them to the other side's files of such a directory as a directory rename (moved into the new
+    place, or a conflict). A copy is no move; a file moved down into a subdirectory leaves no directory."""
+    return [(f["previous_filename"], f["filename"]) for f in entries or []
+            if f.get("status") == "renamed" and f.get("previous_filename") and f.get("filename")
+            and left_dirs(f["previous_filename"], f["filename"])]
+
+
+def left_dirs(src, dst):
+    """The directories of `src` (every ancestor, nearest first, the root excluded) that `dst` is not inside. Compared exactly,
+    not folded: a directory renamed to another case or Unicode form is a rename for git on a case-sensitive checkout."""
+    out, d = [], posixpath.dirname(src)
+    while d:
+        if not (dst + "/").startswith(d + "/"):
+            out.append(d)
+        d = posixpath.dirname(d)
+    return out
+
+
+def path_clashes(base_files, paths, base_moves=(), pr_moves=()):
+    """The base's paths that clash with the PR's without being the same name, which a test merge would have shown as a conflict
+    and the two file lists cannot: a file on one side where the other has a directory of that name, names that differ only in
+    case or Unicode form (one file on a case-insensitive or normalising checkout), and a file moved out of a directory on one
+    side (`base_moves`, `pr_moves`: dir_moves) while the other side has a path in that directory (a directory rename).
+    [text] for each pair, sorted."""
+    def dirs(ps):
+        out = {}
+        for p in ps:
+            parts = p.split("/")
+            for k in range(1, len(parts)):
+                out.setdefault(fold("/".join(parts[:k])), p)
+        return out
+
+    def by_fold(ps):
+        out = {}
+        for p in ps:
+            out.setdefault(fold(p), set()).add(p)
+        return out
+    bdirs, pdirs = dirs(base_files), dirs(paths)
+    bfold, pfold = by_fold(base_files), by_fold(paths)
+    found = []
+    for k, bps in sorted(bfold.items()):
+        for bp in sorted(bps):
+            for pp in sorted(pfold.get(k, ())):
+                if pp != bp:
+                    found.append("%s and %s differ only in case or Unicode form" % (bp, pp))
+            if k in pdirs:
+                found.append("the base's file %s is a directory in this PR (%s)" % (bp, pdirs[k]))
+    for k, pps in sorted(pfold.items()):
+        for pp in sorted(pps):
+            if k in bdirs:
+                found.append("this PR's file %s is a directory in the base (%s)" % (pp, bdirs[k]))
+    for who, moves, other, where in (("the base", base_moves, paths, "this PR"), ("this PR", pr_moves, base_files, "the base")):
+        for src, dst in moves:
+            hit = [p for d in left_dirs(src, dst) for p in other if fold(p).startswith(fold(d) + "/")]
+            if hit:
+                found.append("%s moved %s to %s, a directory rename git may apply to %s's %s" % (who, src, dst, where, hit[0]))
+    return found
+
+
+def fresh_test_merge(a, base_sha, reads=TEST_MERGE_READS):
+    """GitHub's test merge as --behind auto reads it: (test merge SHA, None) when it has the parents [base tip, head] and
+    `mergeable` is true in the same answer; else (None, (verdict, why)): FAIL for `mergeable` false (a conflict, whatever the
+    parents say: the parents of a test merge GitHub did not rebuild cannot tell an old conflict from a new one, and a refusal
+    only asks for the base to be merged), ?? while it
+    stays stale (asked again `reads` - 1 times, TEST_MERGE_WAIT_S apart: the read itself makes GitHub recompute it)."""
     seen = ""
-    for i in range(TEST_MERGE_READS):
+    for i in range(reads):
         if i:
             time.sleep(TEST_MERGE_WAIT_S)
         pr = B.api("repos/%s/pulls/%s" % (a.repo, a.pr)) or {}
@@ -673,8 +759,8 @@ def fresh_test_merge(a, base_sha):
         if ok is True:
             return m, None
         seen = "test merge %s is fresh, mergeable %s" % (m[:12], json.dumps(ok))
-    return None, ("??", "GitHub's test merge is still stale after %d reads (%s): re-run once GitHub has recomputed it"
-                  % (TEST_MERGE_READS, seen))
+    return None, ("??", "GitHub's test merge is still stale after %d read(s) (%s): re-run once GitHub has recomputed it"
+                  % (reads, seen))
 
 
 def merge_parents(a, m):
@@ -829,13 +915,14 @@ def test_merge(a, base_sha):
     return m
 
 
-def clean_shared(a, base_sha, cmp_, files, overlap, cfg, may=None, tm=None):
+def clean_shared(a, base_sha, cmp_, files, overlap, cfg, may=None, tm=None, no_tm=None):
     """([(path, detail)] accepted, [path (why)] refused, [why] could not tell) for the files both the base and the PR changed.
     Two independent merges must agree: git's own (`git merge-file` exits 0 on the three texts) and GitHub's test merge (the
     same bytes at a test merge whose parents are the base tip and the head), so a rename GitHub pairs differently, a merge
     attribute or another diff algorithm shows as a disagreement. A file added, removed or renamed on either side is refused
     outright: a 3-way merge of one path means nothing there. --behind auto passes `may` (the clean classes, instead of the
-    --behind-ok-clean globs) and `tm` (the fresh test merge its (a) already read)."""
+    --behind-ok-clean globs) and `tm` (the fresh test merge it already read; `no_tm`, the reason there is none, makes a file
+    that passes the other checks `??` instead: the second opinion is missing)."""
     accepted, refused, unknown = [], [], []
     cand = [p for p in overlap if any(C.glob_match(g, p) for g in a.clean_globs)]
     if may is not None:
@@ -858,6 +945,8 @@ def clean_shared(a, base_sha, cmp_, files, overlap, cfg, may=None, tm=None):
             todo.append(p)
     if not todo:
         return accepted, refused, unknown
+    if no_tm:
+        return accepted, refused, unknown + ["%s: %s" % (p, no_tm) for p in todo]
     mb = ((cmp_.get("merge_base_commit") or {}).get("sha") or "").lower()
     if not SHA_RE.fullmatch(mb):
         return accepted, refused, unknown + ["the comparison names no merge base"]
@@ -1279,7 +1368,7 @@ class Run(object):
                 deny = mcfg["deny_globs"]
                 scaffold = set()
                 if self.boot:                           # the PR's own list cannot be emptied below the init default
-                    deny = list(deny) + [g for g in C.MERGE_DENY_DEFAULT if g not in deny]
+                    deny = list(deny) + [g for g in C.merge_deny_floor(self.cfg["rules"]["dirs"]) if g not in deny]
                     scaffold = bootstrap_scaffold(self.cfg, files)
                 hit = [p for p in paths if p not in scaffold and any(match_fold(g, p) for g in deny)]
                 cond("deny", not hit, "%d deny glob(s)%s%s" % (len(deny), ("; denied: " + ", ".join(hit[:8])) if hit else ", none matches",

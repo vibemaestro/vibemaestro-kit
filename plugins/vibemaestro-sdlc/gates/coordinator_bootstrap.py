@@ -241,6 +241,11 @@ def is_launcher_finding(f):
     return f[1].startswith("the launcher ")
 
 
+def is_old_ask(f):
+    """An old broad ask rule (baton.py OLD_ASKS): kit:permissions-upgrade removes it; this run only adds, so it sets it aside."""
+    return f[1].startswith(B.OLD_ASK_FINDING)
+
+
 def cmd_report(hooks=True):
     sdlc = installed(SDLC)
     check("vibemaestro-sdlc", running_version(), "(running; latest installed %s)" % (show(sdlc[0][0]) if sdlc else "none"))
@@ -334,6 +339,10 @@ class Plan:
 def compute(work):
     """The plan of this machine now; the rules file is written into `work`."""
     p = Plan()
+    other = B.registry_other()
+    if other:       # a session that is not the installed sdlc sees another version's rules and launcher: cmd_permissions would refuse at the act
+        p.refusal = "this session runs vibemaestro-sdlc %s, the installed one is %s: restart Claude Code; nothing written" % other[:2]
+        return p
     sources = B.settings_sources()
     user = user_settings()
     launcher_ok = B.launcher_current()
@@ -345,7 +354,8 @@ def compute(work):
     if os.path.islink(user):
         p.refusal = "%s is a symbolic link: the merge names the file itself" % named(user)
         return p
-    rest = [f for f in found if not is_launcher_finding(f)]
+    rest = [f for f in found if not (is_launcher_finding(f) or is_old_ask(f))]
+    old = [f for f in found if is_old_ask(f)]
     snip = B.snippet()
     rules = dict(snip["permissions"]) if rest else {}
     rules["attribution"] = snip["attribution"]
@@ -368,7 +378,7 @@ def compute(work):
         return p
     merge = merge_of(out, copy)
     after = [f for f in B.perm_findings([(lab, copy if lab == "user" else path) for lab, path in sources])
-             if not is_launcher_finding(f)]
+             if not (is_launcher_finding(f) or is_old_ask(f))]
     if after:
         p.refusal = ("adding rules cannot reach permissions --check rc 0 (the run removes no rule); the owner removes or "
                      "changes these by hand first: %s" % named("; ".join("%s %s" % f for f in after).replace(copy, user)))
@@ -380,7 +390,10 @@ def compute(work):
     if merge:
         before = "absent: created as {} first" if absent else "sha256 %s" % sha_file(user)
         p.lines.append("bootstrap settings %s (%s): merge %s (rules sha256 %s)" % (user, before, merge[0], merge[1]))
-    if not p.lines:
+    if not p.lines and old:
+        p.refusal = ("nothing to do here: the launcher is current and only the old broad ask rules are left, which "
+                     "kit:permissions-upgrade swaps")
+    elif not p.lines:
         p.refusal = ("nothing to do: the launcher is current, the rules are in force (permissions --check rc 0) and no "
                      "attribution key is absent")
     return p
@@ -524,11 +537,15 @@ def cmd_do(what, plan_file):
 
 def cmd_postcheck():
     found = B.perm_findings(B.settings_sources())
+    old = [f for f in found if is_old_ask(f)]
+    found = [f for f in found if not is_old_ask(f)]
     current = B.launcher_current()
     print("launcher %s; permissions --check: %s" % ("current" if current else "NOT current",
-                                                    "rc 0" if not found else "%d finding(s)" % len(found)))
+                                                    "rc 0" if not found and not old else "%d finding(s)" % (len(found) + len(old))))
     for k, t in found[:10]:
         print("  %s %s" % (k, t))
+    if old:
+        print("  %d of them old broad ask rule(s), set aside here: kit:permissions-upgrade swaps them" % len(old))
     return OK if current and not found else FAIL
 
 

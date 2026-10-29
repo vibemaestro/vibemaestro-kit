@@ -108,10 +108,12 @@ def rows(cwd):
     if os.path.isfile(os.path.join(d, "hot.jsonl")):
         try:
             _, st = s.load(d)
-            text = s.render(st)
-            hot_chars = len(text)
-            if hot_chars > s.RENDER_CAP:
-                warn_hot.append("render over %s" % "{:,}".format(s.RENDER_CAP))
+            parts = s.render_parts(st)
+            hot_chars = len(s.join_parts(parts))
+            over = [p for p, _ in s.PARTS                      # in UTF-16 units, as the SessionStart cut counts
+                    if len(parts[p].encode("utf-16-le")) // 2 > (s.RENDER_CAP if p == "hot" else s.STRING_MAX)]
+            if over:                                   # first: the row keeps ≤ 300 bytes, and the end of a field is cut
+                warn_hot.append("over: " + ", ".join(over))
             for letter, title in s.SECTIONS:
                 n = len(s.live(st, letter))
                 if n >= s.WARN_RATIO * s.CAPS[letter]:
@@ -120,8 +122,8 @@ def rows(cwd):
             warn_hot.append("the chain is broken: brain doctor")
     else:
         warn_hot.append("no state yet")
-    out = [["Know·hot", "Hot Memory hot.md" + "; repo index (shared, injected by sdlc; planned B1.7)", size(hot_chars),
-            "SessionStart, every source", "owner supersede or unpin; windows expire; N/X/T closed",
+    out = [["Know·hot", "Hot Memory hot.md" + "; repo index (shared; sdlc injects it at SessionStart when current_state.inject is on)", size(hot_chars),
+            "SessionStart, every source", "owner supersede or unpin; windows expire; others closed",
             "never (Sleep pass: B2.3)", "re-injected", ", ".join(warn_hot)],
            ["Do·hot", "Artifact Index: not built (B2.1)", "—", "—", "PR merged or closed (B2.2)", "—",
             "re-injected (from B2.1)", ""]]
@@ -212,7 +214,7 @@ def did_text(w):
 
 
 def main(as_json):
-    rs, d, st = rows(os.getcwd())
+    rs, d, st = rows(None)                                 # this session's project, else the working directory's
     w = did(d, st)
     if as_json:
         sys.stdout.write(json.dumps({"header": HEADER, "rows": [dict(zip(COLUMNS, r), line=" | ".join(r)) for r in rs],

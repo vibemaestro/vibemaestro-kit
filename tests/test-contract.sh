@@ -5,7 +5,8 @@
 # Run: bash tests/test-contract.sh [<item id>]
 #   no id: every item, the exactness checks, the change rule of the surface against the base branch (a change file when the base
 #   has .changes/, a version bump before), and the planted breaks
-#   an id (marketplace, layout, fetch-action, sandbox-env, seedable, cli, config-schema, rule-packs): that item only, on the real tree
+#   an id (marketplace, layout, fetch-action, sandbox-env, seedable, cli, config-schema, rule-packs, dependents): that item only,
+#   on the real tree
 #   CONTRACT_BASE=<ref>: the base of the version-bump rule (default: merge-base of HEAD and origin/main, else the origin/main tip)
 #
 # The contract file is the list; this suite is its proof. Every item is a FAMILY `fam_<id> <repo copy>` that reads the values the
@@ -29,8 +30,10 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 . "$HERE/fixtures/flow.sh"
 # shellcheck source=fixtures/ports.sh
 . "$HERE/fixtures/ports.sh"
+# shellcheck source=fixtures/baton-owner.sh
+. "$HERE/fixtures/baton-owner.sh"
 
-ITEMS="marketplace layout fetch-action sandbox-env seedable cli config-schema rule-packs"
+ITEMS="marketplace layout fetch-action sandbox-env seedable cli config-schema rule-packs dependents"
 ONLY=${1:-}
 if [ -n "$ONLY" ]; then
   case " $ITEMS " in *" $ONLY "*) ;; *) echo "usage: bash tests/test-contract.sh [$(echo "$ITEMS" | tr ' ' '|')]" >&2; exit 64;; esac
@@ -260,6 +263,7 @@ scripts/baton.py 6
 scripts/baton.py 7
 scripts/baton.py 8
 scripts/baton.py 9
+scripts/baton.py 10
 scripts/baton.py 64
 scripts/baton.py 66
 gates/commit_discipline.py 0
@@ -350,7 +354,19 @@ GW_DONE='journal({"1": {"op": 1, "kind": "issue-comment", "repo": "acme/app", "n
 MG_HEAD=a1b2c3d4e5f60718293a4b5c6d7e8f9001122334
 MG=(--repo acme/app --pr 7 --head "$MG_HEAD" --brief brief.txt)
 # bat <dir> <state dir> <args...> — the baton runner from <dir> with its own state directory; prints the rc
-bat() { local d=$1 s=$2; shift 2; ( cd "$d" && cenv XDG_STATE_HOME="$s" python3 "$P/scripts/baton.py" "$@" ) >/dev/null 2>&1; echo $?; }
+# (a `sign --by owner` first goes through the plugin's guard hook, owner_asked, as in a session whose owner clicks the dialog; the
+# repo copy's baton is isolated from the machine then, baton_isolate)
+bat() {
+  local d=$1 s=$2; shift 2
+  if [ "${1:-} ${2:-} ${3:-}" = "sign --by owner" ]; then
+    [ -d "${P%/}.isolate" ] || baton_isolate "$P"
+    owner_asked "$P" "$d" "$s" s-owner "${@:2}" >/dev/null
+  elif [ "${1:-}" = mode ] && [ $# -gt 1 ]; then
+    [ -d "${P%/}.isolate" ] || baton_isolate "$P"
+    mode_asked "$P" "$d" "$s" s-owner "${@:2}" >/dev/null
+  fi
+  ( cd "$d" && cenv XDG_STATE_HOME="$s" CLAUDE_CODE_SESSION_ID=s-owner python3 "$P/scripts/baton.py" "$@" ) >/dev/null 2>&1; echo $?
+}
 # bat_sign <dir> <state dir> <signer> <script> [args...] — rehearse to read the seal it prints, then sign with it; prints the rc
 bat_sign() {
   local d=$1 s=$2 by=$3 seal; shift 3
@@ -358,7 +374,7 @@ bat_sign() {
   bat "$d" "$s" sign --by "$by" --seal "${seal:-none}" "$@"
 }
 # bat_act <dir> — the template written by `baton new act` into <dir> (a baton script that creates one file); prints its path
-bat_act() { bat "$1" "$1/st" new act --dir "$1" >/dev/null; printf '%s' "$1/act.sh"; }
+bat_act() { cp "$SRC_ROOT/tests/fixtures/baton-positional.sh" "$1/act.sh"; printf '%s' "$1/act.sh"; }   # positional: <file> <text>
 POSTCHECK_OK=$'postcheck() {\n  holds_text\n}'; POSTCHECK_NO=$'postcheck() {\n  false\n}'
 # pr_wt — main tree and a linked worktree on feat/x with one commit, plus summary/evidence files; sets PW PT F
 pr_wt() { mk_pr_repo; commit_in "$PT" a.txt a "feat: x"; }
@@ -442,7 +458,8 @@ trig() {
     "scripts/baton.py 0")          W=$(fresh); bat "$W" "$W/st" new act --dir "$W";;
     "scripts/baton.py 1")          W=$(fresh); S=$(bat_act "$W"); cp "$S" "$W/b.sh"; mutate "$W/b.sh" '# Undo: ' '# Undone: '
                                    mutate "$S" '# Expect: create *' '# Expect: delete *'
-                                   all_rc 1 "$(bat "$W" "$W/st" check "$W/b.sh")" "$(bat "$W" "$W/st" rehearse "$S" "$W/out.txt" x)";;
+                                   all_rc 1 "$(bat "$W" "$W/st" check "$W/b.sh")" "$(bat "$W" "$W/st" rehearse "$S" "$W/out.txt" x)" \
+                                     "$(bat "$W" "$W/st" pack "$S" user:act)";;
     "scripts/baton.py 2")          W=$(fresh); S=$(bat_act "$W"); mk_tools "$W/py" python3; echo f > "$W/a-file"
                                    all_rc 2 "$( (cd "$W" && cenv PATH="$W/py" python3 "$P/scripts/baton.py" check "$S") >/dev/null 2>&1; echo $?)" \
                                      "$(bat "$W" "$W/a-file" mode auto)";;
@@ -466,8 +483,16 @@ trig() {
     "scripts/baton.py 9")          W=$(fresh); S=$(bat_act "$W"); mutate "$S" "$POSTCHECK_OK" "$POSTCHECK_NO"
                                    bat_sign "$W" "$W/st" owner "$S" "$W/out.txt" x >/dev/null; bat "$W" "$W/st" run "$S" "$W/out.txt" x >/dev/null
                                    all_rc 9 "$(bat "$W" "$W/st" log --wait-names act.sh --timeout 1)" "$(bat "$W" "$W/st" log --wait-names never.sh --timeout 1)";;
-    "scripts/baton.py 64")         W=$(fresh); bat "$W" "$W/st";;
-    "scripts/baton.py 66")         W=$(fresh); bat "$W" "$W/st" check "$W/none.sh";;
+    "scripts/baton.py 64")         W=$(fresh); all_rc 64 "$(bat "$W" "$W/st")" "$(bat "$W" "$W/st" pack "$W/act.sh" act)";;
+    "scripts/baton.py 10")         W=$(fresh); V="$W/cfg/plugins/cache/vibemaestro/vibemaestro-sdlc"; mkdir -p "$V"
+                                   cp -r "$P" "$V/4dc7de6c9e01"; cp -r "$P" "$V/3dd2665ed242"
+                                   printf '{"version": 2, "plugins": {"vibemaestro-sdlc@vibemaestro": [{"installPath": "%s", "lastUpdated": "2"}]}}' \
+                                     "$V/3dd2665ed242" > "$W/cfg/plugins/installed_plugins.json"
+                                   all_rc 10 "$( (cd "$W" && cenv XDG_STATE_HOME="$W/st" CLAUDE_CONFIG_DIR="$W/cfg" python3 "$V/4dc7de6c9e01/scripts/baton.py" permissions --check) >/dev/null 2>&1; echo $?)" \
+                                     "$( (cd "$W" && cenv XDG_STATE_HOME="$W/st" CLAUDE_CONFIG_DIR="$W/cfg" python3 "$V/4dc7de6c9e01/scripts/baton.py" permissions --install-launcher) >/dev/null 2>&1; echo $?)";;
+    "scripts/baton.py 66")         W=$(fresh)
+                                   all_rc 66 "$(bat "$W" "$W/st" check "$W/none.sh")" \
+                                     "$(bat "$W" "$W/st" pack --retire user:act 0000000000000000000000000000000000000000000000000000000000000000)";;
     "gates/commit_discipline.py 0")  r=$(gate_repo "feat: x"); py gates/commit_discipline.py main HEAD --cwd "$r";;
     "gates/commit_discipline.py 1")  r=$(gate_repo "wip: x"); py gates/commit_discipline.py main HEAD --cwd "$r";;
     "gates/commit_discipline.py 2")  r=$(gate_repo "feat: x"); py gates/commit_discipline.py main no-such-ref --cwd "$r";;
@@ -668,6 +693,380 @@ fam_rule_packs() {
   hasnt "$(rp_cmd "$P" "$B" "contract-probe" CLAUDE_CONFIG_DIR="$C")" "FROM-AAA" "[rule-packs] enabled: named by no settings file, not served"
 }
 
+# ── dependents ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# Each row of `## Dependent calls` is a call another repository makes into this one; its probe makes that call the way the
+# dependent does, on the repo copy: the copy's owner fixture sourced, the baton forms on a kit baton staged in the copy's plugin
+# (tests/fixtures/baton-dependent.sh as kit:dep-probe), the kit-root scripts and the adapters in scratch repositories, the
+# imported modules and their names, the gates with the dependent's flags. Every expected value comes from the row (hrc, htick):
+# a change of what a call gives goes green only by editing its row, which the change rule then makes name the call. DEP_CALLS
+# lists the probes; the family compares it with the rows both ways, like cli.
+SDLC=plugins/vibemaestro-sdlc
+DBX=kb/research-runs/2026-10-26-dependent-batons   # private (kb/): the pinned copies of a dependent's kit batons
+BAT="$SDLC/scripts/baton.py"
+KB="$SDLC/scripts/kb.py"
+IBS="$SDLC/scripts/intent-branch.sh"
+DEP_CALLS="tests/fixtures/baton-owner.sh
+owner_asked <plugin> <dir> <state dir> <session id> <sign arguments>
+CLAUDE_CODE_SESSION_ID
+XDG_STATE_HOME
+$BAT check kit:<name>
+$BAT check <script path>
+kit:release-promote
+kit:publish-public
+$BAT rehearse kit:<name> <args>
+$BAT mode auto
+$BAT sign --by coordinator-auto --seal <seal> kit:<name> <args>
+$BAT sign --by owner --seal <seal> kit:<name> <args>
+$BAT run kit:<name> <args>
+$BAT go --reuse <script path> <args>
+BATON_PHASE BATON_PLAN BATON_WRITES BATON_PLUGIN_ROOT
+scripts/scan-internal-terms.sh --terms <file> --tree
+scripts/export-public.sh <rev> <outdir>
+$SDLC/gates/gate_common.py
+$SDLC/gates/backends
+$SDLC/scripts/sdlc_config.py
+$SDLC/scripts/sdlc_config.py get <key> --root <dir>
+$SDLC/scripts/rule_packs.py
+$SDLC/scripts/vsdlc.py
+$KB init --lang en
+$KB config check
+$KB new <kind> <slug> --date <date>
+$KB check spec <date>-<slug>
+$KB check current-state
+$KB check current-state <file>
+$KB check current-state --diff <base>...<head> --body-file <file> --config-ref <ref>
+$SDLC/gates/commit_discipline.py <base> <head> --body-file <file> --config-ref <ref>
+$SDLC/gates/commit_discipline.py <base> <head> --body-file <file> --cwd <dir>
+$SDLC/gates/pr_sensitive.py --pr <n> --repo <owner/name> --config-ref <ref>
+$SDLC/gates/pr_sensitive.py --payload <file> --cwd <dir>
+$SDLC/gates/pr_title.py --pr <n> --repo <owner/name> --config-ref <ref>
+$SDLC/gates/pr_title.py --cwd <dir>
+$SDLC/gates/pr_body.py --pr <n> --repo <owner/name> --config-ref <ref>
+$IBS create-intent --slug <slug>
+$IBS create-intent --slug <slug> --base <ref>
+$IBS worker-branch --intent <slug> --name <branch> --no-checkout
+$IBS integrate --intent <slug> --to origin
+$SDLC/scripts/open-pr.sh --title <title> --summary <file> --evidence <file> --draft
+$SDLC/scripts/open-pr.sh --title <title> --summary <file> --evidence <file> --dry-run --fixes <n>
+$SDLC/scripts/open_pr.py --title <title> --summary-file <file> --evidence-file <file> --dry-run --payload-out <file>
+$SDLC/rules/batonrun.instructions.md
+$SDLC/hooks/hooks.json
+$SDLC/scripts/session-start.py
+$SDLC/skills/intake/SKILL.md"
+
+# hrc <holds> <n> — the n-th `rc N` of a row's holds (empty when it has none); htick <holds> <n> — its n-th name in backticks;
+# hticks <holds> <from> — its names in backticks from the from-th on, one per line
+hrc() { printf '%s\n' "$1" | grep -oE '(^|[^a-z])rc [0-9]+' | sed -n "$2s/.*rc //p"; }
+htick() { printf '%s\n' "$1" | grep -oE '`[^`]+`' | sed -n "$2s/^.\(.*\).$/\1/p"; }
+hticks() { printf '%s\n' "$1" | grep -oE '`[^`]+`' | sed -n "$2,\$s/^.\(.*\).$/\1/p"; }
+# dep_names <call> <names> — the names among <names> that the call (a list of variable names) also holds, sorted, one line
+dep_names() { printf '%s\n' $2 | grep -xF -f <(printf '%s\n' $1) | sort | tr '\n' ' '; }
+# hpre <text> — the text up to its first `<` (the literal head of a line shape such as `seal <seal> …`)
+hpre() { printf '%s' "${1%%<*}"; }
+
+# dep_baton <repo copy> — the dependent's baton flow once, on a copy of the plugin with the probe baton as kit:dep-probe, the
+# copy's owner fixture sourced in a subshell for each use; writes into $DS one file per step: rc-<step>, out-<step>
+dep_baton() {
+  local R=$1 W S seal fx="$1/tests/fixtures/baton-owner.sh"; DB=$(fresh)/p; W=$(fresh); S=$(fresh)
+  cp -R "$R/$SDLC" "$DB"; cp "$R/tests/fixtures/baton-dependent.sh" "$DB/batons/dep-probe.sh"
+  ( . "$fx" && baton_isolate "$DB" ) || bad "[dependents] instrument: the copy's owner fixture isolates the plugin copy"
+  DA=(kit:dep-probe "$W/f" hello)
+  db() { local k=$1; shift; ( cd "$W" && cenv XDG_STATE_HOME="$S" CLAUDE_CODE_SESSION_ID=s-owner python3 "$DB/scripts/baton.py" "$@" ) > "$DS/out-$k" 2>&1; echo $? > "$DS/rc-$k"; }
+  db check check kit:dep-probe
+  for f in release-promote publish-public; do   # a dependent's own baton, pinned: staged as a kit baton beside the probe baton (absent in the public export)
+    [ -f "$R/$DBX/$f.sh" ] && { cp "$R/$DBX/$f.sh" "$DB/batons/$f.sh"; db "check-$f" check "kit:$f"; }
+  done
+  cp "$R/tests/fixtures/baton-positional.sh" "$W/act.sh"; db check-path check "$W/act.sh"
+  db rehearse rehearse "${DA[@]}"
+  cp "$W/f.env" "$DS/env-rehearse" 2>/dev/null
+  seal=$(sed -n 's/^seal \([^ ]*\) .*/\1/p' "$DS/out-rehearse")
+  ( . "$fx" && mode_asked "$DB" "$W" "$S" s-owner auto ) >/dev/null 2>&1    # the owner's dialog for the mode change
+  db mode mode auto
+  ( . "$fx" && mode_asked "$DB" "$W" "$S" s-owner auto ) >/dev/null 2>&1
+  db mode2 mode auto
+  db sign-session sign --by coordinator-auto --seal "${seal:-none}" "${DA[@]}"
+  db sign-bare sign --by owner --seal "${seal:-none}" "${DA[@]}"
+  ( . "$fx" && owner_asked "$DB" "$W" "$S" s-other --by owner --seal "${seal:-none}" "${DA[@]}" ) > "$DS/out-asked-other" 2>/dev/null
+  db sign-other-session sign --by owner --seal "${seal:-none}" "${DA[@]}"
+  ( . "$fx" && owner_asked "$DB" "$W" "$S" s-owner --by owner --seal "${seal:-none}" "${DA[@]}" ) > "$DS/out-asked" 2>/dev/null
+  db sign-owner sign --by owner --seal "${seal:-none}" "${DA[@]}"
+  : > "$W/f.env"; db run run "${DA[@]}"
+  cp "$W/f.env" "$DS/env-run" 2>/dev/null
+  cp "$R/tests/fixtures/baton-positional.sh" "$W/old.sh"; touch -d '1 hour ago' "$W/old.sh"
+  db go-plain go "$W/old.sh" "$W/g1" hi
+  db go-reuse go --reuse "$W/old.sh" "$W/g2" hi
+  DSTATE=$S
+}
+
+# py_names <dir> <module> <name>... — the names a module imported from <dir> lacks (empty: all there), or `unimportable`
+py_names() {
+  local d=$1 m=$2; shift 2
+  ( cd "$d" && cenv python3 -B -c 'import importlib, sys
+sys.path.insert(0, ".")
+try:
+    m = importlib.import_module(sys.argv[1])
+except Exception as e:
+    print("unimportable: %s" % e); sys.exit(0)
+print(" ".join(n for n in sys.argv[2:] if not hasattr(m, n)))' "$m" "$@" ) 2>&1
+}
+
+# dep_repo — a git repository on main with a branch feat/x of one commit and origin/main at main; prints its path
+dep_repo() {
+  local r; r=$(fresh)/r; git_ init -q -b main "$r"; echo a > "$r/a"; git_ -C "$r" add -A; git_ -C "$r" commit -q -m "feat: a"
+  git_ -C "$r" checkout -q -b feat/x; echo b > "$r/b"; git_ -C "$r" add -A; git_ -C "$r" commit -q -m "feat: b"
+  git_ -C "$r" update-ref refs/remotes/origin/main main; printf '%s' "$r"
+}
+
+# drc <dir> <command...> — the rc of a command run from <dir> with the failing gh first in PATH
+drc() { local d=$1; shift; ( cd "$d" && cenv PATH="$DG:$PATH" "$@" ) >/dev/null 2>&1; echo $?; }
+
+# dep_kb — a repository after `kb.py init --lang en` (its config then also watching infrastructure/, with a title pattern), with
+# origin/main, a branch feat/i changing a watched path and feat/n another; then the kb and adapter calls of a dependent's flow
+# test, each rc into $DS, in the dependent's order (new intent, spec, plan, check, create-intent, worker-branch, integrate)
+dep_kb() {
+  local k O
+  DK=$(fresh)/k; git_ init -q -b main "$DK"
+  echo $(cd "$DK" && cenv python3 "$DP/scripts/kb.py" init --lang en >/dev/null 2>&1; echo $?) > "$DS/rc-kb-init"
+  cp "$DK/.vibemaestro/sdlc.json" "$DS/init-config.json"
+  python3 -c 'import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d.setdefault("current_state", {})["watch"] = ["infrastructure/"]
+d.setdefault("pr", {}).setdefault("title", {})["pattern"] = "^[a-z]+(\\([^()]+\\))?!?: \\S"
+json.dump(d, open(p, "w"), indent=2)' "$DK/.vibemaestro/sdlc.json"
+  git_ -C "$DK" add -A; git_ -C "$DK" commit -q -m "chore: kb"; git_ -C "$DK" update-ref refs/remotes/origin/main main
+  for k in i n; do
+    git_ -C "$DK" checkout -q -b "feat/$k" main; mkdir -p "$DK/infrastructure"
+    if [ "$k" = i ]; then echo x > "$DK/infrastructure/x"; else echo x > "$DK/other"; fi
+    git_ -C "$DK" add -A; git_ -C "$DK" commit -q -m "feat: $k"
+  done
+  git_ -C "$DK" checkout -q main
+  drc "$DK" python3 "$DP/scripts/kb.py" config check > "$DS/rc-kb-config"
+  for k in intent spec plan; do drc "$DK" python3 "$DP/scripts/kb.py" new "$k" dep-probe --date 2026-10-15 > "$DS/rc-kb-new-$k"; done
+  drc "$DK" python3 "$DP/scripts/kb.py" check spec 2026-10-15-dep-probe > "$DS/rc-kb-check-spec"
+  cp "$DK/kb/specs/2026-10-15-dep-probe.md" "$DS/spec.md"
+  python3 -c 'import re, sys
+p = sys.argv[1]; s = re.sub(r"<FILL:[^>]*>", "filled", open(p).read(), flags=re.S); open(p, "w").write(s)' "$DK/kb/specs/2026-10-15-dep-probe.md"
+  drc "$DK" python3 "$DP/scripts/kb.py" check spec 2026-10-15-dep-probe > "$DS/rc-kb-check-spec-filled"
+  cp "$DS/spec.md" "$DK/kb/specs/2026-10-15-dep-probe.md"
+  drc "$DK" python3 "$DP/scripts/kb.py" check current-state > "$DS/rc-kb-cs"
+  O=$(fresh)/o; git_ init -q -b main "$O"; mkdir -p "$O/.vibemaestro"; cp "$DK/.vibemaestro/sdlc.json" "$O/.vibemaestro/"
+  drc "$O" python3 "$DP/scripts/kb.py" check current-state "$DK/kb/current-state.md" > "$DS/rc-kb-cs-file"
+  k=$(cenv python3 "$DP/scripts/sdlc_config.py" get current_state.limits.lines --root "$O" 2>/dev/null)
+  for k in $(seq 0 "${k:-120}"); do echo "- line $k"; done > "$DS/big.md"   # one line over the cap
+  drc "$O" python3 "$DP/scripts/kb.py" check current-state "$DS/big.md" > "$DS/rc-kb-cs-big"
+  drc "$DK" bash "$DP/scripts/intent-branch.sh" create-intent --slug 2026-10-15-dep-probe > "$DS/rc-ib-create"
+  drc "$DK" bash "$DP/scripts/intent-branch.sh" worker-branch --intent 2026-10-15-dep-probe --name task/dep-1 --no-checkout > "$DS/rc-ib-worker"
+  drc "$DK" bash "$DP/scripts/intent-branch.sh" integrate --intent 2026-10-15-dep-probe --to origin > "$DS/rc-ib-integrate"
+  drc "$DK" bash "$DP/scripts/open-pr.sh" --title "feat: x" --summary "$DF" --evidence "$DF" --draft > "$DS/rc-op-main"
+  git_ -C "$DK" worktree add -q -b feat/pl "$DK.wt" main
+  drc "$DK.wt" python3 "$DP/scripts/open_pr.py" --title "feat(x): y" --summary-file "$DF" --evidence-file "$DF" --dry-run --payload-out "$DS/payload.json" > "$DS/rc-op-core"
+  ( cd "$DK.wt" && cenv PATH="$DG:$PATH" bash "$DP/scripts/open-pr.sh" --title "feat: x" --summary "$DF" --evidence "$DF" --dry-run --fixes 7 ) > "$DS/out-op-dry" 2>/dev/null
+  echo $? > "$DS/rc-op-dry"
+  drc "$DK" python3 "$DP/scripts/kb.py" new intent dep-base --date 2026-10-15 >/dev/null
+  drc "$DK" bash "$DP/scripts/intent-branch.sh" create-intent --slug 2026-10-15-dep-base --base feat/n > "$DS/rc-ib-create-base"   # a ref that is not HEAD
+}
+
+# dep_probe <repo copy> <call> <holds> — the probe of one row, every expected value read from <holds>
+dep_probe() {
+  local R=$1 c=$2 h=$3 L="[dependents] $2" X out r t n f
+  case "$c" in
+    tests/fixtures/*.sh)
+      for f in $(hticks "$h" 1); do
+        eq "$(bash -c '. "$1" >/dev/null 2>&1 && declare -F "$2"' _ "$R/$c" "$f")" "$f" "$L: sourced, it defines $f"
+      done;;
+    "owner_asked "*)
+      eq "$(cat "$DS/out-asked")" "$(htick "$h" 1)" "$L: the guard hook's answer for the owner's sign";;
+    CLAUDE_CODE_SESSION_ID)
+      eq "$(cat "$DS/out-asked-other")" ask "$L: instrument, the guard hook asked for the other session"
+      eq "$(cat "$DS/rc-sign-other-session")" "$(hrc "$h" 1)" "$L: owner_asked for another session id, then sign";;
+    XDG_STATE_HOME)
+      t=$(htick "$h" 1); has "$(cat "$DS/out-run")" "${t/\$XDG_STATE_HOME/$DSTATE}/" "$L: the run log lies under $t";;
+    "$BAT check kit:<name>")
+      eq "$(cat "$DS/rc-check")" "$(hrc "$h" 1)" "$L: rc"
+      for f in $(hticks "$h" 1); do grep -q "^# $f:" "$R/tests/fixtures/baton-dependent.sh" && ok "$L: the probe baton's header holds $f" || bad "$L: the probe baton's header holds $f"; done;;
+    kit:release-promote | kit:publish-public)
+      # the row: backtick 1 the call, 2 on the header words; the copy is a dependent's baton at a recorded blob id, kept in a private folder
+      f=${c#kit:}; t="$R/$DBX/$f.sh"
+      if [ ! -f "$t" ]; then
+        if [ "$(tree_shape "$R")" = export ]; then echo "  (not counted: $L: the pinned copies are not in the public export, probe not run)"
+        else bad "$L: the pinned copy $DBX/$f.sh is missing from the private tree"; fi
+      else
+        eq "$(htick "$h" 1)" "$BAT check kit:$f" "$L: the row names the call the probe makes"
+        eq "$(cat "$DS/rc-check-$f")" "$(hrc "$h" 1)" "$L: rc of $(htick "$h" 1)"
+        for n in $(hticks "$h" 2); do grep -q "^# $n:" "$t" && ok "$L: the pinned copy's header holds $n" || bad "$L: the pinned copy's header holds $n"; done
+        eq "$(python3 - "$t" <<'PY'
+import hashlib, sys
+d = open(sys.argv[1], "rb").read()
+print(hashlib.sha1(b"blob %d\0" % len(d) + d).hexdigest())
+PY
+)" "$(sed -n "s/^| \`$f.sh\` | \`\([0-9a-f]*\)\`.*/\1/p" "$R/$DBX/README.md")" "$L: the pinned copy is the blob its README records"
+      fi;;
+    "$BAT check <script path>")
+      eq "$(cat "$DS/rc-check-path")" "$(hrc "$h" 1)" "$L: rc"
+      for f in $(hticks "$h" 1); do grep -q "^# $f:" "$R/tests/fixtures/baton-positional.sh" && ok "$L: the probe baton's header holds $f" || bad "$L: the probe baton's header holds $f"; done;;
+    "$BAT rehearse kit:<name> <args>")
+      eq "$(cat "$DS/rc-rehearse")" "$(hrc "$h" 1)" "$L: rc"
+      t=$(hpre "$(htick "$h" 1)"); nonempty "$(grep -F -- "$t" "$DS/out-rehearse" | grep -E "^${t}[^ ]+ ")" "$L: a stdout line '$(htick "$h" 1)'";;
+    "$BAT mode auto")
+      eq "$(cat "$DS/rc-mode") $(cat "$DS/rc-mode2")" "$(hrc "$h" 1) $(hrc "$h" 1)" "$L: rc, both calls"
+      eq "$(cat "$DS/out-mode")" "$(htick "$h" 1)" "$L: the first call's one stdout line"
+      eq "$(cat "$DS/out-mode2")" "$(htick "$h" 2)" "$L: the next call's one stdout line";;
+    "$BAT sign --by coordinator-auto --seal <seal> kit:<name> <args>")
+      eq "$(cat "$DS/rc-sign-session")" "$(hrc "$h" 1)" "$L: rc for a baton whose Stops is not none";;
+    "$BAT sign --by owner --seal <seal> kit:<name> <args>")
+      eq "$(cat "$DS/rc-sign-owner")" "$(hrc "$h" 1)" "$L: rc right after owner_asked for that very call"
+      eq "$(cat "$DS/rc-sign-bare")" "$(hrc "$h" 2)" "$L: rc without owner_asked (the bare form)";;
+    "$BAT run kit:<name> <args>")
+      eq "$(cat "$DS/rc-run")" "$(hrc "$h" 1)" "$L: rc"
+      t=$(hpre "$(htick "$h" 1)"); f=$(sed -n "s/^$t[0-9]* writes\{0,1\} — //p" "$DS/out-run")
+      nonempty "$f" "$L: a stdout line '$(htick "$h" 1)'"
+      has "$(cat "$f" 2>/dev/null)" "$(htick "$h" 2)" "$L: …whose run log holds '$(htick "$h" 2)'";;
+    "$BAT go --reuse <script path> <args>")
+      eq "$(cat "$DS/rc-go-reuse")" "$(hrc "$h" 1)" "$L: rc with --reuse"
+      eq "$(cat "$DS/rc-go-plain")" "$(hrc "$h" 2)" "$L: rc without --reuse";;
+    "BATON_PHASE BATON_PLAN BATON_WRITES BATON_PLUGIN_ROOT")
+      has "$(cat "$DS/out-rehearse")" "PLAN create" "$L: BATON_PHASE rehearse: the write is planned"
+      has "$(cat "$DS/out-run")" "run: ok" "$L: BATON_PHASE run: the write is done"
+      for t in rehearse:1 run:2; do   # each `the <phase> phase … gets <names>` part of the row against the line of that phase:
+        # the rehearse call logs its one phase; the run call logs rehearse, run and postcheck, in that order
+        f=$(printf '%s\n' "$h" | tr ';' '\n' | grep -F "the ${t%:*} phase")
+        nonempty "$f" "$L: the row says what the ${t%:*} phase gets"
+        eq "$(dep_names "$c" "$(hticks "$f" 1 | tr '\n' ' ')")" "$(dep_names "$c" "$(sed -n "${t#*:}p" "$DS/env-${t%:*}" 2>/dev/null)")" "$L: the ${t%:*} phase gets what the row says"
+      done;;
+    "scripts/scan-internal-terms.sh --terms <file> --tree")
+      X=$(fresh); git_ init -q -b main "$X/r"; printf 'zq-dep-term\n' > "$X/terms"
+      echo "a zq-dep-term" > "$X/r/hit.txt"; echo clean > "$X/r/b.txt"; git_ -C "$X/r" add -A; git_ -C "$X/r" commit -q -m x
+      out=$(cd "$X/r" && bash "$R/scripts/scan-internal-terms.sh" --terms "$X/terms" --tree 2>&1); r=$?
+      eq "$r" "$(hrc "$h" 1)" "$L: rc when a term is in a tracked file"
+      has "$out" "hit.txt" "$L: …and the output names that file"
+      git_ -C "$X/r" rm -q hit.txt; git_ -C "$X/r" commit -q -m y
+      out=$(cd "$X/r" && bash "$R/scripts/scan-internal-terms.sh" --terms "$X/terms" --tree 2>&1); r=$?
+      eq "$r" "$(hrc "$h" 2)" "$L: rc when none is"
+      eq "$(printf '%s\n' "$out" | tail -n 1)" "$(htick "$h" 1)" "$L: …and its last line";;
+    "scripts/export-public.sh <rev> <outdir>")
+      X=$(fresh); cp -R "$R" "$X/k"; git_ init -q -b main "$X/k"; git_ -C "$X/k" add -A; git_ -C "$X/k" commit -q -m k
+      out=$(cd "$X/k" && bash -s -- HEAD "$X/out" < "$R/scripts/export-public.sh" 2>/dev/null); r=$?
+      eq "$r" "$(hrc "$h" 1)" "$L: run as 'bash -s -- <rev> <outdir>' with the script on stdin: rc"
+      cp -R "$X/out" "$X/o2"; git_ init -q "$X/o2"; t=$(git_ -C "$X/o2" add -Af -- . && git_ -C "$X/o2" write-tree)
+      [[ "$out" =~ ^[0-9a-f]{40}$ ]] && eq "$out" "$t" "$L: stdout is the tree id git write-tree gives for <outdir>" || bad "$L: stdout is one 40-hex tree id (got '${out:0:80}')"
+      for f in $(hticks "$h" 1 | grep -xE '[A-Z]+'); do
+        [ -f "$X/out/$f" ] && ok "$L: <outdir>/$f" || bad "$L: <outdir>/$f"
+        for t in "$X/out"/plugins/*/; do [ -f "$t$f" ] || bad "$L: <outdir>/plugins/$(basename "$t")/$f"; done
+      done;;
+    "$SDLC/gates/gate_common.py"|"$SDLC/gates/backends"|"$SDLC/scripts/sdlc_config.py"|"$SDLC/scripts/rule_packs.py"|"$SDLC/scripts/vsdlc.py")
+      t=$(basename "$c"); t=${t%.py}
+      eq "$(py_names "$DP/$(htick "$h" 1)" "$t" $(hticks "$h" 2))" "" "$L: importable from $(htick "$h" 1), defines $(hticks "$h" 2 | tr '\n' ' ')";;
+    "$SDLC/scripts/sdlc_config.py get <key> --root <dir>")
+      for t in $(hticks "$h" 1); do
+        out=$(cenv python3 "$DP/scripts/sdlc_config.py" get "$t" --root "$DK" 2>/dev/null); r=$?
+        eq "$r" "$(hrc "$h" 1)" "$L: rc for $t"
+        python3 -c 'import json,sys; json.loads(sys.argv[1])' "$out" 2>/dev/null && ok "$L: …stdout is JSON" || bad "$L: …stdout is JSON (got '${out:0:80}')"
+      done;;
+    "$KB init --lang en")
+      eq "$(cat "$DS/rc-kb-init")" "$(hrc "$h" 1)" "$L: rc in a git repository"
+      eq "$(jget "$DK/$(htick "$h" 1)" "d.get('$(htick "$h" 2)')")" "$(htick "$h" 3)" "$L: it writes $(htick "$h" 1) whose $(htick "$h" 2) is $(htick "$h" 3)";;
+    "$KB config check")
+      eq "$(cat "$DS/rc-kb-config")" "$(hrc "$h" 1)" "$L: rc on the config kb.py init wrote";;
+    "$KB new <kind> <slug> --date <date>")
+      n=1; for t in $(hticks "$h" 1 | head -n 3); do
+        eq "$(cat "$DS/rc-kb-new-$t" 2>/dev/null)" "$(hrc "$h" 1)" "$L: rc for $t"
+        f=$(htick "$h" $((n+3))); f=${f/<date>/2026-10-15}; f=${f/<slug>/dep-probe}
+        [ -f "$DK/$f" ] && ok "$L: …it writes $f" || bad "$L: …it writes $f"; n=$((n+1))
+      done;;
+    "$KB check spec <date>-<slug>")
+      eq "$(cat "$DS/rc-kb-check-spec-filled")" "$(hrc "$h" 1)" "$L: rc on the spec kb.py new spec wrote, its blanks filled"
+      eq "$(cat "$DS/rc-kb-check-spec")" "$(hrc "$h" 2)" "$L: rc while its blanks are not";;
+    "$KB check current-state")
+      eq "$(cat "$DS/rc-kb-cs")" "$(hrc "$h" 1)" "$L: rc on the ledger kb.py init wrote";;
+    "$KB check current-state <file>")
+      eq "$(cat "$DS/rc-kb-cs-file")" "$(hrc "$h" 1)" "$L: rc on the ledger kb.py init wrote, by absolute path from another repository"
+      eq "$(cat "$DS/rc-kb-cs-big")" "$(hrc "$h" 2)" "$L: rc on a file over the line cap";;
+    "$KB check current-state --diff "*)
+      eq "$(drc "$DK" python3 "$DP/scripts/kb.py" check current-state --diff main...feat/n --body-file "$DF" --config-ref origin/main)" "$(hrc "$h" 1)" "$L: rc, no watched path changed"
+      eq "$(drc "$DK" python3 "$DP/scripts/kb.py" check current-state --diff main...feat/i --body-file "$DF" --config-ref origin/main)" "$(hrc "$h" 2)" "$L: rc, a watched path changed and the ledger did not"
+      eq "$(drc "$DK" python3 "$DP/scripts/kb.py" check current-state --diff main...feat/n --body-file "$DF" --config-ref no-such-ref)" "$(hrc "$h" 3)" "$L: rc, a config ref that does not resolve";;
+    "$SDLC/gates/commit_discipline.py <base> <head> --body-file <file> --config-ref <ref>")
+      eq "$(drc "$DR" python3 "$DP/gates/commit_discipline.py" main feat/x --body-file "$DF" --config-ref origin/main)" "$(hrc "$h" 1)" "$L: rc on one plain commit"
+      n=$(cenv python3 "$DP/scripts/sdlc_config.py" get "$(htick "$h" 1)" --root "$DR" 2>/dev/null)
+      git_ -C "$DR" checkout -q -b feat/t main
+      for t in $(seq 0 "${n:-0}"); do echo "$t" > "$DR/t"; git_ -C "$DR" add -A; git_ -C "$DR" commit -q -m "feat: t$t"; done
+      git_ -C "$DR" checkout -q feat/x
+      eq "$(drc "$DR" python3 "$DP/gates/commit_discipline.py" main feat/t --body-file "$DF" --config-ref origin/main)" "$(hrc "$h" 2)" "$L: rc, one file touched in $((n+1)) commits ($(htick "$h" 1) $n)"
+      eq "$(drc "$DR" python3 "$DP/gates/commit_discipline.py" main feat/x --body-file "$DF" --config-ref no-such-ref)" "$(hrc "$h" 3)" "$L: rc, a config ref that does not read";;
+    "$SDLC/gates/commit_discipline.py <base> <head> --body-file <file> --cwd <dir>")
+      eq "$(drc "$DG" python3 "$DP/gates/commit_discipline.py" main feat/x --body-file "$DF" --cwd "$DR")" "$(hrc "$h" 1)" "$L: rc, called from another directory";;
+    "$SDLC/gates/pr_sensitive.py --pr "*|"$SDLC/gates/pr_title.py --pr "*|"$SDLC/gates/pr_body.py --pr "*)
+      t=${c#"$SDLC"/}; t=${t%% *}
+      eq "$(drc "$DR" python3 "$DP/$t" --pr 7 --repo acme/app --config-ref origin/main)" "$(hrc "$h" 1)" "$L: rc, gh failing";;
+    "$SDLC/gates/pr_sensitive.py --payload <file> --cwd <dir>")
+      printf '{"title": "feat: x", "body": "clean"}' > "$DG/sens.json"
+      eq "$(drc "$DG" python3 "$DP/gates/pr_sensitive.py" --payload "$DG/sens.json" --cwd "$DR")" "$(hrc "$h" 1)" "$L: rc for a clean payload"
+      printf '{"title": "feat: x", "body": "mail jane@corp.test"}' > "$DG/sens.json"
+      eq "$(drc "$DG" python3 "$DP/gates/pr_sensitive.py" --payload "$DG/sens.json" --cwd "$DR")" "$(hrc "$h" 2)" "$L: rc, an e-mail address in the body";;
+    "$SDLC/gates/pr_title.py --cwd <dir>")
+      for t in "feat: x" "a title without a type"; do
+        printf '{"title": "%s", "draft": false, "files": ["a"], "head": "feat/x"}' "$t" > "$DG/title.json"
+        r=$( (cd "$DG" && cenv python3 "$DP/gates/pr_title.py" --cwd "$DK" < "$DG/title.json") >/dev/null 2>&1; echo $?)
+        if [ "$t" = "feat: x" ]; then eq "$r" "$(hrc "$h" 1)" "$L: rc, a title $(htick "$h" 1) allows"; else eq "$r" "$(hrc "$h" 2)" "$L: rc, a title it does not"; fi
+      done;;
+    "$IBS create-intent --slug <slug>")
+      eq "$(cat "$DS/rc-ib-create")" "$(hrc "$h" 1)" "$L: rc";;
+    "$IBS create-intent --slug <slug> --base <ref>")
+      eq "$(cat "$DS/rc-ib-create-base")" "$(hrc "$h" 1)" "$L: rc"
+      ne "$(git_ -C "$DK" rev-parse feat/n)" "$(git_ -C "$DK" rev-parse main)" "$L: instrument, the ref given is not the checked-out commit"
+      eq "$(git_ -C "$DK" rev-parse -q --verify intent/2026-10-15-dep-base)" "$(git_ -C "$DK" rev-parse feat/n)" "$L: …the branch tip is that ref";;
+    "$IBS worker-branch "*)
+      eq "$(cat "$DS/rc-ib-worker")" "$(hrc "$h" 1)" "$L: rc";;
+    "$IBS integrate "*)
+      eq "$(cat "$DS/rc-ib-integrate")" "$(hrc "$h" 1)" "$L: rc from the main tree";;
+    "$SDLC/scripts/open-pr.sh "*--dry-run*)
+      eq "$(cat "$DS/rc-op-dry")" "$(hrc "$h" 1)" "$L: rc in a linked worktree"
+      t=$(htick "$h" 2); t=${t/<n>/7}   # the probe passes --fixes 7
+      eq "$(sed -n '/^{/,$p' "$DS/out-op-dry" | python3 -c 'import json,sys; b = json.load(sys.stdin).get(sys.argv[1]); print(type(b).__name__, sys.argv[2] in (b or ""))' "$(htick "$h" 1)" "$t" 2>/dev/null)" "str True" "$L: …stdout ends with a JSON payload whose $(htick "$h" 1) names $t";;
+    "$SDLC/scripts/open-pr.sh "*)
+      eq "$(cat "$DS/rc-op-main")" "$(hrc "$h" 1)" "$L: rc from the main tree";;
+    "$SDLC/scripts/open_pr.py "*)
+      eq "$(cat "$DS/rc-op-core")" "$(hrc "$h" 1)" "$L: rc in a linked worktree"
+      eq "$(jget "$DS/payload.json" "type(d.get('$(htick "$h" 1)')).__name__")" str "$L: …the payload holds a $(htick "$h" 1) string";;
+    "$SDLC/"*)
+      [ -f "$R/$c" ] && [ ! -L "$R/$c" ] && ok "$L: a regular file" || bad "$L: a regular file";;
+    *) bad "$L: no probe for this call";;
+  esac
+}
+
+# fam_dependents <repo copy> — every row of `## Dependent calls`, and the rows against DEP_CALLS both ways
+fam_dependents() {
+  local R=$1 rows c h DS DB DA DSTATE DP="$1/$SDLC" DR DG DF DK
+  rows=$(cj "$R" '"\n".join(r[0] for r in d["deps"])' | python3 -c 'import json,sys; print(json.load(sys.stdin))')
+  nonempty "$rows" "[dependents] instrument: the contract lists dependent calls"
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    printf '%s\n' "$DEP_CALLS" | grep -qxF -- "$c" || bad "[dependents] $c: a contract row with no probe"
+  done <<< "$rows"
+  while IFS= read -r c; do
+    printf '%s\n' "$rows" | grep -qxF -- "$c" || bad "[dependents] $c: a probe with no contract row"
+  done <<< "$DEP_CALLS"
+  DS=$(fresh); dep_baton "$R"
+  DR=$(dep_repo); DG=$(fresh); DF="$DG/body"; echo summary > "$DF"
+  printf '#!/bin/sh\necho "fake gh: no network" >&2\nexit 1\n' > "$DG/gh"; chmod +x "$DG/gh"
+  eq "$(drc "$DR" python3 "$DP/gates/pr_title.py" --pr 7 --repo acme/app --config-reff origin/main)" 64 "[dependents] instrument: a misspelled flag is the usage rc 64"
+  eq "$(hrc 'rc 0 here; rc 65 there' 2) $(htick 'a `x` and `y z`' 2)" "65 y z" "[dependents] instrument: a row's values are read (hrc, htick)"
+  dep_kb
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    printf '%s\n' "$DEP_CALLS" | grep -qxF -- "$c" || continue
+    h=$(cj "$R" '[r[1] for r in d["deps"] if r[0] == '"$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$c")"'][0]' | python3 -c 'import json,sys; print(json.load(sys.stdin))')
+    dep_probe "$R" "$c" "$h"
+  done <<< "$rows"
+  if [ -z "${DEP_NESTED:-}" ]; then   # the public export's shape: no fixture directory (private), no kb, no config: both probes say not run, nothing fails
+    local X out; X=$(fresh)/x; mk_repo_copy "$X"; rm -rf "$X/kb" "$X/$DBX" "$X/.vibemaestro/sdlc.json"; : > "$X/$SDLC/LICENSE"
+    out=$(DEP_NESTED=1 fam_dependents "$X" 2>&1)
+    eq "$(tree_shape "$X")" export "[dependents] instrument: the scratch copy has the public export's shape"
+    eq "$(printf '%s\n' "$out" | grep -c 'probe not run')" 2 "[dependents] the public export: both pinned-copy probes say not run"
+    eq "$(printf '%s\n' "$out" | grep -c '^  FAIL \[dependents\] kit:')" 0 "[dependents] …and neither fails (the other probes are the private tree's)"
+  fi
+}
+
 # ── exactness of the item list, and the in-tree half of the version rule ────────────────────────────────────────────────────────
 fam_contract() {
   local R=$1 ids proofs fa mv
@@ -773,8 +1172,13 @@ set_rel() {
 }
 # cfc <repo> <plugins> <level> <file> — a change file in the working tree
 cfc() { mkdir -p "$1/.changes"; printf -- '---\nplugins: %s\nlevel: %s\n---\none line\n' "$2" "$3" > "$1/.changes/$4"; }
+# cfn <repo> <level> <file> <line> — a change file naming sdlc whose one line is <line>
+cfn() { mkdir -p "$1/.changes"; printf -- '---\nplugins: vibemaestro-sdlc\nlevel: %s\n---\n%s\n' "$2" "$4" > "$1/.changes/$3"; }
+# drow <call> — the dependent-call row of this checkout's contract for <call>
+drow() { grep -m1 -F "| \`$1\` |" "$SRC_ROOT/$PLREL/CONTRACT.md"; }
+DFIX=tests/fixtures/baton-owner.sh; DSIGN="$BAT sign --by owner --seal <seal> kit:<name> <args>"
 # cf_probes <contract.py> — the change-file cases; prints one line per case: <tag> <rc>
-cf_probes() { local CT=$1
+cf_probes() { local CT=$1 F S
   cf_repo; edit_surface "$B" "$ROW" "${ROW% |} (reworded) |"
   echo "C1 $(bcheck "$B" HEAD)"
   cfc "$B" vibemaestro-sdlc patch a.md; echo "C2 $(bcheck "$B" HEAD)"
@@ -790,6 +1194,16 @@ cf_probes() { local CT=$1
   cf_repo; edit_surface "$B" "$ROW" "${ROW% |} (reworded) |"; mkdir -p "$B/notes"
   printf -- '---\nplugins: vibemaestro-sdlc\nlevel: minor\n---\nx\n' > "$B/notes/n.txt"; ln -s ../notes/n.txt "$B/.changes/a.md"
   echo "C10 $(bcheck "$B" HEAD)"
+  F=$(drow "$DFIX"); S=$(drow "$DSIGN")
+  cf_repo; edit_surface "$B" "$F" "${F/$DFIX/tests/fixtures/baton-owner-v2.sh}"; cfn "$B" major a.md 'the owner fixture moved'
+  echo "C11 $(bcheck "$B" HEAD)"
+  cfn "$B" major a.md "\`$DFIX\` is now \`tests/fixtures/baton-owner-v2.sh\`"; echo "C12 $(bcheck "$B" HEAD)"
+  cf_repo; edit_surface "$B" "$S" "${S% |}, and only from the owner's own terminal |"; cfn "$B" major a.md 'owner signs from a terminal'
+  echo "C13 $(bcheck "$B" HEAD)"
+  cfn "$B" major a.md "$DSIGN: only from a terminal"; echo "C14 $(bcheck "$B" HEAD)"
+  cfn "$B" major a.md "\`$DSIGN\`: only from a terminal"; echo "C15 $(bcheck "$B" HEAD)"
+  cf_repo; edit_surface "$B" "$F" "$F"$'\n''| `tests/fixtures/new-helper.sh` | defines `x` |'; cfn "$B" minor a.md 'a new helper'
+  echo "C16 $(bcheck "$B" HEAD)"
 }
 P=$(cf_probes "$CT")
 probe() { printf '%s\n' "$P" | sed -n "s/^$1 //p"; }
@@ -803,6 +1217,14 @@ eq "$(probe C7)" 1 "[changes] C7 'Frozen at' moved outside a release: red"
 eq "$(probe C8)" 1 "[changes] C8 a change file already on the base does not count for this change: red"
 eq "$(probe C9)" 0 "[changes] C9 a base whose .changes/README.md was deleted keeps the change-file rule (minor file, no bump: green)"
 eq "$(probe C10)" 1 "[changes] C10 a change file that is a symlink does not count: red"
+nonempty "$(drow "$DFIX")" "[changes] instrument: the contract has a dependent-call row for $DFIX"
+nonempty "$(drow "$DSIGN")" "[changes] instrument: the contract has a dependent-call row for the owner's sign"
+eq "$(probe C11)" 1 "[changes] C11 a renamed dependent call with a major change file that does not name it: red"
+eq "$(probe C12)" 0 "[changes] C12 …with a major change file naming the old call in backticks: green"
+eq "$(probe C13)" 1 "[changes] C13 what a dependent call holds changed (an owner sign that needs more), major file not naming it: red"
+eq "$(probe C14)" 1 "[changes] C14 …the call named without backticks: red"
+eq "$(probe C15)" 0 "[changes] C15 …the call named in backticks: green"
+eq "$(probe C16)" 0 "[changes] C16 a dependent call added, with a minor change file that does not name it: green"
 # planted breaks of the change-file check: each flips its probe
 cbrk() {  # cbrk <label> <probe> <rc on the broken copy> <old> <new>
   local d="$TMP/cbrk-$1"; mkdir -p "$d/tests/fixtures" "$d/$PLREL/scripts"; cp "$CT" "$d/tests/fixtures/contract.py"
@@ -820,6 +1242,9 @@ cbrk frozen-unchecked C7 0 '    if base_t is not None and cur["frozen_at"] != ba
 cbrk base-file-counted C8 0 'or git(repo, "cat-file", "-e", "%s:%s" % (base, rel))[0] == 0:' 'or False:'
 cbrk symlink-counted C10 0 '        if os.path.islink(os.path.join(d, name)):' '        if False:'
 cbrk tip-decides-mode C9 1 '    if git(repo, "log", "-1", "--full-history", "--format=%H", base, "--", ".changes/README.md")[1].strip():' '    if git(repo, "ls-tree", "--name-only", base, "--", ".changes")[1].strip():'
+cbrk dep-name-ignored C11 0 '        if call is not None and call not in out and not any("`%s`" % call in line for line in lines):' '        if False:'
+cbrk dep-name-bare C14 0 '        if call is not None and call not in out and not any("`%s`" % call in line for line in lines):' '        if call is not None and call not in out and not any(call in line for line in lines):'
+cbrk dep-not-identity C13 0 ' | {("dep",) + tuple(r) for r in t["deps"]}' ''
 cbrk never-change-mode C4 1 '    if git(repo, "log", "-1", "--full-history", "--format=%H", base, "--", ".changes/README.md")[1].strip():' '    if False:'
 
 echo "== instrument: the release-time rule (a release, a hotfix, a back-merge) =="
@@ -972,6 +1397,33 @@ BRK pack-beats-repo fam_rule_packs '[rule-packs] precedence: a repo rule replace
 BRK pack-any-project fam_rule_packs '[rule-packs] project scope: an entry of another project' $RPP '        if pp is not None and real(pp)[0] != project:' '        if False:'
 BRK pack-disabled-served fam_rule_packs '[rule-packs] enabled: false in the user settings' $RPP '            if enabled.get(pid) is not True:    # measured: a plugin no settings file enables is not enabled' '            if False:'
 BRK pack-unnamed-served fam_rule_packs '[rule-packs] enabled: named by no settings file' $RPP '            if enabled.get(pid) is not True:    # measured: a plugin no settings file enables is not enabled' '            if enabled.get(pid) is False:'
+# dependents: the brief's two planted breaks. Each goes red on the tree (the family), then, with the contract row edited to the new
+# form, red on a scratch history of the copy (base-check: the old call is gone and no change file names it), and green with a
+# change file naming the old call. (The real change also renames the probe in DEP_CALLS: a row with no probe is red.)
+SEALK='        if rest[0] == "--seal" and len(rest) > 1 and seal is None:'
+d="$TMP/break-dep-fixture"; mk_repo_copy "$d"; mv "$d/$DFIX" "$d/tests/fixtures/baton-owner-v2.sh"
+expect_red dep-fixture-renamed fam_dependents "$d" "[dependents] $DFIX"
+BRK dep-row-drift fam_dependents "[dependents] $DSIGN: rc without owner_asked" $PLREL/CONTRACT.md 'for that very call; rc 3 without it |' 'for that very call; rc 0 without it |'
+BRK dep-base-ignored fam_dependents "[dependents] $IBS create-intent --slug <slug> --base <ref>: …the branch tip" $SDLC/scripts/intent_branch.py '    if not ref_exists(a.base, a.cwd):' '    a.base = "HEAD"
+    if not ref_exists(a.base, a.cwd):'
+BRK dep-fixes-ignored fam_dependents "[dependents] $SDLC/scripts/open-pr.sh --title <title> --summary <file> --evidence <file> --dry-run --fixes <n>: …stdout" $SDLC/scripts/open_pr.py 'body = build_body(summary, evidence, crit, a.fixes,' 'body = build_body(summary, evidence, crit, "",'
+BRK dep-seal-dropped fam_dependents "[dependents] $DSIGN" $BAT "$SEALK" '        if False:'
+# a dependent's own kit baton: a new `check` rule that fails the pinned copy (every kit baton here), and a pinned copy edited by hand
+BRK dep-kit-baton-rule fam_dependents "[dependents] kit:release-promote: rc of $BAT check kit:release-promote" $BAT '    elif (s.kit or s.kind is not None) and not pl and not ul:' '    elif (s.kit or s.kind is not None):'
+BRK dep-pin-edited fam_dependents "[dependents] kit:release-promote: the pinned copy is the blob its README records" $DBX/release-promote.sh '# Usage: --repo <owner/name> --commit <full sha>' '# Usage: --repo <owner/name> --commit <full sha> --edited'
+# dep_hist <label> <old call> <new call> <shell edit of the tree in $H> — the list and note states of one planted break
+dep_hist() {
+  H=$(fresh)/h; mk_repo_copy "$H"; git_ init -q -b main "$H"; git_ -C "$H" add -A; git_ -C "$H" commit -q -m base
+  eval "$4"; edit_surface "$H" "| \`$2\` |" "| \`$3\` |"
+  eq "$(bcheck "$H" HEAD)" 1 "break [$1]: the contract row edited, no change file: base-check red"
+  cfn "$H" major dep.md "a dependent call changed"
+  eq "$(bcheck "$H" HEAD)" 1 "break [$1]: …a major change file that does not name the old call: red"
+  cfn "$H" major dep.md "\`$2\` is now \`$3\`"
+  eq "$(bcheck "$H" HEAD)" 0 "break [$1]: …a major change file naming \`$2\`: green"
+}
+dep_hist dep-fixture-renamed "$DFIX" tests/fixtures/baton-owner-v2.sh 'git_ -C "$H" mv "$DFIX" tests/fixtures/baton-owner-v2.sh'
+dep_hist dep-seal-dropped "$DSIGN" "$BAT sign --by owner --seal=<seal> kit:<name> <args>" 'mutate "$H/$BAT" "$SEALK" "        if False:"'
+dep_hist dep-kit-baton-row kit:release-promote 'kit:release-promote <args>' ':'
 # a released version below `Frozen at`: a 0.0.1 heading on top of the CHANGELOG (below any Frozen at, before and after the first
 # release), anchored on the header line the release never rewrites; a manifest that carries a version (the public export of a
 # release, where it equals the CHANGELOG's) gets 0.0.1 too, as the export would write it

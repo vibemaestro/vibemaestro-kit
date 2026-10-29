@@ -1,7 +1,10 @@
 {
-  "description": "vibemaestro-brain: re-inject hot memory after every compaction; log compactions; guard writes",
+  "description": "vibemaestro-brain: re-inject hot memory, sessions and plan (three strings) after every compaction; log compactions; guard writes; remind of a newer public version",
   "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" session-start", "timeout": 10}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" session-start", "timeout": 10},
+                              {"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" session-start-sessions", "timeout": 10},
+                              {"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" session-start-plan", "timeout": 10},
+                              {"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" update-check", "timeout": 10}]}],
     "PreCompact": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" pre-compact", "timeout": 10}]}],
     "PostCompact": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" post-compact", "timeout": 10}]}],
     "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/brain_hook.py\" session-end"}]}],

@@ -95,6 +95,168 @@ CODE=$(printf '%s\n' "$FILES" | grep -E '^plugins/[^/]+/(scripts|skills|rules|ho
 eq "$(printf '%s\n' "$DOCS" | python3 "$PLAN" --paths | awk -F'\t' '$2 != ""')" "" "every document ($(printf '%s\n' "$DOCS" | grep -c .)) wakes no suite"
 eq "$(printf '%s\n' "$CODE" | python3 "$PLAN" --paths | awk -F'\t' '$2 == ""')" "" "every plugin script, skill, rule and hook file still wakes a suite"
 
+# capped.sh and plant.sh are not @full: lib.sh sources them, so a suite reaches them only by calling their functions. On a copy of
+# this tree, the guard is red when one user's line loses the file (backends calls expect_red of ports.sh, which runs capped).
+echo "== the narrowed @full: capped.sh and plant.sh =="
+RT="$TMP/real"; mkdir -p "$RT"
+(cd "$SRC_ROOT" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git ls-files -z --cached --others --exclude-standard |
+  python3 -c 'import os, sys; sys.stdout.write("".join(p + "\0" for p in sys.stdin.read().split("\0") if p and os.path.isfile(p)))' |
+  tar --null -T - -cf -) | tar -xf - -C "$RT"
+git_ init -q "$RT" && git_ -C "$RT" add -A
+rguard() { python3 "$RT/tests/plan.py" --check 2>&1; }
+eq "$(rguard | tail -1)" "$(python3 "$PLAN" --check | tail -1)" "control: the guard on the copy of this tree says what it says here"
+rplant() {  # rplant <label> <old line text> <new line text> <the guard's words> — the copy's map with one line changed is red
+  local o rc
+  python3 -I -B - "$RT/tests/suites.map" "$2" "$3" <<'PY' || { bad "planted $1: the map line moved, update the plant"; return; }
+import sys
+p, old, new = sys.argv[1:4]; s = open(p).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, new))
+PY
+  o=$(capped rguard); rc=$?
+  cp "$SRC_ROOT/tests/suites.map" "$RT/tests/suites.map"
+  cap_red "$rc" "planted: $1" && return
+  eq "$rc" 1 "planted: $1 → rc 1"; has "$o" "$4" "…the guard says: $4"
+}
+PORTS=ports.sh   # a variable: the literal path would count as a file this suite runs
+rplant "backends loses capped.sh (it reaches it through expect_red)" "$(grep '^backends ' "$HERE/suites.map")" "$(grep '^backends ' "$HERE/suites.map" | sed 's# tests/fixtures/capped.sh##')" \
+  "suite \`backends\` calls \`expect_red\` (tests/fixtures/$PORTS), which reaches tests/fixtures/capped.sh"
+rplant "capped-breaks loses plant.sh" "$(grep '^capped-breaks' "$HERE/suites.map")" "$(grep '^capped-breaks' "$HERE/suites.map" | sed 's# tests/fixtures/plant.sh##')" \
+  "suite \`capped-breaks\` calls \`plant_break\` (tests/fixtures/plant.sh), which reaches tests/fixtures/plant.sh"
+eq "$(printf 'tests/fixtures/plant.sh\0' | python3 "$PLAN" --suites --woken | tr '\n' ' ')" "capped-breaks plan " "plant.sh wakes capped-breaks and plan (its load check copies it), not @full"
+CU=$(printf 'tests/fixtures/capped.sh\0' | python3 "$PLAN" --suites --woken)
+case "$CU" in @full*) bad "capped.sh is @full again: $CU";; *) [ "$(printf '%s\n' "$CU" | grep -c .)" -ge 40 ] && ok "capped.sh wakes the suites that run it ($(printf '%s\n' "$CU" | grep -c .)), not @full" || bad "capped.sh wakes only: $CU";; esac
+has "$(printf 'tests/fixtures/netguard.sh\0' | python3 "$PLAN" --suites)" "@full" "netguard.sh stays @full (clean_env installs its shims in every suite)"
+
+# lib.sh sources capped.sh and plant.sh, which only the suites that call them are planned for: anything else they do when lib.sh
+# loads would reach every suite. So lib.sh is loaded twice as a suite loads it, without those files and with them, and the two shells
+# must match in everything but what the files are for: rc 0 and no output; the same options, shopt, directory, umask, limits, traps
+# and aliases, exported functions, disabled builtins and the command hash; every function and variable the same, the new functions
+# those of the files, the new variables only NARROW_VARS (not exported). A new global there turns this red: check it changes no suite,
+# then name it here. Cheap, and here because `plan` is in every plan. Not seen: open file descriptors (a listing from inside the
+# shell sees its own pipe now and then: a flaky check), a file written or a process started at load, and a change that only acts
+# when one of their functions runs (the suites that call it run it).
+LIBSRC=$(sed -nE 's#^[[:space:]]*\.[[:space:]].*/([A-Za-z0-9_.-]+\.sh)".*#\1#p' "$HERE/fixtures/lib.sh")
+FULLMAP=$(sed -n 's/^@full //p' "$HERE/suites.map")
+NARROW=$(for f in $LIBSRC; do case " $FULLMAP " in *" tests/fixtures/$f "*) ;; *) echo "$f";; esac; done)
+NARROW_VARS="CAP_RC_TIME CAP_RC_MEM"
+[ "$(printf '%s\n' $LIBSRC | grep -c .)" -ge 3 ] && ok "instrument: lib.sh sources $(echo $LIBSRC)" || bad "instrument: lib.sh sources only [$LIBSRC]"
+eq "$(echo $NARROW)" "capped.sh plant.sh" "instrument: the files lib.sh sources that are not @full"
+cat > "$TMP/lib-state.py" <<'PY'
+import re, sys
+def read(p):   # "" for a file the shell never wrote (it exited while loading)
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+def funcs(text):   # `declare -f` output: name → body
+    out, cur = {}, None
+    for line in text.splitlines(True):
+        m = re.match(r"^([A-Za-z_][\w-]*) \(\) $", line)
+        if m:
+            cur = m.group(1); out[cur] = ""
+        if cur:
+            out[cur] += line
+    return out
+VOLATILE = re.compile(r"^(BASH\w*|_|FUNCNAME|LINENO|RANDOM|SRANDOM|SECONDS|EPOCH\w+|PIPESTATUS|BASHPID|COLUMNS|LINES)$")
+def vars_(text):   # `declare -p` output: name → (flags, the whole line)
+    out = {}
+    for line in text.splitlines():
+        m = re.match(r"^declare (-\S+) ([A-Za-z_]\w*)(=|$)", line)
+        if m and not VOLATILE.match(m.group(2)):
+            out[m.group(2)] = (m.group(1), line)
+    return out
+bare, full, names, allowed = sys.argv[1], sys.argv[2], set(sys.argv[3].split()), set(sys.argv[4].split())
+if read(full + ".out").strip() != "rc=0":
+    print("lib.sh did not load quietly with rc 0: %s" % (read(full + ".out").strip()[:300] or "the shell exited while loading lib.sh"))
+for part in read(bare + ".state").split("\x1e")[1:]:
+    key = part.split("\n", 1)[0]
+    other = [q for q in read(full + ".state").split("\x1e")[1:] if q.split("\n", 1)[0] == key]
+    if not other or other[0] != part:
+        print("changed the shell state: %s" % key)
+fb, ff = funcs(read(bare + ".fn")), funcs(read(full + ".fn"))
+for n in sorted(fb):
+    if n not in ff:
+        print("lost function %s" % n)
+    elif ff[n] != fb[n]:
+        print("changed function %s" % n)
+for n in sorted(set(ff) - set(fb) - names):
+    print("new function %s, not one the files define" % n)
+vb, vf = vars_(read(bare + ".vars")), vars_(read(full + ".vars"))
+for n in sorted(vb):
+    if n not in vf:
+        print("lost variable %s" % n)
+    elif vf[n] != vb[n]:
+        print("changed variable %s" % n)
+for n in sorted(set(vf) - set(vb)):
+    if n not in allowed or "x" in vf[n][0]:
+        print("new variable %s" % n)
+PY
+lib_loads() {  # lib_loads <fixtures dir> → empty when lib.sh loads with the narrowed files exactly as without them, else what differs
+  local d="$TMP/ll-copy" f v pat names
+  rm -rf "$d"; mkdir -p "$d"; for f in lib.sh $LIBSRC; do cp "$1/$f" "$d/"; done   # its own copy: the two lib-*.sh go there
+  for f in lib.sh $LIBSRC; do bash -n "$d/$f" 2>/dev/null || echo "bash -n: $f does not parse"; done
+  pat=$(printf '%s\n' $NARROW | sed 's/[.]/[.]/g' | paste -sd'|' -)
+  grep -vE "^[[:space:]]*\.[[:space:]].*/($pat)\"" "$d/lib.sh" > "$d/lib-bare.sh"
+  cp "$d/lib.sh" "$d/lib-full.sh"
+  names=$(for f in $NARROW; do sed -nE 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)\(\) *\{.*/\1/p' "$d/$f"; done)
+  for v in bare full; do
+    rm -f "$TMP/ll-$v".*
+    # shellcheck disable=SC2016
+    (cd "$TMP" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" bash -c '
+      set -uo pipefail
+      . "$1" > "$2.out" 2>&1; echo "rc=$?" >> "$2.out"
+      # the hash first: a command the dump itself ran would enter it
+      { printf "\036command hash\n"; hash -l 2>/dev/null
+        printf "\036options\n"; set +o; shopt -p; printf "\036directory\n"; pwd; printf "\036umask\n"; umask
+        printf "\036limits\n"; ulimit -a; printf "\036traps\n"; trap -p; printf "\036aliases\n"; alias -p
+        printf "\036exported functions\n"; declare -Fx; printf "\036disabled builtins\n"; enable -n
+      } > "$2.state" 2>&1
+      declare -f > "$2.fn"; declare -p > "$2.vars"' _ "$d/lib-$v.sh" "$TMP/ll-$v")
+  done
+  python3 -I -B "$TMP/lib-state.py" "$TMP/ll-bare" "$TMP/ll-full" "$names" "$NARROW_VARS"
+}
+empty "$(lib_loads "$HERE/fixtures")" "lib.sh loads with capped.sh and plant.sh exactly as without them, but for their functions and NARROW_VARS"
+LF="$TMP/libfx"
+lplant() {  # lplant <label> <file> <old> <new> <words> — lib.sh does not load cleanly from a copy with one change
+  local o
+  rm -rf "$LF"; mkdir -p "$LF"; for f in lib.sh $LIBSRC; do cp "$HERE/fixtures/$f" "$LF/"; done
+  python3 -I -B - "$LF/$2" "$3" "$4" <<'PY' || { bad "planted $1: the text moved, update the plant"; return; }
+import sys
+p, old, new = sys.argv[1:4]; s = open(p).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, new))
+PY
+  o=$(capped lib_loads "$LF"); has "$o" "$5" "planted: $1 → the load check says: $5"
+}
+lplant "capped.sh exits at the top level" capped.sh "CAP_RC_TIME=247; CAP_RC_MEM=248" "exit 3; CAP_RC_TIME=247; CAP_RC_MEM=248" "the shell exited while loading lib.sh"
+lplant "plant.sh does not parse" plant.sh "plant_break() {" "plant_break() { (" "plant.sh does not parse"
+lplant "capped.sh turns on errexit" capped.sh "CAP_RC_TIME=247; CAP_RC_MEM=248" "set -e; CAP_RC_TIME=247; CAP_RC_MEM=248" "changed the shell state: options"
+lplant "plant.sh prints at load" plant.sh "plant_break() {" "echo loading; plant_break() {" "did not load quietly"
+A="CAP_RC_TIME=247; CAP_RC_MEM=248"
+while IFS='|' read -r label code words; do
+  lplant "capped.sh at load: $label" capped.sh "$A" "$code; $A" "$words"
+done <<'EFFECTS'
+sets umask|umask 077|changed the shell state: umask
+exports a variable|export GIT_AUTHOR_DATE=x|new variable GIT_AUTHOR_DATE
+sets the locale|LC_ALL=C|new variable LC_ALL
+puts a directory first in PATH|PATH=/opt/x:$PATH|changed variable PATH
+traps TERM|trap '' TERM INT|changed the shell state: traps
+lowers a limit|ulimit -n 64|changed the shell state: limits
+changes IFS|IFS=:|changed variable IFS
+redefines bad|bad() { :; }|changed function bad
+moves the counters|PASS=0; FAIL=-1000|changed variable FAIL
+removes a function|unset -f hasnt|lost function hasnt
+defines an alias|alias git=false|changed the shell state: aliases
+cds|cd /|changed the shell state: directory
+exports a function|export -f ok|changed the shell state: exported functions
+disables a builtin|enable -n test|changed the shell state: disabled builtins
+hashes a command|hash -p /bin/true zzz|changed the shell state: command hash
+EFFECTS
+
 # CI runs the plan: full history (merge-base), no credentials in the clone, base from the event, no depth-1 fetch over it
 WF="$SRC_ROOT/.github/workflows/test.yml"
 O=$(python3 - "$WF" <<'PY'
@@ -107,7 +269,8 @@ print("checkout=%d" % len(co))
 print("depth=%s" % (co[0].get("with", {}).get("fetch-depth") if co else None))
 print("creds=%s" % (co[0].get("with", {}).get("persist-credentials") if co else None))
 print("run=%s" % (run[0]["run"].strip() if run else ""))
-print("base=%s" % (run[0].get("env", {}).get("BASE", "") if run else ""))
+print("env=%s" % sorted((run[0].get("env") or {}).items()) if run else "")
+print("if=%s" % j.get("if"))
 print("shallow=%d" % sum("--depth" in str(s.get("run", "")) for s in steps))
 print("on=%s" % sorted((d.get("on") or d.get(True)).keys()))
 print("perms=%s" % d.get("permissions"))
@@ -117,10 +280,14 @@ PY
 has "$O" "checkout=1" "test.yml tests job: one checkout"
 has "$O" "depth=0" "test.yml tests job: fetch-depth 0 (the planner needs the merge-base)"
 has "$O" "creds=False" "test.yml tests job: persist-credentials false (no token in the clone the suites read)"
-has "$O" 'run=bash tests/run-all.sh --changed "$BASE"' "test.yml tests job: runs the plan, bash tests/run-all.sh --changed \"\$BASE\""
-has "$O" "base=\${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}" "test.yml: BASE is the PR base, or the push's before"
+eq "$(printf '%s\n' "$O" | grep '^run=')" 'run=pr_head=$PR_HEAD; unset PR_HEAD; bash tests/run-all.sh --changed "@merge-parent:$pr_head"' \
+   "test.yml tests job: runs the plan of the PR's own change, and the suites do not inherit PR_HEAD (test-export-gate.sh runs a step that reads one)"
+eq "$(printf '%s\n' "$O" | grep '^env=')" "env=[('PLUGIN_REQUIRE_CLAUDE', '1'), ('PR_HEAD', '\${{ github.event.pull_request.head.sha }}')]" \
+   "test.yml tests job: PR_HEAD is the event's head.sha, and no BASE (base.sha is the main of the PR's last push)"
+eq "$(printf '%s\n' "$O" | grep '^if=')" "if=github.event_name == 'pull_request' && github.event.pull_request.draft == false" \
+   "test.yml tests job: a ready PR only, never a push to main (the scheduled full run covers main)"
 has "$O" "shallow=0" "test.yml tests job: no --depth fetch (it would make the full clone shallow)"
-has "$O" "on=['pull_request', 'push']" "test.yml: still on pull_request and push"
+has "$O" "on=['pull_request', 'push']" "test.yml: still on pull_request and push (the term scan runs on push)"
 has "$O" "perms={'contents': 'read'}" "test.yml: permissions still contents: read only"
 hasnt "$(cat "$WF")" "pull_request_target" "test.yml: no pull_request_target"
 eq "$(printf '%s\n' "$O" | grep '^name=')" "name=bash tests/run-all.sh" "test.yml: the tests job keeps the check name bash tests/run-all.sh (branch protection may require it)"
@@ -210,6 +377,66 @@ case_ "fail closed: an empty base → full" "$ALL" "" w
 git_ -C "$R" checkout -q --orphan lone && cm lone
 case_ "fail closed: no merge-base → full" "$ALL" main lone
 git_ -C "$R" checkout -q -f w && git_ -C "$R" reset -q --hard main
+
+echo "== @merge-parent:<PR head>: the PR's own change against the main it is merged with =="
+# On a PR, GitHub checks out a merge commit of the PR head into the current main: main is its first parent, the PR head its second.
+# The event's base.sha is the main of the PR's last push: when main moved since, a diff from it also counts what other PRs merged
+# (a PR of 3 kb/ files once planned 43/69 suites). @merge-parent:<sha> diffs from the first parent, only when HEAD has exactly two parents
+# and the second is <sha> (the event's head.sha): any other commit, a worker's own merge of main included, is the full suite.
+MAIN0=$(git_ -C "$R" rev-parse main)
+gh_merge() {  # gh_merge <branch>… — detach at main and merge the branches as GitHub does (main first parent)
+  git_ -C "$R" checkout -q --detach main && git_ -C "$R" merge -q --no-ff --no-edit "$@"
+}
+mp() { printf '@merge-parent:%s' "$(git_ -C "$R" rev-parse "$1")"; }   # mp <PR branch> — the word test.yml passes
+git_ -C "$R" checkout -q -b pr main && printf 'pr\n' >> "$R/src/a.txt" && cm pr-a
+git_ -C "$R" checkout -q main && printf 'other pr\n' >> "$R/src/c.txt" && cm other-pr-c   # main moves after the PR's last push
+gh_merge pr
+case_ "control: the stale base.sha also plans what main merged since the PR's last push (c)" "a c plan" "$MAIN0" HEAD
+case_ "@merge-parent:<PR head> (no head, as in CI): only the PR's own change" "a plan" "$(mp pr)"
+has "$(cat "$TMP/err")" "plan: 2/4 suites — 1 changed path" "…and the plan line counts one path"
+case_ "@merge-parent:<PR head> with the merge commit as head" "a plan" "$(mp pr)" "$(git_ -C "$R" rev-parse HEAD)"
+printf 'u\n' > "$R/src/b-untracked.txt"
+case_ "@merge-parent:<PR head>, no head: an untracked file in the checkout still counts" "a b c plan" "$(mp pr)"
+rm -f "$R/src/b-untracked.txt"
+case_ "fail closed: @merge-parent with no PR head → full" "$ALL" @merge-parent
+has "$(cat "$TMP/err")" "names no PR head" "…and the plan line says why"
+case_ "fail closed: @merge-parent: with an empty PR head → full" "$ALL" @merge-parent:
+case_ "fail closed: a PR head that is not the merge's second parent (an older push) → full" "$ALL" "$(mp pr~1)"
+has "$(cat "$TMP/err")" "is not the PR head" "…and the plan line says why"
+git_ -C "$R" checkout -q -b pr-merged "$MAIN0" && printf 'pr2\n' >> "$R/src/a.txt" && cm pr2-a
+git_ -C "$R" merge -q --no-edit main                                                       # the PR branch merged main (c)
+case_ "fail closed: a worker's own merge of main into its branch (main is the second parent) → full" "$ALL" "$(mp pr-merged)"
+git_ -C "$R" checkout -q main && printf 'third pr\n' >> "$R/src/b.txt" && cm third-pr-b    # then main moved again (b)
+gh_merge pr-merged
+case_ "a PR branch that merged main: still only its own change" "a plan" "$(mp pr-merged)"
+git_ -C "$R" checkout -q -b pr-revert main && printf 'r\n' >> "$R/src/a.txt" && printf 'r\n' >> "$R/src/c.txt" && cm pr-ac
+git_ -C "$R" checkout -q HEAD~1 -- src/c.txt && cm pr-revert-c
+gh_merge pr-revert
+case_ "a file changed then reverted on the PR: merging changes it not, it wakes nothing" "a plan" "$(mp pr-revert)"
+git_ -C "$R" checkout -q -b pr-same "$MAIN0" && printf 'pr\n' >> "$R/src/a.txt" && printf 'other pr\n' >> "$R/src/c.txt" && cm pr-same
+gh_merge pr-same
+case_ "a file the PR changed exactly as main already did (c): merging changes it not, only a wakes" "a plan" "$(mp pr-same)"
+git_ -C "$R" checkout -q -b pr-b main && printf 'pb\n' >> "$R/docs/x.md" && cm pr-b-doc
+git_ -C "$R" checkout -q -b pr-c main && printf 'pc\n' >> "$R/src/a2.txt" && cm pr-c-a2
+gh_merge pr-b pr-c
+eq "$(git_ -C "$R" rev-list --parents -n 1 HEAD | wc -w | tr -d ' ')" 4 "instrument: an octopus merge with three parents"
+case_ "fail closed: an octopus merge (three parents) → full" "$ALL" "$(mp pr-b)"
+has "$(cat "$TMP/err")" "plan: full — " "…and the plan line says full"
+git_ -C "$R" checkout -q --detach pr
+case_ "fail closed: HEAD is no merge commit (one parent) → full, never the diff from its parent" "$ALL" "$(mp pr)"
+has "$(cat "$TMP/err")" "is not a merge commit of two parents" "…and the plan line says why"
+case_ "fail closed: a head that is no merge commit → full" "$ALL" "$(mp pr)" pr
+case_ "fail closed: a root commit → full" "$ALL" "$(mp pr)" lone
+case_ "fail closed: a head that does not resolve → full" "$ALL" "$(mp pr)" no-such-ref
+case_ "fail closed: a PR head that does not resolve → full" "$ALL" @merge-parent:no-such-ref
+gh_merge pr && git_ -C "$R" branch -q merged HEAD
+SH="$TMP/shallow"; rm -rf "$SH"
+git_ init -q "$SH" && git_ -C "$SH" fetch -q --depth 1 "$R" merged:merged 2>/dev/null && git_ -C "$SH" checkout -q merged
+eq "$(git_ -C "$SH" rev-parse --is-shallow-repository)" true "instrument: a shallow clone of the merge commit (its parents are missing)"
+GOT=$(python3 "$SH/tests/plan.py" "$(mp pr)" 2>"$TMP/err" | tr '\n' ' ' | sed 's/ $//')
+eq "$GOT" "$ALL" "fail closed: a merge whose parents are missing (shallow clone) → full ($(cat "$TMP/err"))"
+rm -rf "$SH"
+git_ -C "$R" checkout -q -f w && git_ -C "$R" branch -q -f main "$MAIN0" && git_ -C "$R" reset -q --hard main
 
 echo "== a map edit (option B) =="
 sed -i 's#^b src/b\*$#b src/b* docs/*#' "$R/tests/suites.map"; cm mapb
@@ -402,5 +629,86 @@ open(p, "w").write(s.replace(old, new))
 PY
 red "a root kb/ path read as the fixture's by its tail" "suite \`a\` uses these files but its line in tests/suites.map does not cover tests/fixtures/f/kb/current-state.md"
 cp "$TMP/plan.good" "$R/tests/plan.py"
+
+echo "== the guard: a function of a fixture an @full file sources =="
+# lib.sh (@full) sources capped.sh and plant.sh, which are not @full: a suite that calls one of their functions, directly or through
+# a function of another shell fixture (expect_red in ports.sh runs capped), must have the file on its line. The path references do
+# not show it: the suite names lib.sh and ports.sh, never capped.sh.
+R="$TMP/r3"; mk_scratch
+printf '. "$(dirname "${BASH_SOURCE[0]}")/cap.sh"\n. "$(dirname "${BASH_SOURCE[0]}")/pl.sh"   # pl: plx\n' > "$R/tests/fixtures/lib.sh"
+printf '# capx — the cap\ncapx() { "$@"; }\n' > "$R/tests/fixtures/cap.sh"
+printf 'plx() { capx true; }\n' > "$R/tests/fixtures/pl.sh"
+printf 'x=1\nera() {  # era <cmd> — through capx\n  capx "$@"\n}\nquiet() { :; }\n' > "$R/tests/fixtures/fa.sh"
+printf '#!/bin/bash\n. "$HERE/fixtures/lib.sh"\n. "$HERE/fixtures/fa.sh"\nera true\n' > "$R/tests/test-a.sh"
+printf '#!/bin/bash\n. "$HERE/fixtures/lib.sh"\nplx\n' > "$R/tests/test-b.sh"
+# c defines and calls a function named like fa.sh's, without sourcing fa.sh; it mentions capx only in a comment
+printf '#!/bin/bash\n. "$HERE/fixtures/lib.sh"\nera() { :; }\nera\n# capx is not called here\n' >> "$R/tests/test-c.sh"
+sed -i 's#^a %src-a tests/fixtures/fa.sh$#a %src-a tests/fixtures/fa.sh tests/fixtures/cap.sh#; s#^b src/b\*$#b src/b* tests/fixtures/pl.sh tests/fixtures/cap.sh#' "$R/tests/suites.map"
+cm functions
+eq "$(guard | tail -1)" "plan --check: ok (20 tracked files, 4 suites)" "control: every suite that reaches cap.sh or pl.sh has it on its line"
+sed -i 's#^a %src-a tests/fixtures/fa.sh tests/fixtures/cap.sh$#a %src-a tests/fixtures/fa.sh#' "$R/tests/suites.map"
+red "a suite that reaches cap.sh through a function of a fixture it sources (era in fa.sh)" "suite \`a\` calls \`era\` (tests/fixtures/fa.sh), which reaches tests/fixtures/cap.sh that tests/fixtures/lib.sh sources, but its line in tests/suites.map does not cover tests/fixtures/cap.sh"
+git_ -C "$R" checkout -q -- tests/suites.map
+sed -i 's#^b src/b\* tests/fixtures/pl.sh tests/fixtures/cap.sh$#b src/b* tests/fixtures/cap.sh#' "$R/tests/suites.map"
+red "a suite that calls a function of pl.sh without pl.sh on its line" "suite \`b\` calls \`plx\` (tests/fixtures/pl.sh), which reaches tests/fixtures/pl.sh"
+git_ -C "$R" checkout -q -- tests/suites.map
+sed -i 's#^b src/b\* tests/fixtures/pl.sh tests/fixtures/cap.sh$#b src/b* tests/fixtures/pl.sh#' "$R/tests/suites.map"
+red "a suite that reaches cap.sh through a function of another sourced fixture (plx in pl.sh)" "suite \`b\` calls \`plx\` (tests/fixtures/pl.sh), which reaches tests/fixtures/cap.sh"
+git_ -C "$R" checkout -q -- tests/suites.map
+printf 'capx true\n' >> "$R/tests/test-c.sh"
+red "a suite that calls a function of cap.sh directly" "suite \`c\` calls \`capx\` (tests/fixtures/cap.sh), which reaches tests/fixtures/cap.sh"
+git_ -C "$R" checkout -q -- tests/test-c.sh
+printf 'fb() { era "$@"; }\n' > "$R/tests/fixtures/fb.sh"; printf '. "$HERE/fixtures/fb.sh"\nfb x\n' >> "$R/tests/test-c.sh"
+sed -i 's#^c src/c\* plugins/pp/sub/\*$#c src/c* plugins/pp/sub/* tests/fixtures/fb.sh tests/fixtures/fa.sh#' "$R/tests/suites.map"
+red "a new fixture whose function reaches cap.sh through two fixtures (fb → era → capx)" "suite \`c\` calls \`fb\` (tests/fixtures/fb.sh), which reaches tests/fixtures/cap.sh"
+git_ -C "$R" checkout -q -- tests/suites.map tests/test-c.sh; rm -f "$R/tests/fixtures/fb.sh"
+eq "$(guard | tail -1)" "plan --check: ok (20 tracked files, 4 suites)" "control: the restored tree is green again"
+# every shape of a call reaches the name: the name as a word anywhere in the code, comments dropped (quote-aware)
+while IFS= read -r shape; do
+  printf '%s\n' "$shape" >> "$R/tests/test-c.sh"
+  red "a call shape the guard must see: $shape" "suite \`c\` calls \`capx\`"
+  git_ -C "$R" checkout -q -- tests/test-c.sh
+done <<'SHAPES'
+eval "capx true"
+trap 'capx true' RETURN
+_r=capx; "$_r" true
+case 1 in 1)capx true;; esac
+capx>/dev/null
+"capx" a b
+echo "x #1"; capx true
+if ! capx true; then :; fi
+out=$(capx true)
+x="$(echo "a #b")"; capx true
+y=${x// #/}; capx true
+x=$'it\'s # y'; capx true
+x=$(echo a)#b; capx true
+echo a\ #b; capx true
+x="$(case $a in x) echo "a #b";; y) capx true;; esac)"
+SHAPES
+printf '# capx is named in a comment only\necho hi  # capx here too\ncapxx() { :; }; capxx\n' >> "$R/tests/test-c.sh"
+eq "$(guard | tail -1)" "plan --check: ok (20 tracked files, 4 suites)" "control: a name in a comment, or inside a longer word, is no call"
+git_ -C "$R" checkout -q -- tests/test-c.sh
+# the body of a function runs to the `}` at its own indent: a nested definition or a heredoc that holds one does not end it
+fn_case() {  # fn_case <label> <fixture text> <the guard's words> — c sources fn.sh (on its line) and calls fnc
+  printf '%s\n' "$2" > "$R/tests/fixtures/fn.sh"
+  printf '. "$HERE/fixtures/fn.sh"\nfnc\n' >> "$R/tests/test-c.sh"
+  sed -i 's#^c src/c\* plugins/pp/sub/\*$#c src/c* plugins/pp/sub/* tests/fixtures/fn.sh#' "$R/tests/suites.map"
+  red "$1" "$3"
+  git_ -C "$R" checkout -q -- tests/suites.map tests/test-c.sh; rm -f "$R/tests/fixtures/fn.sh"
+}
+fn_case "a nested definition before the call" $'fnc() {\n  _inner() { :; }\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a heredoc holding a definition before the call" $'fnc() {\n  cat <<X\nstub() { :; }\nX\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a sibling after a definition that closes mid-line inside a multi-line quote" $'_j() { python3 -c \'\nprint(1)\' "$1"; }\nfnc() {\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a sibling after a definition with a quoted brace" $'_j() { echo "{"; }\nfnc() {\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a second definition on one line" $'helper() { :; }; fnc() { capx true; }' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "the same name defined twice (if/else)" $'if true; then\n  fnc() {\n    capx true\n  }\nelse\n  fnc() { :; }\nfi' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a here-string with a bare word before the definition" $'a() {\n  read -r x <<< hello\n}\nfnc() {\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a here-string with a quoted word before the definition" $'a() {\n  read -r x <<< "hello"\n}\nfnc() {\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a shift by a name in (( )) before the definition" $'a() {\n  (( y = 1<<bits ))\n}\nfnc() {\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a shift by a name in \$(( )) before the definition" $'a() {\n  y=$(( 1 << n ))\n}\nfnc() {\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "a subshell in a subshell ((…) && (…)) is no arithmetic: top-level code after it" $'zz() {\n  ((true) && (false))\n}\ncapx true\nfnc() { :; }' "suite \`c\` sources tests/fixtures/fn.sh, whose top-level code reaches tests/fixtures/cap.sh"
+fn_case "arithmetic with inner parentheses (( y = (a+b)*2 )) before the definition" $'a() {\n  (( y = (a+b)*2<<k ))\n}\nfnc() {\n  capx true\n}' "suite \`c\` calls \`fnc\` (tests/fixtures/fn.sh), which reaches tests/fixtures/cap.sh"
+fn_case "top-level code of a fixture the suite sources" $'capx true\nfnc() { :; }' "suite \`c\` sources tests/fixtures/fn.sh, whose top-level code reaches tests/fixtures/cap.sh"
+R="$TMP/r"
 
 summary

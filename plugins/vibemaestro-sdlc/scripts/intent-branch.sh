@@ -60,7 +60,7 @@ fi
 # không bị đếm. Không fetch: lõi chặn cây chính (rc 7) TRƯỚC mọi fetch, adapter
 # không được làm ngược lại; ref `origin/intent/*` local luôn ≥ điểm cắt vì nhánh
 # con được cắt từ chính nó. Không phân giải được gì thì để lõi báo lỗi của nó.
-SUB="" CWD="." INTENT="" BRANCH="" IREF="" LB=0 NOISSUE=0 ARGS=()
+SUB="" CWD="." INTENT="" BRANCH="" IREF="" SLUG="" LB=0 NOISSUE=0 ARGS=()
 while [ $# -gt 0 ]; do
     a="$1"; shift
     case "$a" in
@@ -72,6 +72,8 @@ while [ $# -gt 0 ]; do
         --intent) ARGS+=("$a"); INTENT="${1:-}"; a="${1:-}"; shift || true ;;
         --branch=*) BRANCH="${a#*=}" ;;
         --branch) ARGS+=("$a"); BRANCH="${1:-}"; a="${1:-}"; shift || true ;;
+        --slug=*) SLUG="${a#*=}" ;;
+        --slug) ARGS+=("$a"); SLUG="${1:-}"; a="${1:-}"; shift || true ;;
         --intent-ref=*) IREF="${a#*=}" ;;
         --intent-ref) ARGS+=("$a"); IREF="${1:-}"; a="${1:-}"; shift || true ;;
         create-intent|worker-branch|integrate) [ -z "$SUB" ] && SUB="$a" ;;
@@ -109,4 +111,14 @@ if [ "$SUB" = create-intent ] && [ "$NOISSUE" -eq 0 ]; then
 fi
 
 # Không ghi __pycache__ vào thư mục plugin (có thể là bản cài trong cache).
-PYTHONDONTWRITEBYTECODE=1 exec python3 "$CORE" "${ARGS[@]}"
+# `create-intent` that succeeded tells the sandbox the intent is at its spec stage (stage-signal.sh: a no-op without a
+# `session-notify` that supports `--stage`, and it never fails this script). The core is no longer exec'd, so its rc is kept.
+signal() { bash "$HERE/stage-signal.sh" "$@" || true; }
+# Only `create-intent` has something to do after the core; every other subcommand still `exec`s it (a signal to this pid reaches it).
+[ "$SUB" = create-intent ] || PYTHONDONTWRITEBYTECODE=1 exec python3 "$CORE" "${ARGS[@]}"
+PYTHONDONTWRITEBYTECODE=1 python3 "$CORE" "${ARGS[@]}"; RC=$?
+# the stem is the slug without `branch.intent_prefix` (the core accepts `--slug intent/<slug>`); no `--slug` spelled out: no signal
+PFX=$(python3 "$HERE/sdlc_config.py" get branch.intent_prefix --root "$CWD" 2>/dev/null) || PFX="intent/"
+SLUG="${SLUG#"$PFX"}"
+[ "$RC" -eq 0 ] && [ -n "$SLUG" ] && signal spec "$SLUG"
+exit "$RC"

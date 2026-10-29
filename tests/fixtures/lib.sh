@@ -329,3 +329,10 @@ summary() {
   [ -n "${SUITE_RESULTS_DIR:-}" ] && printf '%s %s\n' "$PASS" "$FAIL" > "$SUITE_RESULTS_DIR/$(basename "$0" .sh)" 2>/dev/null
   [ "$FAIL" -eq 0 ]
 }
+
+# baton_set_mode <XDG_STATE_HOME> <manual|auto> — a suite's setup: the mode file as a `mode` change the owner signed leaves it,
+# with its `dialog <id>` line (baton.py PROOF_LINE). The change itself takes the owner's dialog record (fixtures/baton-owner.sh
+# mode_asked), which a suite that only needs a mode to be set does not exercise.
+baton_set_mode() {
+  ( umask 077; mkdir -p "$1/vibemaestro/baton" && printf '%s\ndialog %s\n' "$2" 0123456789abcdef0123456789abcdef > "$1/vibemaestro/baton/mode" )
+}
