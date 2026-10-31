@@ -127,7 +127,7 @@ def _placeholder(s):
     m = _PH_VARS.match(s)
     if m and all(_var_name_ok(r) for r in re.findall(r"\$\{?[A-Za-z_]\w*\}?", m.group(0))):
         return bool(_PH_VAR_TAIL.fullmatch(s[m.end():]))
-    low = s.lower()            # may be longer than s (`İ`): never compare their lengths
+    low = s.lower()            # may be longer than s (the Turkish dotted capital I): never compare their lengths
     if not _PH_PART.search(low):
         return False           # no placeholder part: nothing marks the value as one
     left = _PH_RUN.sub("", _PH_PART.sub(" ", low))   # a space: removing a part must not join two letter groups into a run

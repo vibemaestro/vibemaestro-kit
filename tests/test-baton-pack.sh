@@ -3,6 +3,7 @@
 # BatonRun: keeping a flow that ran right — `baton pack` (scripts/baton.py): the file and its keep record, the refusals, the
 # `ok` run it needs (logged on this machine only), --retire, moves between places that a re-run finishes, the per-name lock, and
 # the owner: line; in a sandbox a bare name keeps project:, user: is refused, and a stop-list baton packs after go stopped for the owner
+# (a Stops: none script too, on a stop of mode manual, marked never ran)
 # =============================================================================
 # Run: bash tests/test-baton-pack.sh
 #
@@ -312,11 +313,12 @@ fam_sandbox() {
   BT_ENV=(SEAT=seat-1 INTENT_SLUG=2026-10-25-x)
   mk "$P" "$W/p.sh" "# p"; sed -i 's/^# Stops: none$/# Stops: publish/' "$W/p.sh"; B=$(shaf "$W/p.sh")
   eq "$(bt "$P" "$R" pack "$W/p.sh" p)" 3 "[sandbox] a stop-list baton before go: rc 3 (no ok run, no stop for the owner)"
-  has "$(out)" "a stop-list baton packs as project: once go has stopped for the owner" "[sandbox] …the refusal points a stop-list baton to go's stop"
+  has "$(out)" "a baton packs as project: once go has stopped for the owner" "[sandbox] …the refusal points a stop-list baton to go's stop"
   o=$(fresh); eq "$(bt "$P" "$R" go "$W/p.sh" "$(D "$o")")" 8 "[sandbox] go of the stop-list baton stops for the owner: rc 8"
   eq "$(grep -c "	go	.*	owner	.*scratch@$B" "$(bdir)/log.tsv")" 1 "[sandbox] …and logs one go owner line binding its sha256"
   BT_ENV=()
   eq "$(bt "$P" "$R" pack "$W/p.sh" project:p)" 3 "[sandbox] outside a sandbox that line is no ok run: rc 3"
+  hasnt "$(out)" "packs as project: once go" "[sandbox] …and the refusal outside a sandbox does not point to go's stop"
   BT_ENV=(SEAT=seat-1 INTENT_SLUG=2026-10-25-x)
   eq "$(bt "$P" "$R" pack "$W/p.sh" user:p)" 64 "[sandbox] …to user: in a sandbox: rc 64"
   eq "$(bt "$P" "$R" pack "$W/p.sh" p)" 0 "[sandbox] the stop-list baton packs as project:p after go stopped for the owner: rc 0"
@@ -327,13 +329,34 @@ fam_sandbox() {
   mk "$P" "$W/p2.sh" "# p2"; sed -i 's/^# Stops: none$/# Stops: publish/' "$W/p2.sh"; o=$(fresh)
   bt "$P" "$R" go "$W/p2.sh" "$(D "$o")" >/dev/null; echo '# changed after go' >> "$W/p2.sh"
   eq "$(bt "$P" "$R" pack "$W/p2.sh" p2)" 3 "[sandbox] bytes changed after go stopped for the owner: rc 3"
-  # the line is written only for a stop from the Stops list: a Stops: none baton stopped by mode manual gets none
+  # a Stops: none session script stopped by mode manual: the line is written too, and pack keeps it as never run
   baton_set_mode "$ST" manual                                     # setup: in a pod no dialog changes the mode
   mk "$P" "$W/m.sh" "# m"; A=$(shaf "$W/m.sh"); o=$(fresh)
+  eq "$(bt "$P" "$R" pack "$W/m.sh" m)" 3 "[sandbox] a Stops: none baton before go: rc 3"
+  has "$(out)" "for Stops none, in mode manual" "[sandbox] …the refusal points it to go's stop in mode manual"
   eq "$(bt "$P" "$R" go "$W/m.sh" "$(D "$o")")" 8 "[sandbox] mode manual: a Stops: none baton stops for the owner: rc 8"
-  eq "$(grep -c "	go	.*	owner	.*@$A" "$(bdir)/log.tsv")" 0 "[sandbox] …and logs no go owner line"
-  eq "$(bt "$P" "$R" pack "$W/m.sh" m)" 3 "[sandbox] …so it does not pack: rc 3"
-  hasnt "$(out)" "a stop-list baton packs" "[sandbox] …and the refusal of a Stops: none baton does not point to the stop-list path"
+  eq "$(grep -c "	go	.*	manual	owner	.*scratch@$A" "$(bdir)/log.tsv")" 1 "[sandbox] …and logs one go owner line in mode manual"
+  BT_ENV=()
+  eq "$(bt "$P" "$R" pack "$W/m.sh" project:m)" 3 "[sandbox] outside a sandbox that mode-manual line is no ok run: rc 3"
+  BT_ENV=(SEAT=seat-1 INTENT_SLUG=2026-10-25-x)
+  eq "$(bt "$P" "$R" pack "$W/m.sh" m)" 0 "[sandbox] …in the pod it packs as project:m: rc 0"
+  has "$(out)" "— it never ran: Stops none, held only by a sandbox pod's mode manual, so the coordinator's go is its first run —" "[sandbox] …the line says it never ran"
+  has "$(newest "$K" m | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["sha256"], r.get("never_ran"))')" "$A it never ran" "[sandbox] …its keep record pins those bytes and says it never ran"
+  has "$(bt "$P" "$R" list project:m >/dev/null; out)" ", kept before any run" "[sandbox] …and list labels it kept before any run"
+  # the line counts for Stops: none bytes only when go logged it in mode manual
+  mk "$P" "$W/m2.sh" "# m2"; A=$(shaf "$W/m2.sh"); o=$(fresh)
+  bt "$P" "$R" go "$W/m2.sh" "$(D "$o")" >/dev/null
+  python3 - "$(bdir)/log.tsv" "$A" <<'PYEOF'
+import sys
+p, sha = sys.argv[1], sys.argv[2]
+lines = open(p, encoding="utf-8").read().split("\n")
+for i, ln in enumerate(lines):
+    v = ln.split("\t")
+    if len(v) > 9 and v[1] == "go" and v[9] == "owner" and v[-1].endswith("@" + sha):
+        v[8] = "auto"; lines[i] = "\t".join(v)
+open(p, "w", encoding="utf-8").write("\n".join(lines))
+PYEOF
+  eq "$(bt "$P" "$R" pack "$W/m2.sh" m2)" 3 "[sandbox] Stops: none bytes whose go owner line is not of mode manual: rc 3"
   bt "$P" "$W" mode auto >/dev/null
   # outside a sandbox, go writes no line for a stop-list baton
   BT_ENV=(); mk "$P" "$W/q.sh" "# q"; sed -i 's/^# Stops: none$/# Stops: publish/' "$W/q.sh"; A=$(shaf "$W/q.sh"); o=$(fresh)
@@ -586,12 +609,13 @@ BRK() {
 }
 BRK sandbox-no-default fam_sandbox '[sandbox] a bare name keeps project:<name>: rc 0' '    if ":" not in word and new and in_sandbox():' '    if False:'
 BRK sandbox-user-ok fam_sandbox '[sandbox] a user: target in a sandbox: rc 64' '    if place == "user" and new and in_sandbox():' '    if False:'
-BRK owner-stop-anywhere fam_sandbox '[sandbox] outside a sandbox that line is no ok run: rc 3' '    if not (in_sandbox() and t.kept.prefix == "project" and stops_of(t.text) not in (None, "none")):' '    if not (t.kept.prefix == "project" and stops_of(t.text) not in (None, "none")):'
-BRK owner-stop-any-sha fam_sandbox '[sandbox] bytes changed after go stopped for the owner: rc 3' '    return any(v.endswith("@" + sha) for v in owner_stops())' '    return bool(owner_stops())'
-BRK owner-stop-manual fam_sandbox '[sandbox] …and logs no go owner line' '            if stops and in_sandbox():' '            if in_sandbox():'
-BRK owner-stop-outside fam_sandbox '[sandbox] …and logs no go owner line' '            if stops and in_sandbox():' '            if stops:'
-BRK hint-never fam_sandbox "[sandbox] …the refusal points a stop-list baton to go's stop" '"has stopped for the owner on these bytes (exit 8)" if in_sandbox()' '"has stopped for the owner on these bytes (exit 8)" if False'
-BRK hint-always fam_sandbox '[sandbox] …and the refusal of a Stops: none baton does not point to the stop-list path' '                            stops_of(t.text) not in (None, "none") else "")' '                            True else "")'
+BRK owner-stop-anywhere fam_sandbox '[sandbox] outside a sandbox that line is no ok run: rc 3' '    if not (in_sandbox() and t.kept.prefix == "project" and stops_of(t.text) is not None):' '    if not (t.kept.prefix == "project" and stops_of(t.text) is not None):'
+BRK owner-stop-any-sha fam_sandbox '[sandbox] bytes changed after go stopped for the owner: rc 3' '    return any(v.endswith("@" + sha) for v in owner_stops(manual=no_stop(t.text)))' '    return bool(owner_stops())'
+BRK owner-stop-any-mode fam_sandbox '[sandbox] Stops: none bytes whose go owner line is not of mode manual: rc 3' 'owner_stops(manual=no_stop(t.text))' 'owner_stops()'
+BRK owner-stop-no-manual fam_sandbox '[sandbox] …and logs one go owner line in mode manual' '            manual = not stops and not s.value_why() and place_of(path) is None' '            manual = False'
+BRK owner-stop-outside fam_sandbox '[sandbox] …and logs no go owner line' '            if (stops or manual) and in_sandbox():' '            if stops or manual:'
+BRK hint-never fam_sandbox "[sandbox] …the refusal points a stop-list baton to go's stop" '"stopped for the owner on these bytes (exit 8; for Stops none, in mode manual)" if in_sandbox()' '"stopped for the owner on these bytes (exit 8; for Stops none, in mode manual)" if False'
+BRK hint-always fam_sandbox '[sandbox] …and the refusal outside a sandbox does not point to go' '(exit 8; for Stops none, in mode manual)" if in_sandbox() and' '(exit 8; for Stops none, in mode manual)" if True or'
 BRK no-okrun fam_okrun '[okrun] the source changed after its ok run: rc 3' '    return any(v.endswith("@" + sha) for v in ok_runs())' '    return True'
 BRK okrun-any-log fam_okrun '[okrun] only this machine' \
     '                if len(v) == len(LOG_FIELDS) and v[1] == "run" and v[9] == "ok":' '                if len(v) >= len(LOG_FIELDS) - 1 and v[9] == "ok":'

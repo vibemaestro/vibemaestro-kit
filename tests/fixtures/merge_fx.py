@@ -583,6 +583,72 @@ def fx_bootstrap(fx, a):
         add_file(fx, ".github/workflows/ci.yml")
 
 
+def fx_amend(fx, a):
+    """the base has a config with no merge.deny_globs (a repo that adopted the plugin before the `merge` section existed: the
+    rules directory init writes, no `merge` section); the PR modifies the config to add the section (the skill's deny globs, admin
+    bypass and the image lane on: a forged grant). `a`: partial (the base already has merge.required_checks, which the head keeps),
+    log (the base names merge.log, which the head keeps), drop-key (the head drops the base's required_checks), edit-key (it edits
+    it), other-key (it changes rules.dirs), extra-key (it adds a ci section), external (it names an external CI adapter), no-deny
+    (its merge section sets no deny_globs), null-deny (the base has `deny_globs: null`, which is unset), nested-key (the head adds a key inside a merge key the base has), log-lost (the head changes the base's merge.log: refused, and logged to the base's log), renamed (the config arrives by a rename: no lane), empty-deny (it denies nothing, and adds a workflow: the init default still refuses it), deny-set (the base already sets deny_globs: no bootstrap), untouched (the PR does not
+    change the config), workflow, outside (a file outside the brief) and rules-md (a Markdown file under the rules directory)
+    are what the PR adds besides the config."""
+    full = cfg_of(fx)
+    old = {"schema": 1, "rules": {"dirs": [".vibemaestro/rules"]}}
+    if a in ("partial", "drop-key", "edit-key"):
+        old["merge"] = {"required_checks": ["test/unit"]}
+    if a == "log":
+        old["merge"] = {"log": "amend-log.jsonl"}
+    if a == "deny-set":
+        old["merge"] = {"deny_globs": ["src/secret/**"]}
+    if a == "null-deny":
+        old["merge"] = {"deny_globs": None}
+    if a == "nested-key":
+        old["merge"] = {"image_bump": {"enabled": False}}
+    if a == "log-lost":
+        old["merge"] = {"log": "amend-log.jsonl"}
+    set_cfg(fx, old)
+    head = json.loads(json.dumps(old))
+    head["merge"] = dict(old.get("merge", {}))
+    head["merge"].update(full["merge"])
+    head["merge"]["admin_bypass"] = True
+    head["merge"]["image_bump"]["enabled"] = True
+    if a == "partial":
+        head["merge"]["required_checks"] = ["test/unit"]
+    if a == "log":
+        head["merge"]["log"] = "amend-log.jsonl"
+    if a == "nested-key":
+        head["merge"]["image_bump"] = {"enabled": False, "tag_files": ["deploy/app.yaml"]}
+    if a == "log-lost":
+        head["merge"]["log"] = "other-log.jsonl"
+    if a == "drop-key":
+        del head["merge"]["required_checks"]
+    if a == "edit-key":
+        head["merge"]["required_checks"] = ["test/lint"]
+    if a == "other-key":
+        head["rules"] = {"dirs": [".vibemaestro/policies"]}
+    if a == "extra-key":
+        head["ci"] = {"backend": "github-actions"}
+    if a == "external":
+        head["ci"] = {"backend": "external:tools/ci.py"}
+    if a == "no-deny":
+        del head["merge"]["deny_globs"]
+    if a == "empty-deny":
+        head["merge"]["deny_globs"] = []
+    if a == "deny-set":
+        head["merge"]["deny_globs"] = ["src/secret/**"]
+    fx["api"][CFG + H] = json.dumps(head)
+    if a == "renamed":
+        add_file(fx, ".vibemaestro/sdlc.json", status="renamed", prev=".vibemaestro/old.json")
+    elif a != "untouched":
+        add_file(fx, ".vibemaestro/sdlc.json", status="modified")
+    if a in ("workflow", "empty-deny"):
+        add_file(fx, ".github/workflows/ci.yml")
+    if a == "outside":
+        add_file(fx, "ops/x.txt")
+    if a == "rules-md":
+        add_file(fx, ".vibemaestro/rules/README.md")
+
+
 def fx_rules_dirs(fx, a):
     """rules.dirs in the base config: the comma-separated directories `a` (rule Markdown an agent loads as instructions)."""
     cfg = cfg_of(fx)

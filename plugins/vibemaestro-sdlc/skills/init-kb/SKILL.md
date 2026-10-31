@@ -33,7 +33,7 @@ baton `kit:merge-pr`). Only on a yes, ask these too; the guard reads them from t
 
 | # | Ask | Key | Default |
 |---|---|---|---|
-| 8 | changed paths the guarded merge refuses in its normal lane (globs; `[]` is a valid answer, unset makes the guard refuse to run) | `merge.deny_globs` | `[".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*"]` |
+| 8 | changed paths the guarded merge refuses in its normal lane (globs; `[]` is a valid answer, unset makes the guard refuse to run, except for the PR that adds the section) | `merge.deny_globs` | `[".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*"]` |
 | 9 | checks that must be green on every merge (check names, or `<workflow>/<name>`; a skipped run counts as missing, a commit status never counts) | `merge.required_checks` | none: at least one green check |
 | 10 | may the guard pass `--admin` to GitHub (bypass branch rules as an admin)? | `merge.admin_bypass` | no |
 | 11 | an image-bump lane: files holding the image tag, the image build tree, the revision file and pattern, the registry (`ghcr` or `external:<path>`, host, image) | `merge.image_bump` | off |
@@ -42,6 +42,7 @@ baton `kit:merge-pr`). Only on a yes, ask these too; the guard reads them from t
 `kb.py init` writes `merge.deny_globs` into a new config even when these questions are skipped: the answer, else the default
 of question 8 (the report names it), so the guarded merge never refuses a repo's PRs for a missing list. A repo's first PR, the one
 adding the config, merges through the guard's bootstrap: the guard reads the added config at that PR's head for that one merge.
+So does, in a repo whose config has no `merge.deny_globs` yet, the PR that changes the config to add the `merge` section and nothing else; any other PR there is refused until that one has merged.
 
 Keep `.vibemaestro/*` in the deny globs: it is what stops a PR from turning `merge.admin_bypass` on, or emptying the deny list,
 for itself. The default leaves `.vibemaestro/batons/` out, so a project baton merges through the guard like other code; deny

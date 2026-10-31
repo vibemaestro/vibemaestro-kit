@@ -24,6 +24,9 @@
 # path's sha256 (two settings files, two records). A record stays after a run that held, so undo works from it only when its
 # plan sha256 is this run's, and only while the file still has the merged sha256. The restore, like the merge, goes through a
 # mktemp file next to the settings file, so a read-only settings file is put back too.
+# The backup is a whole copy of the settings file (an `env` block too), named after the path and the bytes before, so it is
+# kept only for the undo: the run lists it in BATON_UNDO_ONLY, and baton removes it once the run ended ok or its undo put the
+# file back. Only an unknown state keeps it, for the owner. The record (paths and sha256, no settings bytes) stays.
 # `kind:settings-merge` keeps its positional arguments (`# Usage:`). A copy meant to be kept with `baton pack` declares
 # `# Params:` instead, reads its values in a block of `P_<KEY>="$<n>"` lines and declares Targets as `{key}` patterns.
 # bash 3.2 (macOS) runs this file: no associative arrays, no ${var,,}, no mapfile.
@@ -129,7 +132,13 @@ else:
 PY
 }
 after_sha() { merged "$SETTINGS" "$RULES" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'; }
-backup_to() { mkdir -p "$RECORDS" && { cmp -s "$SETTINGS" "$1" || cp "$SETTINGS" "$1"; }; }
+# backup_to <path> — the backup is written afresh and listed for removal once the run's state is known (a signed run only: the
+# merge a kit simulates has no plan). One already there for this path holds these very bytes, which the file holds now: the
+# run takes it over.
+backup_to() {
+  mkdir -p "$RECORDS" && cp -f "$SETTINGS" "$1" || return 1    # -f: a read-only one (a read-only file's backup) too
+  if [ -n "${BATON_PLAN:-}" ]; then printf '%s\n' "$1" >> "${BATON_UNDO_ONLY:-/dev/null}"; fi
+}
 # plan_id — the sha256 of the signed plan baton hands the run and its undo (BATON_PLAN): which run a record belongs to
 plan_id() { if [ -n "${BATON_PLAN:-}" ] && [ -f "$BATON_PLAN" ]; then sha_of "$BATON_PLAN"; fi; }
 record() { mkdir -p "$RECORDS" && printf '%s %s %s\n' "$1" "$2" "$(plan_id)" > "$RECORD"; }
@@ -171,7 +180,7 @@ act() {
   fi
   before=$(sha_of "$SETTINGS")
   after=$(after_sha)
-  backup="$RECORDS/__NAME__-$before.json"
+  backup="$RECORDS/__NAME__-$(path_key)-$before.json"
   write "backup $SETTINGS sha256 $before to $backup" backup_to "$backup"
   write "record $RECORD: the backup, and sha256 $after once merged" record "$backup" "$after"
   write "merge $counts into $SETTINGS (rules sha256 $(sha_of "$RULES"))" merge_in

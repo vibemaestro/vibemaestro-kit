@@ -49,7 +49,7 @@ Condition: you stand in a worktree, on the branch `intent/<date>-<slug>`; all ch
        --summary <summary-file> --evidence <evidence-file> --base <default branch> --closes <issue number> --draft
    ```
 
-   - Unless `--dry-run`, `open-pr.sh` sends the `ship` stage signal itself (`scripts/stage-signal.sh`: a no-op without a sandbox, never fails the script).
+   - Unless `--dry-run`, `open-pr.sh` sends the `ship` stage signal itself (`scripts/stage-signal.sh`: `session-notify` in a sandbox, else the local state file of the session; it never fails the script).
    - Pass `--closes` **explicitly**: take the number from the `issue:` line of `kb/intent/<date>-<slug>.md`. (Standing on the branch
      `intent/<slug>`, `open-pr.sh` also reads that number by itself from the intent of the repo you stand in and prints it; a number passed by hand still wins.)
      A PR with no issue (like the PR that builds the kb scaffold) leaves the flag out.
@@ -63,10 +63,20 @@ Condition: you stand in a worktree, on the branch `intent/<date>-<slug>`; all ch
    `gh pr ready` (evidence on the final version, a review with fresh context). A draft PR is only a place to review, not a review that has happened.
    Spawn the review agent on the configured review model: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get agents.review_model`
    prints it, and it goes into the Agent tool's `model`. Give the agent the PR and the head SHA it reviews, not your conclusion.
-   At the start of each review round run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" review --subagents <n>` (`<n>` reviewers launched; a no-op without a sandbox).
    If the read fails, use the plugin default (the same command with `--default`), tell the person what
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" config check` names, and do not edit the config for them; if the
    `--default` read fails too, ask the person which model to use.
+   At the start of each review round run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" review <stem> --subagents <n>` (`<n>` reviewers launched; `<stem>` the intent's `<date>-<slug>`).
+6. **Once the PR is ready, record the done report** (outside a sandbox it marks the intent done in the local state file a
+   dashboard reads; in a sandbox it does nothing, as `session-done` records it there). The report goes on stdin, its first line the PR
+   link and the full head SHA:
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" done <stem> <<'EOF'
+   <PR url> <full head sha>
+   <one line: what the PR does>
+   EOF
+   ```
 
 ## What evidence is, and what it is not
 

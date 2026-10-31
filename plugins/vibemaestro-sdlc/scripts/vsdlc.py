@@ -891,6 +891,29 @@ SCAFFOLD_BRANCH_OLD = "chore/kb-khoi-tao"   # its old name: a branch pushed befo
 SCAFFOLD_PROBE = "kb/intent"                # the directory `kb.py new intent` needs; a tree entry exists once it holds a tracked file
 
 
+def upstream_has_kb(troot):
+    """True when the upstream (`@{u}`, as last fetched) of the current branch has `kb/intent`. Merged there: a tree with no `kb/` is not
+    "not merged yet" (`scaffold_ref`), and a branch with no upstream is not covered."""
+    return git_out(troot, "cat-file", "-e", "@{u}:" + SCAFFOLD_PROBE) is not None
+
+
+def upstream_kb_ref(troot):
+    """The name of the upstream when this tree is plainly only behind it: no `kb/` on disk (not even a file or a link in the way, which a
+    pull would be refused over), HEAD itself tracks nothing under `kb` (a `kb/` only deleted from disk is restored by a checkout, not a pull),
+    HEAD is not already at or ahead of `@{u}` (a pull then does nothing), and `@{u}` has `kb/intent`; else "". `kb_reminder` and
+    `flow_reminder` ask this one question, so the sentence and the chain cannot disagree.
+    A name with odd characters is shown as `@{u}`, which git reads the same."""
+    kb = os.path.join(troot, "kb")
+    if os.path.lexists(kb) or not upstream_has_kb(troot):
+        return ""
+    if git_out(troot, "cat-file", "-e", "HEAD:kb") is not None:
+        return ""
+    if git_out(troot, "merge-base", "--is-ancestor", "@{u}", "HEAD") is not None:
+        return ""
+    name = git_out(troot, "rev-parse", "--abbrev-ref", "@{u}") or ""
+    return name if re.fullmatch(r"[\w./+-]+", name) else "@{u}"
+
+
 def scaffold_ref(troot):
     """The ref of the init-kb scaffold branch (current name then old name, each local first, then `origin/`) that carries `kb/intent`, else "". Asked only when this
     tree has no `kb/`: the scaffold is made and pushed but not merged here, so the reminder must not say to scaffold it again. Also "" when the
@@ -898,7 +921,7 @@ def scaffold_ref(troot):
     (a branch with no upstream is not covered)."""
     if os.path.isdir(os.path.join(troot, "kb")):
         return ""
-    if git_out(troot, "cat-file", "-e", "@{u}:" + SCAFFOLD_PROBE) is not None:
+    if upstream_has_kb(troot):
         return ""       # the upstream of this branch already has kb/: it is merged there and only this tree is behind, not "not merged yet"
     for ref in (SCAFFOLD_BRANCH, "origin/" + SCAFFOLD_BRANCH, SCAFFOLD_BRANCH_OLD, "origin/" + SCAFFOLD_BRANCH_OLD):
         if git_out(troot, "cat-file", "-e", "%s:%s" % (ref, SCAFFOLD_PROBE)) is not None:
@@ -921,7 +944,8 @@ def flow_reminder(troot):
     if not chain:
         return ""
     # chưa có kb/ thì intake/brainstorm/spec/plan không có chỗ ghi: init-kb đứng trước (chỉ khi skill đó vừa kiểm là có mặt)
-    need_kb = "init-kb" in mine and not os.path.isdir(os.path.join(troot, "kb")) and not scaffold_ref(troot)
+    need_kb = ("init-kb" in mine and not os.path.isdir(os.path.join(troot, "kb")) and not scaffold_ref(troot)
+               and not upstream_kb_ref(troot))
     has_intake = chain[0] == "intake"
     if need_kb:
         chain = ["init-kb"] + chain
@@ -962,9 +986,23 @@ SCAFFOLD_ON_BRANCH = {
 }
 
 
+# `kb_reminder` when this tree has no `kb/` but its upstream (`@{u}`) already has it: only the tree is behind, so pull; same keys as above
+UPSTREAM_HAS_KB = {
+    "en": "This tree has no `kb/` yet, but its upstream `%s` already has one: bring this tree up to date with `git pull --ff-only` "
+          "(a pull follows this branch's upstream; if the branch has local commits and cannot fast-forward, run `git merge %s`) "
+          "and do not scaffold `kb/` again, a second one would conflict with it.",
+    "vi": "Cây này chưa có `kb/`, nhưng upstream của nó `%s` đã có: hãy cập nhật cây bằng `git pull --ff-only` "
+          "(pull đi theo upstream của nhánh này; nhánh có commit riêng, không fast-forward được thì chạy `git merge %s`), "
+          "đừng dựng `kb/` lại, bản thứ hai sẽ xung đột với bản đã có.",
+}
+
+
 def kb_reminder(troot, injected=False, rel="kb/current-state.md", lang="vi"):
     kb = os.path.join(troot, "kb")
     if not os.path.isdir(kb):
+        up = upstream_kb_ref(troot)
+        if up:
+            return UPSTREAM_HAS_KB.get(lang, UPSTREAM_HAS_KB["vi"]) % (up, up)
         ref = scaffold_ref(troot)
         if ref:
             return SCAFFOLD_ON_BRANCH.get(lang, SCAFFOLD_ON_BRANCH["vi"]) % ref

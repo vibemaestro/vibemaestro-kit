@@ -120,7 +120,8 @@
   "evidence": {
     "ui_paths": [
       "web/**"
-    ]
+    ],
+    "trusted_app": null
   },
   "sensitive": {
     "allowlist": ".allow",

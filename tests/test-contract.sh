@@ -5,7 +5,7 @@
 # Run: bash tests/test-contract.sh [<item id>]
 #   no id: every item, the exactness checks, the change rule of the surface against the base branch (a change file when the base
 #   has .changes/, a version bump before), and the planted breaks
-#   an id (marketplace, layout, fetch-action, sandbox-env, seedable, cli, config-schema, rule-packs, dependents): that item only,
+#   an id (marketplace, layout, fetch-action, sandbox-env, seedable, cli, config-schema, rule-packs, dependents, local-state): that item only,
 #   on the real tree
 #   CONTRACT_BASE=<ref>: the base of the version-bump rule (default: merge-base of HEAD and origin/main, else the origin/main tip)
 #
@@ -33,7 +33,7 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 # shellcheck source=fixtures/baton-owner.sh
 . "$HERE/fixtures/baton-owner.sh"
 
-ITEMS="marketplace layout fetch-action sandbox-env seedable cli config-schema rule-packs dependents"
+ITEMS="marketplace layout fetch-action sandbox-env seedable cli config-schema rule-packs dependents local-state"
 ONLY=${1:-}
 if [ -n "$ONLY" ]; then
   case " $ITEMS " in *" $ONLY "*) ;; *) echo "usage: bash tests/test-contract.sh [$(echo "$ITEMS" | tr ' ' '|')]" >&2; exit 64;; esac
@@ -1067,6 +1067,71 @@ fam_dependents() {
   fi
 }
 
+# ── local-state ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# The writer runs from the copy with no `session-notify` on the PATH, a throw-away HOME and XDG_STATE_HOME; each fact's value is
+# read from the contract (the first `…` of its cell, or the whole cell) and checked against what the writer does.
+# lfv <repo copy> <fact> — the first backticked value of a local-state fact, or the whole cell
+lfv() { local v; v=$(fact "$1" local-state "$2"); printf '%s\n' "$v" | grep -qF '`' && v=$(printf '%s\n' "$v" | grep -oE '`[^`]+`' | head -1 | tr -d '`'); printf '%s' "$v"; }
+# lsig <state home or -> <home> <session or -> <child 0|1> <cwd> <args...> — the writer, stdin passed through
+lsig() {
+  local xs=$1 hm=$2 sid=$3 ch=$4 cwd=$5; shift 5; local e=(PATH="$(bare_path nogh)" HOME="$hm")
+  [ "$xs" = - ] || e+=(XDG_STATE_HOME="$xs"); [ "$sid" = - ] || e+=(CLAUDE_CODE_SESSION_ID="$sid"); [ "$ch" = 1 ] && e+=(CLAUDE_CODE_CHILD_SESSION=1)
+  ( cd "$cwd" && env -i "${e[@]}" bash "$LSP/$LSW" "$@" )
+}
+# ljf <file> <python expression on d> — a value of the JSON file (a string bare, else JSON)
+ljf() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v=eval(sys.argv[2]); print(v if isinstance(v,str) else json.dumps(v))' "$1" "$2" 2>/dev/null || echo "<unreadable>"; }
+fam_local_state() {
+  local R=$1 XS HM C SID=s-contract S=2026-01-02-contract S2=2026-01-02-child S3=2026-01-02-main F D v rx n st seen
+  LSP="$1/$PLREL"
+  facts_exact "$R" local-state "writer|place|place without XDG_STATE_HOME|session|stem|reader's files|schema|fields|local fields|local version|states|mode|question|report|transcript of a bound subagent|transcript of a session|unbound subagent|coordinator"
+  XS=$(fresh)/state; HM=$(fresh)/home; mkdir -p "$HM"; C=$(fresh)
+  LSW=$(lfv "$R" writer); [ -f "$LSP/$LSW" ] && ok "[local-state] writer: $LSW is in the plugin" || bad "[local-state] writer: $LSW is not in the plugin"
+  # place
+  lsig "$XS" "$HM" "$SID" 0 "$C" spec "$S" </dev/null
+  F=$(lfv "$R" place); F=${F//\$XDG_STATE_HOME/$XS}; F=${F//<session>/$SID}; F=${F//<stem>/$S}; D=$(dirname "$F")
+  [ -f "$F" ] && ok "[local-state] place: the file is where the contract says" || bad "[local-state] place: no file at $F"
+  local XS0; XS0=$(fresh)/state; lsig "$XS0" "$HM" - 0 "$C" spec "$S" </dev/null
+  [ ! -e "$XS0" ] && ok "[local-state] writer: nothing without CLAUDE_CODE_SESSION_ID" || bad "[local-state] writer: a file without CLAUDE_CODE_SESSION_ID"
+  v=$(lfv "$R" "place without XDG_STATE_HOME"); v=${v/#\~/$HM}; v=${v//<session>/$SID}; v=${v//<stem>/$S}
+  lsig - "$HM" "$SID" 0 "$C" spec "$S" </dev/null
+  [ -f "$v" ] && ok "[local-state] place without XDG_STATE_HOME: the file is there" || bad "[local-state] place without XDG_STATE_HOME: no file at $v"
+  rm -f "$v"; lsig rel/state "$HM" "$SID" 0 "$C" spec "$S" </dev/null
+  [ -f "$v" ] && ok "[local-state] place without XDG_STATE_HOME: a relative one counts as unset" || bad "[local-state] place without XDG_STATE_HOME: a relative one was used"
+  # session, coordinator, unbound subagent: a subagent's env has its main session's id
+  has "$(fact "$R" local-state session)" CLAUDE_CODE_SESSION_ID "[local-state] session: the variable is named"
+  lsig "$XS" "$HM" "$SID" 1 "$C" spec "$S2" </dev/null
+  eq "$(ljf "$D/$S2.json" 'd["session"]')" "$SID" "[local-state] coordinator: a child's file is in its main session's directory and names that session"
+  eq "$(ljf "$D/$S2.json" '[d["local"]["child"], d["local"]["agent"]]')" "[true, null]" "[local-state] unbound subagent: child true, agent null"
+  lsig "$XS" "$HM" "$SID" 0 "$C" spec "$S3" </dev/null
+  eq "$(ljf "$D/$S3.json" '[d["local"]["child"], d["local"]["agent"]]')" "[false, null]" "[local-state] transcript of a session: child false, agent null"
+  lsig "$XS" "$HM" "$SID" 0 "$C" bind "$S2" --agent a1b2c3 </dev/null
+  eq "$(ljf "$D/$S2.json" '[d["session"], d["local"]["agent"]]')" "[\"$SID\", \"a1b2c3\"]" "[local-state] transcript of a bound subagent: bind writes local.agent"
+  # stem
+  rx=$(lfv "$R" stem); has "$(fact "$R" local-state stem)" "at most 80" "[local-state] stem: its length is stated"
+  python3 -c 'import re,sys; sys.exit(0 if re.fullmatch(sys.argv[1], sys.argv[2]) else 1)' "$rx" "$S" && ok "[local-state] stem: the stem used here matches the pattern" || bad "[local-state] stem: the pattern does not match $S"
+  lsig "$XS" "$HM" "$SID" 0 "$C" spec my-intent </dev/null 2>/dev/null
+  lsig "$XS" "$HM" "$SID" 0 "$C" spec "2026-01-02-$(printf 'a%.0s' $(seq 1 70))" </dev/null 2>/dev/null
+  # reader's files
+  eq "$(cd "$D" && ls -A | grep -E '\.json$' | grep -v '^\.' | sort | tr '\n' ' ')" "$(printf '%s.json\n' "$S" "$S2" "$S3" | sort | tr '\n' ' ')" "[local-state] reader's files: exactly one per written stem (a stem outside the pattern or over 80 is not written)"
+  # shape and versions
+  eq "$(ljf "$F" 'd["schema"]')" "$(lfv "$R" schema)" "[local-state] schema"
+  eq "$(ljf "$F" '" ".join(d)')" "$(lfv "$R" fields)" "[local-state] fields: exactly these, in this order"
+  eq "$(ljf "$F" '" ".join(d["local"])')" "$(lfv "$R" "local fields")" "[local-state] local fields"
+  eq "$(ljf "$F" 'd["local"]["v"]')" "$(lfv "$R" "local version")" "[local-state] local version"
+  # states, question, report
+  seen="$(ljf "$F" 'd["state"]')"
+  python3 -c 'print("Q"*2500)' | lsig "$XS" "$HM" "$SID" 0 "$C" ask "$S"
+  st=$(ljf "$F" 'd["state"]'); seen="$seen $st"; n=$(lfv "$R" question)
+  eq "$(ljf "$F" '[d["state"], len(d["question"])]')" "[\"waiting\", $n]" "[local-state] question: cut to $n characters, while waiting"
+  python3 -c 'print("R"*900)' | lsig "$XS" "$HM" "$SID" 0 "$C" done "$S"
+  st=$(ljf "$F" 'd["state"]'); seen="$seen $st"; n=$(fact "$R" local-state report | grep -oE '`[0-9]+`' | tr -d '`')
+  eq "$(ljf "$F" '[d["state"], len(d["tail"]), d["tail"][:3]]')" "[\"done\", $n, \"RRR\"]" "[local-state] report: tail keeps its first $n characters, while done"
+  eq "$seen" "$(lfv "$R" states)" "[local-state] states: spec, ask and done give exactly these, in this order"
+  # mode
+  eq "$(python3 -c 'import os,stat,sys; print("%o %o" % (stat.S_IMODE(os.stat(sys.argv[1]).st_mode), stat.S_IMODE(os.stat(sys.argv[2]).st_mode)))' "$F" "$D")" \
+     "$(lfv "$R" mode | sed 's/^0//') $(fact "$R" local-state mode | grep -oE '`0[0-7]+`' | sed -n 2p | tr -d '`' | sed 's/^0//')" "[local-state] mode: the file and its session directory"
+}
+
 # ── exactness of the item list, and the in-tree half of the version rule ────────────────────────────────────────────────────────
 fam_contract() {
   local R=$1 ids proofs fa mv
@@ -1389,6 +1454,10 @@ BRK schema-bump fam_config_schema '[config-schema] schema' $PLREL/scripts/sdlc_c
 BRK config-moved fam_config_schema '[config-schema] config file' $PLREL/scripts/sdlc_config.py 'CONFIG_REL = ".vibemaestro/sdlc.json"' 'CONFIG_REL = ".vibemaestro/config.json"'
 BRK item-removed fam_contract '[contract] items' $PLREL/CONTRACT.md '| `seedable` | the plugin directory' '| `seedable-x` | the plugin directory'
 RPP=$PLREL/scripts/rule_packs.py
+BRK local-version-raised fam_local_state '[local-state] local version' $PLREL/scripts/local_state.py 'LOCAL_V = 1' 'LOCAL_V = 2'
+BRK local-place-moved fam_local_state '[local-state] place: no file at' $PLREL/scripts/local_state.py 'base = os.path.join(top, "sessions")' 'base = os.path.join(top, "local")'
+BRK local-field-added fam_local_state '[local-state] fields: exactly these' $PLREL/scripts/local_state.py '        "hint": False,' '        "hint": False, "extra": None,'
+BRK local-mode-wide fam_local_state '[local-state] mode' $PLREL/scripts/local_state.py 'os.fchmod(f.fileno(), 0o600)' 'os.fchmod(f.fileno(), 0o640)'
 BRK pack-dependency-renamed fam_rule_packs '[rule-packs] dependency named in dependencies: the plugin that names it' $RPP 'DEPENDENCY = "vibemaestro-sdlc"' 'DEPENDENCY = "vibemaestro-core"'
 BRK pack-registry-moved fam_rule_packs '[rule-packs] registry: a pack listed' $RPP 'REGISTRY_REL = ("plugins", "installed_plugins.json")' 'REGISTRY_REL = ("plugins", "registry.json")'
 BRK pack-home-moved fam_rule_packs '[rule-packs] registry without CLAUDE_CONFIG_DIR' $RPP '        return os.path.join(home, ".claude"), None' '        return os.path.join(home, ".claude-code"), None'

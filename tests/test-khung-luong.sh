@@ -240,6 +240,8 @@ echo "== P2: kb/ vắng ở cây này nhưng nhánh khung đã đẩy, chưa g�
 unset PL      # the cases above leave PL on a plugin copy without `intake`
 SC_EN='which is not merged yet: merge that branch or switch to it'
 SC_VI='chưa được gộp: hãy gộp nhánh đó hoặc chuyển sang nhánh đó'
+PULL_EN='already has one: bring this tree up to date with `git pull --ff-only`'
+PULL_VI='đã có: hãy cập nhật cây bằng `git pull --ff-only`'
 mk_scaffold() {  # mk_scaffold <repo> local|remote [nhánh] — nhánh khung (mặc định tên cũ chore/kb-khoi-tao) mang kb/intent, rồi về lại nhánh cũ
   local r=$1 where=$2 br=${3:-chore/kb-khoi-tao} cur
   cur=$(git_ -C "$r" symbolic-ref --short HEAD)
@@ -263,11 +265,35 @@ for lg in en vi none; do
   N7="$TMP/sc-behind-$lg"; mk_app "$N7" 0; mk_scaffold "$N7" local chore/kb-init
   git_ -C "$N7" remote add origin "$TMP/khong-co-remote.git"; git_ -C "$N7" config branch.main.remote origin; git_ -C "$N7" config branch.main.merge refs/heads/main
   git_ -C "$N7" update-ref refs/remotes/origin/main chore/kb-init
+  # two layouts that keep today's text: a remote and an origin/main that has kb/ but a branch with no upstream (no `@{u}`), and an upstream without kb/
+  N8="$TMP/sc-noup-$lg"; mk_app "$N8" 0; mk_scaffold "$N8" remote kb-elsewhere     # kb/ only on a ref that is not a scaffold branch name
+  git_ -C "$N8" remote add origin "$TMP/khong-co-remote.git"
+  git_ -C "$N8" update-ref refs/remotes/origin/main refs/remotes/origin/kb-elsewhere; git_ -C "$N8" update-ref -d refs/remotes/origin/kb-elsewhere
+  # layouts where a pull does not give the tree a kb/ (or may not fast-forward): the first two keep today's text, the third gets the pull text with the merge fallback
+  N10="$TMP/sc-diverged-$lg"; mk_app "$N10" 0; mk_scaffold "$N10" local chore/kb-init
+  git_ -C "$N10" remote add origin "$TMP/khong-co-remote.git"; git_ -C "$N10" config branch.main.remote origin; git_ -C "$N10" config branch.main.merge refs/heads/main
+  git_ -C "$N10" update-ref refs/remotes/origin/main chore/kb-init; : > "$N10/local.txt"; git_ -C "$N10" add local.txt; git_ -C "$N10" commit -qm local
+  N11="$TMP/sc-kbgone-$lg"; mk_app "$N11" 1
+  git_ -C "$N11" remote add origin "$TMP/khong-co-remote.git"; git_ -C "$N11" config branch.main.remote origin; git_ -C "$N11" config branch.main.merge refs/heads/main
+  git_ -C "$N11" update-ref refs/remotes/origin/main HEAD; rm -rf "$N11/kb"
+  # HEAD is AHEAD of the upstream (a commit removed kb/): a pull does nothing; HEAD tracks other files under kb/ (not kb/intent), deleted from disk: a merge would not bring them back
+  N13="$TMP/sc-ahead-$lg"; mk_app "$N13" 1
+  git_ -C "$N13" remote add origin "$TMP/khong-co-remote.git"; git_ -C "$N13" config branch.main.remote origin; git_ -C "$N13" config branch.main.merge refs/heads/main
+  git_ -C "$N13" update-ref refs/remotes/origin/main HEAD; git_ -C "$N13" rm -rq kb; git_ -C "$N13" commit -qm rmkb
+  N14="$TMP/sc-kbother-$lg"; mk_app "$N14" 0; mk_scaffold "$N14" local chore/kb-init
+  git_ -C "$N14" remote add origin "$TMP/khong-co-remote.git"; git_ -C "$N14" config branch.main.remote origin; git_ -C "$N14" config branch.main.merge refs/heads/main
+  git_ -C "$N14" update-ref refs/remotes/origin/main chore/kb-init; mkdir -p "$N14/kb/specs"; : > "$N14/kb/specs/z.md"; git_ -C "$N14" add kb; git_ -C "$N14" commit -qm kbspec; rm -rf "$N14/kb"
+  N12="$TMP/sc-kbfile-$lg"; mk_app "$N12" 0; mk_scaffold "$N12" local chore/kb-init
+  git_ -C "$N12" remote add origin "$TMP/khong-co-remote.git"; git_ -C "$N12" config branch.main.remote origin; git_ -C "$N12" config branch.main.merge refs/heads/main
+  git_ -C "$N12" update-ref refs/remotes/origin/main chore/kb-init; printf 'x\n' > "$N12/kb"
+  N9="$TMP/sc-upnokb-$lg"; mk_app "$N9" 0
+  git_ -C "$N9" remote add origin "$TMP/khong-co-remote.git"; git_ -C "$N9" config branch.main.remote origin; git_ -C "$N9" config branch.main.merge refs/heads/main
+  git_ -C "$N9" commit -q --allow-empty -m ahead; git_ -C "$N9" update-ref refs/remotes/origin/main HEAD; git_ -C "$N9" reset -q --hard HEAD~1
   N5="$TMP/sc-newname-$lg"; mk_app "$N5" 0; mk_scaffold "$N5" local chore/kb-init
   N6="$TMP/sc-newname-remote-$lg"; mk_app "$N6" 0; mk_scaffold "$N6" remote chore/kb-init
   # ca 3: khung đã gộp — cây có kb/ (nhánh khung vẫn còn)
   N4="$TMP/sc-merged-$lg"; mk_app "$N4" 1; mk_scaffold "$N4" local
-  for d in "$N1" "$N2" "$N3" "$N4" "$N5" "$N6" "$N7"; do
+  for d in "$N1" "$N2" "$N3" "$N4" "$N5" "$N6" "$N7" "$N8" "$N9" "$N10" "$N11" "$N12" "$N13" "$N14"; do
     [ "$lg" = none ] || { mkdir -p "$d/.vibemaestro"; printf '{"schema":1,"language":"%s"}\n' "$lg" > "$d/.vibemaestro/sdlc.json"; }
   done
   OLD='This repo has no `kb/` yet: use the skill `vibemaestro-sdlc:init-kb`'
@@ -286,10 +312,47 @@ for lg in en vi none; do
     hasnt "$F" 'init-kb' "($lg, nhánh khung ${w##*:}) lời nhắc luồng không còn init-kb"
     has "$F" 'starts with `vibemaestro-sdlc:intake`' "($lg, nhánh khung ${w##*:}) lời nhắc luồng bắt đầu bằng intake"
   done
-  C=$(ctx "$(boi "$N7")")
-  has "$C" "$OLD" "($lg) kéo sau upstream: câu của main còn nguyên (lời khuyên 'kéo về' để sang một issue theo dõi riêng)"
+  C=$(ctx "$(boi "$N7")"); F=$(flow_lines "$C")
   has "$(git_ -C "$N7" rev-parse --abbrev-ref '@{u}')" "origin/main" "($lg) kéo sau upstream: đối chứng dụng cụ — nhánh hiện tại có upstream"
+  case "$lg" in vi|none) want=$PULL_VI; other=$PULL_EN;; en) want=$PULL_EN; other=$PULL_VI;; esac
+  has "$C" "$want" "($lg) kéo sau upstream (kb/ đã ở origin/main): chữ 'kéo về' theo language"
+  hasnt "$C" "$other" "($lg) kéo sau upstream: không lẫn chữ của ngôn ngữ kia"
+  has "$C" '`origin/main`' "($lg) kéo sau upstream: nêu tên upstream"
+  hasnt "$C" "$OLD" "($lg) kéo sau upstream: không còn câu 'chạy init-kb'"
+  hasnt "$F" 'init-kb' "($lg) kéo sau upstream: lời nhắc luồng không còn init-kb"
+  has "$F" 'starts with `vibemaestro-sdlc:intake`' "($lg) kéo sau upstream: lời nhắc luồng bắt đầu bằng intake"
   hasnt "$C" "$SC_EN" "($lg) kéo sau upstream (khung đã gộp ở origin/main): không nói 'chưa gộp' (en)"; hasnt "$C" "$SC_VI" "($lg) kéo sau upstream: không nói 'chưa gộp' (vi)"
+  # one message, not two: the behind warning (once per session, from origin/main as last fetched) and the kb sentence both say pull
+  has "$C" 'is behind origin/main by 1 commit' "($lg) kéo sau upstream: cảnh báo 'tụt sau' cũng có mặt (đối chứng cho câu dưới)"
+  has "$C" 'then `git pull --ff-only`' "($lg) kéo sau upstream: cảnh báo 'tụt sau' cũng bảo kéo về — hai dòng cùng một lời khuyên"
+  # no `@{u}`, or an upstream without kb/: today's text, byte for byte in the parts that matter (sentence, chain), and no pull text
+  for w in "$N8:không có upstream" "$N9:upstream không có kb/"; do
+    C=$(ctx "$(boi "${w%%:*}")"); F=$(flow_lines "$C")
+    [ "${w%%:*}" != "$N8" ] || { eq "$(git_ -C "$N8" cat-file -t refs/remotes/origin/main:kb/intent)" tree "($lg, ${w##*:}) đối chứng dụng cụ: origin/main có kb/"
+      eq "$(git_ -C "$N8" for-each-ref --format='%(upstream)' refs/heads/main)" "" "($lg, ${w##*:}) …mà nhánh hiện tại không có upstream"; }
+    has "$C" "$OLD" "($lg, ${w##*:}) chữ cũ nguyên"
+    has "$F" 'starts with `vibemaestro-sdlc:init-kb` (this repo has no `kb/` yet), then `vibemaestro-sdlc:intake`' "($lg, ${w##*:}) lời nhắc luồng vẫn bắt đầu bằng init-kb"
+    hasnt "$C" "$PULL_EN" "($lg, ${w##*:}) không có chữ 'kéo về' (en)"; hasnt "$C" "$PULL_VI" "($lg, ${w##*:}) không có chữ 'kéo về' (vi)"
+    hasnt "$C" "$SC_EN" "($lg, ${w##*:}) không có chữ nhánh khung (en)"; hasnt "$C" "$SC_VI" "($lg, ${w##*:}) không có chữ nhánh khung (vi)"
+  done
+  C=$(ctx "$(boi "$N10")"); F=$(flow_lines "$C")
+  has "$C" "$want" "($lg) nhánh có commit riêng (không ff được): vẫn chữ 'kéo về' theo language"
+  has "$C" 'git merge origin/main' "($lg) nhánh có commit riêng: chữ nêu lối ra khi ff-only không đi được (merge origin/main)"
+  hasnt "$F" 'init-kb' "($lg) nhánh có commit riêng: lời nhắc luồng không còn init-kb"
+  # `kb/` only deleted from disk (HEAD has it, upstream = HEAD): not behind, a pull does nothing — today's text; a `kb` FILE in the way: a pull would be refused — today's text
+  for w in "$N11:kb/ bị xoá khỏi đĩa, HEAD còn" "$N12:một file tên kb chắn đường" "$N13:HEAD đi trước upstream (commit xoá kb/)" "$N14:HEAD có file khác dưới kb/, đã xoá khỏi đĩa"; do
+    C=$(ctx "$(boi "${w%%:*}")"); F=$(flow_lines "$C")
+    has "$C" "$OLD" "($lg, ${w##*:}) chữ cũ nguyên"
+    has "$F" 'starts with `vibemaestro-sdlc:init-kb` (this repo has no `kb/` yet), then `vibemaestro-sdlc:intake`' "($lg, ${w##*:}) lời nhắc luồng vẫn bắt đầu bằng init-kb"
+    hasnt "$C" "$PULL_EN" "($lg, ${w##*:}) không có chữ 'kéo về' (en)"; hasnt "$C" "$PULL_VI" "($lg, ${w##*:}) không có chữ 'kéo về' (vi)"
+  done
+  eq "$(git_ -C "$N11" cat-file -t HEAD:kb/intent)" tree "($lg) kb/ bị xoá khỏi đĩa: đối chứng dụng cụ — HEAD còn kb/intent"
+  eq "$(git_ -C "$N13" rev-list --count origin/main..HEAD)" 1 "($lg) HEAD đi trước: đối chứng dụng cụ — HEAD đi trước upstream 1 commit"
+  eq "$(git_ -C "$N14" cat-file -t HEAD:kb/specs)" tree "($lg) HEAD có file khác dưới kb/: đối chứng dụng cụ — HEAD có kb/specs"
+  [ -f "$N12/kb" ] && ok "($lg) file kb chắn đường: đối chứng dụng cụ — kb là file" || bad "($lg) N12 không có file kb"
+  C=$(ctx "$(boi "$N9")")
+  has "$(git_ -C "$N9" rev-parse --abbrev-ref '@{u}')" "origin/main" "($lg) upstream không có kb/: đối chứng dụng cụ — nhánh có upstream"
+  has "$C" 'is behind origin/main by 1 commit' "($lg) upstream không có kb/: tụt sau thật (đối chứng: chỉ kb/ ở upstream đổi chữ)"
   C=$(ctx "$(boi "$N4")"); F=$(flow_lines "$C")
   has "$C" 'This repo has a `kb/`.' "($lg) khung đã gộp: cây có kb/ → câu kb/ thường (đối chứng)"
   hasnt "$C" "$SC_EN" "($lg) khung đã gộp: không nhắc nhánh khung (en)"; hasnt "$C" "$SC_VI" "($lg) khung đã gộp: không nhắc nhánh khung (vi)"

@@ -26,6 +26,13 @@ and in the plan line as `bootstrap`); it must set `merge.deny_globs` and name no
 `--image-bump` and `--require-image` are rc 64, deny adds the init default (sdlc_config.merge_deny_floor: MERGE_DENY_DEFAULT plus each `rules.dirs` folder of the added config under
 `.vibemaestro/`) to the PR's globs and
 lets through only the config and Markdown files under its `.vibemaestro/` rules directory, and the brief applies as always.
+The same lane, over a base that HAS a config which sets no `merge.deny_globs` (no `merge` section, or one without it): the PR that
+changes `.vibemaestro/sdlc.json` in place (status modified) is read at its head under every check above (it must set
+`merge.deny_globs` and name no `external:` adapter, else rc 65), and it may only ADD the merge section: every key outside `merge`
+is the base's and every `merge` key the base file has keeps its value (else rc 65, the keys named), so this one PR cannot change
+what judges it. Deny lets through only that config file (the base owns its rules directory), the merge log is the base config's,
+and the run, the log and the plan line say `bootstrap` as above. Any other PR against that base, and a PR that changes the config
+without setting `merge.deny_globs`, is rc 65 as before; a base that sets `merge.deny_globs` is never bootstrap.
 
 Conditions:
   open, not-draft    the PR is open and not a draft
@@ -97,8 +104,8 @@ the merge, an adapter that exits, the log, a guard input not found in the base's
 that cannot answer); 64 misuse (also an argument or a --brief/--expect-plan file that is not UTF-8, a --behind-ok-clean glob
 that is not docs-only, --behind with another value than auto or beside --behind-ok or --behind-ok-clean, --admin without
 merge.admin_bypass or in bootstrap, --image-bump with the lane off or in bootstrap, --require-image without a registry, naming
-another image or in bootstrap); 65 invalid config, or merge.deny_globs unset (in bootstrap: the added config invalid, without merge.deny_globs,
-or naming an external adapter).
+another image or in bootstrap); 65 invalid config, or merge.deny_globs unset (in bootstrap: the added or changed config invalid, without
+merge.deny_globs, naming an external adapter or, over a base config, changing more than the merge section).
 
 Standard library only, Python 3.8+.
 """
@@ -1232,6 +1239,52 @@ def bootstrap_config(a, base):
     return cfg, text
 
 
+_ABSENT = object()
+
+
+def _same(x, y):
+    if x is _ABSENT or y is _ABSENT:
+        return x is y
+    return json.dumps(x, sort_keys=True) == json.dumps(y, sort_keys=True)     # not ==: True == 1
+
+
+def bootstrap_amend(a, base, base_text, base_cfg):
+    """(config, text) read at the PR's head when the base HAS a config that sets no merge.deny_globs and this PR changes that file in
+    place (status modified, no rename), else None. The no-config lane's own checks hold (the head sets merge.deny_globs, names no
+    `external:` adapter), and the PR may only ADD the merge section: every key outside `merge` is the base's, and every `merge` key the
+    base file has keeps its value. The base's other keys decide who judges the PR (the CI adapter, the rules directories): this one
+    PR may not change them."""
+    files = pr_files(a)
+    if not any(f.get("filename") == C.CONFIG_REL and f.get("status") == "modified" for f in files) or \
+            any(f.get("previous_filename") == C.CONFIG_REL for f in files):
+        return None
+    text = B.api_raw("repos/%s/contents/%s?ref=%s" % (a.repo, C.CONFIG_REL, a.head))
+    if text is None:
+        return None
+    where = " (bootstrap: read at the head %s, %s sets no merge.deny_globs)" % (a.head[:12], base)
+    cfg = G.load_config_text(text, where)
+    if cfg["merge"]["deny_globs"] is None:
+        raise G.ConfigError("merge.deny_globs is not set in the config this PR changes%s: it must say which paths the guard "
+                            "refuses (an empty list is a valid answer)" % where)
+    ext = sorted(guard_inputs(cfg) - {C.CONFIG_REL})
+    if ext:
+        raise G.ConfigError("the config this PR changes names an external adapter (%s)%s: a PR cannot bring the code that "
+                            "judges it; merge it by hand" % (", ".join(ext), where))
+    try:
+        old, new = json.loads(base_text), json.loads(text)
+    except ValueError as e:
+        raise G.ConfigError("a config is not JSON%s: %s" % (where, e))
+    om, nm = old.get("merge") or {}, new.get("merge") or {}
+    if not isinstance(om, dict) or not isinstance(nm, dict):
+        raise G.ConfigError("merge is not an object%s" % where)
+    changed = sorted(k for k in set(old) | set(new) if k != "merge" and not _same(old.get(k, _ABSENT), new.get(k, _ABSENT)))
+    changed += sorted("merge." + k for k in om if k != "deny_globs" and not _same(om[k], nm.get(k, _ABSENT)))   # null there is unset
+    if changed:
+        raise G.ConfigError("the config this PR changes alters %s%s: this lane may only add the merge section to the base's config "
+                            "and keep what it has; merge it by hand" % (", ".join(changed), where))
+    return cfg, text
+
+
 def log_path(cfg):
     rel = ((cfg or {}).get("merge") or {}).get("log") or LOG_NAME
     return os.path.join(state_home(), "vibemaestro", rel)
@@ -1242,10 +1295,13 @@ class Run(object):
         self.a, self.cfg, self.base, self.base_sha, self.V = a, None, None, None, Verdicts()
         self.digest, self.merge_sha, self.fd = None, None, None
         self.boot, self.clean = None, []                  # bootstrap: sha256 of the head's config; the shared files merged clean
+        self.amend = None                                 # bootstrap over a base config with no merge.deny_globs: that base config
         self.merge_commit = False                         # the back-merge lane: a merge commit instead of a squash
 
     def log_cfg(self):
-        return None if self.boot else self.cfg          # bootstrap: the default log, the one --status reads while the base has no config
+        # bootstrap without a base config: the default log, the one --status reads while the base has none; over a base config: that
+        # config's own (the base is trusted, the head is not)
+        return self.amend or (None if self.boot else self.cfg)
 
     def open_log(self):
         """Open the merge log before anything that cannot be undone, so the run that merges can always write its line."""
@@ -1303,6 +1359,11 @@ class Run(object):
         self.base, base_sha, text = base_and_text(a)
         self.base_sha = base_sha
         boot = bootstrap_config(a, self.base) if text is None else None
+        base_cfg = G.load_config_text(text, " (read at %s %s)" % (self.base, base_sha[:12]))
+        if text is not None and base_cfg["merge"]["deny_globs"] is None:
+            self.amend = base_cfg                       # a refusal inside the lane is logged to the base's log too
+            boot = bootstrap_amend(a, self.base, text, base_cfg)
+            self.amend = base_cfg if boot else None
         if boot:
             self.cfg, self.boot = boot[0], sha256(boot[1])
             if a.admin:
@@ -1312,7 +1373,7 @@ class Run(object):
             if a.require_image is not None:
                 raise Usage("--require-image is refused in bootstrap: the registry it is checked against would be the PR's own")
         else:
-            self.cfg = G.load_config_text(text, " (read at %s %s)" % (self.base, base_sha[:12]))
+            self.cfg = base_cfg
         mcfg = self.cfg["merge"]
         if mcfg["deny_globs"] is None:
             raise G.ConfigError("merge.deny_globs is not set at %s %s: the guard refuses to run until the repo lists the paths "
@@ -1338,8 +1399,10 @@ class Run(object):
             used.append(registry)
         self.digest = code_digest(used)
         say("merge_guard: %s#%s into %s (%s, %s), head %s, lane %s"
-            % (a.repo, a.pr, self.base, base_sha[:12], "bootstrap: it has no %s, so the one this PR adds is read at the head"
-               % C.CONFIG_REL if self.boot else "its config read there", a.head, "image-bump" if a.image_bump else "normal"))
+            % (a.repo, a.pr, self.base, base_sha[:12],
+               ("bootstrap: the base's %s sets no merge.deny_globs, so the one this PR changes is read at the head" % C.CONFIG_REL
+                if self.amend else "bootstrap: it has no %s, so the one this PR adds is read at the head" % C.CONFIG_REL)
+               if self.boot else "its config read there", a.head, "image-bump" if a.image_bump else "normal"))
         V = self.V
         cond = V.cond
         cond("open", pr.get("state") == "OPEN", "state %s" % pr.get("state"))
@@ -1369,17 +1432,20 @@ class Run(object):
                 scaffold = set()
                 if self.boot:                           # the PR's own list cannot be emptied below the init default
                     deny = list(deny) + [g for g in C.merge_deny_floor(self.cfg["rules"]["dirs"]) if g not in deny]
-                    scaffold = bootstrap_scaffold(self.cfg, files)
+                    scaffold = {C.CONFIG_REL} if self.amend else bootstrap_scaffold(self.cfg, files)
                 hit = [p for p in paths if p not in scaffold and any(match_fold(g, p) for g in deny)]
                 cond("deny", not hit, "%d deny glob(s)%s%s" % (len(deny), ("; denied: " + ", ".join(hit[:8])) if hit else ", none matches",
-                     "; bootstrap: the init default is added, and the %d file(s) this PR adds as its config and its rules' "
-                     "Markdown are its scaffold" % len(scaffold) if self.boot else ""))
+                     ("; bootstrap: the init default is added, and the config this PR changes is its scaffold" if self.amend else
+                      "; bootstrap: the init default is added, and the %d file(s) this PR adds as its config and its rules' "
+                      "Markdown are its scaffold" % len(scaffold)) if self.boot else ""))
             allowed = a.allowed
             outside = [p for p in paths if not any(C.glob_match(g, p) for g in allowed)]
             cond("brief", not outside, "%d allowed glob(s)%s" % (len(allowed), ("; outside: " + ", ".join(outside[:8])) if outside else ", every path inside"))
             links(a, files, V)
             if self.boot:
-                cond("own-inputs", True, "bootstrap: the base has no config; the one this PR adds names no adapter")
+                cond("own-inputs", True, "bootstrap: the base's config sets no merge.deny_globs; the one this PR changes only adds the "
+                     "merge section and names no adapter" if self.amend else
+                     "bootstrap: the base has no config; the one this PR adds names no adapter")
             else:
                 try:
                     modes = base_modes(a, base_sha, sorted(guard_inputs(self.cfg)))

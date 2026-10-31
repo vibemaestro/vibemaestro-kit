@@ -14,8 +14,8 @@ Each command is `<launcher> <subcommand> …` (`~/.local/state/vibemaestro/baton
 ${CLAUDE_PLUGIN_ROOT}/scripts/baton.py`); baton's options before the script, its values after. Run each bare, as its
 own call: no `cd <dir> &&`, no pipe, `| tail` or `| grep` after `sign`, `run` or `go`.
 
-0. **A simple write is direct** (one comment, one ticket): one step, undone by one direct call, neither on the stop list
-   (below), not a flow met before. Never split a flow into such writes.
+0. **A simple write is direct** (one comment, one ticket): one step, undone by one direct call, neither on the stop list,
+   not a flow met before. Never split a flow into such writes.
 1. **`list <keyword>` first.** One fits (purpose, targets, risk): `go <prefix>:<name> key='value'…`, values single-quoted;
    a kit or kind takes its `Usage`. `go kit:gh-write --spec <file>` covers issue-create, issue-comment, comment-edit,
    issue-edit, pr-body-edit, issue-reopen, issue-close, pr-close, pr-ready, pr-create, file-pr; never by hand (a lone comment or ticket: step 0). Merge:
@@ -31,7 +31,7 @@ own call: no `cd <dir> &&`, no pipe, `| tail` or `| grep` after `sign`, `run` or
 5. **The act:**
    - every change through `write "<plan line>" <command…>`; reads outside it run in every phase, rehearse too;
    - resolved values in plan lines (full SHA, tag, absolute path, target repo or host), never a value the act moves;
-   - one `Expect` line per write (below); no `source` or local helper; a file it reads is a `file` value, or its sha256 in a plan line;
+   - one `Expect` line per write (below); no `source` or local helper; a file it reads is a `file` value (a secret: `path`), or its sha256 in a plan line;
    - undo compares every target with its before-state, or `Undo:` names what it leaves; an undo that cannot delete names
      what it leaves behind and exits non-zero; a late after-state: the write waits for it.
 6. **`go`** runs check, rehearse (plan vs Expect, Targets), seal, sign, run, post-check, log. A session baton or `input`
@@ -40,9 +40,9 @@ own call: no `cd <dir> &&`, no pipe, `| tail` or `| grep` after `sign`, `run` or
 ### Params
 
 `# Params: key=type …`: each key required, once, checked before anything runs. Types: `int`, `sha40`, `sha256`, `name`,
-`repo`, `ref`, `path` (absolute), `url` (https), `file`, `input` (written for this call), `under:<dir>`, `enum:<a>|<b>`.
-No value holds a space, quote or `$`: free text from outside (a title, a body) goes into an `input` file you Write. A path
-whose last segment starts with `-`, `+` or `@` is refused (exit 64); a middle segment may. After
+`repo`, `ref`, `path` (absolute), `url` (https), `file`, `input` (written for this call; a secret in neither: `limits.md`), `under:<dir>`, `enum:<a>|<b>`.
+No value holds a space, quote or `$`: free text is an `input` file you Write. A path
+whose last segment starts with `-`, `+` or `@` is refused (exit 64). After
 the gates, one line per key, in order: `P_DEST="$1"`; read only as `"$P_DEST"` (other tools: `limits.md`). `Targets`:
 patterns before ` — ` (`{dest} {dir}/** {repo}#{issue} — …`). Each plan line names one, and its absolute-path, repo, URL
 or `refs/` words all match one (file copies exempt). Targets not patterns: untested, and `pack` refuses them.
@@ -156,7 +156,7 @@ esac
 - `write()` or the `PHASE=` line not as the skeleton's; `$PHASE` read elsewhere; a final `case` unlike the skeleton's.
 - A `PLAN` line or a write (`gh`, `git push`, `kubectl apply`…) outside `write()`, or a function `write()` runs called without it.
 - A local script or `source` (`act.md`); `diff`, `grep` or `cmp` in a pipeline unwrapped (`{ … || true; } | head`).
-- A stop pattern Stops lacks (below); `gh_state` in `$(…)`, backticks, a pipe, a subshell or `&`.
+- A stop pattern Stops lacks; `gh_state` in `$(…)`, backticks, a pipe, a subshell or `&`.
 - `Params` off the grammar; no values block; a `P_` name set elsewhere, unquoted, in `eval`, a heredoc or `gh -F`.
 - A kept baton without a `Params` key or pattern `Targets`, or with `Usage`; a `bash -n` or `shellcheck -S error` finding.
 
@@ -164,7 +164,7 @@ esac
 
 - `irreversible-delete`: deletes what cannot come back: data volumes, namespaces, package versions, repositories, branches (a merged one: `kit:branch-delete`), tags, secret paths, databases
 - `secrets`: reads, prints, writes or rotates a secret
-- `security-boundary`: widens a boundary: RBAC, admission or network policy, making something public, an admin bypass
+- `security-boundary`: widens a boundary: RBAC, admission or network policy, making something public, an admin bypass; any value naming a settings file (`limits.md`)
 - `cluster-lane`: changes a live cluster outside an approved lane: suspending reconciliation, draining nodes
 - `history-rewrite`: force-pushes or rewrites history on a shared branch
 - `money-org`: billing, plans, organisation admin (create or rename a repository, members)

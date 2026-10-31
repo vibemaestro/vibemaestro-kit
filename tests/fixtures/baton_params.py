@@ -4,6 +4,8 @@ process against a plugin copy (its scripts/baton.py, so a planted break in that 
 
   baton_params.py make <plugin> <out> <params> <targets> [<top> [<act> [<Expect lines>]]]   write a test baton
   baton_params.py table <plugin> grammar|values|reader|owner              one line per case: PASS|FAIL<TAB><label>
+  baton_params.py secrets <dir>                                           write real-looking secret files into <dir>, one line
+                                                                          per file: <kind><TAB><path><TAB><marker it holds>
 
 A case's label is its tag in the suite: a planted break must turn the intended label red."""
 import json
@@ -354,7 +356,73 @@ def main(argv):
     if argv[0] == "table":
         table(argv[1], argv[2])
         return 0
+    if argv[0] == "secrets":
+        for kind, name, marker in secrets(argv[1]):
+            print("%s\t%s\t%s" % (kind, os.path.join(argv[1], name), marker))
+        return 0
     return 64
+
+
+def secrets(d):
+    """Real-looking secret files under d, one per kind the launcher refuses as a file or input value: (kind, file name, a
+    marker the file holds and no output or state file may). Each value is put together here, so this file holds none whole."""
+    j = "".join
+    r = "aB3xK9pQ2mZ7vL4nW8rT6yU1"
+    pem = lambda label, body: j(["-----BEGIN ", label, "-----\n", body, "\n-----END ", label, "-----\n"])
+    line = lambda tag: j(["MIIEpAIBAAKCAQEA", tag, r, r[::-1]])     # the marker: one line of the key body
+    body = lambda tag: j([line(tag), "\n", r, "=="])
+    jwt = j(["ey", "J", "hbGciOiJSUzI1NiIsImtpZCI6Ik", r, ".eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Ii", r, ".SflKxwRJSMeKK", r])
+    kd = j(["LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVB", r, r])
+    age = j(["QWERTYUIOP", "1234567890", "ASDFGHJKLZXCVBNM"])       # a separate line: no key word beside the value in the source
+    cases = [
+        ("private-key", "id_ed25519", line("b3BlbnNzaC1rZXk"), pem(j(["OPENSSH PRIV", "ATE KEY"]), body("b3BlbnNzaC1rZXk"))),
+        ("private-key", "server.key", line("cnNhLWtleQ"), pem(j(["RSA PRIV", "ATE KEY"]), body("cnNhLWtleQ"))),
+        ("private-key", "pkcs8.pem", line("ZW5jcnlwdGVk"), pem(j(["ENCRYPTED PRIV", "ATE KEY"]), body("ZW5jcnlwdGVk"))),
+        ("private-key", "signing.asc", line("cGdwLWtleQ"), pem(j(["PGP PRIV", "ATE KEY BLOCK"]), body("cGdwLWtleQ"))),
+        ("cluster-client-key", "kubeconfig", kd,
+         j(["apiVersion: v1\nkind: Config\nusers:\n- name: admin\n  user:\n    client-certificate-data: LS0tLS1CRUdJTiBDRVJU\n",
+            "    client-key", "-data: ", kd, "\n"])),
+        ("jwt", "kubeconfig-sa", jwt, j(["apiVersion: v1\nkind: Config\nusers:\n- name: deployer\n  user:\n    token: ", jwt, "\n"])),
+        ("github-token", "gh-token", j(["gh", "p_", r, r[:12]]), j(["GH_TOKEN=", "gh", "p_", r, r[:12], "\n"])),
+        ("github-token", "gh-pat", j(["github", "_pat_", r, r]), j(["github", "_pat_", r, r, "\n"])),
+        ("api-key-sk", "anthropic.env", j(["sk", "-ant-", r]), j(["ANTHROPIC_KEY=", "sk", "-ant-", r, "\n"])),
+        ("slack-token", "slack.txt", j(["xo", "xb-", "1234567890-", r]), j(["xo", "xb-", "1234567890-", r, "\n"])),
+        ("aws-access-key", "credentials", j(["AK", "IA", "Q7W3E9R2T5Y8U1I4"]),
+         j(["[default]\naws_access_key_id = ", "AK", "IA", "Q7W3E9R2T5Y8U1I4", "\nregion = eu-west-1\n"])),
+        ("vault-token", "vault-token", j(["hv", "s.", r]), j(["hv", "s.", r, "\n"])),
+        ("cluster-client-key", "kubeconfig.json", kd, j(['{"users": [{"name": "admin", "user": {"client-key', '-data": "', kd, '"}}]}\n'])),
+        ("cluster-client-key", "kubeconfig-quoted", kd, j(["users:\n- user:\n    client-key", "-data: \"", kd, "\"\n"])),
+        ("cluster-client-key", "kubeconfig-block", kd, j(["users:\n- user:\n    client-key", "-data: |\r\n      ", kd, "\r\n"])),
+        ("private-key", "ec.key", line("ZWMta2V5"), pem(j(["EC PRIV", "ATE KEY"]), body("ZWMta2V5")).replace("\n", "\r\n")),
+        ("private-key", "putty.ppk", line("cHV0dHk"), j(["PuTTY-User", "-Key-File-3: ssh-ed25519\nPrivate-Lines: 1\n", line("cHV0dHk"), "\n"])),
+        ("aws-access-key", "sts-credentials", j(["AS", "IA", "Q7W3E9R2T5Y8U1I4"]),
+         j(["[sso]\naws_access_key_id = ", "AS", "IA", "Q7W3E9R2T5Y8U1I4", "\n"])),
+        ("aws-access-key", "secret-only", j(["wJalrXUtnFEMI", r]), j(["aws_secret", "_access_key = ", "wJalrXUtnFEMI", r, "\n"])),
+        ("api-key-sk", "stripe.env", j(["sk", "_live_", r]), j(["STRIPE_KEY=", "sk", "_live_", r, "\n"])),
+        ("gitlab-token", "gitlab.env", j(["gl", "pat-", r[:20]]), j(["GITLAB_TOKEN=", "gl", "pat-", r[:20], "\n"])),
+        ("npm-token", ".npmrc", j(["npm", "_", (r + r)[:36]]), j(["//registry.npmjs.org/:_authToken=", "npm", "_", (r + r)[:36], "\n"])),
+        ("google-api-key", "maps.env", j(["AI", "za", (r + r)[:35]]), j(["MAPS_KEY=", "AI", "za", (r + r)[:35], "\n"])),
+        # a letter right before the token (escaped JSON, URL encoding, an escaped tab) and a value on the next YAML line
+        ("github-token", "escaped.json", j(["gh", "p_", r[::-1], r[:12]]), j(['{"body": "see\\n', "gh", "p_", r[::-1], r[:12], '"}\n'])),
+        ("github-token", "urlenc.txt", j(["gh", "p_", r, r[::-1][:12]]), j(["payload%3D", "gh", "p_", r, r[::-1][:12], "\n"])),
+        ("aws-access-key", "escaped.tsv", j(["AK", "IA", "Z9X8C7V6B5N4M3L2"]), j(["id\\t", "AK", "IA", "Z9X8C7V6B5N4M3L2", "\n"])),
+        ("cluster-client-key", "kubeconfig-next-line", kd, j(["users:\n- user:\n    client-key", "-data:\n      ", kd, "\n"])),
+        ("api-key-sk", "openai.env", j(["sk", "-", (r + r)[:48]]), j(["OPENAI_KEY=", "sk", "-", (r + r)[:48], "\n"])),
+        ("api-key-sk", "svcacct.env", j(["sk", "-svcacct-", r, r, "_", r]), j(["OPENAI_KEY=", "sk", "-svcacct-", r, r, "_", r, "\n"])),
+        ("api-key-sk", "escaped-sk.json", j(["sk", "-", (r[::-1] + r)[:48]]), j(['{"env": "A=1\\n', "sk", "-", (r[::-1] + r)[:48], '"}\n'])),
+        ("aws-access-key", "sts.json", j(["wJalrXUtnFEMI", r[::-1]]), j(['{"Credentials": {"SecretAccessKey": "', "wJalrXUtnFEMI", r[::-1], '"}}\n'])),
+        ("aws-access-key", "sts-in-json.log", j(["wJalrXUtnFEMI", r, "7"]),
+         j(['{"msg": "{\\"SecretAccessKey\\": \\"', "wJalrXUtnFEMI", r, "7", '\\"}"}\n'])),
+        # a real token padded so its tail looks like a placeholder
+        ("github-token", "padded.txt", j(["gh", "p_", r[3:], r[:15]]), j(["gh", "p_", r[3:], r[:15], "X" * 20, "\n"])),
+        ("age-secret-key", "age.key", j(["AGE-SECRET", "-KEY-1", age]), j(["# created: 2026-10-30\n", "AGE-SECRET", "-KEY-1", age, "\n"])),
+    ]
+    out = []
+    for kind, name, marker, text in cases:
+        with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+            f.write(text)
+        out.append((kind, name, marker))
+    return out
 
 
 if __name__ == "__main__":

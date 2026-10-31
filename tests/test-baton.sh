@@ -1563,13 +1563,124 @@ print(" ".join(l for l in b.BRANCH_DELETE_LABELS if l not in labels) or "none")'
   # the lint runs per body line: a long line of repeated stdin feeds stays far from cubic
   eq "$(within 5 python3 -c 'import importlib.util, re, sys
 s = importlib.util.spec_from_file_location("b", sys.argv[1]); b = importlib.util.module_from_spec(s); s.loader.exec_module(b)
-for line in ("git update-ref --stdin " * 1000, "cat <<x | " * 1000, "delete refs/heads/x " * 1000, "rm refs/ " * 1000):
+for line in ("git update-ref --stdin " * 1000, "cat <<x | " * 1000, "delete refs/heads/x " * 1000, "rm refs/ " * 1000,
+             "cp settings.json " * 1000, "rm .claude/settings " * 1000, "x=.claude/settings " * 1000,
+             "cp " * 3000 + "settings.json", "curl -o " * 1000, "${a:=" * 1000, "S=\"a " * 1000, "a=" * 5000, "S=\"" * 3000):
     [re.search(rx, line) for _c, _l, rx in b.STOP_HINTS]' "$P/scripts/baton.py")" 0 \
-     "[stop-hint] the stop patterns on a 1000-fold line (update-ref --stdin, heredoc pipe, delete, rm refs/): under 5 s"
+     "[stop-hint] the stop patterns on a 1000-fold line (update-ref --stdin, heredoc pipe, delete, rm refs/, settings): under 5 s"
   refok 'git -C /lab/remote.git rev-parse --verify -q refs/heads/feature/old'
   f="$W/rd-declared.sh"; cp "$A" "$f"; in_act "$f" 'write "delete x" git -C /lab/remote.git update-ref -d refs/heads/x'
   mutate "$f" '# Stops: none' '# Stops: irreversible-delete'
   eq "$(bt "$P" "$W" check "$f")" 0 "[stop-hint] the same delete declared (Stops: irreversible-delete): check rc 0"
+  # a Claude Code settings file: the guard denies a plain-tool write that widens one, a baton's writes run where no hook sees
+  # them; the plugin's own settings writers declare security-boundary and check clean
+  local k
+  for k in kind:settings-merge kit:coordinator-bootstrap kit:permissions-upgrade; do
+    eq "$(bt "$P" "$W" check "$k")" 0 "[stop-hint] check $k (Stops: security-boundary): rc 0"
+  done
+  f="$W/allow.sh"; cp "$A" "$f"
+  in_act "$f" "write \"allow Bash(*)\" python3 -I -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s.setdefault(\"permissions\", {}).setdefault(\"allow\", []).append(\"Bash(*)\"); json.dump(s, open(p, \"w\"))' \"\$HOME/.claude/settings.json\""
+  eq "$(bt "$P" "$W" check "$f")" 1 "[stop-hint] a Stops: none baton that adds an allow rule to \$HOME/.claude/settings.json: check rc 1"
+  has "$(cat "$BT_OUT")" 'looks like stop category `security-boundary`: matched `settings*.json under .claude|$CLAUDE_CONFIG_DIR written' \
+    "[stop-hint] …as security-boundary, a settings write"
+  mutate "$f" '# Stops: none' '# Stops: security-boundary'
+  eq "$(bt "$P" "$W" check "$f")" 0 "[stop-hint] the same baton declared (Stops: security-boundary): check rc 0"
+  local SW='settings*.json under .claude|$CLAUDE_CONFIG_DIR written: >|tee|rm|mv|ln|cp|install|rsync|sd|dd|curl|wget -o|sed|perl|ruby|yq|awk -i|git checkout|code|a write() or interpreter argument'
+  local SH='settings*.json or its .claude|$CLAUDE_CONFIG_DIR directory held in a name: X=|x = |${X:=}|for x in'
+  setw() {     # setw <label> <line>: check rc 1 under Stops: none, the FAIL line names security-boundary and the label
+    n=$((n + 1)); f="$W/sw$n.sh"; cp "$A" "$f"; in_act "$f" "$2"
+    eq "$(bt "$P" "$W" check "$f")" 1 "[stop-hint] ${2%%$'\n'*}: flagged (check rc 1)"
+    has "$(cat "$BT_OUT")" "looks like stop category \`security-boundary\`: matched \`$1\`" "[stop-hint] …as \`${1%%:*}\`"
+  }
+  setw "$SW" 'jq ".permissions.allow += [\"Bash\"]" "$DEST" > "$HOME/.claude/settings.json"'
+  setw "$SW" 'printf x >> "${CLAUDE_CONFIG_DIR}/settings.local.json"'
+  setw "$SW" 'printf x | tee "$HOME/.claude/settings.json" >/dev/null'
+  setw "$SW" 'write "add" cp "$DEST" "$HOME/.claude/settings.json"'
+  setw "$SW" 'write "add" cp "$DEST/settings.json" ~/.claude/'
+  setw "$SW" 'write "add" install -m 600 "$DEST" .claude/settings.local.json'
+  setw "$SW" 'write "add" mv -f "$DEST" ~/.claude/settings.json'
+  setw "$SW" 'write "add" ln -sf "$DEST" "$HOME/.claude/settings.json"'
+  setw "$SW" 'write "drop" rm -f -- "$HOME/.claude/settings.local.json"'
+  setw "$SW" "write \"add\" sed -i 's/\"deny\"/\"x\"/' \"\$HOME/.claude/settings.json\""
+  setw "$SW" "write \"add\" perl -pi -e 's/a/b/' ~/.claude/settings.json"
+  setw "$SW" "write \"add\" yq -i '.permissions.allow += [\"Bash\"]' \"\$HOME\"/.claude/settings.json"
+  setw "$SW" 'write "add" dd if="$DEST" of="$HOME/.claude/settings.json"'
+  setw "$SW" 'write "put back" git checkout -- .claude/settings.json'
+  setw "$SW" 'write "add" cp "$DEST" /etc/claude-code/managed-settings.json'
+  setw "$SW" $'python3 -I - "$DEST" <<\'PY\'\nimport json, os\nwith open(os.path.expanduser("~/.claude/settings.json"), "w") as f:\n    f.write("{}")\nPY'
+  setw "$SW" $'python3 -I - <<\'PY\'\nfrom pathlib import Path\n(Path.home() / ".claude" / "settings.json").write_text("{}")\nPY'
+  # review round 1: a redirection or comment after the copy, `$(…)` in the word, CLAUDE_CONFIG_DIR read in code, the macOS
+  # managed path (a space in it), a directory copied whole into .claude
+  setw "$SW" 'write "add" cp "$DEST" "$HOME/.claude/settings.json" 2>/dev/null'
+  setw "$SW" 'write "add" cp "$DEST" "$HOME/.claude/settings.json"  # put it back'
+  setw "$SW" 'echo "$DEST" > "$(git rev-parse --show-toplevel)/.claude/settings.json"'
+  setw "$SW" 'printf x | tee "$(pwd)/.claude/settings.json"'
+  setw "$SW" $'python3 -I - <<\'PY\'\nimport os\nwith open(os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "settings.json"), "w") as f:\n    f.write("{}")\nPY'
+  setw "$SW" 'echo "$DEST" > "/Library/Application Support/ClaudeCode/managed-settings.json"'
+  setw "$SW" 'write "sync" rsync -a "$DEST/" ~/.claude/'
+  # the path as an argument of write() (a helper that writes it) or of an interpreter whose program is a heredoc, a variable
+  # named for the directory, flags with a digit or the long yq spelling, a download, pathlib's .open("w")
+  setw "$SW" 'write "merge" merge_rules "$HOME/.claude/settings.json" "$DEST"'
+  setw "$SW" $'write "add" python3 -I - "$HOME/.claude/settings.json" <<\'PY\'\nimport sys\nprint(sys.argv[1])\nPY'
+  setw "$SW" 'cp "$DEST" "$CLAUDE_DIR/settings.json" 2>&1'
+  setw "$SW" "perl -0pi -e 's/a/b/' \"\$HOME/.claude/settings.json\""
+  setw "$SW" "yq eval --inplace '.a = 1' \"\$HOME/.claude/settings.json\""
+  setw "$SW" 'curl -fsSL -o "$HOME/.claude/settings.json" "$DEST"'
+  setw "$SW" $'python3 -I - <<\'PY\'\nfrom pathlib import Path\nwith (Path.home() / ".claude" / "settings.json").open("w") as f:\n    f.write("{}")\nPY'
+  setw "$SH" 'S=$(git rev-parse --show-toplevel)/.claude/settings.json'
+  setw "$SH" 'S="$HOME/.claude/settings.json"'
+  setw "$SH" 'S="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"'
+  setw "$SH" $'python3 -I - <<\'PY\'\nimport os\np = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")\nPY'
+  setw "$SH" 'for s in "$HOME"/.claude/settings*.json; do echo "$s"; done'
+  setw "$SH" ': "${S:=$HOME/.claude/settings.json}"'
+  # review round 2: quoted pieces inside the word, the path held through an operator, an f-string or a list
+  setw "$SW" 'echo x > "$HOME/".claude/settings.json'
+  setw "$SW" "echo x > ~/'.claude'/settings.json"
+  setw "$SW" 'echo x > `pwd`/.claude/settings.json'
+  setw "$SH" $'python3 -I - <<\'PY\'\nfrom pathlib import Path\np = Path.home() / ".claude" / "settings.json"\nq = f"{Path.home()}/.claude/settings.json"\nPY'
+  setw "$SH" $'python3 -I - <<\'PY\'\npaths = ["~/.claude/settings.json"]\nPY'
+  # review round 3: a curl with headers before -o, `+ "/settings.json"`, a quoted .claude or a spaced redirection after a copy
+  setw "$SW" 'curl -fsSL --retry 3 --connect-timeout 10 -H "Authorization: Bearer $DEST" -H "Accept: application/vnd.github.raw+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/o/some-long-repository-name/contents/a/b/c/settings.json?ref=refs/heads/main" --output "$HOME/.claude/settings.json"'
+  setw "$SH" $'python3 -I - <<\'PY\'\nimport os\np = os.environ["CLAUDE_CONFIG_DIR"] + "/settings.json"\nPY'
+  setw "$SW" "write \"sync\" cp -r \"\$DEST\" ~/'.claude'"
+  setw "$SW" 'write "sync" cp -r "$DEST/" "$HOME/.claude/" > /dev/null'
+  # the natural two-line write: the path in a name, then a write through it; the FAIL line says what to do
+  n=$((n + 1)); f="$W/sw$n.sh"; cp "$A" "$f"; in_act "$f" $'S="$HOME/.claude/settings.json"\n  write "add" mv -f "$DEST" "$S"'
+  eq "$(bt "$P" "$W" check "$f")" 1 "[stop-hint] the path in a name, then mv onto \"\$S\": check rc 1"
+  has "$(cat "$BT_OUT")" 'declare it all the same, or name the path written out in the command that reads it' "[stop-hint] …the FAIL line says how a read-only baton passes"
+  setok() {    # setok <line>: a read of the settings file, or a file that is not one: check rc 0
+    n=$((n + 1)); f="$W/so$n.sh"; cp "$A" "$f"; in_act "$f" "$1"
+    eq "$(bt "$P" "$W" check "$f")" 0 "[stop-hint] ${1%%$'\n'*}: not flagged (check rc 0)"
+  }
+  setok 'cp "$HOME/.claude/settings.json" "$DEST.bak"'
+  setok 'jq . "$HOME/.claude/settings.json"'
+  setok 'grep -c allow "$HOME/.claude/settings.json" > "$DEST.count"'
+  setok 'write "copy" cp "$DEST" "$HOME/.claude/settings.json.bak"'
+  setok 'echo x > "$DEST/docs/settings.json"'
+  setok 'echo x > "$DEST/.claude/settings.md"'
+  setok 'docker run --rm -v "$HOME/.claude/settings.json:/s.json:ro" img cat /s.json'
+  setok 'S=$1'
+  setok 'echo "see settings-merge.sh" > "$DEST"'
+  # the read the FAIL line recommends, kept in a name, and other reads that hold no path
+  setok 'RULES="$(jq .permissions "$HOME/.claude/settings.json")"; echo "$RULES" > "$DEST"'
+  setok 'x=1 jq . ~/.claude/settings.json'
+  setok 'cp "$HOME/.claude/settings.json" "$DEST.bak" 2>/dev/null'
+  setok 'SUM=$(sha256sum "$HOME/.claude/settings.json" | cut -c1-64); echo "$SUM" > "$DEST"'
+  setok 'LC_ALL=C grep -c allow "$HOME/.claude/settings.json" > "$DEST.count"'
+  setok "python3 -I -c 'import json, sys; json.dump(json.load(open(sys.argv[1])), sys.stdout)' \"\$HOME/.claude/settings.json\""
+  setok "perl -Mstrict -ne 'print if /allow/' \"\$HOME/.claude/settings.json\""
+  setok 'cp "$DEST" "$DEST/foo.claude/settings.json"'
+  setok 'echo x > "$CFG/settings.json"'
+  setok 'echo x > "$CLAUDE_PLUGIN_ROOT/settings.json"'
+  setok 'ln -sr "$DEST" ~/.claude'
+  setok 'mv -r "$DEST" ~/.claude'
+  setok 'LOG=tmp/x jq . ~/.claude/settings.json'
+  setok 'curl -fsSL "https://x/y?ref=refs/heads/main" | jq . ~/.claude/settings.json'
+  setok 'X=`cat "$HOME/.claude/settings.json"`; echo "$X" > "$DEST"'
+  setok $'python3 -I - <<\'PY\'\nimg = Image.open("a.png"); q = 1 if img else os.path.exists(".claude/settings.json")\nPY'
+  setok $'python3 -I - <<\'PY\'\nimport os\nok = os.path.exists(os.path.expanduser("~/.claude/settings.json"))\nPY'
+  setok $'python3 -I - <<\'PY\'\nimport json, os\ndata = json.load(open(file=os.path.expanduser("~/.claude/settings.json")))\nPY'
+  setok '# write "add" cp "$DEST" "$HOME/.claude/settings.json"'
   out=$(python3 - "$P/skills/batonrun/limits.md" "$P/scripts/baton.py" <<'PY'
 import importlib.util, re, sys
 t = open(sys.argv[1], encoding="utf-8").read()
@@ -1589,7 +1700,7 @@ for x in sorted(code - skill): print("in code only: %s %s" % x)
 for x in sorted(skill - code): print("in the skill only: %s %s" % x)
 PY
 )
-  has "$out" "pairs 31" "[stop-hint] instrument: the code holds the 31 labelled patterns"
+  has "$out" "pairs 33" "[stop-hint] instrument: the code holds the 33 labelled patterns"
   eq "$(printf '%s\n' "$out" | grep -c -E '^(in |unparsed)')" 0 "[stop-hint] the pattern list (limits.md) equals STOP_HINTS' labels ($(printf '%s' "$out" | grep -E '^(in |unparsed)' | head -2 | tr '\n' ' '))"
 }
 
@@ -2264,7 +2375,7 @@ BRK dir-unbound fam_run_dir '[run-dir] run from another directory: rc 3' \
     '"args": list(args), "cwd": cwd, "env": env}' '"args": list(args), "cwd": "", "env": env}' \
     'rec.get("args"), rec.get("cwd"),' 'rec.get("args"), cwd,'
 BRK plan-unbound fam_run_plan '[run-plan] the plan changed since signing: rc 3' '            if plan_sha(plan) != rec.get("plan_sha256"):' '            if False:'
-BRK undo-not-called fam_run_undo '[run-undo] post-check mismatch: rc 4' $'            if result != "ok":\n                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [])' $'            if False:\n                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [])'
+BRK undo-not-called fam_run_undo '[run-undo] post-check mismatch: rc 4' $'            if result != "ok":\n                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [], undo_only=undo_only)' $'            if False:\n                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [], undo_only=undo_only)'
 BRK auto-ignores-stops fam_modes '[modes] auto + a declared stop: coordinator-auto cannot sign' $'    if stops:\n        return "the script declares stop' $'    if False:\n        return "the script declares stop'
 # the rule: one alternative removed, and a pattern that would read baton itself
 BRKF() {
@@ -2309,7 +2420,7 @@ BRK verdict-echo-only fam_check_gate '[check-gate] control: printf verdicts' 'if
 BRK signals-unhandled fam_round2_streams "[round2] the stopped rehearse's script did not write late" '            signal.signal(sig, _on_term)' '            pass'
 BRK closed-stdout fam_round2_streams '[round2] run with stdout closed' 'stream = getattr(sys, name) or open(os.devnull, "w")' 'stream = getattr(sys, name)'
 BRK stdout-breaks fam_run_pipe "[run-pipe] 'run | head' of a failing run" '        setattr(sys, name, SafeOut(stream))' '        setattr(sys, name, stream)'
-BRK manual-run-unchecked fam_modes '[modes] manual again: a pending coordinator-auto signature is refused' '    why = allowed(signer, mode, stops)' '    why = None'
+BRK manual-run-unchecked fam_modes '[modes] manual again: a pending coordinator-auto signature is refused' '    why = allowed(signer, mode, stops, s.value_why())' '    why = None'
 BRK substitutions-unsplit fam_check_round3 '[check-round3] a write inside local x=' 'SEPARATORS = re.compile(r"\|\||&&|;;|(?<![<>&])&(?![&>])|[;|\n`()]|\$\(\(?|[<>]\(")' 'SEPARATORS = re.compile(r"\|\||&&|;;|(?<![<>&])&(?![&>])|[;|\n]")'
 BRK path-prefix-missed fam_check_round3 '[check-round3] a write with a path prefix' 'prefix = re.match(r"\S*/", whole)' 'prefix = None'
 BRK xargs-arg-missed fam_check_round3 '[check-round3] a write behind xargs -I %' '"xargs": "ILnPdEsa", ' '"xargs": "", '
@@ -2449,7 +2560,7 @@ BRK go-fresh-unchecked fam_go_fresh '[go-fresh] a script last written 600 s ago:
 BRK go-fresh-by-path fam_go_fresh '[go-fresh] a fresh symlink to an old file: rc 1' '                self.mtime = os.fstat(f.fileno()).st_mtime' '                self.mtime = os.lstat(path).st_mtime'
 BRK go-fresh-future fam_go_fresh '[go-fresh] a file dated 600 s in the future: rc 1' '    if age < -FUTURE_SLACK:' '    if False:'
 BRK go-reuse-dropped fam_go_fresh '[go-fresh] …and the exact command with --reuse' '"%s go %s--reuse %s"' '"%s go %s%s"'
-BRK go-signs-stop-list fam_go_owner '[go-owner] auto-stops: exit 8' '        why = allowed("coordinator-auto", mode, stops)' '        why = None'
+BRK go-signs-stop-list fam_go_owner '[go-owner] auto-stops: exit 8' '        why = allowed("coordinator-auto", mode, stops, s.value_why())' '        why = None'
 BRK go-by-owner-accepted fam_go_attack '[go-attack] go --by owner: 64' 'if rest[0] != "--by" or len(rest) < 2 or rest[1] != "coordinator-auto":' 'if rest[0] != "--by" or len(rest) < 2 or rest[1] not in SIGNERS:'
 BRK go-card-after-detail fam_go_owner "[go-card] auto-stops: '== OWNER DECISION: ' on the card, in order" \
     $'            for ln in card:\n                say("%s", ln)\n            say("detail: %s (check and rehearse output)", detail)' \
@@ -2482,7 +2593,11 @@ BRK stop-misses-refs-dir fam_stop_hint '[stop-hint] write "drop all" rm -rf "$DE
 BRK stop-misses-combined-flags fam_stop_hint '[stop-hint] write "drop x" git branch -Dq' \
   'BR_FLAGS = r"[acCdDfilmMqrtuv]"' 'BR_FLAGS = r"[A-Z]"'
 BRK stop-kit-hint-dropped fam_stop_hint '[stop-hint] …the FAIL line names kit:branch-delete' \
-  '+ (BRANCH_KIT_HINT if label in BRANCH_DELETE_LABELS else "")))' '+ ""))'
+  '+ (BRANCH_KIT_HINT if label in BRANCH_DELETE_LABELS else "")' '+ ""'
+BRK stop-misses-settings fam_stop_hint '[stop-hint] a Stops: none baton that adds an allow rule' \
+    'SETTINGS_PATH = (SETTINGS_DIR + ' 'SETTINGS_PATH = (r"(?!)" + SETTINGS_DIR + '
+BRK stop-settings-hint-dropped fam_stop_hint '[stop-hint] …the FAIL line says how a read-only baton passes' \
+    '(SETTINGS_HELD_HINT if label == SETTINGS_HELD_LABEL else "")' '""'
 BRK stop-label-drift fam_stop_hint "[stop-hint] the pattern list (limits.md) equals" '("secrets", "gh secret", ' '("secrets", "gh secrets", '
 BRKF stop-label-doc-only fam_stop_hint "[stop-hint] the pattern list (limits.md) equals" skills/batonrun/limits.md '; `vault kv|read|write|delete`' ''
 BRKF gh-state-any-output fam_gh_state '[gh-state] a 404 JSON body without headers' skills/batonrun/SKILL.md '    "0 HTTP/"*" 200") GH_STATE=exists ;;' '    *) GH_STATE=exists ;;'

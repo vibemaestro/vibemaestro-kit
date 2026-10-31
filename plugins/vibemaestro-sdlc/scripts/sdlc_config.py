@@ -92,8 +92,8 @@ ROUND_PATTERN = r"\bround\s*(\d+)\b"
 
 
 def round_plain(text):
-    """A commit subject as `commits.round_pattern` sees it: lower case, accents removed (composed or decomposed), `đ` as `d`
-    (NFD does not decompose it), so `dot` matches "Đợt 2"."""
+    """A commit subject as `commits.round_pattern` sees it: lower case, accents removed (composed or decomposed), the Vietnamese
+    d with stroke (U+0111) as `d` (NFD does not decompose it), so `dot` matches the Vietnamese word for "round" in capitals."""
     return "".join(ch for ch in unicodedata.normalize("NFD", text.lower()) if not unicodedata.combining(ch)).replace("\u0111", "d")
 
 
@@ -115,7 +115,7 @@ def round_never_matches(pattern):
 
 def _round_can_match(items, fold):
     """False when the parsed regex needs a literal that a `round_plain` text never holds (upper case without `(?i)`, an accent,
-    `đ`). A branch, a class or an optional part is fine as soon as one way through it can match."""
+    the d with stroke). A branch, a class or an optional part is fine as soon as one way through it can match."""
     def char_ok(c):
         ch = chr(c)
         return round_plain(ch) == (ch.lower() if fold else ch)
@@ -195,8 +195,9 @@ DEFAULTS = {
     # a repo that publishes its tree: null (it does not), or the globs that stay private besides the root kb/ (rule public-tree)
     "public": {"private": None},
     # the pr-evidence gate: null (the repo has no UI, no E2E evidence asked), or the globs of its UI paths. Set it in a repo only
-    # once every reader in use knows the key (rule config-compat, rollout)
-    "evidence": {"ui_paths": None},
+    # once every reader in use knows the key (rule config-compat, rollout). trusted_app: null, or the slug of the repo's own GitHub
+    # App, whose round comments count as evidence (its bot account, not a person posting through it)
+    "evidence": {"ui_paths": None, "trusted_app": None},
     "sensitive": {"allowlist": ".pr-sensitive-allow", "scan": list(SENSITIVE_SCOPES)},
     "dead_branches": {"max_merged_on_remote": 0},
     "ci": {"runner_var": "CI_RUNNER", "runner_default": "ubuntu-latest", "backend": "github-actions"},
@@ -406,7 +407,7 @@ SCHEMA_TREE = {
     }),
     "rules": ("obj", {"dirs": ("pathlist",), "disable": ("strlist",)}),
     "public": ("obj", {"private": ("globsnull",)}),
-    "evidence": ("obj", {"ui_paths": ("globsnull",)}),
+    "evidence": ("obj", {"ui_paths": ("globsnull",), "trusted_app": ("appnull",)}),
     "sensitive": ("obj", {"allowlist": ("relpath",), "scan": ("idlist", SENSITIVE_SCOPES)}),
     "dead_branches": ("obj", {"max_merged_on_remote": ("int", 0)}),
     "ci": ("obj", {"runner_var": ("ident",), "runner_default": _STR, "backend": ("backend", ("github-actions",))}),
@@ -474,6 +475,8 @@ def merge_deny_floor(rules_dirs):
 _HOST = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::[0-9]{1,5})?$")
 # `merge.log`: a plain file name in the user's state directory, so it can never point into the baton's own state
 _LOG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# a GitHub App slug as GitHub writes it (the bot account is `<slug>[bot]`): lower case, digits, hyphens, no hyphen at either end
+_APP_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
 _IMAGE = re.compile(r"^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$")
 
 
@@ -686,6 +689,10 @@ def _check(node, v, key, out):
         for i, item in enumerate(v):
             if not glob_ok(item):
                 out.append(("%s[%d]" % (key, i), GLOB_RULE))
+    elif kind == "appnull":
+        if v is not None and (not isinstance(v, str) or not _APP_SLUG.fullmatch(v) or v == "github-actions"):
+            out.append((key, "must be null or a GitHub App slug (lower-case letters, digits, '-'), not github-actions: every "
+                             "workflow of the repo posts as github-actions[bot], one that echoes text a PR controls too"))
     elif kind == "lognull":
         if v is not None and (not isinstance(v, str) or not _LOG_NAME.fullmatch(v) or v.lower() == "baton"):
             out.append((key, "must be null or a plain file name (letters, digits, '.', '_', '-'; not `baton`) in the user's state directory"))

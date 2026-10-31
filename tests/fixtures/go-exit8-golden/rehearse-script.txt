@@ -1,0 +1,14 @@
+baton script <W>/stop.sh (sha256 43fe6faa2f2b)
+  Purpose: example act, replace it: create one file holding the given text
+  Targets: the file named by the first argument
+  Blast:   that one file; nothing else is read or written
+  Undo:    removes the file, only while it holds exactly the text this act writes
+  Pre:     the file is absent (an existing file with other content is refused, never overwritten)
+  Stops:   publish, secrets
+== rehearse
+  PLAN create <W>/o.txt
+  VERDICT rehearse ok
+== plan against Expect
+  ok   create <W>/o.txt  ~  create *
+seal <SEAL> (binding of script sha256 43fe6faa2f2b, 2 arguments, directory <W> and environment; then the plan)
+rehearse ok. After the owner's go: python3 <P>/scripts/baton.py sign --by owner --seal <SEAL> <W>/stop.sh <W>/o.txt hello

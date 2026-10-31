@@ -49,7 +49,7 @@ Condition: the repo already has `kb/` — if not, do `vibemaestro-sdlc:init-kb` 
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/intent-branch.sh" create-intent --slug <date>-<slug> --base <base>
    ```
 
-   (In a sandbox, `create-intent` also sends the `spec` stage signal through `scripts/stage-signal.sh`; elsewhere it does nothing.)
+   (`create-intent` also sends the `spec` stage signal through `scripts/stage-signal.sh`: to `session-notify` in a sandbox, to the local state file elsewhere.)
    The branch `intent/<date>-<slug>` is created **right in the worktree** (the main tree does not change branch), cut
    from exactly the `<base>` of step 1 (always pass `--base`: the default `origin/main` is wrong when the repo's default branch is not `main` or `kb/` is not merged yet). The issue is created
    in the repo that `gh` picks from the directory you stand in — that is, the app repo — and the issue number is written into the line

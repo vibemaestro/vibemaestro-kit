@@ -50,7 +50,10 @@ gets the values as $1… in the declared order (a file value as a read-only copy
 baton's own options come before the script path; everything after the path is the script's own arguments (`--` ends baton's
 options). Every phase runs `bash` on a fresh copy of the hashed bytes, from the caller's directory, with the caller's environment
 (without BASH_ENV, the other SHELL_HOOKS and P_*) plus BATON_PHASE, in a process group of its own, stdin closed. The run phase
-and its undo also get BATON_PLAN, a file holding the signed plan, so a script can refuse an act when the world moved since.
+and its undo also get BATON_PLAN, a file holding the signed plan, so a script can refuse an act when the world moved since, and
+BATON_UNDO_ONLY, a file the script appends the path of a file to when it keeps it only for its undo (a backup): once the run
+ends ok or its undo put the state back, baton removes each such path that is a regular file the run wrote in <state>/records;
+when the state is unknown they stay, for the owner.
 
 `go` is `rehearse`, `sign --by coordinator-auto` and `run` in turn; it stops at the first step that fails, with its exit code
 and whole output, else prints one line, `go: ok — <n> writes — <run log>`.
@@ -68,14 +71,16 @@ newest STDIN_HARD.
 A signature binds the script's sha256 (and a kept baton's place), its arguments (and file values' sha256), the directory, a
 fingerprint of the variables that steer the tools (STEERING) and the plan; `sign` names the seal rehearse printed. `run` consumes
 it, and its writes (DO lines) must be the signed plan. Mode `manual` (the default) accepts only `--by owner`; mode `auto` also
-`--by coordinator-auto`, for `Stops: none`. This guards an honest but fallible session, not one that sets out to forge a record.
+`--by coordinator-auto`, for `Stops: none` and no argument or Param value that names a Claude Code settings file or its
+directory (settings_value). This guards an honest but fallible session, not one that sets out to forge a record.
 `go --queue` leaves a run that needs the owner in the queue instead of a dialog: the owner signs it later from a Claude Code session
 of their own (`sign --by owner --queued <id>`, never from the session or Claude Code process that queued it), and `run --queued
 <id>` runs it once within 24 h while its plan is the sealed one; `log --queue` lists the items, `log --wait-queued <id>` waits.
 
 State, outside every repository: $XDG_STATE_HOME/vibemaestro/baton (a relative XDG_STATE_HOME is ignored), else
 ~/.local/state/vibemaestro/baton: `mode`, `signatures/`, `used/`, `log.tsv`, `runs/` (the newest 200 run outputs are kept; `runs/LAST` names the newest, written before the script runs),
-`stdin/` (the scripts `go -` read), `inputs/` (file values' copies, the newest 200 kept), `kept/` (keep records `pack` writes),
+`stdin/` (the scripts `go -` read), `inputs/` (file values' copies: a call that never reaches its run phase removes its own,
+the copies runs used are kept, the newest 200, until a call of the same bytes that never runs ends), `records/` (a script's run records and backups), `kept/` (keep records `pack` writes),
 `queue/` (the owner's queue; `queue/used/` the items that ran; both removed 7 days after their expiry).
 
 Exit codes:
@@ -110,6 +115,7 @@ import difflib
 import errno
 import fcntl
 import fnmatch
+import glob
 import hashlib
 import json
 import os
@@ -187,6 +193,34 @@ KEPT_NAME_MAX, KEPT_MAX, HEADER_READ = 64, 256 * 1024, 8 * 1024
 PARAM_KEY = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 PARAM_TYPES = ("int", "sha40", "sha256", "name", "repo", "ref", "path", "url", "file", "input")
 SECRET_KEY = re.compile(r"token|secret|passw|credential|apikey|api_key", re.I)
+# A file or input value is copied under <state>/inputs and kept, so one whose bytes look like key material is refused before the
+# copy: a secret is a path value, read where it is. The kinds name key material with little doubt: the leak scan's
+# (gates/pr_sensitive.py) and a few more token shapes; its prose kinds (password=, bearer, a URL credential, long base64) are left
+# out, since an input value is mostly prose. A token starts at TOKEN_START: after a byte that cannot be part of it, or right
+# after an escape (`\nghp_…` in JSON, `%3Dghp_…`), so a word or a base64 blob holding the prefix is not one and each match has
+# few starts (no quadratic scan of 1 MiB). Group 1 is the value: fewer than 4 distinct bytes in it is a placeholder
+# (ghp_XXXX…), judged on the whole value so padding a real token does not hide it; a docs placeholder with a varied part
+# (sk-ant-api03-xxxx…) is refused. A backstop, not the rule: a binary or re-encoded key passes, and so does a token glued to
+# a byte that can be part of it (123ghp_…).
+TOKEN_START = rb"(?:(?<![A-Za-z0-9_\-])|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4})|(?<=%[0-9A-Fa-f]{2}))"
+SECRET_CONTENT = [(k, re.compile(rx)) for k, rx in (
+    ("private-key", rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY|PuTTY-User-Key-File-[0-9]+:"),
+    # YAML plain, quoted, block or on the next line, or JSON with the key quoted
+    ("cluster-client-key", rb"client-key-data[\"']?\s*:\s*(?:[|>][-+]?\s*)?[\"']?([A-Za-z0-9+/]{16,})"),
+    ("github-token", TOKEN_START + rb"(?:gh[pousr]_([A-Za-z0-9]{30,})|github" rb"_pat_([A-Za-z0-9_]{40,}))"),
+    ("gitlab-token", TOKEN_START + rb"glpat-([A-Za-z0-9_\-]{20,})"),
+    # a bare sk- needs a run of 20 without a hyphen, so a branch name (sk-1234-fix-login-…) is not one
+    ("api-key-sk", TOKEN_START + rb"(?:sk-(?:ant|proj)-([A-Za-z0-9_\-]{20,})|sk-([A-Za-z0-9_\-]*[A-Za-z0-9_]{20})|[rs]k_live_([A-Za-z0-9]{20,}))"),
+    ("slack-token", TOKEN_START + rb"xox[abpr]-([A-Za-z0-9-]{10,})"),
+    ("aws-access-key", TOKEN_START + rb"(?:(?:AKIA|ASIA)([0-9A-Z]{16})(?![0-9A-Z])|"
+     rb"(?i:aws_secret_access_key|aws_session_token|secretaccesskey|sessiontoken)(?:\\?[\"'])?(?:[ \t]*[:=][ \t]*|[ \t]+)"
+     rb"(?:\\?[\"'])?(?=[A-Za-z+/=]{0,64}[0-9])([A-Za-z0-9+/=]{20,}))"),
+    ("google-api-key", TOKEN_START + rb"AIza([0-9A-Za-z_\-]{35})"),
+    ("npm-token", TOKEN_START + rb"npm_([A-Za-z0-9]{36})(?![A-Za-z0-9])"),
+    ("vault-token", TOKEN_START + rb"hv[sbr]\.([A-Za-z0-9_\-]{20,})"),
+    ("age-secret-key", rb"AGE-SECRET-KEY-1([A-Z0-9]{20,})"),
+    ("jwt", TOKEN_START + rb"eyJ([A-Za-z0-9_\-]{10,})\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}"),
+)]
 PARAMS_LINE_MAX, PARAMS_KEYS_MAX, VALUES_MAX, FILE_MAX, INPUTS_KEPT = 400, 12, 4096, 1 << 20, 200
 BASENAME_MAX = 190                                      # <sha256>.<basename> stays within a 255-byte file name
 LEAD_REFUSED = "-+:@=~%"                                # a value starting with one changes a word's meaning for git, gh, curl
@@ -267,6 +301,30 @@ BRANCH_DELETE_LABELS = ("git push --delete|-d|:<ref>", "git update-ref -d|--dele
 BRANCH_KIT_HINT = ("; a branch of a private GitHub repository (not a tag, not a rename) merged into its default branch at a "
                    "pinned head (the head in the default branch, or the head of its merged PR into it): "
                    "`kit:branch-delete repo= branch= head=` deletes it with no owner signature")
+# A Claude Code settings file: settings*.json (managed-settings.json) right under .claude, $CLAUDE_CONFIG_DIR or the managed
+# directory, joined by `/` or written as path parts (`".claude", "settings.json"`, `".claude" / "settings.json"`). The guard
+# (scripts/settings-guard.py) denies a plain-tool write that widens one; a baton's writes run where no hook sees them.
+# a directory: `.claude`, CLAUDE_CONFIG_DIR, the managed one, or a variable named for it (`"$CLAUDE_DIR/settings.json"`); not
+# `foo.claude` or `x-claude-code`
+SETTINGS_DIR = (r"(?<![\w.-])(?:(?i:\.claude)|CLAUDE_CONFIG_DIR|(?i:claude-?code)"
+                r"|\$\{?(?!CLAUDE_PLUGIN|CLAUDE_PROJECT_DIR\b)[A-Za-z_]*(?i:claude)\w*)\}?")    # a plugin's own root is not it
+SETTINGS_FILE = r"(?i:(?:managed-)?settings[\w.*?\[\]{},-]*\.json)(?![\w.-])"           # a glob or `settings{,.local}.json` too
+SETTINGS_PATH = (SETTINGS_DIR + r"[\"']?[\])]*[\"']?\s*(?:[/,]|\+\s*[\"']/)[/\s]*(?:\./)*[\"']?"  # `environ["…"], "…"`, `+ "/…"`
+                 + SETTINGS_FILE)
+# the path as one shell word: a quoted word may hold spaces and `$(…)`; unquoted, `$(…)` and quoted pieces with no space
+# (`"$HOME/".claude`, `~/'.claude'`, `` `pwd` ``): a quoted piece with a space would reach into a `$(jq … "<path>")` read
+SHELL_PIECE = r"(?:[^\s|;&<>()\"'`]|\$\([^()\n]*\)|\"[^\"\s]*\"|'[^'\s]*'|`[^`\s]*`)"
+SETTINGS_WORD = r"(?:\"[^\"\n]*?|'[^'\n]*?|" + SHELL_PIECE + r"*?[\"']?)" + SETTINGS_PATH
+WORD_END = r"[\"']?(?:\s+\d*[<>]&?\s*\S*)*\s*(?:#[^\n]*)?(?:$|[;|&)])"  # the last word: a redirection or a comment may follow
+FILE_CMD = r"(?<![-\w.])(?:%s)(?![\w-])"                            # a command word (`/bin/rm` too, never `--rm`)
+CODE_WRITE = (r"\bopen\([^\n]*?,\s*(?:mode\s*=\s*)?[\"'][rbt]*[wax+][rbtwax+]*[\"']"
+              r"|\.open\(\s*(?:mode\s*=\s*)?[\"'][rbt]*[wax+][rbtwax+]*[\"']"
+              r"|write_text|write_bytes|json\.dump\((?![^\n;]*?,\s*sys\.std)|(?<!stdout)(?<!stderr)\.write\(|\bos\.(?:replace|rename|remove|unlink|truncate)\(|\bshutil\.\w+\("
+              r"|writeFile|appendFile|copyFile|createWriteStream|\bfs\.(?:rename|copy|unlink|rm)|file_put_contents")
+SETTINGS_HELD_LABEL = "settings*.json or its .claude|$CLAUDE_CONFIG_DIR directory held in a name: X=|x = |${X:=}|for x in"
+SETTINGS_HELD_HINT = ("; a later write through that name is not seen, so the name counts as one. A baton that only reads it: "
+                      "declare it all the same, or name the path written out in the command that reads it, not through a "
+                      "name (`OUT=$(jq . \"$HOME/.claude/settings.json\")`)")
 STOP_HINTS = (                                     # (category, the label check names and the skill lists, the pattern)
     ("irreversible-delete", "gh repo|release delete", r"\bgh\s+(?:repo|release)\s+delete\b"),
     ("irreversible-delete", "kubectl … delete ns|pvc|pv",
@@ -308,6 +366,41 @@ STOP_HINTS = (                                     # (category, the label check 
      r"\bgh(?:\s+(?:-R|--repo)[\s=]+\S+)?\s+pr(?:\s+(?:-R|--repo)[\s=]+\S+)?\s+merge\b[^|;&\n]*\s--admin\b"),
     ("security-boundary", "private=false|visibility=public", r"\b(?:private=false|visibility=public)\b"),
     ("security-boundary", "--visibility public", r"--visibility[\s=]+public\b"),
+    # the settings guard's Bash shapes, on one line: a redirection, a file command naming it, a copy onto it (or a settings
+    # file into a .claude directory), dd of=, a download onto it, an in-place edit, git checkout|restore, code that names it
+    # and writes; and the path as an argument of write() or of an interpreter whose program is a heredoc (a change it makes)
+    ("security-boundary",
+     "settings*.json under .claude|$CLAUDE_CONFIG_DIR written: >|tee|rm|mv|ln|cp|install|rsync|sd|dd|curl|wget -o"
+     "|sed|perl|ruby|yq|awk -i|git checkout|code|a write() or interpreter argument",
+     r"(?:>\|?|>>|&>>?)\s*" + SETTINGS_WORD
+     + r"|(?:^|[;&|{(]|\b(?:then|do|else))\s*write\s+(?:\"[^\"\n]*\"|'[^'\n]*'|\S+)\s[^\n]*?" + SETTINGS_PATH
+     + r"|\b(?:python[0-9.]*|node|ruby|perl|php|deno|bun)\b(?=[^|;&\n]{0,600}<<)[^|;&\n]{0,600}?" + SETTINGS_PATH
+     + r"|" + FILE_CMD % "tee|sponge|truncate|rm|unlink|shred|mv|ln|patch|sd" + r"[^|;&\n]{0,600}?\s" + SETTINGS_WORD
+     + r"|" + FILE_CMD % "cp|install|rsync" + r"[^|;&\n]{0,600}\s" + SETTINGS_WORD + WORD_END
+     # into a .claude directory: a settings*.json, or a directory copied whole (cp, rsync)
+     + r"|(?:" + FILE_CMD % "cp|install|rsync|mv|ln" + r"(?=[^|;&\n]{0,600}?(?i:settings)[\w.*?\[\]-]*\.json)|" + FILE_CMD % "cp|rsync"
+     + r"(?=[^|;&\n]{0,600}?\s(?:-[A-Za-z]*[rRa]|--(?:recursive|archive)\b)))[^|;&\n]{0,600}\s[\"']?" + SHELL_PIECE
+     + r"{0,300}?[\"']?" + SETTINGS_DIR + r"[\"']?/?" + WORD_END
+     + r"|\bdd\b[^|;&\n]{0,600}\sof=" + SETTINGS_WORD
+     + r"|\b(?:curl|wget)\b[^|;&\n]{0,600}?\s(?:-[A-Za-z]*[oO]|--output(?:-document)?)(?:=|\s*)" + SETTINGS_WORD
+     + r"|" + FILE_CMD % "g?sed|perl|ruby|yq|g?awk" + r"(?=[^|;&\n]{0,600}\s(?:-(?![Mm])[A-Za-z0-9]*i|--in-?place))[^|;&\n]{0,600}?"
+     + SETTINGS_PATH
+     + r"|" + GIT + r"(?:checkout|restore)\b[^|;&\n]{0,600}?" + SETTINGS_PATH
+     + r"|^(?=[^\n]*" + SETTINGS_PATH + r")[^\n]*?(?:" + CODE_WRITE + r")"),
+    ("security-boundary", SETTINGS_HELD_LABEL,
+     # shell: the value is the path word (`S="$HOME/.claude/settings.json"`), not a command reading it (`R="$(jq . …)"`)
+     # or a `${S:=…}` default
+     r"(?<![\w$(,.=-])[A-Za-z_]\w*=\(?[\"']?" + SHELL_PIECE + r"{0,300}?" + SETTINGS_PATH
+     + r"|\$\{\w+:?=[^}\n]{0,600}?" + SETTINGS_PATH
+     # code: a call or a string that ends in the path (`p = os.path.join(…, ".claude", "settings.json")`, `p = f"{h}/…"`), or,
+     # with a space after `=`, an operator, a list, a parenthesis or a template (`p = home / ".claude" / …`); not a read
+     # (open, read, load, exists, isfile, stat): `x=y/z cmd <path>` and ``X=`cat <path>` `` are shell, not code
+     + r"|(?<![\w$(,.=-])[A-Za-z_][\w.]*\s*(?::[^=\n]{0,80})?=(?!=)(?:\s*(?=[\w.]+\s*\(|[fFrRbB]{0,2}[\"'])"
+     + r"|\s+(?=[\w.]+\s*[/+%\[]|[\[(`]))"
+     + r"(?:(?!\b(?:open|read(?:_text|_bytes|lines?)?|loads?|exists|is_?file|stat|getsize|getmtime)\s*\(|\$\()[^;\n]){0,600}?"
+     + SETTINGS_PATH
+     + r"[\"'`)\]\s]*(?:(?:\.(?:expanduser|resolve|absolute)\(\)|%\s*[\w(][^;#\n]*)\s*)*(?:$|[;#])"
+     + r"|\bfor\s+\w+\s+in\b[^;\n]*?" + SETTINGS_PATH),
     ("cluster-lane", "flux suspend", r"\bflux\s+suspend\b"),
     ("cluster-lane", "kubectl … drain|cordon", r"\bkubectl(?=\s)[^|;&\n]*\s(?:drain|cordon)\b"),
     ("history-rewrite", "git push --force|-f|+<ref>",
@@ -761,7 +854,8 @@ class Kept:
 
 def kept_records(key, name):
     """[(seq, record)] of the keep and retire records of (place key, name), oldest first. A keep record holds `sha256` (and
-    place, root, name, params, stops, prev_sha256, kept_by, kept_at); a retire record holds `retired` (and kept_by, kept_at).
+    place, root, name, params, stops, prev_sha256, kept_by, kept_at, and never_ran for a pod's keep of bytes that declare no
+    stop, on a mode-manual stop); a retire record holds `retired` (and kept_by, kept_at).
     Each is <state>/kept/<place key>/<name>/<seq>.json, seq six digits; any other file there is not a record."""
     d = os.path.join(state_dir(), "kept", key, name)
     try:
@@ -820,11 +914,16 @@ def kept_who(rec):
     return esc(" ".join(parts) or "local")
 
 
+NEVER_RAN = "it never ran: Stops none, held only by a sandbox pod's mode manual, so the coordinator's go is its first run"
+
+
 def kept_label(rec):
-    """`not reviewed, kept by <who> <YYYY-MM-DD>`: the one label of a kept baton, on list, the sign line, go's line and the card."""
+    """`not reviewed, kept by <who> <YYYY-MM-DD>`: the one label of a kept baton, on list, the sign line, go's line and the card;
+    `, kept before any run` for a pod's keep of bytes that had not run (true for good, even after a later run)."""
     at = rec.get("kept_at") if isinstance(rec, dict) else None
     day = at[:10] if isinstance(at, str) and re.match(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", at) else "(no date)"
-    return "not reviewed, kept by %s %s" % (kept_who(rec), day)
+    return "not reviewed, kept by %s %s%s" % (kept_who(rec), day, ", kept before any run" if isinstance(rec, dict) and
+                                              rec.get("never_ran") else "")
 
 
 def drop_userinfo(url):
@@ -1134,12 +1233,142 @@ def read_value_file(v):
     return (data, st.st_mtime), None
 
 
+def secret_problem(data):
+    """The refusal of a file or input value whose bytes look like key material (SECRET_CONTENT), naming the kind and never the
+    bytes, or None. One verdict per content in a process: go binds the same values more than once."""
+    sha = hashlib.sha256(data).digest()
+    if sha not in SECRET_SEEN:
+        SECRET_SEEN[sha] = next((kind for kind, rx in SECRET_CONTENT for m in rx.finditer(data)
+                                 if len(set(next((g for g in m.groups() if g), m.group()))) >= 4), None)
+    if SECRET_SEEN[sha] is None:
+        return None
+    return ("looks like a secret (%s): a file or input value is copied under the state directory and a run's copy is kept, so a secret is never "
+            "one; declare it as a path Param under a key that names no secret (key_file, not token): the script reads it where "
+            "it is (into a command's stdin, never printed) and nothing copies it. Text that only quotes a secret's shape: "
+            "reword it" % SECRET_SEEN[sha])
+
+
+SECRET_SEEN = {}
+
+# A bound value that names a Claude Code settings file, or a settings directory itself, makes the call security-boundary
+# whatever Stops says: `check` reads the text, so a script that writes "$1" or a Params value is seen only here, by the value.
+# A settings directory is one named .claude (any case), the managed one (MANAGED_SETTINGS) or one CLAUDE_CONFIG_DIR names; a
+# settings file has SETTINGS_FILE's name right in one; a subdirectory of one is not one. A value is read as one path.
+SETTINGS_FILE_NAME = re.compile(r"\A" + SETTINGS_FILE + r"\Z")
+SETTINGS_NAMES = ("settings.json", "settings.local.json", "managed-settings.json")   # what a glob in the name is tried on
+GLOB_CHARS = re.compile(r"[*?\[]")
+VAR_DEFAULT = re.compile(r"\$\{(\w+):?[-=]([^}]*)\}")                    # ${X:-d}, ${X-d}, ${X:=d}, ${X=d}
+CONFIG_DIRS, SETTINGS_IDS = [], []                      # read once per process
+
+
+def config_dirs():
+    """The directories CLAUDE_CONFIG_DIR names, in baton's environment and in each ancestor's (the session's), absolute ones only,
+    as written and with links followed."""
+    if not CONFIG_DIRS:
+        dirs = [os.environ.get("CLAUDE_CONFIG_DIR", "")] + [cfg for _a, _c, cfg, _h in ancestors()]
+        CONFIG_DIRS.append(set(p for d in dirs if d and os.path.isabs(d) for p in (os.path.normpath(d), os.path.realpath(d))))
+    return CONFIG_DIRS[0]
+
+
+def settings_dir(p):
+    return os.path.basename(p).lower() == ".claude" or p in config_dirs() or p in [os.path.dirname(m) for m in MANAGED_SETTINGS]
+
+
+def settings_kind(p):
+    """"file" when the absolute path p is a Claude Code settings file, "directory" when it is a settings directory, else None."""
+    if settings_dir(p):
+        return "directory"
+    d, name = os.path.split(p)
+    if settings_dir(d) and (SETTINGS_FILE_NAME.match(name)
+                            or (GLOB_CHARS.search(name) and any(fnmatch.fnmatchcase(n, name.lower()) for n in SETTINGS_NAMES))):
+        return "file"
+    return None
+
+
+def settings_ids():
+    """{(st_dev, st_ino): (kind, path)} of the settings directories baton knows (the config directories, ~/.claude, the managed
+    one, the .claude of the directory and of each one above it) and of the settings files in them, links followed: another
+    name of one (a hard link, the file or directory a settings link points to) is the same file."""
+    if not SETTINGS_IDS:
+        dirs, d = set(config_dirs()) | set([os.path.join(os.path.expanduser("~"), ".claude")]), os.getcwd()
+        dirs |= set(os.path.dirname(m) for m in MANAGED_SETTINGS)
+        while True:
+            dirs.add(os.path.join(d, ".claude"))
+            if os.path.dirname(d) == d:
+                break
+            d = os.path.dirname(d)
+        ids = {}
+        for d in sorted(dirs):
+            files = [f for f in sorted(glob.glob(os.path.join(glob.escape(d), "*.json")))     # no cap: a decoy never hides one
+                     if SETTINGS_FILE_NAME.match(os.path.basename(f))]
+            for kind, f in [("directory", d)] + [("file", f) for f in files]:
+                try:
+                    st = os.stat(f)
+                except (OSError, ValueError):
+                    continue
+                m = st.st_mode                          # a link to /dev/null (a device) or a directory is no settings file
+                if stat.S_ISDIR(m) if kind == "directory" else not (stat.S_ISDIR(m) or stat.S_ISCHR(m) or stat.S_ISBLK(m)):
+                    ids.setdefault((st.st_dev, st.st_ino), (kind, f))
+        SETTINGS_IDS.append(ids)
+    return SETTINGS_IDS[0]
+
+
+def value_paths(v, cwd):
+    """The absolute paths a value may name: the value; without surrounding blanks and one pair of quotes; the part after its first
+    `=`; without a leading file://. Each with $CLAUDE_CONFIG_DIR, other $VAR, ${VAR:-default} and ~ expanded and joined to cwd,
+    as written (`..` folded) and with links followed; a glob in it expanded against the disk."""
+    unq = lambda c: c[1:-1] if len(c) >= 2 and c[0] == c[-1] and c[0] in "'\"" else c
+    cands = [v, unq(v.strip())]
+    cands += [unq(c.split("=", 1)[1].strip()) for c in list(cands) if "=" in c]
+    cands += [c[len("file://"):] for c in list(cands) if c[:7].lower() == "file://"]
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    cfg = cfg if os.path.isabs(cfg) else os.path.join(os.path.expanduser("~"), ".claude")
+    env = lambda name, dflt: cfg if name == "CLAUDE_CONFIG_DIR" else os.environ.get(name) or dflt
+    out = []
+    for c in cands:
+        if not c:
+            continue
+        try:                                            # a NUL (a queued item's JSON) is no path
+            c = re.sub(r"\$(?:CLAUDE_CONFIG_DIR\b|\{CLAUDE_CONFIG_DIR\})", lambda _m: cfg, c)
+            c = os.path.expanduser(os.path.expandvars(VAR_DEFAULT.sub(lambda m: env(m.group(1), m.group(2)), c)))
+            p = os.path.join(cwd, c)
+            out += [os.path.normpath(p), os.path.realpath(p)]
+            if GLOB_CHARS.search(c):
+                out += [q for g in sorted(glob.glob(p))[:64] for q in (os.path.normpath(g), os.path.realpath(g))]
+        except (OSError, ValueError):
+            continue
+    return list(dict.fromkeys(out))
+
+
+def settings_value(pairs):
+    """(label, value, what, path) of the first (label, value) pair whose value names a Claude Code settings file or directory,
+    by its path or as another name of one (settings_ids), else None. A regular file with more than one hard link that is not
+    one of those is "linked": its other names may be a settings file in a .claude no search reaches, so it counts as one."""
+    cwd = os.getcwd()
+    for label, v in pairs:
+        for p in value_paths(v, cwd):
+            kind = settings_kind(p)
+            if kind:
+                return label, v, kind, p
+            try:
+                st = os.stat(p)
+            except (OSError, ValueError):
+                continue
+            hit = settings_ids().get((st.st_dev, st.st_ino))
+            if hit:
+                return (label, v) + hit
+            if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+                return label, v, "linked", "%s, %d hard links" % (p, st.st_nlink)
+    return None
+
+
 def bind_call(s, args):
     """The binding words of a call. For a baton with Params: the key=value words in the declared order once every word is
     checked; s.argv (the script's arguments: the values, a file value as its copy), s.inputs ({key: sha256}), s.values and
     s.param_lines (the card lines) are set; any problem is Stop(USAGE) naming each one and the declared Params. Without Params
-    the words are the arguments as given."""
+    the words are the arguments as given. s.value_stop: the value that names a Claude Code settings file (settings_value), or None."""
     if s.params is None:
+        s.value_stop = settings_value(("argument %d" % (i + 1), a) for i, a in enumerate(args))
         return list(args)
     if s.params_problems:
         raise Stop(USAGE, "%s: its Params line does not parse: %s", s.path, "; ".join(s.params_problems))
@@ -1167,6 +1396,8 @@ def bind_call(s, args):
         p = value_problem(t, a, vals[k], home)
         if p is None and t in ("file", "input"):
             files[k], p = read_value_file(vals[k])
+            if p is None:
+                p = secret_problem(files[k][0])
         if p:
             probs.append("%s=%s: %s" % (k, quoted(vals[k]), p))
     total = sum(len(v.encode("utf-8", "surrogateescape")) for v in vals.values())
@@ -1175,6 +1406,7 @@ def bind_call(s, args):
     if probs:
         raise Stop(USAGE, "the call does not fit %s:\n%s\n  # Params: %s", s.word, shown_join("\n", ["  " + p for p in probs]),
                    s.field("Params"))
+    s.value_stop = settings_value((k, vals[k]) for k, _t, _a in s.params)
     words, argv, inputs, lines, s.input_mtimes = [], [], {}, [], {}
     for k, t, _a in s.params:
         v = vals[k]
@@ -1195,8 +1427,9 @@ def bind_call(s, args):
 
 def input_copy(v, data, sha):
     """The read-only copy a file value reaches the script as: <state>/inputs/<sha256>.<basename>/<basename>, written once
-    through a temporary directory and a rename (file 0400, directory 0500), then checked like any existing copy. A copy that
-    does not hold its bytes is moved aside, logged and made again, and this step is refused (rc 3): the next call works."""
+    through a temporary directory and a rename (file 0400, directory 0500), held (hold_copy) and checked like any existing copy.
+    A copy that does not hold its bytes is removed and logged, and this step is refused (rc 3): the next call makes it again.
+    One another baton process holds is left to it, and this step is refused too."""
     d = ensure_state()
     real = os.path.realpath(d)
     if path_problem(real):
@@ -1207,21 +1440,101 @@ def input_copy(v, data, sha):
     final = os.path.join(top, "%s.%s" % (sha, base))
     try:
         os.makedirs(top, mode=0o700, exist_ok=True)
-        if not os.path.lexists(final):
-            make_copy(top, final, base, data)
+        HELD_COPIES.setdefault(final, None)             # before it is made: a stop from here on still removes it
+        for _attempt in range(3):                       # a copy another process removed meanwhile is made again
+            if not os.path.lexists(final):
+                make_copy(top, final, base, data)
+            if hold_copy(final):
+                break
         why = copy_problem(final, base, sha)
         if why:
-            aside = os.path.join(top, ".mismatch-%s-%d" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), os.getpid()))
-            os.rename(final, aside)
-            make_copy(top, final, base, data)
-            log_event(d, event="input-copy", result="mismatch", output="%s: %s; moved to %s" % (final, why, aside))
-            raise Stop(REFUSED, "the input copy %s %s, not sha256 %s: it was moved aside to %s and made again from the bytes just "
-                                "read; nothing ran, and the next call will work", os.path.join(final, base), why, sha, aside)
+            release_copy(final)
+            if not remove_if_free(final):
+                raise Stop(REFUSED, "the input copy %s %s, not sha256 %s, and another baton process holds it: nothing ran; "
+                                    "call again once it ended", os.path.join(final, base), why, sha)
+            log_event(d, event="input-copy", result="mismatch", output="%s: %s; removed" % (final, why))
+            raise Stop(REFUSED, "the input copy %s %s, not sha256 %s: it was removed; nothing ran, and the next call makes it "
+                                "again from the file", os.path.join(final, base), why, sha)
+        if HELD_COPIES.get(final) is None:
+            raise Stop(REFUSED, "the input copy %s was removed by another baton process each time it was made: nothing ran; "
+                                "call again", os.path.join(final, base))
         os.utime(final)                                 # in use: the newest INPUTS_KEPT copies stay
     except OSError as e:
         raise Stop(ENV, "the input copy %s cannot be made: %s", final, e.strerror or e)
     prune_inputs(top)
     return os.path.join(final, base)
+
+
+# A copy lives for the process that binds it, unless that process runs: each process holds a shared lock on every copy it bound
+# (HELD_COPIES) until it ends, and one that never started a run phase removes them then (drop_copies), each only when no other
+# baton process holds it. A copy a run used stays until the newest INPUTS_KEPT rule or a later call of the same bytes that never
+# runs removes it. A process killed outright cannot remove its copy: the INPUTS_KEPT rule does.
+HELD_COPIES = {}                                        # {copy directory: fd holding its shared lock, or None (not held yet)}
+
+
+def hold_copy(final):
+    """True once this process holds a shared lock on the copy directory at `final` (opened without following a link), the one
+    still at that path; False when it was removed or replaced while the lock was taken."""
+    if HELD_COPIES.get(final) is not None:
+        return True
+    try:
+        fd = os.open(final, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False                                    # not a directory of its own: copy_problem names it
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        if os.path.samestat(os.fstat(fd), os.lstat(final)):
+            HELD_COPIES[final] = fd
+            return True
+    except OSError:
+        pass
+    os.close(fd)
+    return False
+
+
+def release_copy(final):
+    fd = HELD_COPIES.get(final)
+    HELD_COPIES[final] = None
+    if fd is not None:
+        os.close(fd)
+
+
+def remove_if_free(path):
+    """Remove a copy directory (or a link where one should be) when no baton process holds it: the exclusive lock, taken at
+    once, is held while it goes. A directory that cannot be opened cannot be held either, so it goes too. True when it went."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as e:
+        if e.errno == errno.ENOENT:
+            return True
+        if e.errno not in (errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM):
+            return False                                # out of descriptors or memory: nothing known, nothing removed
+        remove_tree(path)                               # a link, a file, a directory of mode 0: never held
+        return not os.path.lexists(path)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not os.path.samestat(os.fstat(fd), os.lstat(path)):
+            return False
+        remove_tree(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def drop_copies():
+    """At the end of a process: release every copy it held, and remove each when no run phase started (RUN["consumed"]). The stop
+    signals wait meanwhile, so a second interrupt does not leave a copy behind."""
+    mask = signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGTERM, signal.SIGHUP, signal.SIGINT))
+    try:
+        for final in list(HELD_COPIES):
+            release_copy(final)
+            if not RUN["consumed"]:
+                remove_if_free(final)
+            del HELD_COPIES[final]
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
 
 
 def make_copy(top, final, base, data):
@@ -1293,7 +1606,8 @@ def remove_tree(path):
 
 def prune_inputs(top):
     """Keep the newest INPUTS_KEPT copies (by the time each was last used), as stdin/ keeps its scripts, the newest 20 copies set
-    aside on a mismatch, and no temporary directory older than an hour (a make_copy that was killed)."""
+    aside on a mismatch, and no temporary directory older than an hour (a make_copy that was killed). A copy another baton
+    process holds (hold_copy) is never removed."""
     try:
         names = os.listdir(top)
         when = dict((n, os.lstat(os.path.join(top, n)).st_mtime) for n in names)
@@ -1302,7 +1616,7 @@ def prune_inputs(top):
     for pattern, keep in ((r"[0-9a-f]{64}\.", INPUTS_KEPT), (r"\.mismatch-", 20)):
         group = sorted((n for n in names if re.match(pattern, n)), key=lambda n: when[n])
         for n in group[:-keep]:
-            remove_tree(os.path.join(top, n))
+            remove_if_free(os.path.join(top, n))      # a copy another process holds stays
     for n in names:
         if n.startswith(".tmp-") and time.time() - when[n] > 3600:
             remove_tree(os.path.join(top, n))
@@ -1437,7 +1751,7 @@ class Script:
             self.bind_sha = self.sha
         self.fields, self.header_end, self.header_problems = parse_header(self.text.split("\n"))
         self.params, self.params_problems = parse_params(self.field("Params")) if "Params" in self.fields else (None, [])
-        self.argv = self.inputs = self.values = None
+        self.argv = self.inputs = self.values = self.value_stop = None
         self.param_lines = []
         if self.kept is not None and not self.kept.pin(self.sha) and pin and (self.kept.retired or not self.kept.reviewed(self.data)):
             raise Stop(REFUSED, "%s", self.kept.refusal())
@@ -1465,6 +1779,21 @@ class Script:
         if words == ["none"]:
             return [], []
         return [w for w in words if w in STOP_WORDS], [w for w in words if w not in STOP_WORDS]
+
+    def value_why(self):
+        """The one line of a bound value that names a Claude Code settings file (bind_call), or None: also None when Stops
+        already declares security-boundary, so such a baton reads as before."""
+        if self.value_stop is None or "security-boundary" in self.stops()[0]:
+            return None
+        label, v, kind, p = self.value_stop
+        what = ("names a file with other hard links, which may be a Claude Code settings file" if kind == "linked"
+                else "names a Claude Code settings %s" % kind)
+        return ("%s %s %s%s: the call is security-boundary whatever Stops: says; only the owner signs it"
+                % (label, quoted(v), what, "" if p == v else " (%s)" % esc(p)))
+
+    def call_stops(self):
+        """The call's stop categories: the declared ones, plus security-boundary for a value_why."""
+        return self.stops()[0] + (["security-boundary"] if self.value_why() else [])
 
 
 def plugin_real():
@@ -2746,7 +3075,8 @@ def check_script(s):
                 probs.append((n0, "looks like stop category `%s`: matched `%s` (`%s`) in: %s; if the act does that, "
                               "declare it (`# Stops: %s`, then only the owner signs)"
                               % (cat, label, m.group(0).strip()[:60], joined.strip()[:80], cat)
-                              + (BRANCH_KIT_HINT if label in BRANCH_DELETE_LABELS else "")))
+                              + (BRANCH_KIT_HINT if label in BRANCH_DELETE_LABELS else "")
+                              + (SETTINGS_HELD_HINT if label == SETTINGS_HELD_LABEL else "")))
         joined = ""
 
     # the bytes that were read and hashed, on stdin: never the file again, which may have changed since
@@ -2775,10 +3105,11 @@ def need_bash():
         raise Stop(ENV, "no bash on PATH")
 
 
-def run_phase(s, args, phase, sinks, plan=None):
+def run_phase(s, args, phase, sinks, plan=None, undo_only=None):
     """Run one phase on a fresh copy of the hashed bytes; (rc, output lines). Each output line goes to every sink as it comes.
     With `plan` (the signed plan, given to the run phase and its undo) the script gets BATON_PLAN, a file holding it one line per write,
-    so it can refuse to do anything else before an act that cannot be undone."""
+    so it can refuse to do anything else before an act that cannot be undone. With `undo_only` (the same file for the run phase and
+    its undo) it gets BATON_UNDO_ONLY: the paths it keeps only for its undo (drop_undo_only)."""
     tmpd = tempfile.mkdtemp(prefix="baton-")
     try:
         p = os.path.join(tmpd, s.name)
@@ -2794,6 +3125,9 @@ def run_phase(s, args, phase, sinks, plan=None):
         env["BATON_SCRIPT"] = s.real
         env["BATON_WRITES"] = writes
         env.pop("BATON_PLAN", None)                     # only the runner sets it, and only for the run phase and its undo
+        env.pop("BATON_UNDO_ONLY", None)                # the same
+        if undo_only is not None:
+            env["BATON_UNDO_ONLY"] = undo_only
         if plan is not None:                            # a name of its own: a script may be called `plan`
             pfd, planf = tempfile.mkstemp(prefix="signed-plan-", dir=tmpd)
             with os.fdopen(pfd, "w", encoding="utf-8", errors="surrogateescape") as f:
@@ -3101,12 +3435,14 @@ def why_unsigned(d, s, args, cwd, env):
     return "the environment differs from the signed one: %s" % (", ".join(moved) or "unknown")
 
 
-def allowed(signer, mode, stops):
-    """None when `signer` may sign or run in `mode`, else the reason."""
+def allowed(signer, mode, stops, value=None):
+    """None when `signer` may sign or run in `mode`, else the reason. stops: the declared ones; value: Script.value_why()."""
     if signer == "owner":
         return None
     if signer != "coordinator-auto":
         return "unknown signer %r" % signer
+    if value:
+        return "%s%s" % ("the script declares stop categories (%s); " % ", ".join(stops) if stops else "", value)
     if mode != "auto":
         return "the mode is manual: only the owner signs (`baton mode` shows it; the owner sets it)"
     if stops:
@@ -4194,24 +4530,27 @@ def owner_commands(path, args, seal):
 
 def sandbox_handoff(path, args, seal, stops, params):
     """The lines a pod session reads after the decision card in place of the owner's sign and run commands: nobody in a pod
-    signs as the owner (its guard refuses it), so the call goes to the coordinator. A session script on a stop-list stop is
-    kept as `project:<name>` and carried by the PR; `pack` keeps only a baton that declares Params, and a script given them changes
-    its bytes, args and seal, so one without them is sent back to `go`. A kit, a kind, a kept baton, or a stop that is only mode
-    manual (`pack` keeps an `ok` run, not this stop) has nothing to pack: only the call is handed over. The seal is of the file as
-    it stands here: the coordinator's own `go` on the kept baton shows the one it signs."""
+    signs as the owner (its guard refuses it), so the call goes to the coordinator, under a name its machine can run. A session
+    script is kept as `project:<name>` and carried by the PR, whether its stop is a stop-list item or only mode manual (with
+    `Stops: none`: then it never ran, and the coordinator's `go` is its first run); `pack` keeps only a baton that declares
+    Params, and a script given them changes its bytes, args and seal, so one without them is sent back to `go` first. A kit, a
+    kind or a kept baton has nothing to pack: only the call is handed over. The seal is of the file as it stands here: the
+    coordinator's own `go` on the kept baton shows the one it signs."""
     call = lambda name, note="": "tell the coordinator the call: name %s, args %s, seal %s%s" % (
         name, " ".join(shlex.quote(a) for a in args) or "(none)", seal, note)
     lines = ["in a sandbox pod nobody signs as the owner: hand the call to the coordinator"]
-    if place_of(path) is None and stops:
+    if place_of(path) is None:
         if not params:
-            return lines + ["  a script without a `# Params:` header cannot be kept: add one (the script reads its values from it), "
-                            "run `go` on it again with key=value args, and follow the hand-off that prints"]
+            return ["in a sandbox pod nobody signs as the owner, and this script cannot be handed over yet: add a `# Params:` "
+                    "header (the script reads its values from it), then `go` on it again with key=value args; that `go` prints "
+                    "the hand-off"]
         name = os.path.splitext(os.path.basename(path))[0]
-        name = name if KIT_RE.match(name) and len(name) <= KEPT_NAME_MAX else "<name>"
+        name = (name if KIT_RE.match(name) and len(name) <= KEPT_NAME_MAX and name not in kit_names() and
+                not COPY_NAME.search(name) else "<name>")       # a name pack refuses is no call: the session picks one
         return lines + ["  1. keep it: %s pack %s project:%s" % (entry_command(), shlex.quote(os.path.abspath(path)), name),
                         "  2. commit .vibemaestro/batons/%s.sh on your branch and open the PR" % name,
-                        "  3. " + call("project:" + name, " (of this copy)")]
-    return lines + ["  " + call(path if place_of(path) else os.path.abspath(path))]
+                        "  3. " + call("project:" + name, " (of this copy)" if stops else " (of this copy; %s)" % NEVER_RAN)]
+    return lines + ["  " + call(path)]
 
 
 def needs_quoting(s, args):
@@ -4235,8 +4574,14 @@ def cmd_rehearse(rest):
     _plan, _r, seal = rehearsed(s, args, sys.stdout)
     if seal is None:
         return BAD_SCRIPT
+    if s.value_why():
+        say("rehearse: %s", s.value_why())
     if needs_quoting(s, args):
         say("rehearse ok. %s", quoting_note(needs_quoting(s, args)))
+        return OK
+    if in_sandbox():                                    # a pod has no owner: its guard refuses the sign, so no sign line
+        say("rehearse ok. In a sandbox pod nobody signs as the owner: when this call needs the owner, go on it hands it to "
+            "the coordinator")
         return OK
     say("rehearse ok. After the owner's go: %s", owner_commands(path, args, seal)[0])
     return OK
@@ -4279,7 +4624,7 @@ def signed(by, seal, path, args, out, dialog=None):
     mode, cwd, env = read_mode(), os.path.realpath(os.getcwd()), steering()
     binding = binding_of(s.bind_sha, args, cwd, env, s.inputs)
     stops, _u = s.stops()
-    why = allowed(by, mode, stops)
+    why = allowed(by, mode, stops, s.value_why())
     common = dict(name=s.name, script=s.sha[:12], binding=binding[:12], args=args, dir=cwd, signed_by=by, mode=mode,
                   baton=s.baton_id())
     if why is None and by == "owner" and not dialog:
@@ -4304,7 +4649,7 @@ def signed(by, seal, path, args, out, dialog=None):
         raise Stop(REFUSED, "sign refused: the seal now is %s, not the %s that was shown; the script, its arguments, its "
                             "directory, its environment or its plan changed: rehearse and show it again", seal_of(binding, plan), seal)
     rec = {"v": 2 if dialog else 1, "binding": binding, "script_path": s.real, "script_sha256": s.sha, "args": args, "cwd": cwd,
-           "env": env, "plan_sha256": plan_sha(plan), "plan": plan, "stops": stops, "signed_by": by, "mode": mode, "time": now_iso()}
+           "env": env, "plan_sha256": plan_sha(plan), "plan": plan, "stops": s.call_stops(), "signed_by": by, "mode": mode, "time": now_iso()}
     if dialog:
         rec["dialog"] = dialog
     if s.inputs is not None:
@@ -4413,7 +4758,7 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
                                                        "in, or queue it again)" % item["id"]))
     signer = rec.get("signed_by")
     stops, _u = s.stops()
-    why = allowed(signer, mode, stops)
+    why = allowed(signer, mode, stops, s.value_why())
     if why is None and signer == "owner" and (rec.get("v") != 2 or not rec.get("dialog")):
         why = "the signature names no owner's dialog (a baton that signs without one wrote it): have it signed again"
     if why:
@@ -4436,6 +4781,9 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
             header_summary(s, out)
             say("signed by %s at %s; mode %s; binding %s", signer, rec.get("time"), mode, binding[:12], out=out)
         result, undone, consumed = None, None, False
+        ufd, undo_only = tempfile.mkstemp(prefix=".undo-only-", dir=d)   # the paths the run keeps only for its undo
+        os.close(ufd)
+        started = time.time() - 2                       # a file system's coarse clock: a file the run wrote is never older
         try:
             good, plan, reasons = rehearse(s, args, sinks)
             if not good:
@@ -4458,7 +4806,7 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
                 consumed = RUN["consumed"] = True
             except OSError:
                 refuse("the signature was used meanwhile", signer, out_path)
-            rc, lines, done = run_phase(s, args, "run", sinks, plan=rec.get("plan") or [])
+            rc, lines, done = run_phase(s, args, "run", sinks, plan=rec.get("plan") or [], undo_only=undo_only)
             if rc != 0 or not verdict_ok(lines, "run"):
                 result = "run-failed"
             elif done != plan:
@@ -4468,7 +4816,7 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
             else:
                 result = "ok" if postchecked(s, args, sinks) else "postcheck-failed"
             if result != "ok":
-                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [])
+                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [], undo_only=undo_only)
                 undone = "yes" if rc == 0 and verdict_ok(lines, "undo") else "failed"
         except Stop:
             raise
@@ -4482,6 +4830,7 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
         finally:
             for sig in (signal.SIGTERM, signal.SIGHUP):  # the run is over: let the log line and the report through
                 signal.signal(sig, signal.SIG_IGN)
+            drop_undo_only(undo_only, result == "ok" or undone == "yes", sinks, started)
         logged = log_event(d, event="run", signed_by=signer, result=result, undone=undone, output=out_path, **common)
         if result == "ok":
             msg = "run ok: %s did what it planned and the post-check holds" % s.name
@@ -4497,6 +4846,38 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
             say("full output: %s", out_path)
     prune_runs(d)
     return (OK if result == "ok" else UNDONE if undone == "yes" else UNKNOWN), result, logged, out_path
+
+
+def drop_undo_only(listing, known, sinks, started):
+    """The end of the undo window: the run's state is known (`known`: ok, or its undo put it back), so each path the script listed
+    in BATON_UNDO_ONLY that is a regular file (not a link) directly in <state>/records, written since the run started (its ctime),
+    is removed; a path anywhere else, or a file the run did not write, is never removed. When the state is unknown the files
+    stay, for the owner to put the state back by hand. The listing goes either way."""
+    try:
+        with open(listing, encoding="utf-8", errors="surrogateescape") as f:
+            paths = [ln.rstrip("\n") for ln in f if ln.strip()]
+        os.unlink(listing)
+    except OSError:
+        return
+    records = os.path.realpath(os.path.join(state_dir(), "records"))
+    for p in sorted(set(paths)):
+        try:
+            st = os.lstat(p)
+            mine = (os.path.isabs(p) and os.path.realpath(os.path.dirname(p)) == records
+                    and stat.S_ISREG(st.st_mode) and st.st_ctime >= started)
+        except OSError:
+            continue                                    # gone already
+        if not mine:
+            for out in sinks:
+                say("== kept %s: not a file this run wrote in %s", esc(p), records, out=out)
+        elif known:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        else:
+            for out in sinks:
+                say("== kept for putting the state back by hand: %s", esc(p), out=out)
 
 
 class Held:
@@ -4542,6 +4923,8 @@ def decision_card(s, plan, stops, mode, chosen=True, question=None):
     lines += ["  Why:      %s" % f("Purpose"), "  Blast:    %s" % f("Blast"), "  Undo:     %s" % f("Undo")]
     if stops:
         lines.append("  Stop:     %s (a stop-list item: only the owner signs)" % ", ".join(stops))
+    if s.value_why():
+        lines.append("  Stop:     %s" % log_value(s.value_why()))
     if question:
         lines += question
     elif mode == "manual" and chosen:
@@ -4639,7 +5022,8 @@ def cmd_go(rest):
     session may not sign stops after rehearse with the owner's decision card and exit 8; `go` never signs as owner. When every
     step holds it prints one line; a failing step prints its whole output."""
     usage = ("usage: baton.py go [--by coordinator-auto | --queue] [--reuse] <script|-> [args...]  (- reads the script from stdin; "
-             "the owner signs with `sign --by owner`; --queue leaves a run that needs the owner in the queue for them)")
+             "%s--queue leaves a run that needs the owner in the queue for them)"
+             % ("" if in_sandbox() else "the owner signs with `sign --by owner`; "))    # a pod never signs as the owner
     by = reuse = queue = False
     if rest and rest[0] == "--queue":                   # a run that needs the owner waits in the queue, not in a dialog
         if in_sandbox():
@@ -4706,7 +5090,7 @@ def cmd_go(rest):
             return BAD_SCRIPT
         stops, _u = s.stops()
         mode, chosen = mode_state()
-        why = allowed("coordinator-auto", mode, stops)
+        why = allowed("coordinator-auto", mode, stops, s.value_why())
         if queue and not why:
             raise Stop(USAGE, "go --queue: %s needs no owner here (mode %s, Stops none): go without --queue runs it", s.name, mode)
         if why:
@@ -4716,14 +5100,18 @@ def cmd_go(rest):
             fd = os.open(detail, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8", errors="backslashreplace") as f:
                 f.write(held.text())
-            if stops and in_sandbox():                  # only the owner signs it, never in a pod: pack may keep these bytes
+            manual = not stops and not s.value_why() and place_of(path) is None   # a session script held only by mode manual
+            if (stops or manual) and in_sandbox():      # only the owner signs it, never in a pod: pack may keep these bytes
                 log_event(d, event="go", result="owner", name=s.name, script=s.sha[:12], args=args,
                           dir=os.path.realpath(os.getcwd()), mode=mode, baton=s.baton_id())
-            question = mode_question() if mode == "manual" and not chosen and not stops else None   # a Stops: none baton waits on it
-            card = decision_card(s, plan, stops, mode, chosen, question)
+            asks = mode == "manual" and not chosen and not s.call_stops()     # a Stops: none baton waits on the mode question
+            question = mode_question() if asks and not in_sandbox() else None   # a pod has no owner to ask: no mode command
+            card = decision_card(s, plan, s.call_stops(), mode, chosen or asks, question)
+            if in_sandbox():                            # nobody in a pod sets the mode
+                why = why.replace(" (`baton mode` shows it; the owner sets it)", "")
             if queue and not needs_quoting(s, args):
                 word = path if re.match(r"(?:kit|kind|project|user):", path) else os.path.abspath(path)
-                it = queue_item(s, word, call, args, plan, stops, mode, card, detail)
+                it = queue_item(s, word, call, args, plan, s.call_stops(), mode, card, detail)
                 say("go: queued %s — %s: %d write%s; the owner signs it in a Claude Code session of their own before %s "
                     "(/vibemaestro-sdlc:owner-sign); wait: %s log --wait-queued %s; then: %s run --queued %s", it["id"], s.name,
                     len(plan), "" if len(plan) == 1 else "s", it["expires"], entry_command(), it["id"], entry_command(), it["id"])
@@ -4738,8 +5126,16 @@ def cmd_go(rest):
                 say("go: stopped after rehearse (exit %d, waiting for the owner): %s", OWNER, why)
                 return OWNER
             if in_sandbox():                            # a pod has no owner: the guard refuses its sign, so no sign line
-                for ln in sandbox_handoff(path, args, seal, stops, s.params is not None):
-                    say("%s", ln)
+                if s.value_why() and not stops and place_of(path) is None:
+                    # the coordinator cannot run a pod's file, and pack keeps one only for a declared stop: the header says it
+                    say("in a sandbox pod nobody signs as the owner: declare `# Stops: security-boundary`%s in %s (%s), write "
+                        "it to a fresh path and go again; that stop hands it to the coordinator",
+                        "" if s.params is not None else " and a `# Params:` header (only such a script can be kept)",
+                        os.path.abspath(path), "a value names a file with other hard links, which may be a Claude Code "
+                        "settings file" if s.value_stop[2] == "linked" else "a value names a Claude Code settings %s" % s.value_stop[2])
+                else:
+                    for ln in sandbox_handoff(path, args, seal, stops, s.params is not None):
+                        say("%s", ln)
             else:
                 say("on the owner's go: %s", sign_cmd)
                 say("then:              %s", run_cmd)
@@ -5162,15 +5558,15 @@ def kit_names():
     return names
 
 
-def owner_stops():
-    """The `baton` field of each `go` line that stopped for the owner because of the baton's Stops list in a sandbox (result
-    `owner`), from this machine's log.tsv."""
+def owner_stops(manual=False):
+    """The `baton` field of each `go` line that stopped for the owner in a sandbox (result `owner`: the baton's Stops list, or a
+    session script held only by mode manual), from this machine's log.tsv; with manual, only the lines logged in mode manual."""
     out = set()
     try:
         with open(os.path.join(state_dir(), "log.tsv"), encoding="utf-8", errors="backslashreplace", newline="") as f:
             for ln in f:
                 v = ln.rstrip("\n").split("\t")
-                if len(v) == len(LOG_FIELDS) and v[1] == "go" and v[9] == "owner":
+                if len(v) == len(LOG_FIELDS) and v[1] == "go" and v[9] == "owner" and (not manual or v[8] == "manual"):
                     out.add(v[-1])
     except OSError:
         pass
@@ -5178,11 +5574,18 @@ def owner_stops():
 
 
 def owner_stop_of(t, sha):
-    """In a sandbox, a project: keep of bytes whose Stops is not none stands on a `go` that stopped for the owner on these exact
-    bytes instead of an ok run: a pod never gets the owner's signature, so the coordinator runs it after the PR merges."""
-    if not (in_sandbox() and t.kept.prefix == "project" and stops_of(t.text) not in (None, "none")):
+    """In a sandbox, a project: keep stands on a `go` that stopped for the owner on these exact bytes instead of an ok run: a pod
+    never gets the owner's signature, so the coordinator runs it after the PR merges. Bytes that declare no stop stand only on a
+    stop logged in mode manual (the pod could not run them): they never ran, and the coordinator's `go` is their first run."""
+    if not (in_sandbox() and t.kept.prefix == "project" and stops_of(t.text) is not None):
         return False
-    return any(v.endswith("@" + sha) for v in owner_stops())
+    return any(v.endswith("@" + sha) for v in owner_stops(manual=no_stop(t.text)))
+
+
+def no_stop(text):
+    """True when the Stops line declares no stop word (`none`, or nothing but commas), as Script.stops() reads it."""
+    s = stops_of(text)
+    return s is not None and not set(s.split(", ")) - {"none", ""}
 
 
 def ok_run_of(sha):
@@ -5385,14 +5788,15 @@ def copy_holder(kept, sha):
     return None
 
 
-def keep_refusal(t, sha, recs):
-    """The state refusals of a keep (rc 3), against the records and the files at this moment, under the place's lock."""
+def keep_refusal(t, sha, recs, ran):
+    """The state refusals of a keep (rc 3), against the records and the files at this moment, under the place's lock; ran: an
+    ok run of these bytes is in the log."""
     kept = t.kept
-    if not ok_run_of(sha) and not owner_stop_of(t, sha):
+    if not ran and not owner_stop_of(t, sha):
         raise Stop(REFUSED, "pack: no ok run of these bytes (sha256 %s) in this machine's baton log: run them once with values "
-                            "(go <path> key=…), then pack%s", sha, "; in a sandbox a stop-list baton packs as project: once go "
-                            "has stopped for the owner on these bytes (exit 8)" if in_sandbox() and t.kept.prefix == "project" and
-                            stops_of(t.text) not in (None, "none") else "")
+                            "(go <path> key=…), then pack%s", sha, "; in a sandbox a baton packs as project: once go has "
+                            "stopped for the owner on these bytes (exit 8; for Stops none, in mode manual)" if in_sandbox() and
+                            t.kept.prefix == "project" and stops_of(t.text) is not None else "")
     other = copy_holder(kept, sha)
     if other is not None:
         raise Stop(REFUSED, "pack: these bytes (sha256 %s) are already kept as %s:%s: evolve that baton and keep its name, never "
@@ -5433,7 +5837,8 @@ def pack_facts(t, data, sha, old, prev, newest, ran=True):
         was += ", file %s" % sha256(old)[:12]
     return "kept %s (%s) — Stops %s — sha256 %s — changed: %s — body %s lines — not reviewed%s — Purpose: %s" % (
         esc(t.kept.word), was, esc(stops_of(t.text) or "(none)"), sha[:12], changed, body,
-        "" if ran else " — not run: stop-list, the owner signs after merge", cut(esc(t.field("Purpose")), 120))
+        "" if ran else " — not run: stop-list, the owner signs after merge" if not no_stop(t.text) else " — " + NEVER_RAN,
+        cut(esc(t.field("Purpose")), 120))
 
 
 def pack_target(t, data, sha):
@@ -5442,7 +5847,8 @@ def pack_target(t, data, sha):
     leaves bytes no record pins, which no call runs."""
     kept = t.kept
     recs = kept_records(kept.key, kept.name)
-    keep_refusal(t, sha, recs)
+    ran = ok_run_of(sha)
+    keep_refusal(t, sha, recs, ran)
     keeps = [r for _q, r in recs if is_keep(r)]
     newest = keeps[-1] if keeps else None
     prev = newest["sha256"] if newest is not None and pin_state(kept.prefix, recs, newest["sha256"])[0] else None
@@ -5466,11 +5872,13 @@ def pack_target(t, data, sha):
             return
         if old != data:
             pack_put_file(kept, data)
-        write_record(kept.key, kept.name, {"place": kept.prefix, "root": root, "name": kept.name, "sha256": sha,
-                                           "params": t.field("Params"), "stops": stops_of(t.text), "prev_sha256": prev,
-                                           "kept_by": kept_by(), "kept_at": now_iso()})
+        rec = {"place": kept.prefix, "root": root, "name": kept.name, "sha256": sha, "params": t.field("Params"),
+               "stops": stops_of(t.text), "prev_sha256": prev, "kept_by": kept_by(), "kept_at": now_iso()}
+        if not ran and no_stop(t.text):                 # kept on a mode-manual stop (keep_refusal): it never ran
+            rec["never_ran"] = NEVER_RAN
+        write_record(kept.key, kept.name, rec)
         log_event(d, event="pack", name=kept.word, script=sha[:12], result="kept", dir=cwd, output=kept.path, baton=baton)
-        facts = pack_facts(t, data, sha, old, prev, newest, ran=ok_run_of(sha))
+        facts = pack_facts(t, data, sha, old, prev, newest, ran=ran)
         if kept.prefix == "user":
             say("owner: %s", facts)
         else:
@@ -6356,7 +6764,10 @@ def main(argv):
         say("baton: unknown command %s (one of: %s)", repr(argv[0]), ", ".join(COMMANDS), out=sys.stderr)
         return USAGE
     try:
-        return fn(list(argv[1:]))
+        try:
+            return fn(list(argv[1:]))
+        finally:
+            drop_copies()
     except Stop as e:
         say("baton: %s", e.text, out=sys.stderr)
         return e.rc

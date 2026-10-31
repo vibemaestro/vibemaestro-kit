@@ -76,6 +76,9 @@ of a bare `gh`; `baton.py` is not one. These are lints over the text: an indirec
   it (else exit 5). Without one, an undo reported ok and restored nothing (a settings backup named after the settings sha).
   A record outlives a run that held, so it names its run: the sha256 of the signed plan, the file `BATON_PLAN` that baton
   hands the run and its undo; undo acts only on its own run's record (the kinds `settings-merge` and `ci-rerun-failed` do).
+- A file kept only for the undo (a backup, which may hold what should not be copied) is listed in `BATON_UNDO_ONLY`: baton
+  removes it from `<state-dir>/records` once the run held or its undo put the state back, and keeps it only when the state is
+  unknown. List only a file this run wrote, named so no other run shares it (`kind:settings-merge`: path key and sha256).
 
 ## A GitHub object that may not exist
 

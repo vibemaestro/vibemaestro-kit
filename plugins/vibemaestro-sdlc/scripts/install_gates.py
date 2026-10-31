@@ -17,6 +17,12 @@ Skills ask, scripts do: the `install-gates` skill collects the answers, this scr
   fallback: with this form the installer prints a WARNING for each kept file whose runs-on has no guard.
 - The gate scripts, the config loader and the message table (`messages.py`) are copied to `.vibemaestro/gates/` (the workflows run
   them from there, from the BASE branch).
+- With `language` `en` in the repo's config the copies are English only: the `vi` slot of every `messages.py` entry holds the English
+  text, the `vi` defaults of `sdlc_config.py` hold the `en` preset's values, and the install stops (rc 65, nothing written) if a
+  letter in U+00C0..U+1EF9 is left in a copy it would write, a workflow template or the allowlist header (a rendered workflow carries
+  the repo's own tokens, so it is not checked). A copy the repo already has is still kept; with `en` a kept copy of those scripts that holds such
+  a letter is named in a WARNING (delete the file and install again for a clean one). With `vi` (or no key) the copies are the
+  plugin's own, byte for byte.
 - The allowlist of the sensitive-info gate is written as a header-only file at `sensitive.allowlist` (default `.pr-sensitive-allow`).
 - It does not write `.vibemaestro/sdlc.json`; it prints which keys the gates read.
 - After that it asks GitHub, read-only (`gh api -X GET`, never a write, never a prompt), whether the runner variable is set on the repo or
@@ -24,10 +30,11 @@ Skills ask, scripts do: the `install-gates` skill collects the answers, this scr
   locked the gates never start and read as failed). When `gh` cannot answer it prints one "check skipped" line. Neither changes the rc.
 
 rc 0 done (or nothing to do; the runner-variable check never changes it), 64 bad usage (unknown gate, bad runner label, not a git repo),
-65 invalid config.
+65 invalid config, or a Vietnamese letter that the `en` rewrite could not remove.
 Standard library only, Python 3.8+.
 """
 import argparse
+import ast
 import json
 import os
 import re
@@ -217,6 +224,75 @@ def render(text, var, default, exception="COMMIT EXCEPTION:"):
             .replace("@@RUNNER_DEFAULT@@", default).replace("@@COMMIT_EXCEPTION@@", tok))
 
 
+# a letter of the Vietnamese range (U+00C0..U+1EF9: the Latin-1 and Latin Extended letters up to the Vietnamese tones)
+VIET = re.compile("[\u00c0-\u1ef9]")
+
+
+def viet_lines(data):
+    """The 1-based numbers of the lines of `data` (bytes) that hold a Vietnamese letter."""
+    return [i for i, ln in enumerate(data.decode("utf-8", errors="replace").split("\n"), 1) if VIET.search(ln)]
+
+
+def _splice(data, edits):
+    """`data` (bytes) with each (node, new bytes) put in place of the node's source text. `ast` counts columns in UTF-8 bytes."""
+    starts, pos = [], 0
+    for ln in data.split(b"\n"):
+        starts.append(pos)
+        pos += len(ln) + 1
+    spans = sorted(((starts[n.lineno - 1] + n.col_offset, starts[n.end_lineno - 1] + n.end_col_offset, new) for n, new in edits), reverse=True)
+    for lo, hi, new in spans:
+        data = data[:lo] + new + data[hi:]
+    return data
+
+
+def _node_bytes(data, node):
+    lines = data.split(b"\n")
+    if node.lineno == node.end_lineno:
+        return lines[node.lineno - 1][node.col_offset:node.end_col_offset]
+    first = lines[node.lineno - 1][node.col_offset:]
+    last = lines[node.end_lineno - 1][:node.end_col_offset]
+    return b"\n".join([first] + lines[node.lineno:node.end_lineno - 1] + [last])
+
+
+def english_messages(data):
+    """`messages.py` with the English text in the `vi` slot of every `TABLE` entry (the keys, the placeholders and the code stay)."""
+    tree = ast.parse(data.decode("utf-8"))
+    edits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "TABLE" for t in node.targets) and isinstance(node.value, ast.Dict):
+            for entry in node.value.values:
+                if isinstance(entry, ast.Dict):
+                    slots = {k.value: v for k, v in zip(entry.keys, entry.values) if isinstance(k, ast.Constant)}
+                    if "vi" in slots and "en" in slots:
+                        edits.append((slots["vi"], _node_bytes(data, slots["en"])))
+    return _splice(data, edits)
+
+
+def _vi_to_en(base, over, out, path="DEFAULTS"):
+    """Fill `out` with {Vietnamese default string: its `en` preset string} by walking the defaults and the preset laid over them."""
+    if isinstance(over, dict):
+        for k, v in over.items():
+            _vi_to_en(base[k], v, out, "%s.%s" % (path, k))
+    elif isinstance(over, list):
+        if len(base) != len(over):
+            raise ValueError("%s: the vi and en lists differ in length" % path)
+        for i, (b, o) in enumerate(zip(base, over)):
+            _vi_to_en(b, o, out, "%s[%d]" % (path, i))
+    elif isinstance(over, str) and over != base:
+        if out.setdefault(base, over) != over:
+            raise ValueError("%s: one vi text, two en texts" % path)
+
+
+def english_config(data):
+    """`sdlc_config.py` with the `en` preset's text where the `vi` defaults have theirs: each string literal equal to a `vi` default
+    that the preset replaces is written as the preset's string."""
+    table = {}
+    _vi_to_en(sdlc_config.DEFAULTS, sdlc_config.LANGUAGE_PRESETS["en"], table)
+    edits = [(n, repr(table[n.value]).encode("utf-8")) for n in ast.walk(ast.parse(data.decode("utf-8")))
+             if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value in table and VIET.search(n.value)]
+    return _splice(data, edits)
+
+
 def write_new(path, data, mode, dry):
     """Create `path` only if it is absent. Returns 'wrote', or 'kept' / 'kept (differs)' when it exists."""
     if os.path.lexists(path):
@@ -268,10 +344,14 @@ def main(argv):
         return die(64, "the runner label must match [A-Za-z0-9._-]+, or be %r (no fallback), not %r" % (sdlc_config.RUNNER_SELF_HOSTED_ONLY, default))
 
     plan = []   # (relative path, bytes, mode)
+    owned = []  # (label, bytes) the plugin writes as its own text: what language en must find free of Vietnamese letters
+    vendored_rels = set()
     for n in names:
         with open(os.path.join(TEMPLATES, GATES[n][0]), encoding="utf-8") as f:
+            tmpl = f.read()
+            owned.append(("gates/workflows/" + GATES[n][0] + " (the template)", tmpl.encode("utf-8")))
             try:
-                text = render(f.read(), var, default, cfg["tokens"]["commit_exception"])
+                text = render(tmpl, var, default, cfg["tokens"]["commit_exception"])
             except ValueError as e:
                 return die(65, str(e))
             plan.append((".github/workflows/" + GATES[n][0], text.encode("utf-8"), 0o644))
@@ -279,12 +359,32 @@ def main(argv):
     for fn in vendored:
         with open(os.path.join(GATES_DIR, fn), "rb") as f:
             plan.append((".vibemaestro/gates/" + fn, f.read(), 0o755))
+            vendored_rels.add(".vibemaestro/gates/" + fn)
+    english = {"sdlc_config.py": english_config, "messages.py": english_messages}
     for fn in ("sdlc_config.py", "messages.py"):        # the config loader, and the message table a gate prints from
         with open(os.path.join(HERE, fn), "rb") as f:
-            plan.append((".vibemaestro/gates/" + fn, f.read(), 0o644))
+            data = f.read()
+        if cfg["language"] == "en":
+            try:
+                data = english[fn](data)
+            except Exception as e:          # a source the rewrite cannot read is a refusal, not a traceback half way through
+                return die(65, "%s: the English copy could not be made: %s: %s" % (fn, e.__class__.__name__, e))
+        plan.append((".vibemaestro/gates/" + fn, data, 0o644))
+        vendored_rels.add(".vibemaestro/gates/" + fn)
     if "pr-sensitive" in names:
+        owned.append(("the allowlist header", ALLOWLIST_HEADER.encode("utf-8")))
         plan.append((cfg["sensitive"]["allowlist"], ALLOWLIST_HEADER.encode("utf-8"), 0o644))
 
+    if cfg["language"] == "en":
+        # the plugin's own text only: a rendered workflow carries the repo's own tokens, which may hold such a letter on purpose
+        for rel, data, _mode in plan:
+            if rel in vendored_rels:
+                owned.append((rel, data))
+        for label, data in owned:
+            left = viet_lines(data)
+            if left:
+                return die(65, "%s: language is en, but line %d of the text to write (%d line(s) in all) still holds a Vietnamese letter: "
+                           "nothing was written. A Vietnamese comment or text in the plugin's own file is the usual cause." % (label, left[0], len(left)))
     # every target is checked BEFORE anything is written: it must stay inside the repo once symlinks are resolved, and no parent of it may
     # be a file (a symlinked .github pointing outside the repo would otherwise make the installer write there)
     real_root = os.path.realpath(root)
@@ -312,6 +412,15 @@ def main(argv):
                 print("WARNING %s is kept, and its runs-on still has a fallback (%s) although ci.runner_default is \"%s\": a run with the "
                       "variable unset can still go to that runner and queue without an error. Delete the file and install again to write "
                       "the version with no fallback." % (rel, hosted[0], sdlc_config.RUNNER_SELF_HOSTED_ONLY))
+        if res == "kept (differs)" and cfg["language"] == "en" and rel in vendored_rels:   # the plugin's copies, not a file the repo owns
+            try:
+                with open(os.path.join(root, *rel.split("/")), "rb") as f:
+                    left = viet_lines(f.read())
+            except OSError:
+                left = []
+            if left:
+                print("WARNING %s is kept and still holds Vietnamese text (%d line(s)) although language is en: delete the file and install "
+                      "again to write the English copy." % (rel, len(left)))
         if res == "kept (differs)" and rel.endswith("/commit-discipline.yml"):
             with open(os.path.join(root, *rel.split("/")), "rb") as f:
                 have = f.read()

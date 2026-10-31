@@ -210,7 +210,156 @@ fam_install() {
   has "$(cat "$S")" 'never overwrites' "[I] …and says it never overwrites"
 }
 
-FAMILIES="fam_each fam_invalid fam_base fam_install"
+# lines holding a letter of U+00C0..U+1EF9 (the Vietnamese letters, with the Latin Extended ones between): in each file named, or on
+# stdin when none is. The counter is never trusted alone: [L] runs it on a string it must count (see the control there).
+vc() { python3 -c '
+import re, sys
+r = re.compile("[" + chr(0xc0) + "-" + chr(0x1ef9) + "]")
+srcs = [open(f, encoding="utf-8", errors="replace") for f in sys.argv[1:]] or [sys.stdin]
+print(sum(1 for s in srcs for ln in s if r.search(ln)))' "$@"; }
+# vc_tree <repo> — the same, over every file the installer writes that a person could keep in an English-only repo
+vc_tree() { vc "$1"/.vibemaestro/gates/* "$1"/.github/workflows/*; }
+
+# facts <file> — the facts of a PR that touches a UI file and carries no E2E evidence
+facts() { printf '{"head": "%s", "files": [{"filename": "web/a.js"}], "capped": false, "base": "main", "comments": []}' "$(printf 'a%.0s' $(seq 40))" > "$1"; }
+
+# language: the copies a repo keeps follow its `language`. en: no Vietnamese letter in any installed file, and the gates still run from
+# them; vi: the loader and the table are what the plugin has; an older copy is kept, said so, and a clean one comes from deleting it.
+fam_english() {
+  local p=$1 r r2 c i d t1 t2 f
+  printf 'x \xe1\xba\xa1 y\n' > "$TMP/ctl-letter.txt"
+  eq "$(vc "$TMP/ctl-letter.txt")" 1 "[L] control: the counter counts a line with one Vietnamese letter"
+  ne "$(vc "$p/scripts/messages.py")" 0 "[L] control: the counter finds the Vietnamese table in the plugin's own messages.py"
+  # en: nothing Vietnamese in what is installed
+  r=$(mk_repo en1); put_cfg "$r" '{"language": "en"}'; inst "$p" "$r"
+  eq "$(vc_tree "$r")" 0 "[L] language en: no installed file holds a Vietnamese letter"
+  for f in messages.py sdlc_config.py commit_discipline.py pr_sensitive.py; do eq "$(vc "$r/.vibemaestro/gates/$f")" 0 "[L] en: .vibemaestro/gates/$f has none"; done
+  [ -s "$r/.vibemaestro/gates/messages.py" ] && [ -s "$r/.vibemaestro/gates/sdlc_config.py" ] && ok "[L] en: the loader and the table are written" || bad "[L] en: the loader or the table is missing"
+  # the copies work: the commit gate (config + a failing message), the sensitive gate (table + a failing message)
+  G -C "$r" checkout -qb feat; for i in $(seq 1 15); do cm "$r" "f$i.txt" "feat: task $i"; done
+  run_gate python3 "$(V "$r" commit_discipline.py)" --cwd "$r" main feat; want 0 "[L] en: the installed commit gate is green on 15 commits"
+  cm "$r" f16.txt "feat: task 16"; run_gate python3 "$(V "$r" commit_discipline.py)" --cwd "$r" main feat; want 1 "[L] en: …and red on 16" "limit 15"
+  RC=0; OUT=$(printf 'login with %s\n' "$(printf 'jane.doe%sgmail.com' @)" | cenv python3 "$(V "$r" pr_sensitive.py)" --cwd "$r" --text 2>&1) || RC=$?
+  want 1 "[L] en: the installed sensitive gate is red on a planted e-mail"
+  # the one gate that prints from the message table: pr_evidence (a UI file in the PR, no E2E evidence)
+  facts "$TMP/facts-en.json"
+  put_cfg "$r" '{"language": "en", "evidence": {"ui_paths": ["web/**"]}}'
+  RC=0; OUT=$(cd "$r" && cenv python3 .vibemaestro/gates/pr_evidence.py --facts "$TMP/facts-en.json" 2>&1) || RC=$?
+  want 1 "[L] en: the installed pr-evidence gate prints from the copied table, red" 'E2E not run: <reason>'
+  eq "$(printf '%s' "$OUT" | vc)" 0 "[L] en: …and its message holds no Vietnamese letter"
+  # the gate keeps accepting the Vietnamese spelling of an E2E skip line (its regex is written with escapes now), in the en copy too
+  python3 - "$TMP/facts-skip.json" "$(printf 'E2E kh\xc3\xb4ng ch\xe1\xba\xa1y: the reason is long enough here')" <<'PY'
+import json, sys
+head = "a" * 40
+body = "SHA: %s - review round 1 (m)\n\n%s\n" % (head, sys.argv[2])
+json.dump({"head": head, "files": [{"filename": "web/a.js"}], "capped": False, "base": "main",
+           "comments": [{"url": "u", "author": "o", "association": "OWNER", "id": 1, "created_at": "2026-01-01T00:00:00Z", "body": body}]},
+          open(sys.argv[1], "w"))
+PY
+  RC=0; OUT=$(cd "$r" && cenv python3 .vibemaestro/gates/pr_evidence.py --facts "$TMP/facts-skip.json" 2>&1) || RC=$?
+  want 0 "[L] en: the installed pr-evidence gate accepts an E2E skip line written in Vietnamese" "e2e ok"
+  # the same repo in vi (the default): the message is Vietnamese (control for the two checks above) and the copies are the plugin's own
+  r2=$(mk_repo vi1); put_cfg "$r2" '{"evidence": {"ui_paths": ["web/**"]}}'; inst "$p" "$r2"
+  RC=0; OUT=$(cd "$r2" && cenv python3 .vibemaestro/gates/pr_evidence.py --facts "$TMP/facts-en.json" 2>&1) || RC=$?
+  want 1 "[L] vi (no language key), same facts: pr-evidence is red" 'E2E'
+  ne "$(printf '%s' "$OUT" | vc)" 0 "[L] control: the same gate in a vi repo prints Vietnamese letters"
+  for f in messages.py sdlc_config.py; do cmp -s "$p/scripts/$f" "$r2/.vibemaestro/gates/$f" && ok "[L] vi: $f is the plugin's, byte for byte" || bad "[L] vi: $f differs from the plugin's"; done
+  for f in commit_discipline.py pr_sensitive.py; do cmp -s "$p/gates/$f" "$r2/.vibemaestro/gates/$f" && ok "[L] vi: $f is the plugin's, byte for byte" || bad "[L] vi: $f differs from the plugin's"; done
+  r2=$(mk_repo vi2); put_cfg "$r2" '{"language": "vi"}'; inst "$p" "$r2"
+  cmp -s "$p/scripts/messages.py" "$r2/.vibemaestro/gates/messages.py" && ok "[L] vi named in the config: messages.py is the plugin's" || bad "[L] vi named: messages.py differs"
+  # an older copy (a vi table) in an en repo: kept as it is, said so, and deleting it gives a clean one
+  r=$(mk_repo en2); put_cfg "$r" '{"language": "en"}'; mkdir -p "$r/.vibemaestro/gates"; cp "$p/scripts/messages.py" "$r/.vibemaestro/gates/messages.py"
+  t1=$(shasum "$r/.vibemaestro/gates/messages.py" | cut -d' ' -f1)
+  RC=0; OUT=$(cenv python3 "$p/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 0 "[L] an older vi messages.py in an en repo: rc 0, kept" "kept (differs)   .vibemaestro/gates/messages.py"
+  has "$OUT" "WARNING .vibemaestro/gates/messages.py is kept and still holds Vietnamese text" "[L] …with a WARNING naming the file"
+  eq "$(shasum "$r/.vibemaestro/gates/messages.py" | cut -d' ' -f1)" "$t1" "[L] …and the file is untouched"
+  rm "$r/.vibemaestro/gates/messages.py"
+  RC=0; OUT=$(cenv python3 "$p/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 0 "[L] …deleted and installed again: written" "wrote            .vibemaestro/gates/messages.py"
+  eq "$(vc_tree "$r")" 0 "[L] …and no installed file holds a Vietnamese letter"
+  hasnt "$OUT" "WARNING .vibemaestro/gates/messages.py" "[L] …and no warning is left"
+  # a vi repo is not warned about its own copy
+  r2=$(mk_repo vi3); inst "$p" "$r2"; RC=0; OUT=$(cenv python3 "$p/scripts/install_gates.py" --root "$r2" 2>&1) || RC=$?
+  hasnt "$OUT" "still holds Vietnamese text" "[L] a vi repo installed twice: no such warning"
+  printf '# a local note\n' >> "$r2/.vibemaestro/gates/messages.py"
+  RC=0; OUT=$(cenv python3 "$p/scripts/install_gates.py" --root "$r2" 2>&1) || RC=$?
+  has "$OUT" "kept (differs)   .vibemaestro/gates/messages.py" "[L] a vi repo with an older, differing copy: kept"
+  hasnt "$OUT" "still holds Vietnamese text" "[L] …and no such warning (the vi copy is meant to hold the table)"
+  # what the repo owns is never named in that warning, and an unreadable kept path does not stop the install
+  r=$(mk_repo en4); put_cfg "$r" '{"language": "en"}'; printf '0123abcd  # gi\xc3\xa1 tr\xe1\xbb\x8b\n' > "$r/.pr-sensitive-allow"; t1=$(shasum "$r/.pr-sensitive-allow" | cut -d' ' -f1)
+  RC=0; OUT=$(cenv python3 "$p/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 0 "[L] en: an allowlist of the repo with Vietnamese text: rc 0, kept" "kept (differs)   .pr-sensitive-allow"
+  hasnt "$OUT" "still holds Vietnamese text" "[L] en: …and no warning telling the repo to delete its allowlist"
+  eq "$(shasum "$r/.pr-sensitive-allow" | cut -d' ' -f1)" "$t1" "[L] en: …the allowlist is untouched"
+  r=$(mk_repo en5); put_cfg "$r" '{"language": "en"}'; mkdir -p "$r/.vibemaestro/gates"; ln -s "$TMP/no-such-target" "$r/.vibemaestro/gates/messages.py"
+  RC=0; OUT=$(cenv python3 "$p/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 0 "[L] en: a messages.py that is a dangling symlink: rc 0, kept, no traceback" "kept (differs)   .vibemaestro/gates/messages.py"
+  hasnt "$OUT" "Traceback" "[L] en: …and the rest of the install ran"
+  # a Vietnamese letter that is the repo's own token (it lands in a workflow, not in a copy of the plugin) is not the plugin's fault
+  r=$(mk_repo en6); put_cfg "$r" "$(printf '{"language": "en", "tokens": {"commit_exception": "NGO\xe1\xba\xa0I L\xe1\xbb\x86:"}}')"
+  RC=0; OUT=$(cenv python3 "$p/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 0 "[L] en: the repo's own exemption token holds Vietnamese letters: the install still runs" "install-gates: wrote 16"
+  eq "$(vc "$r/.vibemaestro/gates/messages.py" "$r/.vibemaestro/gates/sdlc_config.py")" 0 "[L] en: …and the plugin's copies are still English only"
+  # the English text of the copies, not only the effective config under en (where the preset hides a wrong default): the vendored
+  # loader read as a vi repo gives what the plugin's own loader gives for en
+  r=$(mk_repo en7); put_cfg "$r" '{"language": "en"}'; inst "$p" "$r"; r2=$(mk_repo en8); put_cfg "$r2" '{"schema": 1}'
+  cfg_of() { python3 -I -B -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import sdlc_config
+cfg = sdlc_config.load(sys.argv[2])[0]
+cfg.pop("language", None)
+print(json.dumps(cfg, sort_keys=True))' "$1" "$2"; }
+  eq "$(cfg_of "$r/.vibemaestro/gates" "$r2")" "$(cfg_of "$p/scripts" "$r")" "[L] en: the vendored loader's defaults are the plugin's en text (read as vi, equal to the plugin's en)"
+  # the rewrite counts columns in bytes: a non-ASCII text before the literal on the same line must not shift it
+  python3 -I -B - "$p/scripts" <<'PY' && ok "[L] the rewrite puts the English text in place after non-ASCII text on the same line" || bad "[L] the rewrite shifted a literal after non-ASCII text"
+import sys
+sys.path.insert(0, sys.argv[1])
+import install_gates as ig
+src = ('TABLE = {"k\u2192": {"vi": "ạ ạ", "en": "one"}, "k2": {"en": "two", "vi": "ạ"}}\n').encode("utf-8")
+out = ig.english_messages(src)
+ns = {}
+exec(compile(out.decode("utf-8"), "t", "exec"), ns)
+assert ns["TABLE"]["k\u2192"] == {"vi": "one", "en": "one"} and ns["TABLE"]["k2"] == {"en": "two", "vi": "two"}, ns["TABLE"]
+assert ig.viet_lines(out) == []
+PY
+  # a Vietnamese letter the rewrite cannot reach: the install stops before it writes anything
+  d="$TMP/lcopy-$RANDOM"; cp -r "$p" "$d"; printf '# \xc4\x91 left in a comment\n' >> "$d/gates/commit_discipline.py"
+  r=$(mk_repo en3); put_cfg "$r" '{"language": "en"}'; t1=$(tree_hash "$r")
+  RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 65 "[L] a Vietnamese letter left in a vendored file, language en: rc 65, the file and line named" "gates/commit_discipline.py"
+  eq "$(tree_hash "$r")" "$t1" "[L] …and nothing was written"
+  r=$(mk_repo vi4); t1=$(tree_hash "$r"); RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 0 "[L] the same plugin copy in a vi repo: installs" "install-gates: wrote 16"
+  rm -rf "$d"
+  # every vendored file is held to it, the loader and the table after their rewrite too: a letter outside what the rewrite reaches
+  local vf
+  for vf in gates/gate_common.py scripts/sdlc_config.py scripts/messages.py; do
+    d="$TMP/lcopy-$RANDOM"; cp -r "$p" "$d"; printf '\n# \xc4\x91 left in a comment\n' >> "$d/$vf"
+    r=$(mk_repo en11); put_cfg "$r" '{"language": "en"}'; t1=$(tree_hash "$r")
+    RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+    want 65 "[L] a Vietnamese letter left in $vf, language en: rc 65, the file named" "$(basename "$vf")"
+    eq "$(tree_hash "$r")" "$t1" "[L] …and nothing was written"; rm -rf "$d"
+  done
+  # the plugin's own workflow template and allowlist header are held to the same rule (a rendered workflow is not: see en6)
+  d="$TMP/lcopy-$RANDOM"; cp -r "$p" "$d"; printf '# t\xe1\xbb\x91i\n' >> "$d/gates/workflows/pr-title.yml"
+  r=$(mk_repo en9); put_cfg "$r" '{"language": "en"}'; t1=$(tree_hash "$r")
+  RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 65 "[L] a Vietnamese letter in a workflow template, language en: rc 65, the template named" "pr-title.yml (the template)"
+  eq "$(tree_hash "$r")" "$t1" "[L] …and nothing was written"; rm -rf "$d"
+  d="$TMP/lcopy-$RANDOM"; cp -r "$p" "$d"; mutate "$d/scripts/install_gates.py" 'ALLOWLIST_HEADER = """# Allowlist of the sensitive-info gate' "$(printf 'ALLOWLIST_HEADER = """# Danh s\xc3\xa1ch Allowlist of the sensitive-info gate')"
+  RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 65 "[L] a Vietnamese letter in the allowlist header, language en: rc 65" "the allowlist header"; rm -rf "$d"
+  # an allowlist the repo put under .vibemaestro/gates/ is still the repo's file: no warning for it
+  r=$(mk_repo en10); put_cfg "$r" '{"language": "en", "sensitive": {"allowlist": ".vibemaestro/gates/allow.txt"}}'; mkdir -p "$r/.vibemaestro/gates"
+  printf '0123abcd  # gi\xc3\xa1 tr\xe1\xbb\x8b\n' > "$r/.vibemaestro/gates/allow.txt"
+  RC=0; OUT=$(cenv python3 "$p/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
+  want 0 "[L] en: the repo's allowlist placed under .vibemaestro/gates/: kept" "kept (differs)   .vibemaestro/gates/allow.txt"
+  hasnt "$OUT" "still holds Vietnamese text" "[L] en: …and no warning telling the repo to delete it"
+}
+
+FAMILIES="fam_each fam_invalid fam_base fam_install fam_english"
 for f in $FAMILIES; do "$f" "$PLUGIN"; done
 
 echo "== planted breaks: one probe per fault class, each must turn its family red =="
@@ -247,6 +396,23 @@ BRKG import-guard-gone fam_install '[I] commit_discipline.py without gate_common
 '
 BRKS installer-label-unchecked fam_install '[I] a runner label with a quote' install_gates.py '    if not self_hosted_only(default) and not re.fullmatch(r"[A-Za-z0-9._-]+", default):' '    if False:'
 BRKS installer-existing-reported-wrote fam_install '[I] a second run' install_gates.py '        return "kept" if same else "kept (differs)"' '        return "wrote"'
+BRKS english-rewrite-off fam_english '[L] language en: no installed file holds a Vietnamese letter' install_gates.py '        if cfg["language"] == "en":
+            try:' '        if False:
+            try:'
+BRKS english-copy-for-vi fam_english '[L] vi: messages.py differs' install_gates.py '        if cfg["language"] == "en":
+            try:' '        if True:
+            try:'
+BRKS english-check-off fam_english '[L] a Vietnamese letter left in a vendored file' install_gates.py '            left = viet_lines(data)
+            if left:
+                return die' '            left = []
+            if left:
+                return die'
+BRKS kept-copy-not-warned fam_english '[L] …with a WARNING naming the file' install_gates.py '        if res == "kept (differs)" and cfg["language"] == "en" and rel in vendored_rels:' '        if False:'
+BRKG vietnamese-skip-line-dropped fam_english '[L] en: the installed pr-evidence gate accepts an E2E skip line' pr_evidence.py 'E2E (?:kh' 'E2E (?:zzzz'
+BRKS warning-names-the-repos-files fam_english '[L] en: …and no warning telling the repo to delete its allowlist' install_gates.py ' and rel in vendored_rels:   # the plugin'"'"'s copies, not a file the repo owns' ':'
+BRKS warning-keyed-on-the-folder fam_english '[L] en: …and no warning telling the repo to delete it' install_gates.py ' and rel in vendored_rels:' ' and rel.startswith(".vibemaestro/gates/"):'
+BRKS template-not-checked fam_english '[L] a Vietnamese letter in a workflow template' install_gates.py '            owned.append(("gates/workflows/" + GATES[n][0] + " (the template)", tmpl.encode("utf-8")))' '            pass'
+BRKS header-not-checked fam_english '[L] a Vietnamese letter in the allowlist header' install_gates.py '        owned.append(("the allowlist header", ALLOWLIST_HEADER.encode("utf-8")))' '        pass'
 PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
 QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
 ok() { :; }; bad() { QN=$((QN+1)); }

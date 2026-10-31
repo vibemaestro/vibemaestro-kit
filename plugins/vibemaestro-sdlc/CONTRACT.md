@@ -42,7 +42,7 @@ Keeping Dependent calls current: when a repository that pins this one starts cal
 output or variable of it that no row lists, it adds the row and its probe (`DEP_CALLS` in `tests/test-contract.sh`) in a pull
 request here, merged before its own pin moves. Where each call is used is recorded in this repository's private records.
 
-Frozen at: 0.2.0
+Frozen at: 0.3.0
 
 <!-- surface:begin -->
 ## Items
@@ -58,6 +58,7 @@ Frozen at: 0.2.0
 | `config-schema` | config schema 1: its file, its number and its keys | `bash tests/test-contract.sh config-schema` |
 | `rule-packs` | the rules of an installed plugin that declares a dependency on this one are served by its hooks: where they are found, and how they rank | `bash tests/test-contract.sh rule-packs` |
 | `dependents` | the calls that repositories pinning this one make into it, listed under Dependent calls, each doing what its row holds | `bash tests/test-contract.sh dependents` |
+| `local-state` | outside a sandbox, the local state file a session writes for a dashboard: its place, its shape and versions, and how a reader ties it to its transcript and its coordinator | `bash tests/test-contract.sh local-state` |
 
 ## Facts
 
@@ -86,6 +87,24 @@ Frozen at: 0.2.0
 | `rule-packs` | precedence | a pack rule never takes the name of a rule of this plugin; a repo `rules.dirs` rule replaces it; between packs, the first plugin id in sort order |
 | `rule-packs` | project scope | an entry with a `projectPath` counts only when it is the session's project directory |
 | `rule-packs` | enabled | served only when `enabledPlugins` says true in the last of the user, project, local and managed settings that names the plugin |
+| `local-state` | writer | `scripts/stage-signal.sh`, when `session-notify` is not on the PATH; nothing when `CLAUDE_CODE_SESSION_ID` is unset |
+| `local-state` | place | `$XDG_STATE_HOME/vibemaestro/sessions/<session>/<stem>.json` |
+| `local-state` | place without XDG_STATE_HOME | `~/.local/state/vibemaestro/sessions/<session>/<stem>.json` (a relative `XDG_STATE_HOME` counts as unset) |
+| `local-state` | session | `CLAUDE_CODE_SESSION_ID`; a subagent's is its main session's |
+| `local-state` | stem | `[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(-[a-z0-9]+)*`, at most 80 characters |
+| `local-state` | reader's files | the names in `<session>/` that end in `.json` and do not start with `.` |
+| `local-state` | schema | `1` |
+| `local-state` | fields | `schema state ts epoch event question source tail hint session progress progress_epoch intents local` |
+| `local-state` | local fields | `v stem agent child` |
+| `local-state` | local version | `1`; fields are only added, and each addition raises it |
+| `local-state` | states | `working waiting done` |
+| `local-state` | mode | `0600` for the file, `0700` for its session directory |
+| `local-state` | question | at most `2000` characters, while `state` is `waiting` |
+| `local-state` | report | `tail` while `state` is `done`: the report's first `500` characters |
+| `local-state` | transcript of a bound subagent | `~/.claude/projects/<project>/<session>/subagents/agent-<local.agent>.jsonl` |
+| `local-state` | transcript of a session | `~/.claude/projects/<project>/<session>.jsonl`, when `local.agent` is null and `local.child` is false |
+| `local-state` | unbound subagent | `local.child` true and `local.agent` null: a subagent of `<session>`, not bound yet |
+| `local-state` | coordinator | `session`: for a child, the main session that started it; otherwise the session itself |
 
 ## Exit codes
 
@@ -154,7 +173,7 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | `gates/merge_guard.py` | 1 | a condition fails (each failed condition is named) |
 | `gates/merge_guard.py` | 2 | could not conclude: a `gh` call failed, a GitHub read was incomplete, GitHub refused the merge pinned to the head or left it pending, an `external:` adapter exited, or the merge log cannot be written |
 | `gates/merge_guard.py` | 64 | bad usage: bad arguments (a short head SHA, a `--behind-ok-clean` glob that is not docs-only, `--behind` with another value than `auto` or beside `--behind-ok` or `--behind-ok-clean` among them), `--admin` without `merge.admin_bypass` or in bootstrap, `--image-bump` with the lane off or in bootstrap, `--require-image` without a registry, naming another image or in bootstrap |
-| `gates/merge_guard.py` | 65 | the config at the pull request's base is invalid, or `merge.deny_globs` is not set there; in bootstrap, the config the pull request adds is invalid, sets no `merge.deny_globs` or names an `external:` adapter |
+| `gates/merge_guard.py` | 65 | the config at the pull request's base is invalid, or `merge.deny_globs` is not set there (unless the pull request is the bootstrap one: it adds the config, or changes a base config that sets no `merge.deny_globs` to add the `merge` section); in bootstrap, the config the pull request adds or changes is invalid, sets no `merge.deny_globs`, names an `external:` adapter or, over a base config, changes more than the `merge` section |
 | `gates/gh_write.py` | 0 | every condition of the spec holds (plan mode), or the step did what it said (a run step, the post-check, an undo step, a recovery step) |
 | `gates/gh_write.py` | 1 | a condition fails (each failed condition is named; a repository that is not private, or is internal, is `refuse-public`), a run step refuses (the signed plan differs, the world moved, the journal), the post-check finds a live state other than the posted one, or an undo step leaves a state alone (changed since the run, or a write that may have landed and cannot be found) |
 | `gates/gh_write.py` | 2 | could not conclude: a `gh` call failed or printed something that is not JSON |
@@ -223,6 +242,7 @@ A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py ge
 | `rules.disable` |
 | `public.private` |
 | `evidence.ui_paths` |
+| `evidence.trusted_app` |
 | `sensitive.allowlist` |
 | `sensitive.scan` |
 | `dead_branches.max_merged_on_remote` |

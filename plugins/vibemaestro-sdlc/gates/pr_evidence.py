@@ -2,12 +2,15 @@
 """Gate: the PR carries an AI review pinned to its CURRENT head and, when it changes UI paths, E2E evidence pinned to it too.
 
 Evidence lives in PR comments (the round comments the rule pr-body-shape asks for). A comment counts when:
-  - its author's association is OWNER, MEMBER or COLLABORATOR (anyone can comment on a public PR);
+  - its author's association is OWNER, MEMBER or COLLABORATOR (anyone can comment on a public PR), or its author is the bot
+    account of the App `evidence.trusted_app` names (read at the BASE): login `<slug>[bot]`, type Bot, and posted through
+    that App (`performed_via_github_app.slug`). No user login can hold `[` or `]`, and GitHub writes all three from the token
+    that posted; the last one alone is not enough, as a person posting through the App with their own token carries it too;
   - after fenced code blocks and HTML comments are removed (gate_common.strip_fences), its first line is `tokens.round_comment_prefix`
     followed by a full 40-hex SHA: `SHA: <sha> — review round 2 (fresh-context Opus)`. A short SHA never counts.
 What a counted comment can hold:
   - an AI review: its first line also holds the word `review` and a round number (`commits.round_pattern`);
-  - an E2E line: `E2E pass`, or `E2E không chạy: <reason>` / `E2E not run: <reason>` with a reason of at least 15 characters.
+  - an E2E line: `E2E pass`, or `E2E not run: <reason>`, or the same line in Vietnamese ("khong chay" with its accents: the regex below spells it with escapes) with a reason of at least 15 characters.
 For each kind the newest such comment (by when it was posted) decides. It passes when its SHA is the head, or when it carries over: the
 SHA is an ancestor of the head, every commit after it that is not on the base is a clean merge (no conflict resolved by hand), and `git diff $(git merge-base <base>
 <sha>) <sha> | git patch-id --verbatim` is the same non-empty id at the SHA and at the head (a pure merge of the base,
@@ -41,7 +44,7 @@ TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")
 FILES_CAP = 3000
 MIN_REASON = 15
 E2E_PASS = re.compile(r"^ {0,3}E2E pass(?![\w/?-])", re.M | re.I)
-E2E_SKIP = re.compile(r"^ {0,3}E2E (?:không chạy|not run):[ \t]*(.*)$", re.M | re.I)
+E2E_SKIP = re.compile(r"^ {0,3}E2E (?:kh\u00f4ng ch\u1ea1y|not run):[ \t]*(.*)$", re.M | re.I)
 NAME = "pr-evidence"
 
 
@@ -100,6 +103,12 @@ def reason_len(reason):
     return sum(1 for ch in reason if not ch.isspace() and unicodedata.category(ch) != "Cf")
 
 
+def app_posted(c, app):
+    """True when the comment was posted by the bot account of the App `app` itself (Bot `<app>[bot]`, through `app`)."""
+    return (bool(app) and c.get("author_type") == "Bot" and (c.get("app") or "").lower() == app
+            and (c.get("author") or "").lower() == app + "[bot]")
+
+
 def ui_hits(files, capped, globs):
     if globs is None:
         return None
@@ -115,13 +124,14 @@ def ui_hits(files, capped, globs):
 
 
 def decide(facts, cfg):
-    """(rc, lines). `facts`: head, files, capped, comments [{url, author, association, body, created_at, id}], base (its name, for
+    """(rc, lines). `facts`: head, files, capped, comments [{url, author, author_type, app, association, body, created_at, id}], base (its name, for
     messages), carry(sha) -> (patch-id or None, why): the shared patch-id when evidence at `sha` carries over to the head."""
     head = (facts.get("head") or "").lower()
     if not re.fullmatch(r"[0-9a-f]{40}", head):
         raise gc.Infra("the PR's head SHA is unknown")
     prefix = cfg["tokens"]["round_comment_prefix"]
     lines, red = [], False
+    app = cfg["evidence"].get("trusted_app")
     trusted, ignored = [], []
     if facts.get("base_moved"):
         return gc.RED, ["✗ base: %s" % facts["base_moved"]]
@@ -129,12 +139,16 @@ def decide(facts, cfg):
         sha, short = pinned(c, prefix)
         if sha is None and short is None:
             continue
-        if c.get("association") not in TRUSTED:
+        if c.get("association") not in TRUSTED and not app_posted(c, app):
             ignored.append(c)
             continue
         trusted.append((c, sha, short))
     for c in ignored:
-        lines.append("ignored: %s (author %s is %s)" % (c.get("url"), c.get("author"), c.get("association")))
+        why = ""
+        if c.get("author_type") == "Bot" or c.get("app"):
+            why = ("; of an App, only the bot of evidence.trusted_app counts: %s[bot], posted through %s" % (app, app) if app else
+                   "; evidence.trusted_app is not set, so no App counts")
+        lines.append("ignored: %s (author %s is %s%s)" % (c.get("url"), c.get("author"), c.get("association"), why))
     base = facts.get("base") or "the base"
 
     def judge(kind, pick, missing, fix):
@@ -288,6 +302,8 @@ def live_facts(pr, repo, base, cwd, head, base_name):
     return {"head": head, "files": files, "capped": len(files) >= FILES_CAP, "carry": carry_fn(cwd, base, head),
             "base": base_name or base, "base_moved": moved,
             "comments": [{"url": c.get("html_url"), "author": (c.get("user") or {}).get("login"), "id": c.get("id"),
+                          "author_type": (c.get("user") or {}).get("type"),
+                          "app": (c.get("performed_via_github_app") or {}).get("slug"),
                           "association": c.get("author_association"), "body": c.get("body") or "",
                           "created_at": c.get("created_at")} for c in comments if isinstance(c, dict)]}
 

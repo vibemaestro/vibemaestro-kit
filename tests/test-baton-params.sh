@@ -213,11 +213,15 @@ fam_delivery() {
   has "$(cat "$(bdir)"/runs/*.log)" "SRC $c" "[delivery] the script reads the copy, not the original"
   chmod 700 "$(dirname "$c")"; chmod 600 "$c"; echo tampered > "$c"; chmod 400 "$c"; chmod 500 "$(dirname "$c")"; rm -f "$W/o/x"
   eq "$(bt "$P" "$W" go f.sh "src=$W/f.txt" "$(D "$W/o")")" 3 "[delivery] a copy that changed: rc 3"
-  has "$(out)" "moved aside" "[delivery] …moved aside and made again"
-  eq "$(cat "$c")" hello "[delivery] …the copy holds the bytes again"
+  has "$(out)" "it was removed" "[delivery] …it is removed"
+  eq "$(ninputs)" 0 "[delivery] …and the refused call leaves nothing under <state>/inputs, not even set aside"
   eq "$(bt "$P" "$W" go f.sh "src=$W/f.txt" "$(D "$W/o")")" 0 "[delivery] …and the next call works"
+  eq "$(cat "$c")" hello "[delivery] …its copy holds the bytes again"
   chmod 700 "$(dirname "$c")"; rm -rf "$(dirname "$c")"; ln -s "$W" "$(dirname "$c")"; rm -f "$W/o/x"
   eq "$(bt "$P" "$W" go f.sh "src=$W/f.txt" "$(D "$W/o")")" 3 "[delivery] a copy directory that is a link: rc 3"
+  [ ! -L "$(dirname "$c")" ] && [ -d "$W" ] && ok "[delivery] …the link is removed, what it named untouched" || bad "[delivery] …the link is removed, what it named untouched"
+  rm -f "$W/o/x"
+  eq "$(bt "$P" "$W" go f.sh "src=$W/f.txt" "$(D "$W/o")")" 0 "[delivery] …the next call runs"
   [ -d "$(dirname "$c")" ] && [ ! -L "$(dirname "$c")" ] && ok "[delivery] …a real copy replaces it" || bad "[delivery] …a real copy replaces it"
   local sp; sp="$(fresh)/st ate"; mkdir -p "$sp"
   eq "$( ( cd "$W" && cenv XDG_STATE_HOME="$sp" python3 "$P/scripts/baton.py" go f.sh "src=$W/f.txt" "$(D "$W/o")" ) > "$BT_OUT" 2>&1; echo $?)" 64 \
@@ -250,6 +254,122 @@ baton.prune_inputs(top)
 print(os.path.lexists(os.path.join(top, ".mismatch-000")), "%o" % stat.S_IMODE(os.stat(out).st_mode),
       "%o" % stat.S_IMODE(os.stat(os.path.join(out, "sub")).st_mode))' "$P")
   eq "$n" "False 755 755" "[delivery] a set-aside entry that is a link is removed, and what it points to is never touched"
+}
+
+# ── copies: a call that never reaches its run phase removes the copies it bound, unless another process holds one; a run's stay ─
+fam_copies() {
+  local P=$1 c cmd rc pid n; setup "$P"; mkdir -p "$W/o"
+  mkb "$P" "$W/f.sh" "src=file dest=path" "{dest}/** — the file" "" '  write "put $P_DEST/x" cp -- "$P_SRC" "$P_DEST/x"'
+  c="$(bdir)/inputs/$(shaf "$W/f.txt").f.txt"
+  eq "$(bt "$P" "$W" rehearse f.sh "src=$W/f.txt" "$(D "$W/o")")/$(ninputs)" "0/0" "[copies] rehearse with a file value: rc 0, no copy left"
+  bt "$P" "$W" mode manual >/dev/null
+  eq "$(bt "$P" "$W" go f.sh "src=$W/f.txt" "$(D "$W/o")")" 8 "[copies] go that stops for the owner: rc 8"
+  has "$(out)" "copy $c/f.txt" "[copies] …the card names the copy"
+  eq "$(ninputs)" 0 "[copies] …and leaves no copy of the file value"
+  eq "$(bt "$P" "$W" run f.sh "src=$W/f.txt" "$(D "$W/o")")/$(ninputs)" "3/0" "[copies] run with no signature: rc 3, no copy left"
+  eq "$(bt "$P" "$W" go --queue f.sh "src=$W/f.txt" "$(D "$W/o")")/$(ninputs)" "0/0" "[copies] go --queue: rc 0, the queued item leaves no copy"
+  cmd=$(sed -n "s/^on the owner's go: //p" "$BT_OUT")
+  [ -z "$cmd" ] && { bt "$P" "$W" go f.sh "src=$W/f.txt" "$(D "$W/o")" >/dev/null; cmd=$(sed -n "s/^on the owner's go: //p" "$BT_OUT"); }
+  guard_cmd "$P" "$W" "$ST" "$OWNER_SID" "$cmd" >/dev/null
+  rc=$( ( cd "$W" && eval "cenv XDG_STATE_HOME='$ST' XDG_DATA_HOME='$XD' CLAUDE_CODE_SESSION_ID='$OWNER_SID' ${cmd}" ) > "$BT_OUT" 2>&1; echo $?)
+  eq "$rc/$(ninputs)" "0/0" "[copies] the owner signs: rc 0, and the signing leaves no copy either"
+  eq "$(bt "$P" "$W" run f.sh "src=$W/f.txt" "$(D "$W/o")")" 0 "[copies] the signed run: rc 0"
+  eq "$(cat "$W/o/x" 2>/dev/null)" hello "[copies] …it read the bytes the owner signed"
+  [ -d "$c" ] && ok "[copies] a run's copy stays" || bad "[copies] a run's copy stays"
+  python3 -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDONLY); fcntl.flock(fd, fcntl.LOCK_SH); open(sys.argv[2], "w").close(); time.sleep(120)' "$c" "$W/held" &
+  pid=$!; n=0; while [ ! -e "$W/held" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n+1)); done
+  eq "$(bt "$P" "$W" rehearse f.sh "src=$W/f.txt" "$(D "$W/o")")" 0 "[copies] a rehearse while another process holds the copy: rc 0"
+  [ -d "$c" ] && ok "[copies] …the copy another process holds stays" || bad "[copies] …the copy another process holds stays"
+  # a copy that fails its check while another process holds it is left to that process, and the call is refused
+  chmod 700 "$c"; chmod 600 "$c/f.txt"; echo tampered > "$c/f.txt"; chmod 400 "$c/f.txt"; chmod 500 "$c"
+  eq "$(bt "$P" "$W" rehearse f.sh "src=$W/f.txt" "$(D "$W/o")")" 3 "[copies] a copy that changed while another process holds it: rc 3"
+  has "$(out)" "another baton process holds it" "[copies] …it says another process holds it"
+  [ -d "$c" ] && ok "[copies] …and leaves the held copy to it" || bad "[copies] …and leaves the held copy to it"
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  eq "$(bt "$P" "$W" rehearse f.sh "src=$W/f.txt" "$(D "$W/o")")/$(ninputs)" "3/0" "[copies] …once nobody holds it, the next call removes it: rc 3, nothing left"
+  eq "$(bt "$P" "$W" rehearse f.sh "src=$W/f.txt" "$(D "$W/o")")/$(ninputs)" "0/0" "[copies] …and the call after it works and leaves nothing"
+  n=$(cenv XDG_STATE_HOME="$ST" python3 -c 'import fcntl, os, sys
+sys.path.insert(0, sys.argv[1] + "/scripts"); import baton
+top = os.path.join(baton.state_dir(), "inputs-held"); os.makedirs(top)
+for i in range(203):
+    d = os.path.join(top, "%064x.f" % i); os.makedirs(d); os.chmod(d, 0o500); os.utime(d, (1000 + i, 1000 + i))
+ready, done = os.pipe(), os.pipe()
+pid = os.fork()
+if pid == 0:                                            # another process holds the oldest copy until the prune is over
+    fd = os.open(os.path.join(top, "%064x.f" % 0), os.O_RDONLY); fcntl.flock(fd, fcntl.LOCK_SH)
+    os.write(ready[1], b"x"); os.read(done[0], 1); os._exit(0)
+os.read(ready[0], 1)
+baton.prune_inputs(top); left = set(os.listdir(top)); os.write(done[1], b"x"); os.waitpid(pid, 0)
+print(len(left), ("%064x.f" % 0) in left, ("%064x.f" % 1) in left)' "$P")
+  eq "$n" "201 True False" "[copies] prune keeps a copy another process holds, and removes the next oldest"
+  n=$(cenv XDG_STATE_HOME="$ST" python3 -c 'import os, sys
+sys.path.insert(0, sys.argv[1] + "/scripts"); import baton
+top = os.path.join(baton.state_dir(), "inputs-closed"); os.makedirs(top)
+for i in range(201):
+    d = os.path.join(top, "%064x.f" % i); os.makedirs(d); open(os.path.join(d, "f"), "w").close(); os.chmod(d, 0o500); os.utime(d, (1000 + i, 1000 + i))
+os.chmod(os.path.join(top, "%064x.f" % 0), 0)
+baton.prune_inputs(top); left = os.listdir(top); print(len(left), ("%064x.f" % 0) in left)
+for n in left:
+    os.chmod(os.path.join(top, n), 0o700)' "$P")
+  eq "$n" "200 False" "[copies] prune removes a copy directory it cannot open (nobody can hold one)"
+}
+
+# ── secrets: a file or input value that looks like key material is refused before any copy; a path value is never copied ────
+# nostate <marker> — 0 when no file under the state directory holds the marker (the inputs copies, the run logs, log.tsv)
+nostate() { ! grep -rqF -- "$1" "$ST" 2>/dev/null; }
+ninputs() { find "$(bdir)/inputs" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' '; }
+fam_secret() {
+  local P=$1 S kind f m n=0 big; setup "$P"; S=$(fresh); mkdir -p "$W/o"
+  mkb "$P" "$W/sf.sh" "src=file dest=path" "{dest}/** — the file" "" '  write "put $P_DEST/x" cp -- "$P_SRC" "$P_DEST/x"'
+  mkb "$P" "$W/si.sh" "body=input dest=path" "{dest}/** — the file" "" '  write "put $P_DEST/x" cp -- "$P_BODY" "$P_DEST/x"'
+  mkb "$P" "$W/sp.sh" "src=path dest=path" "{dest}/** — the file" "" '  write "put $P_DEST/x" cp -- "$P_SRC" "$P_DEST/x"'
+  while IFS=$'\t' read -r kind f m; do
+    n=$((n+1)); rm -f "$W/o/x"
+    eq "$(bt "$P" "$W" go sf.sh "src=$f" "$(D "$W/o")")" 64 "[secret] a $kind as a file value ($(basename "$f")): rc 64"
+    has "$(out)" "looks like a secret ($kind)" "[secret] …the kind is named ($(basename "$f"))"
+    has "$(out)" "path Param" "[secret] …the safe way, a path Param, is named ($(basename "$f"))"
+    case "$(out)" in *"$m"*) bad "[secret] …the output holds the secret ($(basename "$f"))";; *) ok "[secret] …the output holds no byte of it ($(basename "$f"))";; esac
+    eq "$(bt "$P" "$W" go si.sh "body=$f" "$(D "$W/o")")" 64 "[secret] a $kind as an input value ($(basename "$f")): rc 64"
+    eq "$(ninputs)/$([ -e "$W/o/x" ] && echo ran || echo none)" "0/none" "[secret] …no copy under <state>/inputs, nothing ran ($(basename "$f"))"
+    nostate "$m" && ok "[secret] …no state file holds it ($(basename "$f"))" || bad "[secret] …no state file holds it ($(basename "$f"))"
+  done < <(python3 "$FX" secrets "$S")
+  [ "$n" -ge 33 ] && ok "[secret] the fixture planted every kind" || bad "[secret] the fixture planted every kind ($n)"
+  f="$S/id_ed25519"; m=$(python3 "$FX" secrets "$(fresh)" | sed -n 1p | cut -f3)
+  eq "$(bt "$P" "$W" rehearse sf.sh "src=$f" "$(D "$W/o")")" 64 "[secret] rehearse refuses it too: rc 64"
+  has "$(out)" "under a key that names no secret (key_file, not token)" "[secret] …and names the key-name screen the path Param still meets"
+  eq "$(bt "$P" "$W" go sp.sh "src=$f" "$(D "$W/o")")" 0 "[secret] the same key as a path value: rc 0"
+  has "$(cat "$W/o/x" 2>/dev/null)" "$m" "[secret] …the script read it where it is"
+  eq "$(ninputs)" 0 "[secret] …and nothing was copied under <state>/inputs"
+  nostate "$m" && ok "[secret] …no state file holds it" || bad "[secret] …no state file holds it"
+  # the header at the very end of a file of exactly the 1 MiB cap is still found
+  big="$W/big.pem"; python3 -c 'import sys
+tail = open(sys.argv[2], "rb").read()[:80]
+open(sys.argv[1], "wb").write(b"x" * (1024 * 1024 - len(tail)) + tail)' "$big" "$f"
+  eq "$(bt "$P" "$W" go sf.sh "src=$big" "$(D "$W/o")")" 64 "[secret] a 1 MiB file with the key header at its end: rc 64"
+  has "$(out)" "looks like a secret (private-key)" "[secret] …named"
+  ln -s "$f" "$W/key-link"
+  eq "$(bt "$P" "$W" go sf.sh "src=$W/key-link" "$(D "$W/o")")" 64 "[secret] a link to the key: rc 64, never followed"
+  eq "$(ninputs)" 0 "[secret] …and still no copy"
+  # prose about secrets is not a secret: an input that names them in words runs
+  printf 'Rotate the GitHub token and the SSH private key.\nA token starts with ghp_ and a key file with BEGIN.\nBranch: sk-1234-fix-login-redirect-loop-on-safari\ntask-proj-migrate-the-whole-thing disk-ant-colony-optimization-algorithm\naws_session_token = sessionTokenFromEnvironmentVar\n' > "$W/prose.md"
+  # placeholders in a doc are not secrets: fewer than 4 distinct characters at the end of the match
+  printf 'GH_TOKEN=gh%s\nANTHROPIC_KEY=sk%s\n    client-key%s: %s\n' "p_$(printf 'X%.0s' $(seq 1 36))" "-ant-$(printf 'x%.0s' $(seq 1 24))" -data \
+    "$(printf 'A%.0s' $(seq 1 40))" >> "$W/prose.md"
+  rm -f "$W/o/x"
+  eq "$(bt "$P" "$W" go si.sh "body=$W/prose.md" "$(D "$W/o")")" 0 "[secret] an input that only talks about secrets: rc 0"
+  # no pattern scans a hostile 1 MiB value for long: each match has few starts
+  n=$(python3 -c 'import sys, time
+sys.path.insert(0, sys.argv[1] + "/scripts"); import baton
+worst = 0
+for pat in (b"eyJ", b"eyJabcdefghij-", b"eyJ.", b"ghp_", b"sk-", b"sk-a", b"glpat-", b"AIza", b"AKIA", b"-----BEGIN ", b"client-key-data: ",
+            b"aws_secret_access_key ", b"sessiontoken=", b"secretaccesskey=", b"=sessiontoken=", b"%3D", b"\\n"):
+    d = (pat * ((1 << 20) // len(pat) + 1))[:1 << 20]; baton.SECRET_SEEN.clear(); t = time.time(); baton.secret_problem(d)
+    worst = max(worst, time.time() - t)
+d = b"sessiontoken" + b" " * ((1 << 20) - 12); baton.SECRET_SEEN.clear(); t = time.time(); baton.secret_problem(d)
+worst = max(worst, time.time() - t)
+print("slow" if worst > 5 else "fast")' "$P")
+  eq "$n" fast "[secret] a hostile 1 MiB value is scanned in under 5 s per pattern set"
 }
 
 fam_binding() {
@@ -730,7 +850,7 @@ print("%s | %s | %s" % (w, baton.quoting_note(w) if w else "-", baton.needs_quot
   has "$r" "| None" "[owner] …a plain value needs none"
 }
 
-FAMILIES="fam_grammar fam_values fam_call fam_delivery fam_binding fam_display fam_places fam_pin fam_worktrees fam_targets fam_reader fam_list
+FAMILIES="fam_grammar fam_values fam_call fam_delivery fam_copies fam_secret fam_binding fam_display fam_places fam_pin fam_worktrees fam_targets fam_reader fam_list
 fam_origin fam_reviewed fam_owner"
 
 echo "== the real plugin =="
@@ -785,6 +905,18 @@ BRK p-inherited fam_delivery '[delivery] a P_ variable the caller set is not inh
     '        env = {k: v for k, v in env.items() if not k.startswith("P_")}' '        env = dict(env)'
 BRK copy-writable fam_delivery '[delivery] …mode 400' '        os.chmod(os.path.join(tmp, base), 0o400)' '        os.chmod(os.path.join(tmp, base), 0o600)' \
     '    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o400:' '    if not stat.S_ISREG(st.st_mode):'
+BRK secret-start fam_secret '[secret] an input that only talks about secrets: rc 0' 'TOKEN_START = rb"(?:(?<![A-Za-z0-9_\-])' 'TOKEN_START = rb"(?:(?<=)|(?<![A-Za-z0-9_\-])'
+BRK secret-placeholder fam_secret '[secret] an input that only talks about secrets: rc 0' '                                 if len(set(next((g for g in m.groups() if g), m.group()))) >= 4), None)' '                                 if True), None)'
+BRK secret-copied fam_secret '[secret] a private-key as a file value (id_ed25519): rc 64' '                p = secret_problem(files[k][0])' '                p = None'
+BRK copies-kept fam_copies '[copies] …and leaves no copy of the file value' '        if not RUN["consumed"]:' '        if False:'
+BRK copies-run-dropped fam_copies "[copies] a run's copy stays" '        if not RUN["consumed"]:' '        if True:'
+BRK copies-held-removed fam_copies '[copies] …the copy another process holds stays' \
+    $'        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n        if not os.path.samestat(os.fstat(fd), os.lstat(path)):' \
+    $'        if not os.path.samestat(os.fstat(fd), os.lstat(path)):'
+BRK copies-held-mismatch fam_copies '[copies] …and leaves the held copy to it' \
+    $'            if not remove_if_free(final):\n                raise Stop(REFUSED' $'            if not remove_tree(final):\n                raise Stop(REFUSED'
+BRK copies-closed-kept fam_copies '[copies] prune removes a copy directory it cannot open (nobody can hold one)' \
+    '        remove_tree(path)                               # a link, a file, a directory of mode 0: never held' '        return False'
 BRK copy-unchecked fam_delivery '[delivery] a copy that changed: rc 3' '        why = copy_problem(final, base, sha)' '        why = None'
 BRK inputs-unbound fam_binding '[binding] the file changed after signing: run rc 3' \
     '                                  "inputs": inputs}, sort_keys=True, separators=(",", ":")))' '                                  "inputs": {}}, sort_keys=True, separators=(",", ":")))'

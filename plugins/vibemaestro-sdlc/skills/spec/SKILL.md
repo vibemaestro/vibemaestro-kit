@@ -66,10 +66,24 @@ If not, do `intake` first.
      `session-ask "Spec kb/specs/<date>-<slug>.md is pushed to intent/<date>-<slug>. Approve so I can start coding, or name what needs changing. Open points: <…>"`
      then **end the turn** and wait for the person's message. The command records the `waiting` status so that the person is woken up; the session stays alive.
    - Otherwise (a solo session, or a sandbox without the `session-ask` command), give the spec path in your reply and ask the person right in the session.
+     First record the question with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" ask <date>-<slug>`, the question on stdin
+     through a quoted heredoc (`<<'EOF'`): outside a sandbox it marks the intent waiting in the local state file a dashboard reads; in a
+     sandbox it does nothing.
 
 5. **No code edit without an approval.** Approval is **the person's reply** through the person's channel; the machine has
    no "approved" mark, and silence is not approval. If the person asks for the spec to change, change it, run step 3 again, commit,
-   push, ask for approval again. With an approval, first run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" code` (the sandbox dashboard
-   shows coding started; the command does nothing without a sandbox and never fails), then carry on: `vibemaestro-sdlc:plan` if the work must be split, or code in this
+   push, ask for approval again. With an approval, first run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" code <date>-<slug>` (the dashboard
+   shows coding started: in a sandbox through `session-notify`, else in the local state file of the session; it never fails), then carry on: `vibemaestro-sdlc:plan` if the work must be split, or code in this
    worktree and then `vibemaestro-sdlc:ship`. While working, if you find the spec wrong, fix the spec in a commit of its own and tell the person;
    do not silently work differently from the spec.
+
+## An intent whose spec is already approved
+
+A session that starts work on an intent whose spec is **already approved** (the second PR of a plan row, a run PR after a spec PR, a
+brief that names the spec as approved) does not run steps 1-4 and does not write a second spec. At its first code step (before its PR is opened) it runs
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" code <stem>` (`<stem>` is the intent's `<date>-<slug>`; pass it, the branch may not be
+`intent/<stem>`), then carries on as step 5 says after the signal (`plan` or code, then `ship`). Once per intent and session: skip it when this session already sent `code` through step 5.
+
+"Already approved" is only one of these: the brief or the person names the spec as approved, or the spec file is on `origin`'s default branch
+(after `git fetch origin`; its PR merged). A spec that exists only on a branch this session wrote, or a `SPEC ready` nobody answered, is not approved: nothing is sent
+before the approval, and step 5 stays the only sender on that path.

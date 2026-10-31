@@ -116,6 +116,10 @@ fam_validate() {
   vcase "bad regex" '{"pr": {"title": {"pattern": "("}}}' pr.title.pattern
   vcase "bad branch pattern" '{"branch": {"pattern": "[a"}}' branch.pattern
   vcase "bad enum" '{"hooks": "sometimes"}' hooks
+  vcase "evidence.trusted_app: an App slug" '{"evidence": {"trusted_app": "acme-ai"}}' ok
+  vcase "evidence.trusted_app: github-actions (a PR's own workflow posts as it)" '{"evidence": {"trusted_app": "github-actions"}}' evidence.trusted_app
+  vcase "evidence.trusted_app: not a slug" '{"evidence": {"trusted_app": "Bad Slug"}}' evidence.trusted_app
+  vcase "evidence.trusted_app: the bot login, not the slug" '{"evidence": {"trusted_app": "acme-ai[bot]"}}' evidence.trusted_app
   vcase "wrong type" '{"pr": {"title": {"max_len": "long"}}}' pr.title.max_len
   vcase "a round pattern that does not compile" '{"commits": {"round_pattern": "("}}' commits.round_pattern
   vcase "a round pattern without a capture group" '{"commits": {"round_pattern": "round"}}' commits.round_pattern

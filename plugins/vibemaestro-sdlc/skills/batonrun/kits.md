@@ -330,10 +330,11 @@ commits a `project:` baton on its branch. A `user:` keep prints one line startin
 sha256, what changed, `not reviewed`, its Purpose): copy it into the next reply to the owner.
 
 **In a sandbox** (`INTENT_SLUG` and `SEAT` both set): `pack <path> <name>` keeps `project:<name>`, and `user:` is refused,
-since a pod's library is lost with the pod. A pod never gets the owner's signature, so a stop-list flow is handed over:
+since a pod's library is lost with the pod. A pod never gets the owner's signature, so a flow that stops for the owner is handed over:
 1. `go <path> key='value'…` to the owner's card (exit 8): check, rehearse and plan against Expect all held;
 2. `pack <path> <name>`: these bytes keep as `project:<name>` on that stop (its line says `not run: stop-list, the owner signs
-   after merge`); a `Stops: none` baton still needs an `ok` run;
+   after merge`); a `Stops: none` script keeps only on a stop of the pod's mode manual, and its line, keep record and
+   hand-off say it never ran (the coordinator's `go` is its first run); no `Params`: add them and `go` again first;
 3. commit it on the branch and open the PR; tell the coordinator the call (`go project:<name> key='value'…`).
 
 The coordinator merges the PR after its post-check (the default deny globs leave `.vibemaestro/batons/` to the guard), then

@@ -61,7 +61,7 @@ Fill every `<FILL: …>` (`<ĐIỀN: …>` in a Vietnamese repo). The file has:
 A row must give a fresh session everything it needs when its brief is only the plan file and the row id: what must be true, the
 acceptance, the spec and decision links, the dependencies, and on a release row the version. What the plan says is *what must be true*, not which file or
 line to change. A brief built from a row starts with one quick step: check the row's Current state facts at the current
-`origin/main` before coding, and stop and ask (`session-ask` in a sandbox) when one no longer holds. A plan may hold several row tables (one per level); any table with `Row` and `Link` columns is a row table.
+`origin/main` before coding, and stop and ask (`session-ask` in a sandbox) when one no longer holds. When the row's spec is already approved (as that section defines it), the session does not run the `spec` skill: at its first code step it sends the `code` stage as the section "An intent whose spec is already approved" of that skill says. A plan may hold several row tables (one per level); any table with `Row` and `Link` columns is a row table.
 
 Commit the plan in a PR of its own topic (the first PR, or a docs-only PR), then check its links (below).
 

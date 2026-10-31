@@ -17,6 +17,8 @@
 #       merge (and the merged current-state passes its check); refused on a conflict, a test file, a rename, an add, a symlink,
 #       other bytes, a merge over the cap; a stale test merge is could-not-conclude; a glob that is not docs-only is rc 64
 #   [P] bootstrap: a base with no config and a PR that adds one; the added config's deny globs, the brief, and the refusals
+#   [U] bootstrap of a base that has a config with no merge.deny_globs: the PR that changes the config to add the section takes the
+#       bootstrap lane (same checks); every other PR against that base is still rc 65; the head may only add the merge section
 #   [I] image: --require-image by tag and by full reference, missing, another image; the image-bump lane and its faults
 #   [O] options: --admin without admin_bypass (64), a short head (64), deny globs unset (65), the head's config has no effect
 #   [M] dry run makes no merge call; --merge makes one, pinned; a moved head; the merge log, one line per run, no title or body
@@ -783,7 +785,65 @@ fam_floor() {
   eq "$RC" 0 "[Q] bootstrap: …while a project baton under .vibemaestro/batons still merges: rc 0"
 }
 
-FAMILIES="fam_conditions fam_checks fam_files fam_behind fam_clean fam_boot fam_floor fam_image fam_options fam_merge fam_baton fam_backmerge fam_auto fam_auto_stale"
+# a base whose config sets no merge.deny_globs, and a PR that modifies the config to add the merge section
+fam_amend() {
+  PL=$1; local d
+  d=$(mkfx amend); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 0 "[U] the base config has no merge section, the PR adds it: rc 0"
+  has "$OUT" "bootstrap: the base's .vibemaestro/sdlc.json sets no merge.deny_globs" "[U] …the run says bootstrap, and why"
+  has "$OUT" "the config this PR changes is its scaffold" "[U] …deny skips the config it changes, and only that"
+  has "$(printf '%s\n' "$OUT" | grep '^merge-plan: ')" " bootstrap " "[U] …the plan line carries bootstrap"
+  hasnt "$(tail -n 1 "$d/state/vibemaestro/merge-log.jsonl")" '"bootstrap": null' "[U] …and the log line too"
+  d=$(mkfx amend=partial); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 0 "[U] a base merge section without deny_globs (required_checks kept), the PR adds deny_globs: rc 0"
+  d=$(mkfx amend=log); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 0 "[U] a base merge.log, kept by the head: rc 0"
+  eq "$([ -f "$d/state/vibemaestro/amend-log.jsonl" ] && echo base-log)" "base-log" "[U] …the run logs to the base's merge.log"
+  eq "$([ -f "$d/state/vibemaestro/merge-log.jsonl" ] && echo default-log)" "" "[U] …not to the default log"
+  d=$(mkfx amend=untouched); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 65 "[U] the same base, a PR that does not change the config: rc 65"
+  has "$OUT" "merge.deny_globs is not set" "[U] …the key is named"
+  hasnt "$OUT" "bootstrap" "[U] …no bootstrap"
+  alone "[U] the PR adds the section and a workflow: refused as the no-config bootstrap refuses it" deny amend=workflow -- "${BA[@]}" --allow '.github/**'
+  alone "[U] the PR adds the section and a file outside the brief" brief amend=outside -- "${BA[@]}"
+  alone "[U] the PR adds the section and a Markdown file under the rules directory (not a scaffold here)" deny amend=rules-md -- "${BA[@]}"
+  alone "[U] a head that denies nothing still gets the init default (a workflow it adds is refused)" deny amend=empty-deny -- "${BA[@]}" --allow '.github/**'
+  d=$(mkfx amend=external); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 65 "[U] the head config names an external adapter: rc 65"
+  has "$OUT" "cannot bring the code that judges it" "[U] …named"
+  d=$(mkfx amend=no-deny); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 65 "[U] the head config sets no merge.deny_globs: rc 65"
+  has "$OUT" "the config this PR changes" "[U] …named as the changed config's fault"
+  d=$(mkfx amend=null-deny); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 0 "[U] a base merge section with deny_globs: null (unset), the PR sets it: rc 0"
+  d=$(mkfx amend=renamed); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 65 "[U] the config arrives by a rename, not a modification: rc 65, no bootstrap"
+  hasnt "$OUT" "bootstrap" "[U] …the run is not bootstrap"
+  d=$(mkfx amend=log-lost); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 65 "[U] the head changes the base's merge.log: rc 65"
+  has "$OUT" "alters merge.log" "[U] …the key is named"
+  eq "$([ -f "$d/state/vibemaestro/amend-log.jsonl" ] && echo base-log)" "base-log" "[U] …a refusal inside the lane is logged to the base's merge.log"
+  eq "$([ -f "$d/state/vibemaestro/merge-log.jsonl" ] && echo default-log)" "" "[U] …not to the default log"
+  for a in drop-key edit-key other-key extra-key nested-key; do
+    d=$(mkfx amend=$a); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+    eq "$RC" 65 "[U] the head changes more than the merge section ($a): rc 65"
+    has "$OUT" "may only add the merge section" "[U] …($a) named"
+  done
+  d=$(mkfx amend=nested-key); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  has "$OUT" "alters merge.image_bump" "[U] …a key added inside a kept merge key is named (the comparison is deep)"
+  d=$(mkfx amend=deny-set); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
+  eq "$RC" 1 "[U] the base sets deny_globs, the PR edits its config: rc 1, no bootstrap"
+  has "$OUT" "FAIL  own-inputs:" "[U] …own-inputs refuses it"
+  hasnt "$OUT" "bootstrap" "[U] …and the run is not bootstrap"
+  d=$(mkfx amend); guard "$PL" "$d" "${STD[@]}" "${BA[@]}" --admin
+  eq "$RC" 64 "[U] --admin in this lane: rc 64"
+  d=$(mkfx amend); guard "$PL" "$d" "${STD[@]}" "${BA[@]}" --image-bump
+  eq "$RC" 64 "[U] --image-bump in this lane: rc 64"
+  d=$(mkfx amend); guard "$PL" "$d" "${STD[@]}" "${BA[@]}" --require-image cc1-node22-r16
+  eq "$RC" 64 "[U] --require-image in this lane: rc 64"
+}
+
+FAMILIES="fam_conditions fam_checks fam_files fam_behind fam_clean fam_boot fam_amend fam_floor fam_image fam_options fam_merge fam_baton fam_backmerge fam_auto fam_auto_stale"
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
@@ -869,12 +929,35 @@ BRK nul-merged fam_clean '[S] a shared doc whose text holds a NUL byte: rc 1' $G
 BRK added-merged fam_clean '[S] a doc both sides added: rc 1' $G '(by.get(p) or {}).get("status") != "modified"]' '(by.get(p) or {}).get("status") not in ("modified", "added")]'
 BRK clean-unplanned fam_clean '[S] …and how many shared files merged clean' $G '                + (" clean %d" % len(self.clean) if self.clean else "") + (' '                + ('
 BRK bootstrap-on-error fam_boot '[P] the base config cannot be read (not a 404): rc 2' gates/backends/__init__.py '    if "HTTP 404" in err:' '    if True:'
-BRK bootstrap-external fam_boot '[P] …refused as bootstrap, named' $G '    if ext:' '    if False:'
-BRK bootstrap-no-deny fam_boot "[P] …named as the added config's fault" $G '    if cfg["merge"]["deny_globs"] is None:' '    if False:'
+BRK bootstrap-external fam_boot '[P] …refused as bootstrap, named' $G '    if ext:
+        raise G.ConfigError("the config this PR adds names' '    if False:
+        raise G.ConfigError("the config this PR adds names'
+BRK bootstrap-no-deny fam_boot "[P] …named as the added config's fault" $G '    if cfg["merge"]["deny_globs"] is None:
+        raise G.ConfigError("merge.deny_globs is not set in the config this PR adds' '    if False:
+        raise G.ConfigError("merge.deny_globs is not set in the config this PR adds'
 BRK bootstrap-admin fam_boot '[P] bootstrap with --admin (the added config grants admin_bypass): rc 64' $G '            if a.admin:' '            if False:'
 BRK bootstrap-lane fam_boot '[P] bootstrap with --image-bump (the added config turns the lane on): rc 64' $G '            if a.image_bump:
                 raise Usage("--image-bump is refused' '            if False:
                 raise Usage("--image-bump is refused'
+BRK amend-off fam_amend '[U] the base config has no merge section, the PR adds it: rc 0' $G '            boot = bootstrap_amend(a, self.base, text, base_cfg)' '            boot = None'
+BRK amend-any-base fam_amend '[U] the base sets deny_globs, the PR edits its config: rc 1, no bootstrap' $G '        if text is not None and base_cfg["merge"]["deny_globs"] is None:' '        if text is not None:'
+BRK amend-base-log-dropped fam_amend "[U] …the run logs to the base's merge.log" $G '        return self.amend or (None if self.boot else self.cfg)' '        return None if self.boot else self.cfg'
+BRK amend-any-status fam_amend '[U] the config arrives by a rename, not a modification: rc 65, no bootstrap' $G 'f.get("filename") == C.CONFIG_REL and f.get("status") == "modified" for f in files' 'f.get("filename") == C.CONFIG_REL for f in files'
+BRK amend-keys-unchecked fam_amend '[U] the head changes more than the merge section (other-key): rc 65' $G '    if changed:
+        raise G.ConfigError("the config this PR changes alters' '    if False:
+        raise G.ConfigError("the config this PR changes alters'
+BRK amend-merge-keys-unchecked fam_amend '[U] the head changes more than the merge section (edit-key): rc 65' $G '    changed += sorted("merge." + k for k in om if k != "deny_globs" and not _same(om[k], nm.get(k, _ABSENT)))' '    changed += []'
+BRK amend-null-compared fam_amend '[U] a base merge section with deny_globs: null (unset), the PR sets it: rc 0' $G 'if k != "deny_globs" and not _same' 'if not _same'
+BRK amend-log-not-preset fam_amend "[U] …a refusal inside the lane is logged to the base's merge.log" $G '            self.amend = base_cfg                       # a refusal inside' '            pass                                        # a refusal inside'
+BRK amend-external-unchecked fam_amend '[U] …named' $G '    if ext:
+        raise G.ConfigError("the config this PR changes names' '    if False:
+        raise G.ConfigError("the config this PR changes names'
+BRK amend-no-deny-unchecked fam_amend "[U] …named as the changed config's fault" $G '    if cfg["merge"]["deny_globs"] is None:
+        raise G.ConfigError("merge.deny_globs is not set in the config this PR changes' '    if False:
+        raise G.ConfigError("merge.deny_globs is not set in the config this PR changes'
+BRK amend-scaffold-widened fam_amend '[U] the PR adds the section and a Markdown file under the rules directory (not a scaffold here): rc 1' $G '{C.CONFIG_REL} if self.amend else bootstrap_scaffold(self.cfg, files)' 'set(f.get("filename") for f in files if (f.get("filename") or "").endswith(".md") or f.get("filename") == C.CONFIG_REL) if self.amend else bootstrap_scaffold(self.cfg, files)'
+BRK amend-no-scaffold fam_amend '[U] the base config has no merge section, the PR adds it: rc 0' $G '{C.CONFIG_REL} if self.amend else bootstrap_scaffold(self.cfg, files)' 'set() if self.amend else bootstrap_scaffold(self.cfg, files)'
+BRK amend-no-floor fam_amend '[U] a head that denies nothing still gets the init default (a workflow it adds is refused): rc 1' $G '                    deny = list(deny) + [g for g in C.merge_deny_floor(self.cfg["rules"]["dirs"]) if g not in deny]' '                    deny = list(deny)'
 BRK bootstrap-deny-all fam_boot '[P] bootstrap: the base has no config, the PR adds one: rc 0' $G '    return out
 
 

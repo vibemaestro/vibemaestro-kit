@@ -96,7 +96,7 @@ def exemption(body, token):
 
 
 def round_of(subject, rx):
-    """The first review-round number in a subject, or None. The subject is normalised first (lower case, no accents, `đ` as `d`:
+    """The first review-round number in a subject, or None. The subject is normalised first (lower case, no accents, d with stroke as `d`:
     sdlc_config.round_plain), so a word written with or without accents (composed or decomposed) is one round."""
     m = rx.search(gc.sdlc_config.round_plain(subject))
     return m.group(1) if m else None

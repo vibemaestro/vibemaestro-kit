@@ -54,7 +54,9 @@ but the mode and remote list it writes carry no `dialog <id>` line, so this vers
 
 **A sandbox cannot get the owner's signature.** In a pod `sign --by owner` is refused, so a stop-list flow never runs there:
 `go` it to the card, `pack` it as `project:`, open the PR and hand the call to the coordinator (`kits.md`). There, exit 8
-prints that call to hand over, not a sign line: no sign, `run` or `go --queue` is a next step in a pod.
+prints that call to hand over, not a sign line: no sign, `run` or `go --queue` is a next step in a pod; `rehearse` there
+prints no sign line either, only that `go` hands the call over. A `Stops: none` script held by the pod's mode manual is
+handed over the same way, marked as never run.
 
 **"Reviewed" trusts the local view of origin.** A `project:` baton runs without a keep record when its bytes are the blob at its
 path on `refs/remotes/origin/HEAD` and origin's fetch URL is on the owner's list (`kits.md`). The ref is local: moving it by hand
@@ -106,6 +108,10 @@ or `curl -d|--data…|--json|-F` (both read `@<file>`). It does not see the othe
   it as data (`awk -v` reads escapes: avoid it too).
 Free text from outside (a title, a message, a body) never goes on the command line: it is an `input` file the session writes,
 and the script reads the file.
+A secret (a private key, a token, a cluster credential) is a `path` value, under a key that names no secret (`key_file`,
+not `token`): the script feeds it to a command's stdin and never prints it. A `file` or `input` value is copied under the state directory and kept, so one whose bytes look like key
+material (a private-key header, a `client-key-data` field, a token of a known shape, not a placeholder such as `ghp_XXXX…`)
+is refused (exit 64) before any copy, naming the kind, never the bytes. That screen is a backstop, not the rule: a binary or re-encoded key passes it.
 
 **A flow split into simple writes.** A simple write (one step, undone by one direct call, neither on the stop list, not a flow
 met before) is done directly. Nothing can tell a flow cut into such writes from honest single writes, so the cut is not made:
@@ -119,7 +125,7 @@ the act does, not what the lint finds.
 <!-- stop-patterns -->
 - `irreversible-delete`: `gh repo|release delete`; `kubectl … delete ns|pvc|pv`; `git push --delete|-d|:<ref>`; `gh api -X DELETE`; `git push --mirror`; `git update-ref -d|--delete`; `git update-ref <ref> 0{40}`; `update-ref --stdin: delete <ref>|update <ref> 0{40}|<heredoc or file>`; `git branch -D|-d -f|--delete --force`; `git -C|--git-dir|--work-tree|GIT_DIR=<dir> branch -d|-f|-M|-C|--delete|--force`; `git tag -d|--delete`; `rm|unlink|mv|truncate|shred|find -delete|-exec rm|> … refs/`; `packed-refs written: >|tee|sed -i|perl -i|dd of=|rm|mv|truncate|cp onto`
 - `secrets`: `gh secret`; `kubectl … secret`; `vault kv|read|write|delete`
-- `security-boundary`: `kind: Role|RoleBinding|ClusterRole…|NetworkPolicy|ValidatingAdmissionPolicy`; `gh pr merge --admin`; `private=false|visibility=public`; `--visibility public`
+- `security-boundary`: `kind: Role|RoleBinding|ClusterRole…|NetworkPolicy|ValidatingAdmissionPolicy`; `gh pr merge --admin`; `private=false|visibility=public`; `--visibility public`; `settings*.json under .claude|$CLAUDE_CONFIG_DIR written: >|tee|rm|mv|ln|cp|install|rsync|sd|dd|curl|wget -o|sed|perl|ruby|yq|awk -i|git checkout|code|a write() or interpreter argument`; `settings*.json or its .claude|$CLAUDE_CONFIG_DIR directory held in a name: X=|x = |${X:=}|for x in`
 - `cluster-lane`: `flux suspend`; `kubectl … drain|cordon`
 - `history-rewrite`: `git push --force|-f|+<ref>`; `git filter-branch|filter-repo`; `git push --mirror`
 - `money-org`: `gh repo create|rename|transfer|archive`; `gh api /orgs/<org>/members|memberships|teams|billing|settings`
@@ -137,3 +143,24 @@ even the session's own worktree). Also flagged though harmless: an `update-ref -
 (`printf 'update %s %s' "$REF" "$ZERO" | …`), a `cat` or `<` that ends before a `;` in a group piped into `update-ref
 --stdin` (`{ cat ops; } | …`), `cd <dir>/refs` then a relative `rm`, `xargs rm`, a disguised `git` or `cat` (quoted, glued
 to `''` or `$IFS`, behind a variable).
+
+A Claude Code settings file (`settings*.json` or `managed-settings.json` right under `.claude`, `$CLAUDE_CONFIG_DIR`, the
+managed directory or a variable whose name holds `claude` other than `CLAUDE_PLUGIN_*` and `CLAUDE_PROJECT_DIR`, also as path
+parts in code) is the settings guard's ground, and a baton's writes run where no hook sees them. A write onto it is
+`security-boundary`: the guard's shapes (`tee|sponge|truncate|rm|unlink|shred|mv|ln|patch|sd`, a copy onto it or into
+`.claude`, a directory copied whole into `.claude` by `cp` or `rsync`, `dd of=`, `curl -o`, `wget -O`, an in-place
+`sed|perl|ruby|yq|awk`, code that names it and writes), the path as an argument of `write` or of an interpreter whose
+program is a heredoc, and the path held in a name (a later write through `"$S"` is not seen, so the name counts as one).
+Also flagged though harmless: a backup or link made from it through `write`, a heredoc program that only reads it, an
+option with an `i` read as in-place (`perl -Ilib`, `ruby -ruri`), a read through such a name, a `for` loop over it, a
+comparison with the path, a message or comment that quotes a write onto it. A baton that only reads declares it all the
+same, or names the path written out in the reading command (`OUT=$(jq . "$HOME/.claude/settings.json")`). The path as
+an argument of the baton or a Param is not in the text: `go`, `rehearse`, `sign` and `run` read the bound value, and one that
+names a settings file or such a directory itself, or another name of one (a hard link, a settings link's target unless a device or a directory), makes the call `security-boundary` whatever `Stops:` says, exit 8 or a
+refusal naming the argument (`~`, `$VAR`, `..`, a relative path, links and globs resolved, the part after an `=` read too;
+a value is read as one path, never searched for one among other words, and a subdirectory of `.claude` is not one; a
+regular file with other hard links baton cannot place counts too, since its other name may be a settings file). Not seen: a directory held in a name that does not
+hold `claude` (`CFG="$HOME/.claude"`, then `"$CFG/settings.json"`), a `${…:-…}` default of a name that does not hold
+`claude`, a path in code joined with no space after `=` (`p=home/".claude"/…`) or behind `or`, a path built from pieces or
+read from a file, a quote nested in `$(…)`, a command with more than 600 characters before the path (300 inside one word),
+`cd .claude` then a bare `settings.json`, `git -C ~/.claude checkout`, `cp -t <dir>`, `tar` or `unzip` into it, an editor.

@@ -41,10 +41,15 @@ def cfg_of(E, data):
 N = [0]
 
 
-def c(body, assoc="MEMBER", t=None, author="alice"):
+def c(body, assoc="MEMBER", t=None, author="alice", author_type="User", app=None):
     N[0] += 1
     return {"url": "https://example.invalid/c/%d" % N[0], "author": author, "association": assoc, "body": body,
-            "created_at": t or "2026-10-20T10:%02d:00Z" % N[0], "id": N[0]}
+            "created_at": t or "2026-10-20T10:%02d:00Z" % N[0], "id": N[0], "author_type": author_type, "app": app}
+
+
+def bot(body, slug="acme-ai", author=None, app=None):
+    """A comment as GitHub records one an App's installation token posted: Bot `<slug>[bot]`, association NONE, via the App."""
+    return c(body, assoc="NONE", author=author or slug + "[bot]", author_type="Bot", app=app or slug)
 
 
 def run(E, cfg, comments, files=(), capped=False, carry=None, base_moved=None):
@@ -115,6 +120,28 @@ def fam_decide(plugin, scratch):
          [c(rev % H + "\n" + __import__("unicodedata").normalize("NFD", "E2E không chạy: the UI change is a label"))], files=web)
     case("an edited OLD comment does not become the newest (posting time decides)", 0, "review ok", plain,
          [c(rev % OLD, t="2026-10-20T09:00:00Z"), c(rev % H, t="2026-10-20T10:00:00Z")])
+    appcfg = cfg_of(E, {"evidence": {"trusted_app": "acme-ai"}})
+    case("a review by the trusted App's bot", 0, "review ok", appcfg, [bot(rev % H)])
+    case("…the same comment with evidence.trusted_app unset: ignored (as before)", 1, "ignored: ", plain, [bot(rev % H)])
+    case("…unset, the ignored line names the key", 1, "evidence.trusted_app is not set, so no App counts", plain, [bot(rev % H)])
+    case("a review by another App's bot", 1, "ignored: ", appcfg, [bot(rev % H, slug="other-ai")])
+    case("the App's slug in another case (the fence ignores case too)", 0, "review ok", appcfg, [bot(rev % H, app="ACME-ai")])
+    rc, out = run(E, appcfg, [c(rev % H, assoc="NONE", author="mallory")])
+    say(rc == 1 and "ignored: " in out and "trusted_app" not in out,
+        "[D] a plain outside user's ignored line carries no App reason (%s)" % out.replace("\n", " | ")[:160])
+    case("a user account named like the slug", 1, "ignored: ", appcfg, [c(rev % H, assoc="NONE", author="acme-ai", app="acme-ai")])
+    case("a user account whose login reads <slug>[bot]", 1, "ignored: ", appcfg,
+         [c(rev % H, assoc="NONE", author="acme-ai[bot]", app="acme-ai")])
+    case("a person posting through the App with their own token", 1, "ignored: ", appcfg,
+         [c(rev % H, assoc="NONE", author="mallory", app="acme-ai")])
+    case("the App's bot login, posted through another App", 1, "ignored: ", appcfg, [bot(rev % H, app="other-ai")])
+    case("another App's bot login, posted through the App", 1, "ignored: ", appcfg, [bot(rev % H, slug="other-ai", app="acme-ai")])
+    case("…a person via the App: the ignored line says only the App's bot counts", 1, "only the bot of evidence.trusted_app counts: "
+         "acme-ai[bot], posted through acme-ai", appcfg, [c(rev % H, assoc="NONE", author="mallory", app="acme-ai")])
+    case("the App's bot login with no App recorded", 1, "ignored: ", appcfg,
+         [c(rev % H, assoc="NONE", author="acme-ai[bot]", author_type="Bot")])
+    case("E2E pass by the trusted App's bot", 0, "e2e ok", cfg_of(E, {"evidence": {"ui_paths": ["web/**"], "trusted_app": "acme-ai"}}),
+         [bot(rev % H + "\nE2E pass")], files=web)
     prefixed = cfg_of(E, {"tokens": {"round_comment_prefix": "Vòng:"}})
     case("the prefix comes from the config", 0, "review ok", prefixed, [c("Vòng: %s — review round 1" % H)])
     case("…and the default prefix no longer counts", 1, "no AI-review comment", prefixed, [c(rev % H)])
@@ -212,9 +239,10 @@ def fam_carry(plugin, scratch):
         "[C] decide on real git: a PR-side change after the review is red, naming both SHAs")
 
 
-def evaluate(cond, gh):
+def evaluate(cond, gh, variables=None):
     text = str(cond).strip()
-    v = gh_expr.evaluate(text, {"github": gh}) if "${{" in text else gh_expr.expression(text, {"github": gh})
+    ctx = {"github": gh, "vars": variables or {}}
+    v = gh_expr.evaluate(text, ctx) if "${{" in text else gh_expr.expression(text, ctx)
     return gh_expr.truthy(v)
 
 
@@ -250,9 +278,38 @@ def fam_workflow(plugin, scratch):
     say(not evaluate(rr.get("if"), comment("MEMBER", draft=None)), "[W] rerun: a payload without the draft field counts as a draft")
     say(not evaluate(rr.get("if"), comment("MEMBER", is_pr=False)), "[W] rerun: not on a plain issue")
     say(not evaluate(rr.get("if"), pr("synchronize")), "[W] rerun: not on a pull_request event")
-    first = str(rr.get("if", "")).strip().split("&&")[0]
-    say("author_association" in first and "event_name" not in first and "issue" not in first,
-        "[W] rerun: the commenter's association is the first thing its if checks")
+
+    def by(login, kind="Bot", app=None, assoc="NONE"):
+        e = comment(assoc)
+        e["event"]["comment"]["user"] = {"login": login, "type": kind}
+        e["event"]["comment"]["performed_via_github_app"] = {"slug": app} if app else None
+        return e
+    appvar = {"PR_EVIDENCE_APP": "acme-ai"}
+    say(evaluate(rr.get("if"), by("acme-ai[bot]", app="acme-ai"), appvar), "[W] rerun: the App PR_EVIDENCE_APP names re-runs")
+    say(not evaluate(rr.get("if"), by("acme-ai[bot]", app="acme-ai")), "[W] rerun: …not with PR_EVIDENCE_APP unset")
+    say(not evaluate(rr.get("if"), by("acme-ai[bot]", app="acme-ai"), {"PR_EVIDENCE_APP": ""}), "[W] rerun: …not with it empty")
+    say(not evaluate(rr.get("if"), by("[bot]", app=""), {"PR_EVIDENCE_APP": ""}), "[W] rerun: …an empty variable trusts no '[bot]'")
+    say(not evaluate(rr.get("if"), by("other-ai[bot]", app="other-ai"), appvar), "[W] rerun: another App re-runs nothing")
+    say(not evaluate(rr.get("if"), by("other-ai[bot]", app="acme-ai"), appvar), "[W] rerun: another App's bot via the App re-runs nothing")
+    say(not evaluate(rr.get("if"), by("acme-ai", kind="User", app="acme-ai"), appvar), "[W] rerun: a user named like the slug re-runs nothing")
+    say(not evaluate(rr.get("if"), by("acme-ai[bot]", kind="User", app="acme-ai"), appvar), "[W] rerun: a User typed '<slug>[bot]' re-runs nothing")
+    say(not evaluate(rr.get("if"), by("mallory", kind="User", app="acme-ai"), appvar), "[W] rerun: a person via the App re-runs nothing")
+    say(not evaluate(rr.get("if"), by("acme-ai[bot]", app="other-ai"), appvar), "[W] rerun: the bot login through another App re-runs nothing")
+    say(not evaluate(rr.get("if"), by("acme-ai[bot]"), appvar), "[W] rerun: the bot login with no App recorded re-runs nothing")
+    say(not evaluate(rr.get("if"), dict(by("acme-ai[bot]", app="acme-ai"), event=dict(by("acme-ai[bot]", app="acme-ai")["event"],
+                                                                                       issue={"number": 7, "draft": True, "pull_request": {}})),
+                     appvar), "[W] rerun: the App's comment on a draft re-runs nothing")
+    cond, depth, cut = str(rr.get("if", "")).strip(), 0, None
+    for i, ch in enumerate(cond):   # the first top-level operand of the `&&` chain: a `(…)` group, whole
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        if depth == 0 and cond.startswith("&&", i):
+            cut = i
+            break
+    first = cond[:cut].strip()
+    closes = [i for i in range(len(first)) if first[:i + 1].count("(") == first[:i + 1].count(")")]
+    say(first.startswith("(") and closes[:1] == [len(first) - 1] and "author_association" in first and "vars.PR_EVIDENCE_APP" in first
+        and "event_name" not in first and "issue" not in first,
+        "[W] rerun: the commenter (an association, or the App) is the first operand its if checks, one group")
     steps = rr.get("steps") or []
     say(not any("uses" in s for s in steps), "[W] rerun: no action at all (no checkout)")
     runs = "\n".join(s.get("run", "") for s in steps)

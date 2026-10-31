@@ -111,8 +111,8 @@ if [ "$SUB" = create-intent ] && [ "$NOISSUE" -eq 0 ]; then
 fi
 
 # Không ghi __pycache__ vào thư mục plugin (có thể là bản cài trong cache).
-# `create-intent` that succeeded tells the sandbox the intent is at its spec stage (stage-signal.sh: a no-op without a
-# `session-notify` that supports `--stage`, and it never fails this script). The core is no longer exec'd, so its rc is kept.
+# `create-intent` that succeeded records the intent's spec stage (stage-signal.sh: `session-notify` in a sandbox, the local state
+# file without one; it never fails this script). The core is no longer exec'd, so its rc is kept.
 signal() { bash "$HERE/stage-signal.sh" "$@" || true; }
 # Only `create-intent` has something to do after the core; every other subcommand still `exec`s it (a signal to this pid reaches it).
 [ "$SUB" = create-intent ] || PYTHONDONTWRITEBYTECODE=1 exec python3 "$CORE" "${ARGS[@]}"

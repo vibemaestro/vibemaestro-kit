@@ -2,16 +2,20 @@
 # Gate: an AI review pinned to the PR's current head, and E2E evidence for a PR that changes UI paths (.vibemaestro/gates/pr_evidence.py)
 # =============================================================================
 # Rule behind it: `pr-body-shape` (round comments: first line `SHA: <full head SHA>`). Config: evidence.ui_paths (null: no UI, no E2E
-# asked), tokens.round_comment_prefix, commits.round_pattern in .vibemaestro/sdlc.json, read at the BASE.
+# asked), evidence.trusted_app (null: no App's comment counts), tokens.round_comment_prefix, commits.round_pattern in
+# .vibemaestro/sdlc.json, read at the BASE.
 #
 # Job `evidence` checks the base branch out and runs the script and the config found there; the PR's commits are fetched as data
 # (the patch-id that carries evidence over a pure merge of the base) and never run. It runs when the PR is ready and on each new
 # commit, and on an edit only when the base changed; not on a draft (ready_for_review starts the round).
 #
 # A comment does not attach a run to the PR's checks (an issue_comment run belongs to the default branch), so job `rerun` re-runs
-# the evidence job's latest run on the head when it is red. That job is fenced: its `if` checks the commenter's association BEFORE
-# anything else, it checks out nothing and runs no file of the repository (its steps are gh calls on values passed through env),
-# and it alone has actions: write. It skips a comment without a full 40-hex SHA in it.
+# the evidence job's latest run on the head when it is red. That job is fenced: its `if` checks the commenter BEFORE anything else
+# (an owner, a member or a collaborator; or the bot account of the App the repo variable PR_EVIDENCE_APP names: login
+# `<slug>[bot]`, type Bot, posted through that App. A comment run takes this file from the default branch and a variable is set
+# on the repository or its organisation, not by a PR, so a PR moves neither; set it to the slug of evidence.trusted_app, which
+# is what the gate itself trusts), it checks out nothing and runs no file of the repository (its steps are gh calls on values
+# passed through env), and it alone has actions: write. It skips a comment without a full 40-hex SHA in it.
 #
 # A skipped run tested nothing: the merge guard keeps the verdict of the last real run on the head. A red run is a signal on the
 # PR; whether it blocks the merge is the repo's guard or ruleset.
@@ -67,7 +71,7 @@ jobs:
             --base "origin/$BASE_REF" --base-ref "$BASE_REF" --config-ref "origin/$BASE_REF"
 
   rerun:
-    if: (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR') && github.event_name == 'issue_comment' && github.event.issue.pull_request && toJSON(github.event.issue.draft) == 'false'
+    if: (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR' || (vars.PR_EVIDENCE_APP != '' && github.event.comment.user.type == 'Bot' && github.event.comment.user.login == format('{0}[bot]', vars.PR_EVIDENCE_APP) && github.event.comment.performed_via_github_app.slug == vars.PR_EVIDENCE_APP)) && github.event_name == 'issue_comment' && github.event.issue.pull_request && toJSON(github.event.issue.draft) == 'false'
     runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
     timeout-minutes: 15
     permissions:

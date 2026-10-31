@@ -38,15 +38,31 @@ go out in one message so they run at once. The brief is the subagent's first pro
 5. *Flow:* run `vibemaestro-sdlc:intake` (its step 1 gives the task its own worktree under `.claude/worktrees/`; never edit the
    main tree), then `vibemaestro-sdlc:spec`, then end the turn with `SPEC ready: <spec path> on <branch>`. After approval: build,
    `vibemaestro-sdlc:ship` (draft PR), rule `before-ready`, then end with `PR #N ready: head <full sha>` and nothing after it.
+   A task that continues an intent whose spec is already approved says so in its brief and names the spec; it takes its own worktree (intake step 1) on the branch
+   its brief names, skips the rest of intake and spec, and builds as in the section "An intent whose spec is already approved" of `vibemaestro-sdlc:spec`, which sends its `code` stage.
+6. *Signals:* what the task records for the dashboard, in the local state file of `scripts/stage-signal.sh` (the item
+   `local-state` of `CONTRACT.md`). Pass the stem every time: the task's shell goes back to the main session's directory at each
+   call, so the branch it sees there is not the task's. The stage signals come from the scripts and skills as usual.
+   - Before `SPEC ready …`: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" ask <stem>` with that same line on stdin
+     (a quoted heredoc, `<<'EOF'`): the task shows as waiting.
+   - Before `PR #N ready …`: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" done <stem>` with the report on stdin, its first
+     line `<PR url> <full head sha>`: the task shows as done.
+   - Progress: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" progress <step> <stem>`, `<step>` one of `tests-pass`,
+     `tests-fail` (after a test run), `ci-green`, `ci-red` (after CI on the head), `fix-pushed` (after a review fix commit).
 
 ## 3. While the tasks run
 
 A subagent (on `agents.worker_model`) has no `session-ask` and cannot start another agent, so some steps come back to you:
 
+- **Bind each task to its subagent** as soon as you know its stem, at the latest at its `SPEC ready … on intent/<stem>`:
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" bind <stem> --agent <agent id>`, the agent id from the Agent tool's result
+  that started the task (on `agents.worker_model`). It ties the task's local state file to that subagent's transcript; the subagent
+  cannot do it, as its environment holds no agent id.
 - `SPEC ready …`: show the person the spec path and get their approval (silence is not approval), then resume that task with
   `SendMessage` and the person's words. A question outside the brief: answer it, or ask the person, the same way.
 - **The fresh-context review** of rule `before-ready`: you start it, one Agent call on `agents.review_model`, pinned to the PR head,
-  and send its findings to the subagent through `SendMessage`; the subagent answers with one fix commit.
+  and send its findings to the subagent through `SendMessage`; the subagent answers with one fix commit. When you start it, record
+  the task's review stage: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" review <stem> --subagents 1`.
 - **A stop-list baton** (skill `batonrun`): the task never signs it; it reports the baton path and what it does, and you take it
   to the owner.
 - **A brain write:** a subagent (on `agents.worker_model`) never writes brain (brain refuses it, rc 4); it lists the lines in its

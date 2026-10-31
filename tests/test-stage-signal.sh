@@ -92,6 +92,16 @@ fam_helper() {  # the helper alone: what it emits, and when it stays silent
   git_ -C "$PW" worktree add -q -b feat/other "$PW/../ot" main; CWD_SP="$PW/../ot"
   : > "$LOG"; SP new code >/dev/null 2>&1; empty "$(calls)" "[S6] on a branch that is not intent/*: no call"
   CWD_SP=""
+  # in a sandbox, with a session id: the local verbs call nothing, and nothing writes the local state file
+  local XS; XS=$(fresh)/state; : > "$LOG"
+  SPS() { ( cd "$TMP" && cenv PATH="$SNB:$(bare_path nogh)" SN_MODE=new SN_LOG="$LOG" CLAUDE_CODE_SESSION_ID=s-1 XDG_STATE_HOME="$XS" bash "$PLX/scripts/stage-signal.sh" "$@" ); }
+  out=$( { echo 'a question' | SPS ask 2026-03-04-x; echo "rc $?"; echo 'a report' | SPS done 2026-03-04-x; echo "rc $?"
+           SPS progress ci-green 2026-03-04-x </dev/null; echo "rc $?"; SPS bind 2026-03-04-x --agent abc </dev/null; echo "rc $?"; } 2>&1)
+  eq "$out" "$(printf 'rc 0\nrc 0\nrc 0\nrc 0')" "[S17] a sandbox: ask, done, progress and bind exit 0 and print nothing"
+  empty "$(cat "$LOG")" "[S17] …and call nothing, not even the --help probe"
+  : > "$LOG"; SPS spec 2026-03-04-x </dev/null >/dev/null 2>&1
+  eq "$(calls)" "ARGV: [--intent] [2026-03-04-x] [--stage] [spec] [2026-03-04-x: spec stage started]" "[S17] a sandbox with a session id: the stage call is as before"
+  [ ! -e "$XS" ] && ok "[S17] …and no local state file is written in a sandbox" || bad "[S17] …and no local state file is written in a sandbox"
 }
 
 # the two scripts run their own work first and signal as a side effect: the results are those of a session with no sandbox
@@ -167,6 +177,7 @@ BRK() {  # BRK <label> <family> <needle> <script> <old> <new>
   local d="$TMP/break-$1"; mk_plugin_copy "$d"
   mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
 }
+BRK sandbox-verbs-pass fam_helper '[S17] …and call nothing, not even the --help probe' stage-signal.sh 'case "${1:-}" in ask|done|progress|bind) exit 0 ;; esac' ':'
 BRK probe-skipped fam_helper '[S3] …and no structured call' stage-signal.sh 'grep -qF -- --stage' 'true'
 BRK refusal-fails fam_helper '[S4] a refusal (exit 64)' stage-signal.sh 'exit 0 # refused: the signal never fails the caller' 'exit 1'
 BRK stem-unchecked fam_helper '[S5] a stem with a space' stage-signal.sh '*[!A-Za-z0-9_-]*) return 0 ;;' '*) ;;'

@@ -144,6 +144,11 @@ clean_env() {
   # CLAUDE_CONFIG_DIR too: the hooks read the plugin registry under it (rule packs), and a suite must not see the real one
   unset VIBEMAESTRO_HUB CLAUDE_PLUGIN_OPTION_HUB_PATH INSTRUCTIONS_TARGET_ROOT INTENT_SLUG SEAT \
         CLAUDE_PLUGIN_ROOT CLAUDE_PROJECT_DIR CLAUDE_ENV_FILE CLAUDE_CONFIG_DIR KUBECONFIG PYTHONDONTWRITEBYTECODE
+  # The state directory and the session: a suite run from inside a Claude Code session must not write the session's real local
+  # state file (stage-signal.sh, outside a sandbox), which a dashboard would show as real work. XDG_STATE_HOME is the default
+  # place under the scratch HOME, so a check of the default place still holds; a test that needs the session sets it itself.
+  export XDG_STATE_HOME="$HOME/.local/state"
+  unset CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION
   net_guard_install "$t"
 }
 

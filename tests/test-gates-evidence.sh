@@ -6,7 +6,7 @@
 #
 # An AI review pinned to the PR's current head, and E2E evidence when the PR changes `evidence.ui_paths`: what counts, what is stale,
 # what carries over a pure merge of the base (patch-id, on real git), and the workflow's fences (the re-run job: the commenter's
-# association first, no checkout, actions: write on that job only). The cases are tests/fixtures/evidence_cases.py; each family
+# association, or the repo's own App, first; no checkout, actions: write on that job only). The cases are tests/fixtures/evidence_cases.py; each family
 # runs on the real plugin, then on a copy with one planted break that must turn it red. No network.
 # =============================================================================
 set -uo pipefail
@@ -71,7 +71,7 @@ BRK stale-review-passes fam_decide '[D] a review pinned to an older head' gates/
 BRK short-sha-counts fam_decide '[D] a short SHA' gates/pr_evidence.py \
   '    m = re.match(r"([0-9a-fA-F]{40})\b", rest)' '    m = re.match(r"([0-9a-fA-F]{7,40})\b", rest)'
 BRK outsider-counts fam_decide '[D] a review by an outside commenter' gates/pr_evidence.py \
-  '        if c.get("association") not in TRUSTED:' '        if False:'
+  '        if c.get("association") not in TRUSTED and not app_posted(c, app):' '        if False:'
 BRK fence-counts fam_decide '[D] E2E pass inside a fence does not count' gates/pr_evidence.py \
   '    return gc.strip_fences(SCRIPT.sub(lambda m: "\n" * m.group(0).count("\n"), text))' '    return SCRIPT.sub(lambda m: "\n" * m.group(0).count("\n"), text)'
 BRK ui-change-no-e2e-passes fam_decide '[D] a UI change without E2E evidence' gates/pr_evidence.py \
@@ -101,7 +101,7 @@ BRK base-move-ignored fam_decide '[D] the base moved since the run' gates/pr_evi
 BRK rerun-picks-skipped fam_workflow '[W] rerun: it picks the newest run whose evidence job' gates/workflows/pr-evidence.yml \
   'select(.name == "evidence")' 'select(.name != "x")'
 BRK rerun-any-commenter fam_workflow '[W] rerun: a comment by NONE re-runs nothing' gates/workflows/pr-evidence.yml \
-  "    if: (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR') && " "    if: "
+  "    if: (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR' || (vars.PR_EVIDENCE_APP != '' && github.event.comment.user.type == 'Bot' && github.event.comment.user.login == format('{0}[bot]', vars.PR_EVIDENCE_APP) && github.event.comment.performed_via_github_app.slug == vars.PR_EVIDENCE_APP)) && " "    if: "
 BRK rerun-checks-out fam_workflow '[W] rerun: no action at all' gates/workflows/pr-evidence.yml \
   "      - name: re-run the evidence check" "      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: re-run the evidence check"
