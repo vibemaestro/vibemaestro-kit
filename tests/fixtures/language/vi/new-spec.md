@@ -18,6 +18,12 @@ Intent: <ĐIỀN: đường dẫn kb/intent/…>
 
 <ĐIỀN: điều không làm. Ghi "không có" nếu thật sự không có.>
 
+## Inputs and failure cases
+
+| Đầu vào hay sự cố | Hành vi mong đợi | Test chứng minh |
+|---|---|---|
+| <ĐIỀN: đầu vào xấu, lạ, rỗng, quá cỡ, đồng thời, hỏng giữa chừng — chọn theo rủi ro, tối đa khoảng 10 hàng; không có thì thay cả bảng bằng một dòng `không có, vì <lý do>`> | <ĐIỀN: kết quả> | `<ĐIỀN: test, chạy trong tiêu chí chấp nhận>` |
+
 ## Tiêu chí chấp nhận
 
 1. `<ĐIỀN: lệnh chứng minh>` → <ĐIỀN: kết quả mong đợi>

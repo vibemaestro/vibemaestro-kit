@@ -37,7 +37,7 @@ link points to. The one way is
   interpreter code that names it and writes. Words split as the shell splits them (a quoted sentence is one word); the
   first word is the command, and after a runner (`sudo`, `timeout`, `env`, `xargs`, `find -exec` …) any later writer word;
   `bash -c`, `eval`, `su -c`, `$(…)`, backticks, a heredoc fed to a shell and a string literal in inline code are read again, any other heredoc body is data;
-  only a file whose own directory is `.claude` counts (not a `.claude/worktrees/…` checkout). Reads pass; so do `go kind:settings-merge` and `kit:coordinator-bootstrap`
+  only a file whose own directory is `.claude` counts (not a `.claude/worktrees/…` checkout). Reads pass; so do `go kind:settings-merge` and `kit:bootstrap`
   (their writes run inside the baton process).
 - Not seen: a name built at run time (a variable, `$(…)`, glue, a glob without `settings`), a script file run, a baton the
   session wrote (`check` has no settings pattern), `git apply|am`, an archive, a checkout or merge that does not name the
@@ -53,7 +53,7 @@ it (rc 3): the rules decide when a dialog shows, never whether the call runs. An
 but the mode and remote list it writes carry no `dialog <id>` line, so this version reads them as not chosen (`modes.md`).
 
 **A sandbox cannot get the owner's signature.** In a pod `sign --by owner` is refused, so a stop-list flow never runs there:
-`go` it to the card, `pack` it as `project:`, open the PR and hand the call to the coordinator (`kits.md`). There, exit 8
+`go` it to the card, `pack` it as `project:`, open the PR and hand the call to whoever briefed the session (`kits.md`). There, exit 8
 prints that call to hand over, not a sign line: no sign, `run` or `go --queue` is a next step in a pod; `rehearse` there
 prints no sign line either, only that `go` hands the call over. A `Stops: none` script held by the pod's mode manual is
 handed over the same way, marked as never run.

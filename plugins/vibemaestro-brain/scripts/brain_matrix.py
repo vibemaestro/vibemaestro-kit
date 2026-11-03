@@ -108,16 +108,19 @@ def rows(cwd):
     if os.path.isfile(os.path.join(d, "hot.jsonl")):
         try:
             _, st = s.load(d)
-            parts = s.render_parts(st)
-            hot_chars = len(s.join_parts(parts))
-            over = [p for p, _ in s.PARTS                      # in UTF-16 units, as the SessionStart cut counts
-                    if len(parts[p].encode("utf-16-le")) // 2 > (s.RENDER_CAP if p == "hot" else s.STRING_MAX)]
-            if over:                                   # first: the row keeps ≤ 300 bytes, and the end of a field is cut
-                warn_hot.append("over: " + ", ".join(over))
+            strings = s.render_strings(st)
+            hot_chars = sum(len(t) for _, t in strings)
+            over = [str(i) for i, (_, t) in enumerate(strings, 1)   # in UTF-16 units, as the SessionStart cut counts
+                    if s.units(t) + (s.FIRST_RESERVE if i == 1 else 0) > s.STRING_MAX - s.ANNOTATE_ROOM]
+            if over or len(strings) > s.SLOTS:         # first: the row keeps ≤ 300 bytes, and the end of a field is cut
+                warn_hot.append("over: " + ", ".join(over + ["%d strings" % len(strings)] if len(strings) > s.SLOTS else over))
             for letter, title in s.SECTIONS:
                 n = len(s.live(st, letter))
-                if n >= s.WARN_RATIO * s.CAPS[letter]:
-                    warn_hot.append("%s %d/%d" % (title.split(" ")[0], n, s.CAPS[letter]))
+                if n >= s.WARN_RATIO * s.cap(letter):
+                    warn_hot.append("%s %d/%d" % (title.split(" ")[0], n, s.cap(letter)))
+            q = sum(n for _, n in s.queue_counts(st))
+            if q:
+                warn_hot.append("%d queued" % q)
         except s.Refused:
             warn_hot.append("the chain is broken: brain doctor")
     else:

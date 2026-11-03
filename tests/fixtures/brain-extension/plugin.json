@@ -1,0 +1,5 @@
+{
+  "name": "brain-ext-example",
+  "description": "The example extension of vibemaestro-brain's tests: a ticket on each session, a vouched decision, a lesson shelved, and their lines",
+  "dependencies": ["vibemaestro-brain"]
+}

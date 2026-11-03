@@ -689,7 +689,9 @@ POD_NOTE = (" In a pod the owner never signs: after exit 8, hand the coordinator
 
 
 def in_pod():
-    return all(os.environ.get(v, "").strip() for v in ("INTENT_SLUG", "SEAT"))
+    """A worker session (vsdlc.in_sandbox): VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and SEAT (deprecated); the switch only adds."""
+    return (os.environ.get("VIBEMAESTRO_ROLE") == "worker"
+            or all(os.environ.get(v, "").strip() for v in ("INTENT_SLUG", "SEAT")))
 
 
 def launcher():

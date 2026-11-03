@@ -6,19 +6,26 @@
     python3 tests/live/brain-transcript-check.py --record <dir>     record the fixtures (a nested `claude` that needs no login)
 
 For each SessionStart of the source (default `compact`) in the transcript, the `hook_additional_context` attachment holds what
-reached the model: each brain string (`# vibemaestro-brain`, `## Brain · sessions`, `## Brain · plan`) is `inline` with its size,
-`persisted` (Claude Code replaced it whole by a `<persisted-output>` preview: it was over the cap) or absent. The k-th SessionStart
-of the source is paired with the k-th `session-start` line of the episode log with that source and the transcript's session
-(its lines' `sessionId`).
+reached the model, in the order the hook commands finished: each brain string is `inline` with its size, `persisted` (Claude Code
+replaced it whole by a `<persisted-output>` preview: it was over the cap) or absent. String 1 starts `# vibemaestro-brain`; the
+others are known by their titles, `## Brain · left brain, 2 of 3` (the left brain's strings first) and `## Brain · right brain,
+1 of 2`, a half in one string with no `k of n`. A brain of log format 3 or older had three fixed strings (`# vibemaestro-brain`,
+`## Brain · sessions`, `## Brain · plan`), read as before when the episode line says so. The k-th SessionStart of the source is
+paired with the k-th `session-start` line of the episode log with that source and the transcript's session (its lines'
+`sessionId`).
 
-Clean when, at every SessionStart: string 1 is inline; strings 2 and 3 are inline, or absent while the episode line says they
-injected 0 or comes from an older brain (no field for them: a compaction before the upgrade, in the same transcript); an inline string has the size the episode line counted; each id of --ids is an item line of one of its strings.
+Clean when, at every SessionStart: string 1 is inline; every other string the episode line counted (`injected_strings`, or
+`injected_sessions` and `injected_plan` before) is inline with that size, and one it counted 0 is absent; an older brain's line
+with no field for a string leaves it out (a compaction before the upgrade, in the same transcript); each id of --ids is an item
+line of one of the strings.
 rc 0 clean, 1 a check failed, 2 usage or no SessionStart of the source found. Standard library only.
 
---record writes three fixtures under <dir>, each a transcript and an episode log trimmed to the SessionStart lines, paths
-replaced by `<scratch>`: `three-strings` (all three inline; ids X1, S1, F1), `no-sessions` (no S or Q: string 2 absent, its
-episode line 0; ids X1, F1) and `plan-over-cap` (a copy of this checkout's brain with string 3's own cut raised past 10,000 and a
-plan part over it: Claude Code persists it). Paths, and Claude Code's name for the project directory, read `<scratch>`. Each is a real run of this checkout's hooks under `claude -p` in a scratch config,
+--record writes fixtures under <dir>, each a transcript and an episode log trimmed to the SessionStart lines, paths replaced by
+`<scratch>`: `two-halves` (string 1 and one right-brain string inline; ids D1, X1, S1, F1) and `right-over-cap` (a copy of this
+checkout's brain with the string cap raised past 10,000 and a right brain over it: Claude Code persists it). `three-strings`,
+`no-sessions` and `plan-over-cap` were recorded the same way by a brain of log format 3 and are kept to check that an older brain's
+transcript still reads. Paths, and Claude Code's name for the project directory, read `<scratch>`. Each is a real run of this
+checkout's hooks under `claude -p` in a scratch config,
 HOME and state root (the copy's manifest without its dependency on vibemaestro-sdlc, which a --plugin-dir load cannot resolve;
 the SessionStart hooks do not use sdlc): the hooks run and the transcript is written before the API call is refused, so nothing
 is spent.
@@ -33,8 +40,9 @@ import subprocess
 import sys
 import tempfile
 
-HEADS = (("1", "# vibemaestro-brain"), ("2", "## Brain · sessions"), ("3", "## Brain · plan"))
+HEADS = (("1", "# vibemaestro-brain"), ("2", "## Brain · sessions"), ("3", "## Brain · plan"))     # log format 3 and older
 FIELDS = {"1": "injected", "2": "injected_sessions", "3": "injected_plan"}
+HALF = re.compile(r"(?m)^## Brain · (left|right) brain(?:, (\d+) of (\d+))? v\d+ · ")
 
 
 def events(path, source):
@@ -71,7 +79,8 @@ def episode_lines(path, session, source):
 
 
 def classify(contents):
-    """{string number: ("inline", text) | ("persisted", preview)} of the brain strings among one SessionStart's contents."""
+    """{string number: ("inline", text) | ("persisted", preview)} of the brain strings among one SessionStart's contents, in the
+    three-string layout of log format 3 and older."""
     found = {}
     for c in contents:
         for n, head in HEADS:
@@ -79,6 +88,24 @@ def classify(contents):
                 found[n] = ("inline", c)
             elif c.startswith("<persisted-output>") and head in c:
                 found[n] = ("persisted", c)
+    return found
+
+
+def classify_halves(contents):
+    """The same for the layout of log format 4: string 1 by its head line, the others by their half's title and `k of n`; the
+    left brain's strings come first, so a right-brain string's number counts the left brain's."""
+    found, halves = {}, []
+    for c in contents:
+        how = "persisted" if c.startswith("<persisted-output>") else "inline"
+        if c.startswith("# vibemaestro-brain"):
+            found["1"] = (how, c)
+            continue
+        m = HALF.search(c) if how == "persisted" else HALF.match(c)
+        if m:
+            halves.append((m.group(1), int(m.group(2) or 1), int(m.group(3) or 1), how, c))
+    left = max([n for h, _, n, _, _ in halves if h == "left"] + [1])
+    for h, k, _, how, c in halves:
+        found[str(k if h == "left" else left + k)] = (how, c)
     return found
 
 
@@ -104,27 +131,12 @@ def check(transcript, episodes, ids, source):
     bad = 0
     for k, (src, contents) in enumerate(evs, 1):
         ep = eps[k - 1] if k - 1 < len(eps) else None
-        found, fails, parts = classify(contents), [], []
-        if ep is None:
-            fails.append("no session-start episode line for it")
-        for n, _ in HEADS:
-            how, text = found.get(n, (None, ""))
-            want = ep.get(FIELDS[n]) if ep else None
-            older = ep is not None and (ep.get("format") if isinstance(ep.get("format"), int) else 1) < 3
-            if n != "1" and older and FIELDS[n] not in ep and how is None:
-                parts.append("string %s none (an older brain, format %s)" % (n, ep.get("format", 1)))
-                continue
-            if how == "inline":
-                parts.append("string %s inline %s" % (n, "{:,}".format(len(text))))
-                if isinstance(want, int) and want != len(text):
-                    fails.append("string %s is %d characters, the episode line counted %d" % (n, len(text), want))
-            elif how == "persisted":
-                parts.append("string %s persisted" % n)
-                fails.append("string %s was replaced by a preview: over the cap" % n)
-            else:
-                parts.append("string %s absent" % n)
-                if n == "1" or want != 0:
-                    fails.append("string %s is absent while the episode line says %r" % (n, want))
+        fmt = (ep.get("format") if isinstance(ep.get("format"), int) else 1) if ep else 4
+        if fmt >= 4:
+            fails, parts = halves_check(contents, ep)
+        else:
+            fails, parts = threes_check(contents, ep)
+        found = classify_halves(contents) if fmt >= 4 else classify(contents)
         shown = "\n".join(t for how, t in found.values() if how == "inline")
         missing = [i for i in ids if not re.search(r"(?m)^- %s " % re.escape(i), shown)]
         if ids:
@@ -134,6 +146,61 @@ def check(transcript, episodes, ids, source):
         bad += bool(fails)
         print("SessionStart:%s %d · %s · %s" % (src, k, " · ".join(parts), "clean" if not fails else "FAIL: " + "; ".join(fails)))
     return 1 if bad else 0
+
+
+def halves_check(contents, ep):
+    """([failures], [parts]) of one SessionStart in the layout of log format 4."""
+    found, fails, parts = classify_halves(contents), [], []
+    if ep is None:
+        fails.append("no session-start episode line for it")
+    counted = ep.get("injected_strings") if ep and isinstance(ep.get("injected_strings"), list) else []
+    wants = {"1": ep.get("injected") if ep else None}
+    wants.update({str(i): v for i, v in enumerate(counted, 2)})
+    for n in sorted(set(wants) | set(found), key=int):
+        how, text = found.get(n, (None, ""))
+        want = wants.get(n)
+        if how == "inline":
+            parts.append("string %s inline %s" % (n, "{:,}".format(len(text))))
+            if isinstance(want, int) and want != len(text):
+                fails.append("string %s is %d characters, the episode line counted %d" % (n, len(text), want))
+            elif want is None:
+                fails.append("string %s is not in the episode line" % n)
+        elif how == "persisted":
+            parts.append("string %s persisted" % n)
+            fails.append("string %s was replaced by a preview: over the cap" % n)
+        elif want:
+            parts.append("string %s absent" % n)
+            fails.append("string %s is absent while the episode line says %r" % (n, want))
+        elif n == "1":
+            parts.append("string 1 absent")
+            fails.append("string 1 is absent")
+    return fails, parts
+
+
+def threes_check(contents, ep):
+    """([failures], [parts]) of one SessionStart in the three-string layout of log format 3 and older."""
+    found, fails, parts = classify(contents), [], []
+    if ep is None:
+        fails.append("no session-start episode line for it")
+    for n, _ in HEADS:
+        how, text = found.get(n, (None, ""))
+        want = ep.get(FIELDS[n]) if ep else None
+        older = ep is not None and (ep.get("format") if isinstance(ep.get("format"), int) else 1) < 3
+        if n != "1" and older and FIELDS[n] not in ep and how is None:
+            parts.append("string %s none (an older brain, format %s)" % (n, ep.get("format", 1)))
+            continue
+        if how == "inline":
+            parts.append("string %s inline %s" % (n, "{:,}".format(len(text))))
+            if isinstance(want, int) and want != len(text):
+                fails.append("string %s is %d characters, the episode line counted %d" % (n, len(text), want))
+        elif how == "persisted":
+            parts.append("string %s persisted" % n)
+            fails.append("string %s was replaced by a preview: over the cap" % n)
+        else:
+            parts.append("string %s absent" % n)
+            if n == "1" or want != 0:
+                fails.append("string %s is absent while the episode line says %r" % (n, want))
+    return fails, parts
 
 
 # --- --record ---------------------------------------------------------------------------------------------------------------
@@ -156,11 +223,10 @@ for spec in sys.argv[3:]:
 s.write_caches(d, s.fold([json.loads(b) for b in raw]), s.head_of(raw))
 """
 FIXTURES = {
-    "three-strings": ["D1=ship R4 after the gate", "N1=fix the parser", "S1=w-auth: review round 2, then the docs",
-                      "Q1=owner: approve the budget", "X1=release 0.3.0", "T1=never edit the log by hand",
-                      "F1=kit CLI: ~/bin/kit"],
-    "no-sessions": ["N1=fix the parser", "X1=release 0.3.0", "F1=kit CLI: ~/bin/kit"],
-    "plan-over-cap": ["N1=fix the parser"] + ["T%d=%s" % (i, "t" * 150) for i in range(1, 61)],
+    "two-halves": ["D1=ship R4 after the gate", "N1=fix the parser", "S1=w-auth: review round 2, then the docs",
+                   "Q1=owner: approve the budget", "X1=release 0.3.0", "T1=never edit the log by hand",
+                   "F1=kit CLI: ~/bin/kit"],
+    "right-over-cap": ["N1=fix the parser"] + ["T%d=%s" % (i, "t" * 150) for i in range(1, 61)],
 }
 
 
@@ -181,7 +247,7 @@ def record(out):
             m = json.load(open(man, encoding="utf-8"))
             m.pop("dependencies", None)
             json.dump(m, open(man, "w", encoding="utf-8"))
-            if name == "plan-over-cap":                  # string 3's own cut raised past Claude Code's cap
+            if name == "right-over-cap":                 # the strings' own cut raised past Claude Code's cap
                 p = os.path.join(brain, "scripts", "brain_store.py")
                 src = open(p, encoding="utf-8").read()
                 assert src.count("STRING_MAX = 9500 ") == 1

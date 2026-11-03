@@ -1,10 +1,10 @@
 ---
-description: "Only when the work is coordinated (a coordinating session briefs one execution session per pull request): the roles, the brief as the contract, the coordinator's post-check. Delivered whole at session start only in such a session; a session working alone needs none of it"
+description: "Deprecated, leaves in the next release. Only when the work is coordinated (a coordinating session briefs one execution session per pull request): the roles, the brief as the contract, the coordinator's post-check. Delivered whole at session start only in such a session; a session working alone needs none of it"
 ---
 
 # Coordinated work
 
-Delivered whole after the core only in a coordinated session (a sandbox session, or an enabled plugin of this marketplace that depends on this one ships the file `sdlc-coordinated` at its root); elsewhere it is one catalogue row.
+**Deprecated:** this rule leaves vibemaestro-sdlc in the next release; a plugin that coordinates sessions ships it as its own rule (its rule pack; the `sdlc-coordinated` marker stays). Delivered whole after the core only in a coordinated session (a sandbox session, or an enabled plugin of this marketplace that depends on this one ships the file `sdlc-coordinated` at its root); elsewhere it is one catalogue row.
 
 - **The coordinating session states the requirement and the solution; execution goes to an agent** (an execution session, or a subagent on `agents.worker_model`). Write *what must be true* (with the
   acceptance command) and *which way, and why* (with the context you measured) — not which file, line or command order. The agent that takes

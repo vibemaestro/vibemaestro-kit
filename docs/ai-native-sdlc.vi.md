@@ -39,7 +39,7 @@ Kit có hai plugin, cho một người với một seat Claude trên một máy:
 | Giai đoạn | Anthropic khuyến nghị | Kit | Trạng thái |
 |---|---|---|---|
 | Plan | Ghi ý định bằng lời người yêu cầu thành một file được commit; một người chấp nhận nó [S1] | skill `intake` ghi `kb/intent/<date>-<slug>.md` trước khi có nhánh; skill `brainstorm` | đã có |
-| Specify | Một spec viết từ ý định, được người duyệt trước khi viết code [S1], [S3] | skill `spec`: bốn mục, tiêu chí là lệnh; hỏi duyệt trước khi code | đã có (duyệt là kỷ luật, không phải cổng) |
+| Specify | Một spec viết từ ý định, được người duyệt trước khi viết code [S1], [S3] | skill `spec`: năm mục, tiêu chí là lệnh, một bảng đầu vào và tình huống hỏng; hỏi duyệt trước khi code | đã có (duyệt là kỷ luật, không phải cổng) |
 | Build | CLAUDE.md ngắn, skill cho chính sách, hook cho điều bắt buộc, worktree và subagent [S1], [S5] | Luật do hook đưa tới đúng lúc thao tác; mỗi intent một worktree; model riêng cho từng việc của subagent | đã có |
 | Review | Review với ngữ cảnh mới; agent viết code không được tự duyệt [S1], [S3] | luật `before-ready`; model review lấy từ config; tác giả không bao giờ tự merge PR của mình; người merge, hoặc phiên chính của `local-parallel` merge qua merge có canh gác | đã có (review là kỷ luật, không phải cổng) |
 | Test | Cho agent một phép kiểm chạy được; đưa bằng chứng; eval cho cấu hình của agent [S1], [S3] | Tiêu chí spec là lệnh; `open-pr.sh` từ chối PR không có bằng chứng chạy | đã có; eval là khoảng trống |
@@ -100,9 +100,10 @@ Kit có hai plugin, cho một người với một seat Claude trên một máy:
 
 ### Kit làm gì
 
-- Skill [`spec`](../plugins/vibemaestro-sdlc/skills/spec/SKILL.md) viết `kb/specs/<date>-<slug>.md` theo bốn mục (bối cảnh,
-  mục tiêu, ngoài phạm vi, tiêu chí chấp nhận). Mỗi tiêu chí là **một lệnh và kết quả mong đợi**. Tiêu chí cuối luôn đòi pull
-  request có mục bằng chứng chạy.
+- Skill [`spec`](../plugins/vibemaestro-sdlc/skills/spec/SKILL.md) viết `kb/specs/<date>-<slug>.md` theo năm mục (bối cảnh,
+  mục tiêu, ngoài phạm vi, đầu vào và tình huống hỏng, tiêu chí chấp nhận). Mỗi tiêu chí là **một lệnh và kết quả mong đợi**.
+  Tiêu chí cuối luôn đòi pull request có mục bằng chứng chạy. `## Inputs and failure cases` liệt kê, theo rủi ro, các đầu vào
+  xấu, lạ, rỗng, quá cỡ, đồng thời hay hỏng giữa chừng mà thay đổi phải chịu được, mỗi dòng kèm test chứng minh.
 - `kb.py check spec` kiểm hình dạng: đủ mục, đúng thứ tự, không còn chỗ trống, tiêu chí nào cũng có lệnh
   ([`kb.py`](../plugins/vibemaestro-sdlc/scripts/kb.py)).
 - Skill hỏi người duyệt spec trước khi sửa bất kỳ dòng code nào. Một subagent của `local-parallel` thay vào đó kết thúc lượt
@@ -229,8 +230,9 @@ Kit có hai plugin, cho một người với một seat Claude trên một máy:
 - Luật [`measurement-commands`](../plugins/vibemaestro-sdlc/rules/measurement-commands.instructions.md): trước khi đưa ra một con
   số, chạy một phép đối chứng chắc chắn dương, vì kết quả rỗng có thể do dụng cụ đo hỏng.
 - CI của chính kit chỉ chạy các suite mà thay đổi chạm tới (`tests/run-all.sh --changed`, trong `.github/workflows/test.yml`) và
-  chạy toàn bộ suite hai lần mỗi tuần (`.github/workflows/test-full.yml`). Test của kit cố ý làm hỏng một bản sao của code và
-  đòi kết quả đỏ ("planted breaks").
+  chạy toàn bộ suite hai lần mỗi tuần (`.github/workflows/test-full.yml`). Một test của kit chứng minh nó có tác dụng bằng cách
+  đỏ trên main trước thay đổi và xanh sau đó. Các test cố ý làm hỏng một bản sao của code ("planted breaks") đang được gỡ bỏ,
+  và một phép kiểm từ chối test mới kiểu đó.
 
 ### Kit khác ở đâu
 
@@ -424,7 +426,7 @@ Riêng file workflow vẫn lấy từ pull request, nên một thay đổi dư�
 - **kb**: thư mục `kb/` của một repo: intent, spec, plan, quyết định và file hiện trạng.
 - **main session** (phiên chính): trong `local-parallel`, phiên mà người nói chuyện cùng: nó chia việc, giao brief cho mỗi subagent một việc, chuyển spec cho người duyệt, kiểm lại và merge. Nó không sửa file nào của một việc.
 - **planted break** (phá thử): một test chép code, cố ý phá bản chép ở một chỗ, và đòi suite phải đỏ.
-- **spec**: `kb/specs/<ngày>-<slug>.md`: bốn mục theo thứ tự, tiêu chí là lệnh, được một người duyệt trước khi có code.
+- **spec**: `kb/specs/<ngày>-<slug>.md`: năm mục theo thứ tự, tiêu chí là lệnh, được một người duyệt trước khi có code.
 - **worker**: một subagent xây một việc theo một brief, từ intake tới một pull request nháp. Kết quả của nó là một lời khẳng định; phiên chính chạy lại lệnh nghiệm thu trước khi tin.
 
 ## Nguồn

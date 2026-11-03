@@ -11,8 +11,10 @@
 # [B] where the tool is missing: no `ps` (the memory cap says it is not enforced, the time cap holds); no `ulimit -v` (the backstop case
 #     says SKIP, loudly).
 # [H] plant_break (fixtures/plant.sh): red, green, an anchor not there once, a hang capped, -B added to python3 -I, no copy left.
-# [L] the lint for what plant_break cannot make impossible: [L1] a suite's own planted-break helper reaches capped; [L2] no
-#     python3 -I without -B. Planted offenders first, so a lint that stops matching turns this suite red.
+# [L] the lint: [L1] a suite's own planted-break helper reaches capped; [L2] no python3 -I without -B; [L3]-[L5] no planted
+#     break (fixtures/planted_lint.py): a rewrite of a copy run to go red, a call of expect_red or plant_break, a helper named for a
+#     break; a file listed in fixtures/planted-baseline.txt (it held breaks when the rule changed) may still hold them, a listed file
+#     that holds none is a note. Planted offenders first, so a lint that stops matching turns this suite red.
 # Caps are small here (a few hundred MB, a few seconds); the defaults (1024 MB, 600 s) are in the header of capped.sh.
 # =============================================================================
 set -uo pipefail
@@ -268,13 +270,124 @@ empty "$(lint "$L/test-l1-default.sh")" "[L1] control: a name with \`default\` i
 has "$(lint "$L/test-l2-bad.sh")" "[L2]" "[L2] planted: python3 -I without -B is flagged"
 empty "$(lint "$L/test-l2-ok.sh")" "[L2] control: -I -B (also before a colon), a plant line's mutation text and a comment are not flagged"
 has "$(lint "$L/test-l2-other-word.sh")" "[L2]" "[L2] planted: only plant and plant_break lines are skipped, not any helper word"
-N=0; O=""
+N=0; O=""; FILES=()
 for f in "$HERE"/test-*.sh "$HERE"/fixtures/*.sh; do
   case "$(basename "$f")" in test-capped-breaks.sh|capped.sh|plant.sh) continue;; esac   # these define the words they check
-  N=$((N + 1)); O="$O$(lint "$f")"
+  N=$((N + 1)); O="$O$(lint "$f")"; FILES+=("$f")
 done
 [ "$N" -ge 60 ] && ok "[L] instrument: the glob found $N suites and fixtures" || bad "[L] instrument: only $N files found"
 empty "$O" "[L] every suite and fixture passes [L1] and [L2]"
+
+# [L3]-[L5]: no planted break. The kit's tests prove a change by being red on main before it and green after; a check that a
+# copy of the code with a planted break goes red adds run time and nothing a reviewer reads. fixtures/planted_lint.py says what
+# it sees and what it cannot.
+nb() { python3 -I -B "$HERE/fixtures/planted_lint.py" "$HERE/fixtures" "$@" 2>&1; }   # a traceback is output: no control passes on it
+mk() { local f="$L/$1"; shift; printf '%s\n' "$@" > "$f"; printf '%s' "$f"; }
+PYRW=$'python3 - "$d/x.py" <<\'PY\'\nimport sys\np = sys.argv[1]; s = open(p).read()\nopen(p, "w").write(s.replace("a", "b"))\nPY'
+F=$(mk test-l3-py.sh 'run_one() {' '  d=$(mktemp -d); cp -R "$P" "$d"' "  $PYRW" '  o=$(capped run "$d"); rc=$?' '  eq "$rc" 1 x' '}')
+has "$(nb "$F")" "[L3]" "[L3] planted: a Python rewrite of a copy, then a capped run, is flagged"
+F=$(mk test-l3-sed.sh 'sed "s/a/b/" "$SRC" > "$TMP/copy.sh"' 'out=$(capped bash "$TMP/copy.sh"); rc=$?')
+has "$(nb "$F")" "[L3]" "[L3] planted: a sed of a script into a copy, then a capped run, is flagged"
+F=$(mk test-l3-via.sh 'edit_it() { sed -i "s/a/b/" "$1"; }' 'go() { capped bash "$1"; }' 'edit_it "$c"' 'o=$(go "$c")')
+has "$(nb "$F")" "[L3]" "[L3] planted: the rewrite and the capped run in two helpers of the file are flagged where they meet"
+F=$(mk test-l3-mutate.sh 'mutate "$d/x.py" a b' 'o=$(capped fam "$d")')
+has "$(nb "$F")" "[L3]" "[L3] planted: mutate (ports.sh), then a capped run, is flagged"
+F=$(mk test-l3-perl.sh "perl -pi -e 's/a/b/' \"\$d/x.pl\"" 'if capped run "$d"; then bad x; fi')
+has "$(nb "$F")" "[L3]" "[L3] planted: perl -pi, then a capped run after if, is flagged"
+F=$(mk test-l4.sh 'expect_red "x" fam_x "$d" needle')
+has "$(nb "$F")" "[L4]" "[L4] planted: a call of expect_red is flagged"
+F=$(mk test-l4b.sh 'out=$(plant_break "x" "$T" f.txt a b -- judge @COPY@)')
+has "$(nb "$F")" "[L4]" "[L4] planted: a call of plant_break is flagged"
+F=$(mk test-l5.sh 'BRKX() { :; }' 'xbreak() { :; }' 'mutant_run() { :; }')
+eq "$(nb "$F" | grep -c '\[L5\]')" 3 "[L5] planted: helpers named BRKX, xbreak and mutant_run are each flagged"
+F=$(mk test-l5-quoted-heredoc.sh "f x \$'git <<OPS\\nOPS'" 'has "$(t "$P" "go <<OPS")" x' 'BRKY() { :; }' 'cat <<OPS' 'text' 'OPS')
+has "$(nb "$F")" "[L5] a helper named for a planted break: 3:" "[L5] planted: a \`<<\` inside quotes (\$'…', \"\$(… \"…\")\") opens no here-document, so the helper before a real one is still seen"
+F=$(mk test-l3-input.sh "printf 'a bad line\n' > \"\$R/f.txt\"" 'block | sed "s/\$/\r/" > "$R/crlf.md"' 'O=$(capped run); eq "$?" 1 "a bad input is red"')
+empty "$(nb "$F")" "[L3] control: an input written new (printf >, sed on a pipe), then a capped checker, is a functional case"
+F=$(mk test-l3-marker.sh 'sed -i "s/a/b/" "$R/map"   # the guard'"'"'s input, not a break' 'o=$(capped guard); eq "$?" 1 x')
+empty "$(nb "$F")" "[L3] control: a rewrite that says it builds a checker's input (not a break) is not flagged"
+F=$(mk test-l3-label.sh 'red() { o=$(capped guard); }' 'sed -i "s/a/b/" "$R/map"' 'eq "$x" 1 "the oracle disagrees (red)"')
+empty "$(nb "$F")" "[L3] control: a quoted label that reads like a call (… (red)) is not a call"
+F=$(mk test-l3-helper.sh 'red() {  # a checker given a bad input: not a break' '  o=$(capped guard); rc=$?' '}' 'sed -i "s/a/b/" "$R/map"' 'red x')
+empty "$(nb "$F")" "[L3] control: a helper that says it runs a checker on its input (not a break) is not a break's run"
+F=$(mk test-l3-out.sh 'python3 -c "import sys; sys.stdout.write(sys.stdin.read())" < "$f"' 'o=$(capped run)')
+empty "$(nb "$F")" "[L3] control: Python that reads stdin and writes stdout rewrites no file"
+F=$(mk test-l5-ok.sh 'fam_default_off() { :; }' 'plant_input() {  # writes the checker'"'"'s input, not a break' '  :' '}')
+empty "$(nb "$F")" "[L5] control: a name with no break word, and a break-like name that carries the marker, are not flagged"
+
+F=$(mk test-l4-brain.sh "plant x case_x scripts/brain_owner.py 'if not ok:' 'if False:'")
+has "$(nb "$F")" "[L4]" "[L4] planted: a call of brain.sh's plant (it rewrites a copy and runs it capped) is flagged"
+F=$(mk test-l4-gates.sh 'BRKG x fam_x needle "$old" "$new"' 'BRKS y fam_y needle "$old" "$new"')
+eq "$(nb "$F" | grep -c '\[L4\]')" 2 "[L4] planted: calls of gates.sh's BRKG and BRKS (they call mutate and expect_red) are flagged"
+F=$(mk test-l4-shadow.sh 'plant() {  # plant <class> <line> — the line in a tracked file of the scratch repo: the checker'"'"'s input, not a break' '  printf "%s\n" "$2" > "$R/p.txt"' '}' 'plant kb "$KBPATH"')
+empty "$(nb "$F")" "[L4] control: a file that defines its own plant (an input builder with the marker) is not calling brain.sh's"
+for form in "write_text:python3 -c 'from pathlib import Path; p = Path(\"\$d/x.py\"); p.write_text(p.read_text().replace(\"a\", \"b\"))'" \
+            "sed -Ei:sed -Ei 's/a/b/' \"\$d/x.py\"" "sed --in-place:sed --in-place 's/a/b/' \"\$d/x.py\"" \
+            "perl -p -i:perl -p -i -e 's/a/b/' \"\$d/x.pl\"" "sed <:sed 's/a/b/' < \"\$PL/x.py\" > \"\$d/x.py\"" \
+            "sed --:sed -e 's/a/b/' -- \"\$PL/x.py\" > \"\$d/x.py\"" "awk:awk '{print}' \"\$PL/x.py\" > \"\$d/x.py\"" \
+            "sed literal path:sed 's/a/b/' plugins/x.py > \"\$d/x.py\""; do
+  F=$(mk test-l3-form.sh "${form#*:}" 'o=$(capped run "$d")')
+  has "$(nb "$F")" "[L3]" "[L3] planted: the rewrite form ${form%%:*}, then a capped run, is flagged"
+done
+F=$(mk test-l3-marker-line.sh "sed -i 's/return 1/return 0/' \"\$d/pl/scripts/guard.py\"" 'printf "x\n" > "$R/in.txt"   # the checker'"'"'s input, not a break' 'O=$(capped python3 -B "$d/pl/scripts/guard.py")')
+has "$(nb "$F")" "[L3] a planted break: a rewrite (line 1)" "[L3] planted: the marker on another line of top-level code does not hide a rewrite"
+F=$(mk test-l3-restore.sh 'go() {' '  o=$(capped bash "$1")' "  sed -i 's/b/a/' \"\$1\"" '}' "sed -i 's/a/b/' \"\$c\"; go \"\$c\"")
+has "$(nb "$F")" "[L3]" "[L3] planted: a rewrite, then a helper that runs capped and restores after, is flagged at the call"
+F=$(mk test-l3-restore-ok.sh 'f() { o=$(capped bash "$1"); sed -i "s/b/a/" "$1"; }' 'f "$x"')
+empty "$(nb "$F")" "[L3] control: a run then a rewrite on one line (a restore) is not a rewrite run to go red"
+F=$(mk test-l3-wrapper.sh "sed -i \"s/\$v/z/\" \"\$c\"" 'out=$(timeout 5 capped bash "$c")')
+has "$(nb "$F")" "[L3]" "[L3] planted: capped behind a wrapper (timeout 5) is still a red-expected run"
+F=$(mk test-r2-copy.sh 'd=$(fresh)/p; mk_plugin_copy "$d"' "printf 'bad line\\n' > \"\$d/input.txt\"" 'o=$(capped cenv python3 -B "$d/scripts/check.py" "$d/input.txt"); eq "$?" 1 "a bad input is red"')
+empty "$(nb "$F")" "[L3] control: a plugin copy (its isolation is not a break), a bad input written new, a capped check: a functional case"
+F=$(mk test-r2-twice.sh 'go() { o=$(capped bash "$1"); sed -i "s/b/a/" "$1"; }' 'go "$x"' 'go "$y"')
+empty "$(nb "$F")" "[L3] control: a run-then-restore helper called twice: the restore of one call is not a rewrite for the next"
+F=$(mk test-r2-heredoc-marker.sh "python3 - \"\$R/map\" <<'PY'   # the guard's input, not a break" 'import sys' 'p = sys.argv[1]; s = open(p).read()' 'open(p, "w").write(s.replace("a", "b"))' 'PY' 'o=$(capped guard)')
+empty "$(nb "$F")" "[L3] control: the marker on the line that opens a here-document covers the rewrite in its body"
+F=$(mk test-r2-arith.sh 'bit() { echo $((1 << n)); }' 'BRKZ() { :; }')
+has "$(nb "$F")" "[L5] a helper named for a planted break: 2:" "[L5] planted: \$((1 << n)) is a shift, not a here-document that hides the next helper"
+F=$(mk test-r2-multiline.sh "sed -i 's/a/b/' \"\$d/x.py\"" "cfg=\$(python3 -c '" "import sys; print(sys.stdin.read())' <<EOF" 'k: v' '' 'EOF' ')' 'o=$(capped run "$d")')
+has "$(nb "$F")" "[L3]" "[L3] planted: a quote opened on one line and closed on the next (then a here-document with a blank line) does not hide the run"
+F=$(mk test-r2-pyrestore.sh "go() { o=\$(capped bash \"\$1\"); python3 -c 'import sys; p = sys.argv[1]; open(p, \"w\").write(open(p).read().replace(\"b\", \"a\"))' \"\$1\"; }" 'go "$x"')
+empty "$(nb "$F")" "[L3] control: run, then a restore in Python on the same line, is not a break (the write sorts where it is)"
+F=$(mk test-r2-functional.sh 'case_bad_map() {  # the guard given a bad map: its input, not a break' '  mutate "$R/map" a b' '  o=$(capped guard)' '}')
+empty "$(nb "$F")" "[L3] control: a helper with the marker is not scanned, its mutate included"
+F=$(mk test-r2-wrapper.sh "sed -i 's/a/b/' \"\$c\"" 'o=$(timeout -s KILL 5 capped bash "$c")' "sed -i 's/a/b/' \"\$e\"" 'o=$(env -u HOME capped bash "$e")')
+eq "$(nb "$F" | grep -c '\[L3\]')" 2 "[L3] planted: capped behind timeout -s KILL 5 and env -u HOME is still a run"
+FX="$L/fx"; mkdir -p "$FX"
+printf '%s\n' 'chk() { o=$(capped bash "$1"); sed -i "s/b/a/" "$1"; }' 'setup() { sed -i "s/a/b/" "$1"; }' 'go_red() { sed -i "s/a/b/" "$1"; o=$(capped bash "$1"); }' > "$FX/a.sh"
+printf '%s\n' 'setup() { o=$(capped x); }' > "$FX/b.sh"
+F=$(mk test-r2-fx.sh 'chk "$f"' 'setup "$d"' 'go_red "$e"')
+eq "$(python3 -I -B "$HERE/fixtures/planted_lint.py" "$FX" "$F" 2>&1 | grep -c '\[L4\]')" 1 "[L4] a fixture helper is a break only when a body of it rewrites and then runs (go_red), not run-then-restore (chk) nor two same-named helpers that each do half (setup)"
+F=$(mk test-r3-capped-sed.sh 'mk() { cp -R "$P" "$d"; capped sed -i "s/a/b/" "$d/x.py"; }' 'mk' 'o=$(capped bash "$d/x.py")')
+has "$(nb "$F")" "[L3]" "[L3] planted: a capped command that is itself the rewrite (capped sed -i) is a rewrite, and the run after it is flagged"
+F=$(mk test-r3-capped-py.sh 'edit_copy() {' "  capped python3 - \"\$1\" <<'PY'" 'import sys' 'p = sys.argv[1]; s = open(p).read()' 'open(p, "w").write(s.replace("a", "b"))' 'PY' '}' 'edit_copy "$c"' 'o=$(capped bash "$c")')
+has "$(nb "$F")" "[L3]" "[L3] planted: capped python3 whose here-document writes the file is a rewrite, not a run"
+F=$(mk test-r3-arith.sh "MS=\$(( \$(python3 -c 'print(int(1.5*1000))') - t0 ))" '' 'sabotage() { :; }')
+has "$(nb "$F")" "[L5]" "[L5] planted: a \`))\` inside a quote within \$((…)) does not end it, so the next helper is seen"
+F=$(mk test-r3-subst.sh 'gate() { OUT=$(${GATE_BIN:+capped} bash "${GATE_BIN:-$G}"); }' 'plant() { sed "$2" "$G" > "$TMP/b-$1/g.sh"; printf "%s" "$TMP/b-$1/g.sh"; }' 'broken() { GATE_BIN="$2" gate; }' 'broken "[B1]" "$(plant b1 s/a/b/)" x' 'broken "[B2]" "$(plant b2 s/c/d/)" y')
+eq "$(nb "$F" | grep '\[L3\]' | sed 's/.*(line \([0-9]*\)) run to go red: \([0-9]*\):.*/\1-\2/' | tr '\n' ' ')" "4-4 5-5 " "[L3] planted: a rewrite in \$(…) runs before the command it is an argument of (\${X:+capped} is a run): each break pairs with its own run"
+F=$(mk test-r3-wrapper.sh "sed -i 's/a/b/' \"\$c\"" 'o=$(timeout --signal KILL 5 capped bash "$c")' "sed -i 's/a/b/' \"\$e\"" 'o=$(env -C /tmp capped bash "$e")')
+eq "$(nb "$F" | grep -c '\[L3\]')" 2 "[L3] planted: timeout --signal KILL 5 and env -C dir are wrappers"
+F=$(mk test-r4-later-heredoc.sh 'sed -i "s/a/b/" "$f"' "capped bash \"\$f\"; python3 - \"\$f\" <<'PY'" 'p = __import__("sys").argv[1]; s = open(p).read()' 'open(p, "w").write(s.replace("b", "a"))' 'PY')
+has "$(nb "$F")" "[L3]" "[L3] planted: a here-document opened by a later command on the line does not make the capped run a rewrite"
+F=$(mk test-r4-edge.sh 'v1() { sed s/a/b/ "$G" > "$T/v1"; printf %s "$T/v1"; }' 'expect_bad() { o=$(capped bash "$1"); [ -n "$o" ]; }' 'expect_bad "$(v1)"' 'capped bash "$(sed -i s/a/b/ "$c"; echo "$c")"')
+eq "$(nb "$F" | grep -c '\[L3\]')" 2 "[L3] planted: a call that ends a \$(…) and a rewrite that starts one sort inside it, before the run"
+F=$(mk test-r4-nested-quote.sh 'sed -i "s/a/b/" "$d/x.py"' 'o="$(cd "$d" && capped bash x.py 2>&1)"')
+has "$(nb "$F")" "[L3]" "[L3] planted: a capped run inside \"\$(… \"\$d\" …)\" is seen through the nested quote"
+F=$(mk test-l5-words.sh 'breaking_change() { :; }' 'line_breaks_crlf() { :; }' 'breakdown_ok() { :; }')
+empty "$(nb "$F")" "[L5] control: breaking, breaks and breakdown are not break words"
+
+BASE="$HERE/fixtures/planted-baseline.txt"
+NB=$(python3 -I -B "$HERE/fixtures/planted_lint.py" "$HERE/fixtures" "${FILES[@]}" 2>"$TMP/nb.err"); NRC=$?
+eq "$NRC:$(cat "$TMP/nb.err")" "0:" "[L] the lint read every suite and fixture (rc 0, nothing on stderr): a crash must not pass for a clean tree"
+LISTED=$(sed 's/#.*//' "$BASE" | tr -d ' \t\r' | grep .)   # a comment, whole-line or after a name, is no entry
+[ "$(printf '%s\n' "$LISTED" | grep -c .)" -ge 1 ] && ok "[L] instrument: the baseline lists $(printf '%s\n' "$LISTED" | grep -c .) files" || bad "[L] instrument: the baseline is empty"
+# here-strings, not `printf | grep -q`: under pipefail an early-exiting grep -q gives printf a SIGPIPE and a listed file reads as unlisted
+NEW=$(printf '%s\n' "$NB" | grep . | while IFS= read -r line; do grep -qxF -- "${line%%:*}" <<<"$LISTED" || printf '%s\n' "$line"; done)
+empty "$NEW" "[L] no planted break outside the files the baseline lists (fixtures/planted-baseline.txt)"
+HELD=$(printf '%s\n' "$NB" | grep . | while IFS= read -r line; do printf '%s\n' "${line%%:*}"; done | sort -u)
+CLEAN=$(printf '%s\n' "$LISTED" | while IFS= read -r n; do grep -qxF -- "$n" <<<"$HELD" || printf '%s ' "$n"; done)
+[ -z "$CLEAN" ] || echo "  note: listed in the baseline, no planted break left: $CLEAN"
 
 rm -f "$TMPDIR/.cap-hits"   # the hits above are this suite's own probes
 echo; summary

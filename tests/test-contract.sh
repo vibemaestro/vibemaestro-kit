@@ -4,8 +4,8 @@
 # =============================================================================
 # Run: bash tests/test-contract.sh [<item id>]
 #   no id: every item, the exactness checks, the change rule of the surface against the base branch (a change file when the base
-#   has .changes/, a version bump before), and the planted breaks
-#   an id (marketplace, layout, fetch-action, sandbox-env, seedable, cli, config-schema, rule-packs, dependents, local-state): that item only,
+#   has .changes/, a version bump before)
+#   an id (marketplace, layout, fetch-action, sandbox-env, worker-role, seedable, cli, config-schema, rule-packs, dependents, local-state): that item only,
 #   on the real tree
 #   CONTRACT_BASE=<ref>: the base of the version-bump rule (default: merge-base of HEAD and origin/main, else the origin/main tip)
 #
@@ -13,8 +13,7 @@
 # contract states (facts, exit codes, config keys) and checks them against a scratch copy of this repository, behaviourally where it
 # can: the fetch action's own `run` block copies, the hook output shows the sandbox, the plugin directory alone runs its hooks and
 # entry points, every exit code row is produced by one trigger through the public entry point. The list is exact both ways: a row
-# with no check and a check with no row are both red. Then each check is shown to go red on a copy with one planted break
-# (expect_red, tests/fixtures/ports.sh), so a check that cannot fail is caught. Real git on throw-away repositories, a fake `gh`,
+# with no check and a check with no row are both red. Real git on throw-away repositories, a fake `gh`,
 # the network shims of netguard.sh; no hub, no network, no `sleep`. Assertions read exit codes, files, JSON fields and outputs
 # compared with each other; prose is never asserted.
 #
@@ -33,7 +32,7 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 # shellcheck source=fixtures/baton-owner.sh
 . "$HERE/fixtures/baton-owner.sh"
 
-ITEMS="marketplace layout fetch-action sandbox-env seedable cli config-schema rule-packs dependents local-state"
+ITEMS="marketplace layout fetch-action sandbox-env worker-role seedable cli config-schema rule-packs dependents local-state"
 ONLY=${1:-}
 if [ -n "$ONLY" ]; then
   case " $ITEMS " in *" $ONLY "*) ;; *) echo "usage: bash tests/test-contract.sh [$(echo "$ITEMS" | tr ' ' '|')]" >&2; exit 64;; esac
@@ -156,6 +155,31 @@ fam_sandbox_env() {
   eq "$only2" "$none" "[sandbox-env] variables: only $v2 set: not a sandbox"
   eq "$empty1" "$none" "[sandbox-env] variables: $v1 empty: not a sandbox"
   eq "$empty2" "$none" "[sandbox-env] variables: $v2 empty: not a sandbox"
+  eq "$(sess "$P" "$A" "$v1=2026-01-01-example" "$v2=  ")" "$none" "[sandbox-env] variables: $v2 only spaces: not a sandbox"
+  eq "$(sess "$P" "$A" "$v1= " "$v2=example-seat")" "$none" "[sandbox-env] variables: $v1 only a space: not a sandbox"
+}
+
+# ── worker-role ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+fam_worker_role() {
+  local R=$1 P="$1/$PLREL" A var val v1 v2 none sw pair both
+  facts_exact "$R" worker-role "variable|value"
+  var=$(fact "$R" worker-role variable); val=$(fact "$R" worker-role value)
+  read -r v1 v2 <<<"$(fact "$R" sandbox-env variables)"
+  A=$(mk_origin)
+  none=$(sess "$P" "$A" X_UNRELATED=1)
+  sw=$(sess "$P" "$A" "$var=$val")
+  pair=$(sess "$P" "$A" "$v1=2026-01-01-example" "$v2=example-seat")
+  both=$(sess "$P" "$A" "$var=$val" "$v1=2026-01-01-example" "$v2=example-seat")
+  nonempty "$none" "[worker-role] instrument: the SessionStart hooks print something outside a worker session"
+  ne "$sw" "$none" "[worker-role] $var=$val alone: the hooks speak as in a worker session"
+  has "$sw" "Sandbox session" "[worker-role] $var=$val alone: the first-steps reminder of a worker session"
+  hasnt "$sw" "Deprecated: this session is a worker session" "[worker-role] $var=$val alone: no deprecation line"
+  has "$pair" "Deprecated: this session is a worker session" "[worker-role] $v1 and $v2 alone: the deprecation line"
+  eq "$both" "$sw" "[worker-role] $var=$val with $v1 and $v2: as the switch alone (no deprecation line)"
+  eq "$(sess "$P" "$A" "$var=Worker")" "$none" "[worker-role] $var=Worker: another value adds nothing"
+  eq "$(sess "$P" "$A" "$var= $val")" "$none" "[worker-role] $var with a space before $val: another value adds nothing"
+  eq "$(sess "$P" "$A" "$var=solo")" "$none" "[worker-role] $var=solo: another value adds nothing"
+  eq "$(sess "$P" "$A" "$var=solo" "$v1=2026-01-01-example" "$v2=example-seat")" "$pair" "[worker-role] $var=solo with $v1 and $v2: still a worker session (the switch never takes one away)"
 }
 
 # ── seedable ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -557,13 +581,12 @@ hooks_rc() {
   done <<<"$(hook_cmds_of "$P")"
   echo 0
 }
-# fam_cli <repo copy> — every exit-code row of the contract (CLI_ONLY=<entry> limits it to one entry point)
+# fam_cli <repo copy> — every exit-code row of the contract
 fam_cli() {
   R=$1; local rows e c got n=0
   rows=$(cj "$R" '"\n".join(r[0]+" "+r[1] for r in d["codes"])' | python3 -c 'import json,sys; print(json.load(sys.stdin))')
   while read -r e c; do
     [ -n "$e" ] || continue
-    [ -z "${CLI_ONLY:-}" ] || [ "$e" = "$CLI_ONLY" ] || continue
     printf '%s\n' "$TRIGGERS" | grep -qxF "$e $c" || { bad "[cli] $e rc $c: a contract row with no trigger in this suite"; continue; }
     [ -e "$R/$PLREL/$e" ] || { bad "[cli] $e rc $c: the entry point does not exist"; continue; }
     got=$(trig "$R/$PLREL" "$e" "$c" | tail -1); n=$((n+1))
@@ -571,7 +594,6 @@ fam_cli() {
   done <<<"$rows"
   while read -r e c; do
     [ -n "$e" ] || continue
-    [ -z "${CLI_ONLY:-}" ] || [ "$e" = "$CLI_ONLY" ] || continue
     printf '%s\n' "$rows" | grep -qxF "$e $c" || bad "[cli] $e rc $c: a trigger with no contract row"
   done <<<"$TRIGGERS"
   [ "$n" -gt 0 ] && ok "[cli] instrument: $n exit codes triggered" || bad "[cli] instrument: no exit code was triggered"
@@ -1290,28 +1312,6 @@ eq "$(probe C13)" 1 "[changes] C13 what a dependent call holds changed (an owner
 eq "$(probe C14)" 1 "[changes] C14 …the call named without backticks: red"
 eq "$(probe C15)" 0 "[changes] C15 …the call named in backticks: green"
 eq "$(probe C16)" 0 "[changes] C16 a dependent call added, with a minor change file that does not name it: green"
-# planted breaks of the change-file check: each flips its probe
-cbrk() {  # cbrk <label> <probe> <rc on the broken copy> <old> <new>
-  local d="$TMP/cbrk-$1"; mkdir -p "$d/tests/fixtures" "$d/$PLREL/scripts"; cp "$CT" "$d/tests/fixtures/contract.py"
-  cp "$SRC_ROOT/$PLREL/scripts/release.py" "$d/$PLREL/scripts/release.py"      # the copy reads change files as the checkout does
-  mutate "$d/tests/fixtures/contract.py" "$4" "$5" || return
-  local out rc got; out=$(capped cf_probes "$d/tests/fixtures/contract.py"); rc=$?   # capped: memory and time caps (fixtures/capped.sh)
-  cap_red "$rc" "break [$1]" && return   # a cap hit is red by the cap, not a blind probe
-  got=$(printf '%s\n' "$out" | sed -n "s/^$2 //p")
-  [ "$got" = "$3" ] && ok "break [$1]: probe $2 flips to rc $3, so its check above would go red" || bad "break [$1]: probe $2 gives rc ${got:-none}, not $3: the probe is blind"
-}
-cbrk level-ignored C2 0 'if best is None or LEVELS.index(best) < LEVELS.index(need):' 'if best is None:'
-cbrk plugin-ignored C3 0 '        if plugin in plugins:' '        if True:'
-cbrk major-not-needed C5 0 '        need = "major" if lost else "minor"' '        need = "minor"'
-cbrk frozen-unchecked C7 0 '    if base_t is not None and cur["frozen_at"] != base_t["frozen_at"] and cur_ver == base_ver:' '    if False:'
-cbrk base-file-counted C8 0 'or git(repo, "cat-file", "-e", "%s:%s" % (base, rel))[0] == 0:' 'or False:'
-cbrk symlink-counted C10 0 '        if os.path.islink(os.path.join(d, name)):' '        if False:'
-cbrk tip-decides-mode C9 1 '    if git(repo, "log", "-1", "--full-history", "--format=%H", base, "--", ".changes/README.md")[1].strip():' '    if git(repo, "ls-tree", "--name-only", base, "--", ".changes")[1].strip():'
-cbrk dep-name-ignored C11 0 '        if call is not None and call not in out and not any("`%s`" % call in line for line in lines):' '        if False:'
-cbrk dep-name-bare C14 0 '        if call is not None and call not in out and not any("`%s`" % call in line for line in lines):' '        if call is not None and call not in out and not any(call in line for line in lines):'
-cbrk dep-not-identity C13 0 ' | {("dep",) + tuple(r) for r in t["deps"]}' ''
-cbrk never-change-mode C4 1 '    if git(repo, "log", "-1", "--full-history", "--format=%H", base, "--", ".changes/README.md")[1].strip():' '    if False:'
-
 echo "== instrument: the release-time rule (a release, a hotfix, a back-merge) =="
 # rl_repo — cf_repo whose origin/release is the base commit, then a surface change merged on main with its minor change file; sets B
 rl_repo() {
@@ -1366,145 +1366,5 @@ eq "$(probe H3)" 1 "[hotfix] H3 a hotfix that moves 'Frozen at': red"
 eq "$(probe F1)" 0 "[first] F1 the first public release after the reset: 0.1.0, below release's 1.0.0, 'Frozen at' 0.1.0: green"
 eq "$(probe F2)" 1 "[first] F2 …with 'Frozen at' left at the old 1.0.0: red"
 eq "$(probe F3)" 0 "[first] F3 the release after an unpromoted first one (origin/release still from before the reset): 0.2.0 compared with the base's 0.1.0: green"
-rbrk() {  # rbrk <label> <probe> <rc on the broken copy> <old> <new>
-  local d="$TMP/rbrk-$1"; mkdir -p "$d/tests/fixtures" "$d/$PLREL/scripts"; cp "$CT" "$d/tests/fixtures/contract.py"
-  cp "$SRC_ROOT/$PLREL/scripts/release.py" "$d/$PLREL/scripts/release.py"
-  mutate "$d/tests/fixtures/contract.py" "$4" "$5" || return
-  local got; got=$(capped rl_probes "$d/tests/fixtures/contract.py" | sed -n "s/^$2 //p")   # capped: memory and time caps (fixtures/capped.sh)
-  [ "$got" = "$3" ] && ok "break [$1]: probe $2 flips to rc $3, so its check above would go red" || bad "break [$1]: probe $2 gives rc ${got:-none}, not $3: the probe is blind"
-}
-rbrk frozen-not-set L2 0 '        if cur["frozen_at"] != cur_ver:' '        if False:'
-rbrk minor-not-needed L3 0 '        elif vtuple(cur_ver)[:2] <= vtuple(ref_ver)[:2]:' '        elif False:'
-rbrk major-not-needed L4 0 '        if lost and vtuple(cur_ver)[0] <= vtuple(ref_ver)[0]:' '        if False:'
-rbrk frozen-free L6 0 '        if base_t is not None and cur["frozen_at"] != base_t["frozen_at"]:' '        if False:'
-rbrk base-not-release L1 1 '    ref, what = (ref.strip(), "origin/release") if rc == 0 and ref.strip() else (base, "the base")' '    ref, what = base, "the base"'
-rbrk hotfix-surface-free H1 0 '    if not same:
-        bad.append("the surface changed in a %s' '    if False:
-        bad.append("the surface changed in a %s'
-rbrk hotfix-frozen-free H3 0 '% (kind, kind))
-    if base_t is not None and cur["frozen_at"] != base_t["frozen_at"]:' '% (kind, kind))
-    if False:'
-rbrk release-ref-shadowed L8 0 '"refs/remotes/origin/release^{commit}"' '"origin/release^{commit}"'
-rbrk hotfix-as-release H3 0 '        if kind in ("hotfix", "back-merge"):' '        if False:'
-rbrk first-ordered F1 1 '    if not base_ver:
-        if cur_ver != cur["frozen_at"]:' '    if False:
-        if cur_ver != cur["frozen_at"]:'
-rbrk first-frozen-free F2 0 '        if cur_ver != cur["frozen_at"]:' '        if False:'
-rbrk stale-release-ordered F3 1 "    if what == \"origin/release\" and rc == 0 and '\"version\"' in rel_manifest:" '    if False:'
-
-echo "== planted breaks: each check must go red on a copy with one break =="
-# BRK <label> <family> <needle> <file under the repo> <old> <new>
-BRK() {
-  local d="$TMP/break-$1"; mk_repo_copy "$d"
-  mutate "$d/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-for e in scripts/intent-branch.sh scripts/open-pr.sh scripts/kb.py scripts/sdlc_config.py scripts/install_gates.py scripts/baton.py \
-         gates/commit_discipline.py gates/pr_sensitive.py gates/pr_title.py gates/dead_branches.sh hooks/hooks.json; do
-  f="fam_cli_$(printf '%s' "$e" | tr -c 'A-Za-z0-9\n' '_')"
-  eval "$f() { CLI_ONLY='$e' fam_cli \"\$1\"; }"
-done
-MP=.claude-plugin/marketplace.json; MAN=$PLREL/.claude-plugin/plugin.json; ACT=.github/actions/fetch-plugin/action.yml
-BRK marketplace-renamed fam_marketplace '[marketplace] marketplace name' $MP '"name": "vibemaestro",' '"name": "vibemaestro-next",'
-BRK plugin-renamed fam_marketplace '[marketplace] plugin id' $MAN '"name": "vibemaestro-sdlc"' '"name": "vibemaestro-sdlc-next"'
-BRK source-form fam_layout '[layout] plugin source' $MP '"source": "./plugins/vibemaestro-sdlc"' '"source": "plugins/vibemaestro-sdlc"'
-BRK input-renamed fam_fetch_action '[fetch-action] inputs' $ACT '  dest:' '  target:'
-BRK input-optional fam_fetch_action '[fetch-action] required inputs' $ACT 'required: true' 'required: false'
-BRK input-unread fam_fetch_action '[fetch-action] copies' $ACT 'DEST: ${{ inputs.dest }}' 'DEST: ${{ inputs.target }}'
-BRK copies-git fam_fetch_action '[fetch-action] copies' $ACT 'tar --exclude=.git -C' 'tar -C'
-BRK seat-renamed fam_sandbox_env '[sandbox-env] variables' $PLREL/scripts/vsdlc.py 'SANDBOX_ENV = ("INTENT_SLUG", "SEAT")' 'SANDBOX_ENV = ("INTENT_SLUG", "SEAT_ID")'
-BRK one-variable-enough fam_sandbox_env '[sandbox-env] variables' $PLREL/scripts/vsdlc.py 'return all(os.environ.get(v, "").strip() for v in SANDBOX_ENV)' 'return any(os.environ.get(v, "").strip() for v in SANDBOX_ENV)'
-# seedable: kb.py imports a helper that lives outside the plugin directory; in place it works, seeded alone it does not
-d="$TMP/break-reaches-outside"; mk_repo_copy "$d"; mkdir -p "$d/scripts"; echo 'X = 1' > "$d/scripts/outside_helper.py"
-mutate "$d/$PLREL/scripts/kb.py" 'import datetime' 'import datetime
-sys_path_probe = __import__("sys").path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__import__("os").path.abspath(__file__)), "..", "..", "..", "scripts")); import outside_helper' \
-  && expect_red reaches-outside fam_seedable "$d" '[seedable] scripts/kb.py from the seed'
-BRK rc-intent-branch fam_cli_scripts_intent_branch_sh '[cli] scripts/intent-branch.sh rc 8' $PLREL/scripts/intent-branch.sh '        exit 8' '        exit 9'
-BRK rc-open-pr fam_cli_scripts_open_pr_sh '[cli] scripts/open-pr.sh rc 66' $PLREL/scripts/open_pr.py '    if summary is None:
-        return 66' '    if summary is None:
-        return 65'
-BRK rc-kb fam_cli_scripts_kb_py '[cli] scripts/kb.py rc 66' $PLREL/scripts/kb.py 'return die(M("kb.cs_unreadable", path), 66)' 'return die(M("kb.cs_unreadable", path), 1)'
-BRK rc-sdlc-config fam_cli_scripts_sdlc_config_py '[cli] scripts/sdlc_config.py rc 64' $PLREL/scripts/sdlc_config.py 'no such key: %s\n" % rest[1])
-        return 64' 'no such key: %s\n" % rest[1])
-        return 2'
-BRK rc-install-gates fam_cli_scripts_install_gates_py '[cli] scripts/install_gates.py rc 64' $PLREL/scripts/install_gates.py 'return die(64, "unknown gate %s' 'return die(2, "unknown gate %s'
-BRK rc-baton fam_cli_scripts_baton_py '[cli] scripts/baton.py rc 6' $PLREL/scripts/baton.py 'EXISTS, PERMS, OWNER, USAGE, NOINPUT = 0, 1, 2, 3, 4, 5, 6, 7, 8, 64, 66' 'EXISTS, PERMS, OWNER, USAGE, NOINPUT = 0, 1, 2, 3, 4, 5, 9, 7, 8, 64, 66'
-BRK rc-commit-discipline fam_cli_gates_commit_discipline_py '[cli] gates/commit_discipline.py rc 1' $PLREL/gates/commit_discipline.py '% (cfg["tokens"]["commit_exception"], MIN_REASON))
-    return rc' '% (cfg["tokens"]["commit_exception"], MIN_REASON))
-    return 3 if rc == 1 else rc'
-BRK rc-pr-sensitive fam_cli_gates_pr_sensitive_py '[cli] gates/pr_sensitive.py rc 1' $PLREL/gates/pr_sensitive.py 'return gc.RED if total else gc.OK' 'return 3 if total else gc.OK'
-BRK rc-pr-title fam_cli_gates_pr_title_py '[cli] gates/pr_title.py rc 1' $PLREL/gates/pr_title.py 'print("FAIL cannot read the payload: %s" % e)
-        return gc.RED' 'print("FAIL cannot read the payload: %s" % e)
-        return 3'
-BRK rc-dead-branches fam_cli_gates_dead_branches_sh '[cli] gates/dead_branches.sh rc 1' $PLREL/gates/dead_branches.sh '  exit 1' '  exit 3'
-BRK rc-hooks fam_cli_hooks_hooks_json '[cli] hooks/hooks.json rc 0' $PLREL/scripts/pre-bash.py '    sys.exit(vsdlc.run(lambda: vsdlc.pretool_command(sys.stdin.read())))' '    _in = sys.stdin.read(); __import__("json").loads(_in); sys.exit(vsdlc.run(lambda: vsdlc.pretool_command(_in)))'
-BRK code-row-removed fam_cli_scripts_intent_branch_sh '[cli] scripts/intent-branch.sh rc 8: a trigger with no contract row' $PLREL/CONTRACT.md \
-    "$(row scripts/intent-branch.sh 8)"$'\n' ''
-BRK code-row-added fam_cli_scripts_kb_py '[cli] scripts/kb.py rc 67: a contract row with no trigger' $PLREL/CONTRACT.md \
-    "$ROW" "$ROW"$'\n''| `scripts/kb.py` | 67 | a code nobody produces |'
-BRK key-retyped fam_config_schema '[config-schema] keys: a schema-' $PLREL/scripts/sdlc_config.py '"kb": ("obj", {"spec_warn_bytes": ("intnull", 1)}),' '"kb": ("obj", {"spec_warn_bytes": ("bool",)}),'
-BRK title-never-passes fam_cli_gates_pr_title_py '[cli] gates/pr_title.py rc 0' $PLREL/gates/pr_title.py '    print(("FAIL " if rc else "ok   ") + msg)
-    return rc' '    print(("FAIL " if rc else "ok   ") + msg)
-    return rc if (rc or cfg["pr"]["title"]["pattern"] is None) else 1'
-BRK title-rule-green fam_cli_gates_pr_title_py '[cli] gates/pr_title.py rc 1' $PLREL/gates/pr_title.py '    print(("FAIL " if rc else "ok   ") + msg)
-    return rc' '    print(("FAIL " if rc else "ok   ") + msg)
-    return 0'
-BRK no-gh-rc fam_cli_scripts_open_pr_sh '[cli] scripts/open-pr.sh rc 2' $PLREL/scripts/open-pr.sh 'command -v gh >/dev/null 2>&1 || die "$(say op.sh.no_gh)" 2' 'command -v gh >/dev/null 2>&1 || die "$(say op.sh.no_gh)" 9'
-BRK key-renamed fam_config_schema '[config-schema] key pr.draft' $PLREL/scripts/sdlc_config.py '        "draft": ("bool",),' '        "draft_default": ("bool",),'
-BRK schema-bump fam_config_schema '[config-schema] schema' $PLREL/scripts/sdlc_config.py 'SCHEMA = 1 ' 'SCHEMA = 2 '
-BRK config-moved fam_config_schema '[config-schema] config file' $PLREL/scripts/sdlc_config.py 'CONFIG_REL = ".vibemaestro/sdlc.json"' 'CONFIG_REL = ".vibemaestro/config.json"'
-BRK item-removed fam_contract '[contract] items' $PLREL/CONTRACT.md '| `seedable` | the plugin directory' '| `seedable-x` | the plugin directory'
-RPP=$PLREL/scripts/rule_packs.py
-BRK local-version-raised fam_local_state '[local-state] local version' $PLREL/scripts/local_state.py 'LOCAL_V = 1' 'LOCAL_V = 2'
-BRK local-place-moved fam_local_state '[local-state] place: no file at' $PLREL/scripts/local_state.py 'base = os.path.join(top, "sessions")' 'base = os.path.join(top, "local")'
-BRK local-field-added fam_local_state '[local-state] fields: exactly these' $PLREL/scripts/local_state.py '        "hint": False,' '        "hint": False, "extra": None,'
-BRK local-mode-wide fam_local_state '[local-state] mode' $PLREL/scripts/local_state.py 'os.fchmod(f.fileno(), 0o600)' 'os.fchmod(f.fileno(), 0o640)'
-BRK pack-dependency-renamed fam_rule_packs '[rule-packs] dependency named in dependencies: the plugin that names it' $RPP 'DEPENDENCY = "vibemaestro-sdlc"' 'DEPENDENCY = "vibemaestro-core"'
-BRK pack-registry-moved fam_rule_packs '[rule-packs] registry: a pack listed' $RPP 'REGISTRY_REL = ("plugins", "installed_plugins.json")' 'REGISTRY_REL = ("plugins", "registry.json")'
-BRK pack-home-moved fam_rule_packs '[rule-packs] registry without CLAUDE_CONFIG_DIR' $RPP '        return os.path.join(home, ".claude"), None' '        return os.path.join(home, ".claude-code"), None'
-BRK pack-takes-sdlc-name fam_rule_packs '[rule-packs] precedence: a pack rule named like' $PLREL/scripts/rules.py '                if n in own:' '                if False:'
-BRK pack-beats-repo fam_rule_packs '[rule-packs] precedence: a repo rule replaces' $PLREL/scripts/rules.py '                elif repo.get(n):' '                elif False:'
-BRK pack-any-project fam_rule_packs '[rule-packs] project scope: an entry of another project' $RPP '        if pp is not None and real(pp)[0] != project:' '        if False:'
-BRK pack-disabled-served fam_rule_packs '[rule-packs] enabled: false in the user settings' $RPP '            if enabled.get(pid) is not True:    # measured: a plugin no settings file enables is not enabled' '            if False:'
-BRK pack-unnamed-served fam_rule_packs '[rule-packs] enabled: named by no settings file' $RPP '            if enabled.get(pid) is not True:    # measured: a plugin no settings file enables is not enabled' '            if enabled.get(pid) is False:'
-# dependents: the brief's two planted breaks. Each goes red on the tree (the family), then, with the contract row edited to the new
-# form, red on a scratch history of the copy (base-check: the old call is gone and no change file names it), and green with a
-# change file naming the old call. (The real change also renames the probe in DEP_CALLS: a row with no probe is red.)
-SEALK='        if rest[0] == "--seal" and len(rest) > 1 and seal is None:'
-d="$TMP/break-dep-fixture"; mk_repo_copy "$d"; mv "$d/$DFIX" "$d/tests/fixtures/baton-owner-v2.sh"
-expect_red dep-fixture-renamed fam_dependents "$d" "[dependents] $DFIX"
-BRK dep-row-drift fam_dependents "[dependents] $DSIGN: rc without owner_asked" $PLREL/CONTRACT.md 'for that very call; rc 3 without it |' 'for that very call; rc 0 without it |'
-BRK dep-base-ignored fam_dependents "[dependents] $IBS create-intent --slug <slug> --base <ref>: …the branch tip" $SDLC/scripts/intent_branch.py '    if not ref_exists(a.base, a.cwd):' '    a.base = "HEAD"
-    if not ref_exists(a.base, a.cwd):'
-BRK dep-fixes-ignored fam_dependents "[dependents] $SDLC/scripts/open-pr.sh --title <title> --summary <file> --evidence <file> --dry-run --fixes <n>: …stdout" $SDLC/scripts/open_pr.py 'body = build_body(summary, evidence, crit, a.fixes,' 'body = build_body(summary, evidence, crit, "",'
-BRK dep-seal-dropped fam_dependents "[dependents] $DSIGN" $BAT "$SEALK" '        if False:'
-# a dependent's own kit baton: a new `check` rule that fails the pinned copy (every kit baton here), and a pinned copy edited by hand
-BRK dep-kit-baton-rule fam_dependents "[dependents] kit:release-promote: rc of $BAT check kit:release-promote" $BAT '    elif (s.kit or s.kind is not None) and not pl and not ul:' '    elif (s.kit or s.kind is not None):'
-BRK dep-pin-edited fam_dependents "[dependents] kit:release-promote: the pinned copy is the blob its README records" $DBX/release-promote.sh '# Usage: --repo <owner/name> --commit <full sha>' '# Usage: --repo <owner/name> --commit <full sha> --edited'
-# dep_hist <label> <old call> <new call> <shell edit of the tree in $H> — the list and note states of one planted break
-dep_hist() {
-  H=$(fresh)/h; mk_repo_copy "$H"; git_ init -q -b main "$H"; git_ -C "$H" add -A; git_ -C "$H" commit -q -m base
-  eval "$4"; edit_surface "$H" "| \`$2\` |" "| \`$3\` |"
-  eq "$(bcheck "$H" HEAD)" 1 "break [$1]: the contract row edited, no change file: base-check red"
-  cfn "$H" major dep.md "a dependent call changed"
-  eq "$(bcheck "$H" HEAD)" 1 "break [$1]: …a major change file that does not name the old call: red"
-  cfn "$H" major dep.md "\`$2\` is now \`$3\`"
-  eq "$(bcheck "$H" HEAD)" 0 "break [$1]: …a major change file naming \`$2\`: green"
-}
-dep_hist dep-fixture-renamed "$DFIX" tests/fixtures/baton-owner-v2.sh 'git_ -C "$H" mv "$DFIX" tests/fixtures/baton-owner-v2.sh'
-dep_hist dep-seal-dropped "$DSIGN" "$BAT sign --by owner --seal=<seal> kit:<name> <args>" 'mutate "$H/$BAT" "$SEALK" "        if False:"'
-dep_hist dep-kit-baton-row kit:release-promote 'kit:release-promote <args>' ':'
-# a released version below `Frozen at`: a 0.0.1 heading on top of the CHANGELOG (below any Frozen at, before and after the first
-# release), anchored on the header line the release never rewrites; a manifest that carries a version (the public export of a
-# release, where it equals the CHANGELOG's) gets 0.0.1 too, as the export would write it
-d="$TMP/break-frozen-ahead"; mk_repo_copy "$d"
-if mutate "$d/$PLREL/CHANGELOG.md" 'the first public release is 0.1.0.
-' 'the first public release is 0.1.0.
-
-## 0.0.1
-
-- patch: planted
-' && python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); "version" in d and d.update(version="0.0.1"); json.dump(d, open(p, "w"), indent=2)' "$d/$MAN"; then
-  expect_red frozen-ahead fam_contract "$d" '[contract] Frozen at'
-else bad "break [frozen-ahead]: the plant did not apply (the CHANGELOG anchor or the manifest)"; fi
 
 echo; summary

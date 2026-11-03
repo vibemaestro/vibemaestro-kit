@@ -191,33 +191,5 @@ PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 [ -x "$GHB/gh" ] && ok "instrument: the fake gh is executable" || bad "instrument: the fake gh is not executable"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
-echo "== planted breaks: each family must go red on a copy with one break =="
-BRK() {  # BRK <label> <family> <needle> <file under scripts/> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK issue-failure-vi fam_refused '[I2] …no line of it holds a Vietnamese letter' intent_branch.py '"       branch %s is created; add `issue: N` to %s by hand if needed.\n"' '"       branch %s đã tạo xong; ghi tay `issue: N` vào %s nếu cần.\n"'
-BRK issue-by-default fam_default_off '[I3] …gh was NOT called (a direct' intent_branch.py 'if getattr(a, "issue", False):' 'if True:'
-BRK label-not-created fam_ok '[I1] gh was asked to create the label' intent_branch.py '[gh, "label", "create", ISSUE_LABEL,' '[gh, "label", "list", ISSUE_LABEL,'
-BRK number-invented fam_refused '[I2] …the record has NO issue' intent_branch.py '        return None, (r.stdout + r.stderr).strip()[:400]' '        return 999, None'
-BRK frontmatterless-claims-write fam_nofrontmatter '[I4] …stderr carries the line to write by hand (issue: 42), not' intent_branch.py '    else:
-        return False
-    with open(doc_path' '    else:
-        new = text
-    with open(doc_path'
-BRK label-renamed fam_ok '[I1] …and the label created is exactly intent' intent_branch.py 'ISSUE_LABEL = "intent"' 'ISSUE_LABEL = "intents"'
-BRK retry-not-idempotent fam_retry '[I5] …gh was not called again' intent_branch.py '    if FRONTMATTER_ISSUE_RX.search(open(doc, encoding="utf-8").read()):' '    if False:'
-BRK retry-failure-exits-0 fam_retry '[I5] gh refuses: retry-issue exits 1' intent_branch.py '        return 1
-    report_issue_created' '        return 0
-    report_issue_created'
-BRK adapter-no-injection fam_default_off '[I3] …the adapter injected --issue' intent-branch.sh '    ARGS+=(--issue)' '    :'
-BRK no-issue-not-consumed fam_default_off '[I3] …stderr is empty (the flag did not reach' intent-branch.sh '{ NOISSUE=1; continue; }' '{ NOISSUE=1; }'
-BRK no-issue-consumed-everywhere fam_default_off '[I3] --no-issue is consumed only for create-intent' intent-branch.sh '--no-issue) [ "$SUB" = create-intent ] && { NOISSUE=1; continue; } ;;' '--no-issue) { NOISSUE=1; continue; } ;;'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

@@ -44,7 +44,7 @@ ents = {e["name"]: e for e in m["plugins"]}
 assert ents["vibemaestro-sdlc"]["source"] == "./plugins/vibemaestro-sdlc", ents
 assert m.get("description")
 hk = h["hooks"]
-assert set(hk) == {"SessionStart", "PreToolUse"}, set(hk)
+assert set(hk) == {"SessionStart", "SubagentStart", "PreToolUse"}, set(hk)
 PY
 N=$(find "$SRC_ROOT" -path "$SRC_ROOT/.git" -prune -o -type l -print | wc -l | tr -d " ")
 eq "$N" 0 "repo không có symlink (symlink trỏ ra ngoài plugin bị bỏ khi cài vào cache)"

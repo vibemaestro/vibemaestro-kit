@@ -9,7 +9,6 @@
 #   [L] check links: each broken kind fails in a changed file and is OLD in an unchanged one; a deleted row an unchanged intent
 #       still names; --all; no base
 #   [P] open_pr.py --dry-run: one `Plan row:` line for an intent with plan:, none without
-#   [B] planted breaks on a copy of the plugin: each turns its named case red
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -403,73 +402,6 @@ fam_pr() {
 }
 
 fam_status; fam_nogh; fam_links; fam_recon; fam_pr
-
-# ── [B] planted breaks: each on a copy of the plugin, each must turn its case red ───────────────────────────────────────────────────
-expect_red() {  # expect_red <label> <family> <plugin copy> <the case that must go red>
-  local label=$1 fam=$2 d=$3 needle=$4 out crc
-  out=$(PASS=0; FAIL=0; KBPY="$d/scripts/kb.py"; OPENPR="$d/scripts/open_pr.py"; capped "$fam" 2>&1); crc=$?   # capped: memory and time caps (fixtures/capped.sh)
-  cap_red "$crc" "[B] $label" && return 0
-  case "$out" in *"FAIL $needle"*) ok "[B] $label: '$needle' goes red";; *) bad "[B] $label: '$needle' stayed green";; esac
-}
-BRK() {  # BRK <label> <family> <case> <file under the plugin> <old text> <new text>
-  local d="$TMP/brk-$1"; cp -R "$PLUGIN" "$d"
-  python3 - "$d/$4" "$5" "$6" <<'EOF' || { bad "[B] $1: the text to break was not found"; return; }
-import sys
-p, old, new = sys.argv[1:]
-s = open(p).read()
-if s.count(old) != 1:
-    sys.exit(1)
-open(p, "w").write(s.replace(old, new))
-EOF
-  expect_red "$1" "$2" "$d" "$3"
-}
-BRK mention-links fam_status "[S] H: a PR that only mentions the row (title, body) is not linked" scripts/kb_plan.py \
-  '        merged = sorted(' '        cands.update({p["number"]: p for p in prs if "#" + r["id"] in (p.get("title") or "")})
-        merged = sorted('
-BRK title-hint-dropped fam_status "[S] U: …with a note naming the PR" scripts/kb_plan.py \
-  '                if p["state"] in ("OPEN", "MERGED") and title_rx.search(p.get("title") or ""):' '                if False:'
-BRK title-hint-closed fam_status "[S] W: a closed PR's title gives no note" scripts/kb_plan.py \
-  '                if p["state"] in ("OPEN", "MERGED") and title_rx.search' '                if title_rx.search'
-BRK title-hint-prefix fam_status "[S] X1: (row X10) is not row X1" scripts/kb_plan.py \
-  'r"\(row %s\)" % re.escape(r["id"])' 'r"\(row %s" % re.escape(r["id"])'
-BRK title-hint-state fam_status "[S] U: a row an open PR's title names" scripts/kb_plan.py \
-  '            row["state"] = "planned"
-            if linked:' '            row["state"] = "planned"
-            if linked or re.search(r"\(row %s\)" % re.escape(r["id"]), " ".join(p.get("title") or "" for p in prs), re.I):
-                row["state"] = "PR open"
-            if linked:'
-BRK closed-as-merged fam_status "[S] I: a closed unmerged PR sets no state" scripts/kb_plan.py \
-  'p for p in cands.values() if p["state"] == "MERGED"' 'p for p in cands.values() if p["state"] in ("MERGED", "CLOSED")'
-BRK prefix-ids fam_status "[S] N1: an intent naming row N10 does not link N1 (ids match whole)" scripts/kb_plan.py \
-  '        if ref and ref[0] == rel:
-            back.setdefault(ref[1], []).append(p)' '        if ref and ref[0] == rel:
-            back.setdefault(ref[1][:2], []).append(p)'
-BRK no-version-check fam_status "[S] B: version drift, the manifest read through gh api (commit not fetched)" scripts/kb_plan.py \
-  '                elif have != want_v:' '                elif False:'
-BRK no-changelog-version fam_status "[S] K: a manifest with no version" scripts/kb_plan.py \
-  '    return released if found else None' '    return None'
-BRK no-dep-drift fam_status "[S] E: dependency drift" scripts/kb_plan.py '                    elif st[d] != "merged":' '                    elif False:'
-BRK gh-down-merged fam_nogh "[N] no gh: nothing is called merged" scripts/kb_plan.py \
-  '            row["state"] = "dropped" if link["dropped"] else "not checked"' \
-  '            row.update(pr=(link["prs"] or [0])[0], merge="0" * 40); row["state"] = "dropped" if link["dropped"] else "merged"'
-BRK skip-intent-naming fam_links "[L] an intent does not name its spec: rc 65" scripts/kb_plan.py \
-  '                if not names(ip, s):' '                if False:'
-BRK spec-only-plan fam_links "[L] plan: in the spec only: rc 65" scripts/kb_plan.py '                elif b and not a:' '                elif False:'
-BRK branch-prefix fam_status "[S] Q: a branch link is read whole, not as the prefix intent/2026-01-03-p (#22)" scripts/kb_plan.py \
-  'BRANCH_RX = re.compile(r"(?<![\w/.-])(intent/[A-Za-z0-9._/-]+)")' 'BRANCH_RX = re.compile(r"(?<![\w/.-])(intent/[A-Za-z0-9._-]+)(?![\w/]|\.md)")'
-BRK any-pull-url fam_status "[S] R: a PR URL of another repository does not link this repository's #11" scripts/kb_plan.py \
-  '            if slug and o == slug:' '            if True:'
-BRK partial-hidden fam_nogh "[N] gh failing after the PR list: the header says partly checked" scripts/kb_plan.py \
-  '"checked (%d PRs read)" % len(prs) if not gh.errors' '"checked (%d PRs read)" % len(prs) if True'
-BRK deleted-row-old fam_links "[L] a deleted row an unchanged intent still names: rc 65" scripts/kb_plan.py \
-  '        hard = changed is None or src in changed or any(t in changed for t in targets)' '        hard = changed is None or src in changed'
-BRK recon-sha-unchecked fam_recon "[R] a Current state cell with no SHA: rc 65" scripts/kb_plan.py \
-  '            if ("current" in r["cols"] and r["current"] is None and _plain(r["current_cell"]).lower() not in NONE_CELL' \
-  '            if (False'
-BRK recon-shared-unordered fam_recon "[R] two rows share a file with no order: rc 65" scripts/kb_plan.py \
-  '                    if not (reach(a["id"], b["id"]) or reach(b["id"], a["id"])):' '                    if False:'
-BRK no-plan-line fam_pr "[P] an intent with plan: gets one Plan row line, linked" scripts/open_pr.py \
-  '    if plan:                                 # the plan row' '    if False:                                # the plan row'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

@@ -1,9 +1,11 @@
-"""vibemaestro-brain stale anchors and auto-close: a live Now (N), Next (X), session (S), queue (Q) or pinned (D) item whose anchor
-names a closed issue or a merged or closed PR on GitHub is marked, and a live N, X, S or Q item whose declared `closes` anchors are
-all done closes itself.
+"""vibemaestro-brain stale anchors and auto-close: a live Now (N), Next (X), session (S), queue (Q), request (R) or pinned (D) item
+whose anchor names a closed issue or a merged or closed PR on GitHub is marked, and a live N, X, S, Q or R item whose declared
+`closes` anchors are all done closes itself.
 
-An anchor counts only as a whole string: `#N` (against BRAIN_DEFAULT_REPO=owner/name), `owner/name#N` (as written) or a GitHub
-`https://github.com/<owner>/<name>/issues/<N>` or `/pull/<N>` URL; the last two need no default repository. Each one is one
+An anchor counts only as a whole string: `#N` (against the item's own repository: the one repository its `owner/name#N`
+anchors, URLs and `closes` name, when they name exactly one; else it is not checked), `owner/name#N` (as written) or a GitHub
+`https://github.com/<owner>/<name>/issues/<N>` or `/pull/<N>` URL. BRAIN_DEFAULT_REPO is no longer read: in a session across
+several repositories it resolved an item's `#N` against the wrong one. Each one is one
 `gh api repos/<o>/<r>/issues/<n> --hostname github.com` (the issues endpoint answers for a PR too: `pull_request.merged_at`, and
 `state_reason` for an issue). A merged PR that would close an item is also looked up at `…/pulls/<n>`: it closes only when it was
 merged into its repository's default branch.
@@ -18,7 +20,7 @@ merged into its repository's default branch.
                                what would close, what closed in 24 h, reopened issues, pins for the owner; it writes nothing
     close_linked()             `brain op close-linked`: the same checks with fresh lookups under doctor's bounds, no cap of 5
     closes_form(a), closes_check(anchors)   `--closes`: the stored form of an anchor, and its write-time lookup
-    bare_warning(anchors)      the line `brain op` and `brain owner` print after a write that leaves a bare `#N` with no usable default
+    bare_warning(anchors)      the line `brain op` and `brain owner` print after a write that leaves a bare `#N` its item cannot resolve
 
 The only log write is `link-close`, by the store's writer, at its SessionStart or in `close-linked`; besides it this module writes
 `stale-cache.json` (not part of the log). Standard library only, Python 3.8.
@@ -53,7 +55,7 @@ CACHE_BYTES = 262144        # 200 entries are about 40 KB: a larger file is not 
 MARKS_MAX = 450             # characters the marks, the summary and the note add to one string (test [S] holds the worst case)
 NOTE_MAX = 250              # characters of one string's auto-close line (closed now, reopened, held)
 PER_ITEM = 2                # anchors named in one item's mark
-LETTERS = ("N", "X", "S", "Q", "D")   # the order of the lookups
+LETTERS = ("N", "X", "S", "Q", "R", "D")   # the order of the lookups
 HOST = ["--hostname", "github.com"]
 JQ = '[.state, .closed_at, (.pull_request.merged_at // ""), (.state_reason // ""), (if .pull_request then "pr" else "issue" end)] | @tsv'
 JQ_TITLE = JQ.replace('] | @tsv', ', (.title // "")] | @tsv')
@@ -67,18 +69,26 @@ REASON = re.compile(r"[a-z_]{0,20}")
 REF = re.compile(r"[A-Za-z0-9._/-]{1,40}")
 SHA = re.compile(r"[0-9a-f]{40}")
 SHA12 = re.compile(r"[0-9a-f]{12}")
-SET_IT = "write owner/name#N, or set BRAIN_DEFAULT_REPO=owner/name in the env block of .claude/settings.json"
-NOTHING = {"closed": [], "held": 0, "error": None, "noted": ()}
+SET_IT = "write owner/name#N (a bare #N resolves only against the one repository its item's other anchors name)"
+NOTHING = {"closed": [], "held": 0, "error": None, "noted": (), "stale": []}
 
 
 # --- which anchors ------------------------------------------------------------------------------------------------------------
 
-def default_repo():
-    """(repo or None, the raw value when it is set but not owner/name)."""
-    v = os.environ.get("BRAIN_DEFAULT_REPO", "")
-    if not v:
-        return None, None
-    return (v, None) if repo_ok(v) else (None, v)
+def ignored_default():
+    """BRAIN_DEFAULT_REPO when it is set (no longer read: doctor says so), else None."""
+    return os.environ.get("BRAIN_DEFAULT_REPO") or None
+
+
+def own_repo(anchors):
+    """The one repository the qualified anchors (`owner/name#N`, a URL) of `anchors` name, None when they name none or several:
+    a bare `#N` of the same item resolves against it, since it cannot then be another repository's."""
+    repos = set()
+    for a in anchors:
+        m = parse_anchor(a)
+        if m and m[0] and repo_ok(m[0]):
+            repos.add(m[0].lower())
+    return repos.pop() if len(repos) == 1 else None
 
 
 def repo_ok(r):
@@ -101,15 +111,17 @@ def label(a, key):
     return a if ANCHOR.fullmatch(a) else key
 
 
-def candidates(st, default):
+def candidates(st):
     """[(item id, anchor as written, key or None)] of the live items of LETTERS in lookup order; key is `owner/name#n` in lower
-    case, None for a bare `#n` when there is no default repository. An anchor of any other shape is not listed."""
+    case, None for a bare `#n` whose item names no single repository (`own_repo`). An anchor of any other shape is not listed."""
     out = []
     for letter in LETTERS:
         for it in sorted((i for i in st["items"].values() if i["id"][0] == letter and i["status"] == "live"),
                          key=lambda i: int(i["id"][1:])):
             anchors = list(it.get("anchors") or [])
-            for a in [c for c in it.get("closes") or [] if c not in anchors] + anchors:
+            every = [c for c in it.get("closes") or [] if c not in anchors] + anchors
+            default = own_repo(every)
+            for a in every:
                 m = parse_anchor(a)
                 if not m:
                     continue
@@ -146,9 +158,9 @@ def unchecked(cands):
 
 
 def bare_warning(anchors):
-    """The warning a write prints when `anchors` hold a bare `#N` and no usable default repository could resolve it, else ""."""
-    default, invalid = default_repo()
-    if default:
+    """The warning a write prints when `anchors` (the item's, its `closes` among them) hold a bare `#N` and name no single
+    repository to resolve it against, else ""."""
+    if own_repo([a for a in anchors if isinstance(a, str)]):
         return ""
     bare = []
     for a in anchors:
@@ -157,18 +169,19 @@ def bare_warning(anchors):
             bare.append(a)
     if not bare:
         return ""
-    return "warning: %s %s not checked for staleness (BRAIN_DEFAULT_REPO is not %s); write %s (a GitHub issue or PR URL also works)" % (
-        ", ".join(bare), "is" if len(bare) == 1 else "are", "owner/name" if invalid else "set", ", ".join("owner/name" + a for a in bare))
+    return ("warning: %s %s not checked for staleness (the item names no single repository to resolve %s against); write %s (a "
+            "GitHub issue or PR URL also works)" % (", ".join(bare), "is" if len(bare) == 1 else "are",
+                                                    "it" if len(bare) == 1 else "them", ", ".join("owner/name" + a for a in bare)))
 
 
 def closes_form(a):
     """The stored form of one `--closes` value: `owner/name#N`, as written or from an issue or PR URL. Refused (64) for a bare
-    `#N`, even with BRAIN_DEFAULT_REPO set (in a session across several repositories a default is the wrong-repository case),
-    and for any other string."""
+    `#N` (a closes anchor names the item's repository: a bare one would close on another repository's number) and for any
+    other string."""
     m = ANCHOR.fullmatch(a) if isinstance(a, str) else None
     if m and not m.group(1):
-        raise s.Refused(64, "--closes %s: a bare #N is refused, even with BRAIN_DEFAULT_REPO; write owner/name%s or the issue "
-                            "or PR URL" % (s.printable(a), s.printable(a)))
+        raise s.Refused(64, "--closes %s: a bare #N is refused; write owner/name%s or the issue or PR URL"
+                        % (s.printable(a), s.printable(a)))
     m = m or (URL.fullmatch(a) if isinstance(a, str) else None)
     if not m or not repo_ok(m.group(1)):
         raise s.Refused(64, "--closes %s: write owner/name#N or a GitHub issue or PR URL" % s.printable(str(a))[:100])
@@ -531,6 +544,17 @@ def stale_items(cands, answers):
     return [(i, "stale: " + "; ".join(per[i][:PER_ITEM]) + (", owner retires it" if i[0] == "D" else "")) for i in order]
 
 
+def card_stale(cands, answers, gone):
+    """[(item id, "owner/name#N merged")] for the review card: the first closed anchor of each live item that has one."""
+    out, seen = [], set()
+    for iid, a, k in cands:
+        r = answers.get(k) if k else None
+        if r and r["state"] in ("closed", "merged") and iid not in seen and iid not in gone:
+            seen.add(iid)
+            out.append((iid, "%s %s" % (s.clean_line(label(a, k)), word(r))))
+    return out
+
+
 def lay_out(part, marks, note, auto=""):
     """One part of the render with each mark after its item's line; the marks, a summary and the note together stay ≤ MARKS_MAX
     characters, and the auto-close line (≤ NOTE_MAX) comes last."""
@@ -564,7 +588,7 @@ def fit(parts):
     while True:
         line = "; ".join(h + ", ".join(e) + t + (" (+%d more: brain doctor)" % n if n else "") for h, e, t, n in parts)
         if len(line) <= NOTE_MAX or not any(len(e) > 1 for _, e, _, _ in parts):
-            return s.clean_line(line)[:NOTE_MAX]
+            return s.clean_line(line[:NOTE_MAX])
         i = max(range(len(parts)), key=lambda j: len(parts[j][1]))
         h, e, t, n = parts[i]
         parts[i] = (h, e[:-1], t, n + 1)
@@ -585,16 +609,19 @@ def auto_line(closed, reopened, held, error):
     return fit(parts) if parts else ""
 
 
-def annotate(parts, st, d, sid=None):
-    """({part: text to inject}, the number of stale items, what auto-close did: {"closed": [(id, anchors)], "held": n, "error":
-    text or None, "noted": {parts given a note line}}, the state after). `parts` is the render's three parts; a mark or an
-    auto-close line goes in the part that holds its item, and the check's own note, a held burst and an error in `hot`. Never
-    raises: an error is no marks and one note line in `hot`."""
+def annotate(strings, st, d, sid=None):
+    """([(half, text to inject)], the number of stale items, what auto-close did: {"closed": [(id, anchors)], "held": n, "error":
+    text or None, "noted": {indexes of the strings given a note line}, "stale": [(id, its first closed anchor)] for the review
+    card}, the state after). `strings` is the render's
+    (`brain_store.render_strings`); a mark goes after its item's line, an auto-close line in the first string of the item's
+    half, and the check's own note, a held burst and an error in string 1. Never raises: an error is no marks and one note line
+    in string 1."""
     try:
-        return _annotate(parts, st, d, sid)
+        return _annotate(strings, st, d, sid)
     except Exception as e:  # noqa: BLE001 — a SessionStart must never fail for a lookup
-        out = dict(parts, hot=parts["hot"] + "stale-anchor check: skipped (%s)\n" % e.__class__.__name__)
-        return out, 0, dict(NOTHING, noted={"hot"}), st
+        out = list(strings)
+        out[0] = (out[0][0], out[0][1] + "stale-anchor check: skipped (%s)\n" % e.__class__.__name__)
+        return out, 0, dict(NOTHING, noted={0}), st
 
 
 def round_one(keys, reopen, linked, cache, now):
@@ -626,10 +653,9 @@ def round_two(cache, linked, burst, looked, left, now):
     return due
 
 
-def _annotate(parts, st, d, sid):
+def _annotate(strings, st, d, sid):
     t0 = time.monotonic()
-    default, invalid = default_repo()
-    cands = candidates(st, default)
+    cands = candidates(st)
     keys, total = distinct(cands, None)
     bare = bare_skipped(cands)
     now = time.time()
@@ -669,10 +695,12 @@ def _annotate(parts, st, d, sid):
                 try:
                     st, done, warn = s.link_close(d, sid, rows, {"hook": "SessionStart"})
                     did["closed"] = [(iid, an) for iid, an in rows if iid in done]
-                    did["error"] = s.clean_line(warn.strip().split("\n")[0])[:120] or None     # where it stopped, first
-                    parts = s.render_parts(st)
+                    did["error"] = s.clean_line(warn.strip().split("\n")[0][:120]) or None     # where it stopped, first
+                    strings = s.render_strings(st, limit=s.SLOTS)
                 except Exception as e:  # noqa: BLE001 — a lock held past LOCK_WAIT, a chain refusal: no close, the marks stay
-                    did["error"] = "nothing closed (%s)" % s.clean_line(e.msg if isinstance(e, s.Refused) else s.why(e))[:80]
+                    msg = e.msg if isinstance(e, s.Refused) else s.why(e)
+                    msg = "%s has an error: brain doctor" % s.CONFIG_FILE if msg.startswith(s.CONFIG_FILE) else msg
+                    did["error"] = "nothing closed (%s)" % s.clean_line(msg[:80])
             reopened = [(iid, a) for k, pairs in reopen.items() if (answers.get(k) or {}).get("state") == "open"
                         for iid, a in pairs]
     if failed:
@@ -680,20 +708,24 @@ def _annotate(parts, st, d, sid):
     if keys and total > checked and "skipped, gh not found" not in notes:
         notes.append("checked %d of %d" % (checked, total))
     if bare:
-        notes.append("skipped for %s: %s" % (_short([s.clean_line(a) for a in bare]),
-                                             "BRAIN_DEFAULT_REPO is not owner/name" if invalid else "BRAIN_DEFAULT_REPO is not set"))
+        notes.append("skipped for %s: no single repository of its item" % _short([s.clean_line(a) for a in bare]))
     note = "stale-anchor check: " + "; ".join(notes) if notes else ""
     gone = {iid for iid, _ in did["closed"]}
     marks = [m for m in stale_items(cands, answers) if m[0] not in gone]
-    out, noted = {}, set()
-    for p, text in parts.items():
-        mine = lambda pairs: [x for x in pairs if s.part_of(x[0][0]) == p]
-        auto = auto_line(mine(did["closed"]), mine(reopened), did["held"] if p == "hot" else 0,
-                         did["error"] if p == "hot" else None)
-        pnote = note if p == "hot" else ""
+    did["stale"] = card_stale(cands, answers, gone)
+    first = {}                                      # each half's first string: where its auto-close lines go
+    for i, (half, _) in enumerate(strings):
+        first.setdefault(half, i)
+    out, noted = [], set()
+    for i, (half, text) in enumerate(strings):
+        held = {m.group(1) for m in map(s._ITEM.match, text.splitlines()) if m}
+        mine = lambda pairs: [x for x in pairs if first.get(s.half_of(x[0][0])) == i]
+        auto = auto_line(mine(did["closed"]), mine(reopened), did["held"] if i == 0 else 0,
+                         did["error"] if i == 0 else None)
+        pnote = note if i == 0 else ""
         if pnote or auto:
-            noted.add(p)
-        out[p] = lay_out(text, mine(marks), pnote, auto)
+            noted.add(i)
+        out.append((half, lay_out(text, [m for m in marks if m[0] in held], pnote, auto)))
     did["noted"] = noted
     return out, len(marks), did, st
 
@@ -705,6 +737,7 @@ def close_linked():
     bounds (20 s, ≤ 40 keys) and with no cap of BURST_MAX, closes as the op `link-close`. Refused (3) when this session does
     not write the project's hot memory. Returns what it closed and what it skipped, with why."""
     s.check_caller()
+    s.check_config()                                # before 20 seconds of lookups that link_close would then refuse
     d = s.state_dir()
     if not os.path.isdir(d):
         raise s.Refused(1, "no brain state for this project yet")
@@ -778,7 +811,7 @@ def closes_check(anchors, kept=()):
         else:
             lines.append("closes %s: %s %s · %s" % (a, "PR" if ans["pr"] else "issue",
                                                      word(ans) + (" " + ans["date"] if ans["date"] else ""),
-                                                     s.clean_line(ans["title"])[:80]))
+                                                     s.clean_line(ans["title"][:80])))   # cut, then cleaned: a cut never leaves a partial run
     return lines
 
 
@@ -793,12 +826,13 @@ def doctor_lines(st):
 
 
 def _doctor(st):
-    default, invalid = default_repo()
+    ignored = ignored_default()
     out = []
-    if invalid is not None:
-        out.append(("warn", "BRAIN_DEFAULT_REPO is not owner/name (%s): a bare #N anchor is not checked"
-                    % s.printable(invalid)[:60]))
-    cands = candidates(st, default)
+    if ignored is not None:
+        out.append(("warn", "BRAIN_DEFAULT_REPO is set (%s) but no longer read: a bare #N resolves only against the one "
+                            "repository its item's other anchors name; write owner/name#N, and remove the variable"
+                    % s.printable(ignored)[:60]))
+    cands = candidates(st)
     now = time.time()
     reopen = reopen_keys(st, now)
     for it in sorted((i for i in st["items"].values() if i["status"] == "closed" and isinstance(i.get("linked"), dict)),
@@ -810,9 +844,9 @@ def _doctor(st):
     keys, total = distinct([(None, None, k) for k in reopen] + cands, MAX_DOCTOR)
     total = len(set(reopen) | {k for _, _, k in cands if k})
     skipped = unchecked(cands)
-    if skipped and invalid is None:
+    if skipped:
         ids = {i for i, _ in skipped}
-        out.append(("info", "stale anchors: BRAIN_DEFAULT_REPO is not set, so %d anchor%s on %d item%s %s not checked; %s"
+        out.append(("info", "stale anchors: %d bare anchor%s on %d item%s naming no single repository %s not checked; %s"
                     % (len(skipped), "" if len(skipped) == 1 else "s", len(ids), "" if len(ids) == 1 else "s",
                        "is" if len(skipped) == 1 else "are", SET_IT)))
     for iid, a in skipped[:DOCTOR_UNCHECKED]:

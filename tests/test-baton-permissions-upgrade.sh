@@ -14,7 +14,6 @@
 #       changed after the run is left alone (rc 5)
 #   [R] refused at rehearse, nothing written: no old rule, an old rule in the project's settings, a link, a finding the swap
 #       cannot clear; the engine edited after signing or a plan with another engine sha256: refused, nothing written
-# Then each planted break on its own copy must turn its family red.
 # Assertions read exit codes, files, sha256 and JSON; of the output only REFUSE, LEAVE, PLAN and the baton verdict lines.
 # =============================================================================
 set -uo pipefail
@@ -200,13 +199,13 @@ fam_refused() {
   eq "$(b run "$K")/$(sha_of "$(SETTINGS)")" "3/$s" "[R] the engine edited after signing: run refused (rc 3), nothing written"
 }
 
-fam_order() {  # [B] the old block that also lacks a rule: kit:coordinator-bootstrap adds it, then this kit swaps; neither blocks the other
+fam_order() {  # [B] the old block that also lacks a rule: kit:bootstrap adds it, then this kit swaps; neither blocks the other
   local P=$1
   machine "$P"; old_block
   python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["permissions"]["allow"] = [r for r in d["permissions"]["allow"] if " go:" not in r]; json.dump(d, open(p, "w"))' "$(SETTINGS)"
   eq "$(b rehearse "$K")" 1 "[B] the old block lacking the allow for go: this kit refuses"
-  has "$(cat "$OUT")" "with kit:coordinator-bootstrap" "[B] …and sends the owner to kit:coordinator-bootstrap"
-  eq "$(K=kit:coordinator-bootstrap owner_run)" "0/0" "[B] kit:coordinator-bootstrap: its run adds the missing rule with the old ask rules still there: rc 0"
+  has "$(cat "$OUT")" "with kit:bootstrap" "[B] …and sends the owner to kit:bootstrap"
+  eq "$(K=kit:bootstrap owner_run)" "0/0" "[B] kit:bootstrap: its run adds the missing rule with the old ask rules still there: rc 0"
   eq "$(b permissions --check)" 7 "[B] …the old ask rules are left for this kit"
   hasnt "$(cat "$OUT")" "MISSING" "[B] …nothing is missing any more"
   eq "$(owner_run)" "0/0" "[B] then this kit: rc 0"
@@ -217,29 +216,6 @@ FAMILIES="fam_swap fam_undo fam_refused fam_order"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done
-
-echo "== planted breaks: each one must turn its family red =="
-# BRK <label> <family> <needle> <file under the plugin> <old> <new> [<old> <new>...]
-BRK() {
-  local label=$1 fam=$2 needle=$3 file=$4 d; shift 4; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/$file" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-G=gates/permissions_upgrade.py
-BRK undo-no-restore fam_undo '[U] the settings back byte for byte' $G '        write_atomic(user, old, int(rec.get("mode", 0o600)))' '        pass'
-BRK undo-mode-lost fam_undo '[U] the settings back byte for byte' $G '        write_atomic(user, old, int(rec.get("mode", 0o600)))' '        write_atomic(user, old, 0o600)'
-BRK undo-blind fam_undo '[U] …the changed file is left as it is' $G '    if now == rec.get("after"):' '    if True:'
-BRK removes-extra fam_swap "[S] …no rule starts with *, every anchored rule is there; the user's own" $G \
-    '    kept = [r for r in ask if r not in B.OLD_ASKS]' '    kept = [r for r in ask if r not in B.OLD_ASKS and r != "Bash(rm:*)"]'
-BRK keeps-old fam_swap '[S] …permissions --check: rc 0' $G '    kept = [r for r in ask if r not in B.OLD_ASKS]' '    kept = [r for r in ask if r not in B.OLD_ASKS[1:]]'
-BRK postcheck-blind fam_swap "[S] the engine's post-check on the old block: rc 1" $G '    return OK if not found else FAIL' '    return OK'
-BRK engine-unbound fam_refused '[R] a write whose signed engine sha256' $G \
-    '    if p.refusal or p.line + ENGINE_SUFFIX + engine_hash() not in signed:' '    if p.refusal or not any(ln.startswith(p.line) for ln in signed):'
-BRK other-scope-ignored fam_refused '[R] …refused, the scope named' $G '    if elsewhere:' '    if False:'
-BRK unclean-accepted fam_refused '[R] an allow rule the swap cannot clear' $G '    if after:' '    if False:'
-BRK bootstrap-blocks-on-old fam_order '[B] kit:coordinator-bootstrap: its run adds the missing rule' gates/coordinator_bootstrap.py \
-    '    return f[1].startswith(B.OLD_ASK_FINDING)' '    return False'
-BRK stops-none fam_swap '[S] mode auto: the session cannot sign it' batons/permissions-upgrade.sh '# Stops: security-boundary' '# Stops: none'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

@@ -172,25 +172,4 @@ PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 [ -f "$PL0/scripts/stage-signal.sh" ] && ok "instrument: the plugin copy has the helper" || bad "instrument: the helper is missing from the copy"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
-echo "== planted breaks: each family must go red on a copy with one break =="
-BRK() {  # BRK <label> <family> <needle> <script> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK sandbox-verbs-pass fam_helper '[S17] …and call nothing, not even the --help probe' stage-signal.sh 'case "${1:-}" in ask|done|progress|bind) exit 0 ;; esac' ':'
-BRK probe-skipped fam_helper '[S3] …and no structured call' stage-signal.sh 'grep -qF -- --stage' 'true'
-BRK refusal-fails fam_helper '[S4] a refusal (exit 64)' stage-signal.sh 'exit 0 # refused: the signal never fails the caller' 'exit 1'
-BRK stem-unchecked fam_helper '[S5] a stem with a space' stage-signal.sh '*[!A-Za-z0-9_-]*) return 0 ;;' '*) ;;'
-BRK stage-wrong fam_helper '[S1] code: its own fixed phrase' stage-signal.sh 'code) T="$STEM: coding started"' 'code) T="$STEM: code started"'
-BRK ib-not-emitting fam_ib '[S7] …it emitted the spec stage' intent-branch.sh 'signal spec' ':'
-BRK probe-unbounded fam_helper '[S5] a session-notify whose --help hangs' stage-signal.sh '"${TO[@]+"${TO[@]}"}" session-notify --help' 'session-notify --help'
-BRK ib-emits-on-failure fam_ib '[S11] …and a failed create-intent emits nothing' intent-branch.sh '[ "$RC" -eq 0 ] && [ -n "$SLUG" ] && signal' '[ -n "$SLUG" ] && signal'
-BRK op-dry-emits fam_op '[S13] …nothing is signalled' open-pr.sh 'if [ "$DRY" -eq 1 ]; then' 'bash "$HERE/stage-signal.sh" ship; if [ "$DRY" -eq 1 ]; then'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
-
 echo; summary

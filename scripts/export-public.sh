@@ -19,7 +19,11 @@
 #   the first `## X.Y.Z` heading of the same rev's plugins/<name>/CHANGELOG.md (the private repo carries no version),
 #   as its `version` after `name`; and each dependency on another plugin
 #   of the rev's marketplace that is released at that rev (a bare name, or an object with no `version` and no `marketplace`)
-#   becomes {"name": …, "version": ">=0.1.0"}; and a released plugin's manifest gets `repository`,
+#   becomes {"name": …, "version": ">=<floor>"}: the floor is that sibling's version on the `Released together: <name> X.Y.Z, …`
+#   line of the plugin's own released section (the one under its first `## X.Y.Z` heading; release.py cut writes it), the
+#   version it was released with, else 0.1.0 (a section with no line, or one that does not name the sibling, as every release cut
+#   before the line existed). The floor reads only the plugin's own released section, and `release.py check` keeps that line as it
+#   was once the section is on the base, so a plugin whose version does not move keeps its manifest bytes in every later export. And a released plugin's manifest gets `repository`,
 #   https://github.com/<--repository>, last (the update reminder reads it; a source manifest that names another repository is
 #   refused, rc 3). A manifest that needs none of these keeps its bytes; a changed one is written as JSON
 #   (indent 2, UTF-8, key order kept) plus a newline, so the same rev still gives the same bytes. A plugin with no released
@@ -39,9 +43,10 @@
 #   0  exported; the digest is on stdout
 #   2  usage: wrong arguments, <rev> is not a commit, <outdir> is empty, cannot be created or is not an empty directory
 #   3  refused before writing: the rev's tree holds a path twice (a crafted tree); a manifest's own `version` differs from its
-#      CHANGELOG's released version, or a manifest or the marketplace is not a JSON object; an exported path is a symlink, a gitlink or not
-#      a plain file, has an empty, ".", ".." or ".git" part, or is one git refuses with core.protectHFS and core.protectNTFS on (a
-#      lookalike of .git); README.md or the marketplace is missing; a plugins/<name>/LICENSE or NOTICE is committed (the copy is made
+#      CHANGELOG's released version, or a manifest or the marketplace is not a JSON object; a `Released together:` line that is
+#      not `<name> X.Y.Z` items joined by `, `, or two such lines in one section, or a floor above the sibling's released version
+#      at the rev; an exported path is a symlink, a gitlink or not a plain file, has an empty, ".", ".." or ".git" part, or is
+#      one git refuses with core.protectHFS and core.protectNTFS on (a lookalike of .git); README.md or the marketplace is missing; a plugins/<name>/LICENSE or NOTICE is committed (the copy is made
 #      here only); the rev's .vibemaestro/sdlc.json is missing, not JSON, or has no `public.private` list of valid globs
 #   4  a git call that fails; before writing, a committer time it cannot read (none, or outside 0..2^32); after writing, a file
 #      that could not be written (a name this filesystem folds onto another), or a digest of the written directory that differs
@@ -67,7 +72,9 @@ LICENCE = ("LICENSE", "NOTICE")
 GLOB_BAD_CHARS = "[]{}\\"            # what the `applyTo` glob language does not have: refused, never read literally
 MANIFEST = ".claude-plugin/plugin.json"
 MARKETPLACE = ".claude-plugin/marketplace.json"
-DEPENDENCY_RANGE = ">=0.1.0"   # the range the export writes on a released sibling dependency
+FLOOR_DEFAULT = "0.1.0"        # the floor on a released sibling dependency when the plugin's released section records none
+TOGETHER = "Released together: "   # release.py cut's first line of a section: every plugin released with it, at its version
+VERSION_RX = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 # The config of every git call that reads or builds the digest: no conversion on `git add`, and git's own path checks of every OS
 HARD = ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "-c", "core.fileMode=true", "-c", "core.symlinks=true",
         "-c", "core.ignoreCase=false", "-c", "core.precomposeUnicode=false", "-c", "core.protectHFS=true",
@@ -112,13 +119,41 @@ def released_of(raw):
     for line in (raw or b"").decode("utf-8", "replace").split("\n"):
         if line.startswith("## "):
             v = line[3:].strip()
-            return v if re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", v, re.ASCII) else None
+            return v if re.fullmatch(VERSION_RX, v, re.ASCII) else None
     return None
+
+
+def together_of(raw, version):
+    """{plugin: version} of the `Released together:` line in the `## <version>` section of a CHANGELOG (its first `## ` heading,
+    read as released_of reads it; {} when the section has no such line), or the line itself (a str) when it is not one line of
+    `<name> X.Y.Z` items joined by `, ` (release.py together_in reads it by the same rule)."""
+    import re
+    lines = [l.rstrip() for l in (raw or b"").decode("utf-8", "replace").split("\n")]
+    at = next((i for i, l in enumerate(lines) if l.startswith("## ")), None)
+    if at is None or lines[at][3:].strip() != version:
+        return {}
+    end = next((i for i in range(at + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    found = [l for l in lines[at + 1:end] if l.startswith(TOGETHER.rstrip())]
+    if not found:
+        return {}
+    if len(found) != 1 or not found[0].startswith(TOGETHER):
+        return " | ".join(found)
+    out = {}
+    for item in found[0][len(TOGETHER):].split(", "):
+        hit = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_.-]*) (%s)" % VERSION_RX, item, re.ASCII)
+        if not hit or hit.group(1) in out:
+            return " | ".join(found)
+        out[hit.group(1)] = hit.group(2)
+    return out
+
+
+def vtuple(v):
+    return tuple(int(x) for x in v.split("."))
 
 
 def public_manifests(keep):
     """{manifest path: new bytes} for the manifests the export rewrites (see the header); refuses (rc 3) what cannot be read."""
-    import json
+    import json, re
     oid = {p: o for p, _, o in keep}
     names = sorted({p.split("/")[1] for p in oid if p.startswith("plugins/") and p.endswith("/" + MANIFEST) and p.count("/") == 3})
     paths = [MARKETPLACE] + ["plugins/%s/%s" % (n, f) for n in names for f in (MANIFEST, "CHANGELOG.md")]
@@ -139,6 +174,13 @@ def public_manifests(keep):
         elif "version" in m and rel is not None and m["version"] != rel:
             problems.append("plugins/%s/%s says version %r, its CHANGELOG.md released %s" % (n, MANIFEST, m["version"], rel))
         released[n] = m.get("version") if isinstance(m, dict) and isinstance(m.get("version"), str) else rel
+    together = {}
+    for n in names:
+        rel = released_of(blob("plugins/%s/CHANGELOG.md" % n))
+        line = together_of(blob("plugins/%s/CHANGELOG.md" % n), rel) if rel else {}
+        if isinstance(line, str):
+            problems.append("plugins/%s/CHANGELOG.md `## %s`: %r is not `%s<name> X.Y.Z, …`" % (n, rel, line[:120], TOGETHER))
+        together[n] = line if isinstance(line, dict) else {}
     if problems:
         die(3, "refused %s:\n  " % sha + "\n  ".join(problems))
     out = {}
@@ -157,7 +199,12 @@ def public_manifests(keep):
             for d in deps:
                 name = d if isinstance(d, str) else d.get("name") if isinstance(d, dict) and "version" not in d and "marketplace" not in d else None
                 if isinstance(name, str) and name in siblings and released.get(name):
-                    d = dict(d, version=DEPENDENCY_RANGE) if isinstance(d, dict) else {"name": name, "version": DEPENDENCY_RANGE}
+                    floor = together[n].get(name, FLOOR_DEFAULT)
+                    if re.fullmatch(VERSION_RX, released[name], re.ASCII) and vtuple(floor) > vtuple(released[name]):
+                        die(3, "refused %s: plugins/%s needs %s >=%s (its `%s` line), and the export releases %s %s: no install "
+                               "could meet it" % (sha, n, name, floor, TOGETHER.rstrip(), name, released[name]))
+                    rng = ">=" + floor
+                    d = dict(d, version=rng) if isinstance(d, dict) else {"name": name, "version": rng}
                 fixed.append(d)
             new["dependencies"] = fixed
         if released[n]:

@@ -62,7 +62,12 @@ Condition: you stand in a worktree, on the branch `intent/<date>-<slug>`; all ch
 5. **Before moving to ready or reporting done:** follow the whole `before-ready` rule that the hook reminds you of when you run
    `gh pr ready` (evidence on the final version, a review with fresh context). A draft PR is only a place to review, not a review that has happened.
    Spawn the review agent on the configured review model: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get agents.review_model`
-   prints it, and it goes into the Agent tool's `model`. Give the agent the PR and the head SHA it reviews, not your conclusion.
+   prints it, and it goes into the Agent tool's `model`. Give the agent the PR and the head SHA it reviews, not your conclusion:
+   brief it with the template `reviewer-brief.md` next to this skill (spec verdict first, then quality; your report as claims to
+   check; files expected versus changed; the spec's `## Inputs and failure cases` table; a "declined to judge" list).
+   Every fix round ends with its own re-review of the changed functions read whole, and a class sweep per defect fixed
+   (`before-ready` items 9 to 11). Tests follow rule `test-quality` (`rules/test-quality.instructions.md`): a new test is red on
+   the base and green on the head; never revert the fix to see it red.
    If the read fails, use the plugin default (the same command with `--default`), tell the person what
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" config check` names, and do not edit the config for them; if the
    `--default` read fails too, ask the person which model to use.

@@ -1,0 +1,13 @@
+# The suites and fixtures that held planted breaks when the kit dropped them (tests/test-capped-breaks.sh, [L3]-[L5]).
+# A file listed here may still hold one; a file not listed may not. A listed file that holds none any more is only a note:
+# what is left once the suites dropped theirs: a break here goes, a functional case gets the `not a break` marker, then this
+# file is deleted.
+brain.sh
+gates.sh
+ports.sh
+test-agent-models.sh
+test-hub-shaped-flow.sh
+test-plan.sh
+test-public-tree.sh
+test-run-all.sh
+test-scan-ci-workflow.sh

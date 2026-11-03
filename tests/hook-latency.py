@@ -323,8 +323,8 @@ def brain(a):
                 ms, outs[name] = run_start(name)
                 ts[name].append(ms)
         for name in trees:
-            if "hot memory" not in outs[name][0] or "checked" in outs[name][0]:
-                print("SessionStart (%s) injected no hot memory, or not from a warm cache: the measurement is void" % name)
+            if "## Brain · " not in outs[name][0] or "checked" in outs[name][0]:   # string 1, in either tree's layout
+                print("SessionStart (%s) injected no brain, or not from a warm cache: the measurement is void" % name)
                 return 1
         med = {k: statistics.median(v) for k, v in ts.items()}
         for name in trees:

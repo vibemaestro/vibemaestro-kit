@@ -3,7 +3,7 @@
 # Targets: the repository (--repo), the workflow file (--workflow, under .github/workflows) and the branch (--ref) named; a run record under the baton state directory
 # Blast: one queued run of that workflow on that branch (runner time, and whatever the pinned workflow itself does); nothing in the repository changes
 # Undo: cancels the run this dispatch made while it is queued or in progress; a finished run stays (GitHub keeps every run); the run record is removed; an earlier run's record (another signed plan) is left alone
-# Pre: not a sandbox session (SEAT and INTENT_SLUG set: refused, ask the coordinator); the repository reads private (not internal, not public); the branch exists (letters, digits and ._/-); the workflow file is on its head and declares a workflow_dispatch trigger; each input key is letters, digits, _ and -; at the dispatch, its plan line is in the signed plan
+# Pre: not a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set: refused, ask the coordinator); the repository reads private (not internal, not public); the branch exists (letters, digits and ._/-); the workflow file is on its head and declares a workflow_dispatch trigger; each input key is letters, digits, _ and -; at the dispatch, its plan line is in the signed plan
 # Stops: none
 #   Why none: it starts, in a private repository, one run of a workflow whose bytes the plan line pins (the blob at the branch
 #   head), and the run can be cancelled while it runs. A public or internal repository is refused at rehearse, so it is never
@@ -204,10 +204,12 @@ declares_dispatch() {
   return 1
 }
 
-# in_sandbox — a sandbox pod session: SEAT and INTENT_SLUG both set and not blank (the test of in_sandbox() in baton.py: one alone
-# can sit in a laptop shell). Its token has no actions:write, so a write to Actions there ends in HTTP 403 after the owner's sign.
+# in_sandbox — a worker session: VIBEMAESTRO_ROLE=worker, or (deprecated, leaves in the next release) SEAT and INTENT_SLUG both
+# set and not blank (the test of in_sandbox() in baton.py: one alone can sit in a laptop shell). Its token has no actions:write, so a
+# write to Actions there ends in HTTP 403 after the owner's sign.
 in_sandbox() {
   local s=${SEAT:-} i=${INTENT_SLUG:-}
+  [ "${VIBEMAESTRO_ROLE:-}" = worker ] && return 0
   [ -n "${s//[[:space:]]/}" ] && [ -n "${i//[[:space:]]/}" ]
 }
 
@@ -215,7 +217,7 @@ in_sandbox() {
 act() {
   local vis head blob body login
   if in_sandbox; then
-    echo "REFUSE a sandbox session (SEAT and INTENT_SLUG are set): its token cannot write to Actions (HTTP 403). Ask the coordinator to dispatch workflow $WF on $REPO ref $REF" >&2
+    echo "REFUSE a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set): its token cannot write to Actions (HTTP 403). Ask the coordinator to dispatch workflow $WF on $REPO ref $REF" >&2
     return 3
   fi
   vis=$(gh api "repos/$REPO" --jq '"\(.private) \(.visibility)"' 2>&1 || true)

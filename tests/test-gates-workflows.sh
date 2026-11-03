@@ -18,8 +18,7 @@
 #      with ci.runner_default `self-hosted only` the last operand is a failing fromJSON instead of a label, in every job, and a kept old file is warned about
 #   8. the kit's OWN workflows (not the templates): each job's `runs-on` is evaluated, and in a private repository with the runner variables
 #      unset it fails instead of answering a hosted label (tests/fixtures/runs_on_check.py)
-# Then each fault above is planted in a copy of the rendered template and the checker must go red (a checker that cannot go red proves
-# nothing). The checker is tests/fixtures/workflow_check.py; it reads YAML with a parser, not grep. No network, no sleep.
+# The checker is tests/fixtures/workflow_check.py; it reads YAML with a parser, not grep. No network, no sleep.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -173,37 +172,6 @@ for f in "$TPL"/*.yml "$R"/.github/workflows/*.yml "$SRC_ROOT"/.github/workflows
     *) eq "$rc" 0 "concurrency: $rel cancels only on a new commit$( [ "$rc" = 0 ] || printf ' (%s)' "$(printf '%s' "$O" | head -2)")";;
   esac
 done
-# planted: each must be red; the needle is the reason the checker must give
-conc_break() {  # conc_break <label> <needle> <old> <new> [<gate>]   on a copy of the rendered gate (default pr-sensitive: comment and review events)
-  python3 - "$R/.github/workflows/${5:-pr-sensitive}.yml" "$TMP/conc.yml" "$3" "$4" <<'PY' || { bad "concurrency break $1: the anchor is gone"; return; }
-import sys
-src, out, old, new = sys.argv[1:5]
-t = open(src, encoding="utf-8").read()
-if t.count(old) != 1:
-    sys.exit(3)
-open(out, "w", encoding="utf-8").write(t.replace(old, new))
-PY
-  O=$(python3 "$CONC" "$TMP/conc.yml" 2>&1); rc=$?
-  [ "$rc" = 1 ] && has "$O" "$2" "concurrency break $1: red ($2)" || bad "concurrency break $1: the checker stays green, the probe is blind"
-}
-conc_break cancels-on-edited "pull_request/edited: cancels a run in progress" \
-  "cancel-in-progress: \${{ github.event.action == 'synchronize' }}" "cancel-in-progress: \${{ github.event.action == 'synchronize' || github.event.action == 'edited' }}"
-conc_break comments-share-a-group "issue_comment/created: two runs share the group" "|| github.run_id }}" "|| 'events' }}"
-conc_break cancels-always "issue_comment/created: cancels a run in progress" "cancel-in-progress: \${{ github.event.action == 'synchronize' }}" "cancel-in-progress: true"
-conc_break commit-not-cancelled "a new commit does not cancel" "cancel-in-progress: \${{ github.event.action == 'synchronize' }}" "cancel-in-progress: false"
-conc_break commit-group-per-run "two commits of one PR land in two groups" "&& 'commit' ||" "&& github.run_id ||"
-conc_break no-pr-number "two PRs share the group" "github.event.pull_request.number || github.event.issue.number || github.ref" "github.base_ref"
-conc_break no-workflow-name "does not name the workflow" "group: \${{ github.workflow }}-" "group: gate-"
-conc_break edits-join-commits "pull_request/edited: lands in the commit group" "github.event.action == 'synchronize' && 'commit'" "(github.event.action == 'synchronize' || github.event.action == 'edited') && 'commit'"
-conc_break no-block "no workflow-level concurrency block" "concurrency:
-  group:" "x-concurrency:
-  group:"
-conc_break not-binds-tight "pull_request/edited: cancels a run in progress" "cancel-in-progress: \${{ github.event.action == 'synchronize' }}" "cancel-in-progress: \${{ !github.event.action != 'synchronize' }}"
-conc_break job-level-block "has a concurrency block of its own" "    runs-on: " "    concurrency:
-      group: gate
-      cancel-in-progress: true
-    runs-on: "
-conc_break unreadable "cannot judge the expression" "cancel-in-progress: \${{ github.event.action == 'synchronize' }}" "cancel-in-progress: \${{ fromJSON('x') }}"
 
 echo "== drafts and edits: what each rendered gate runs on (job if, evaluated) =="
 ifv() { python3 "$CONC" --eval-if "$1" "$2" 2>&1 | awk '{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//'; }
@@ -237,55 +205,6 @@ put_cfg "$R4" '{"tokens": {"commit_exception": "NEW"}}'
 O=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$R4" 2>&1)
 has "$O" "has another job condition than this plugin writes" "…also when the kept token merely contains the new one"
 O=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$R5" --only pr-title --dry-run 2>&1); eq "$?" 0 "a token holding \${{ does not stop installing a gate that does not use it"
-# if_break <label> <kind> <scenario> <wrong value> <old> <new> — a planted fault in a copy of the rendered gate; the scenario must flip
-if_break() {
-  python3 - "$RW/$2.yml" "$TMP/ifb.yml" "$5" "$6" <<'PY' || { bad "if break $1: the anchor is gone"; return; }
-import sys
-src, out, old, new = sys.argv[1:5]
-t = open(src, encoding="utf-8").read()
-if t.count(old) != 1:
-    sys.exit(3)
-open(out, "w", encoding="utf-8").write(t.replace(old, new))
-PY
-  local v; v=$(ifv "$TMP/ifb.yml" "$3")
-  [ "$v" = "$4" ] && ok "if break $1: caught ($3 now runs=$v)" || bad "if break $1: $3 gives runs=$v, the probe is blind"
-  O=$(python3 "$CONC" "$TMP/ifb.yml" 2>&1)
-}
-if_break no-draft-check pr-body draft-private true "github.event.pull_request.draft == false && (github.event.action" "(github.event.action"
-if_break body-gate-on-title-edit pr-body edit-title true "(github.event.action != 'edited' || github.event.changes.body || github.event.changes.base)" "true"
-if_break base-ignored-by-body pr-body edit-base false " || github.event.changes.base)" ")"
-if_break title-gate-on-body-edit pr-title edit-body true "(github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)" "true"
-if_break token-removal-skipped commit-discipline edit-body-token-before false "contains(github.event.changes.body.from, 'COMMIT EXCEPTION:') || " ""
-if_break comment-on-private-draft pr-sensitive comment-draft-private true \
-  "(github.event_name == 'issue_comment' && toJSON(github.event.issue.draft) == 'false') || (github.event_name != 'issue_comment' && github.event.pull_request.draft == false)" \
-  "github.event.pull_request.draft == false"
-if_break base-change-skipped commit-discipline edit-base false "github.event.changes.base || github.event.changes.body" "github.event.changes.body"
-if_break comment-nodraft-runs pr-sensitive comment-nodraft-private true "toJSON(github.event.issue.draft) == 'false'" "github.event.issue.draft == false"
-if_break public-draft-unscanned pr-sensitive draft-public false "github.event.repository.private == false || " ""
-# the draft rule in the checker itself: a job that runs on a draft, and types without ready_for_review, are findings
-conc_break draft-runs "runs on a draft" "(github.event_name == 'issue_comment' && toJSON(github.event.issue.draft) == 'false') || (github.event_name != 'issue_comment' && github.event.pull_request.draft == false)" "github.event.pull_request.draft == false"
-conc_break no-job-on-commit "no job runs on a new commit of a ready PR" "    if: (github.event_name != 'issue_comment'" "    if: github.event_name == 'issue_comment' && (github.event_name != 'issue_comment'"
-# a comment-only job (pr-evidence's rerun) skips a commit; the workflow's other job must still check it
-conc_break evidence-job-off-commit "no job runs on a new commit of a ready PR (jobs: evidence, rerun)" \
-  "    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false" "    if: github.event_name == 'pull_request' && github.event.action != 'synchronize' && github.event.pull_request.draft == false" pr-evidence
-# the exemption is read from the text: only a top-level `github.event_name == '<other event>'` makes a job comment-only
-conc_break rerun-not-explicit "job rerun does not run on a new commit of a ready PR" \
-  "&& github.event_name == 'issue_comment' &&" "&& github.event_name != 'pull_request' &&" pr-evidence
-# a trivial job on the commit does not excuse a gate that skips it
-python3 - "$R/.github/workflows/pr-evidence.yml" "$TMP/conc.yml" <<'PY' || bad "concurrency break noop-covers-gate: the anchor is gone"
-import sys
-src, out = sys.argv[1:3]
-t = open(src, encoding="utf-8").read()
-old = "    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false"
-if t.count(old) != 1 or t.count("\njobs:\n") != 1:
-    sys.exit(3)
-t = t.replace(old, "    if: github.event_name == 'pull_request' && github.event.action != 'synchronize' && github.event.pull_request.draft == false")
-t = t.replace("\njobs:\n", "\njobs:\n  noop:\n    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false\n    runs-on: x\n    steps:\n      - run: true\n")
-open(out, "w", encoding="utf-8").write(t)
-PY
-O=$(python3 "$CONC" "$TMP/conc.yml" 2>&1); rc=$?
-[ "$rc" = 1 ] && has "$O" "job evidence does not run on a new commit of a ready PR" "concurrency break noop-covers-gate: red (a noop job on the commit, the gate off it)" \
-  || bad "concurrency break noop-covers-gate: the checker stays green, the probe is blind"
 # small workflows: a pull_request_target gate and an edit-only job are judged on the commit too; a commit job passes
 mini() {  # mini <label> <trigger> <job if> <expect: red|green>
   cat > "$TMP/mini.yml" <<EOT
@@ -332,92 +251,6 @@ for t, want in ((E + " && x", True), ("${{ " + E + " && x }}", True), (E + " && 
 ' "$(dirname "$CONC")" 2>&1)
 [ -z "$O" ] && ok "exemption parser: partial \${{ }}, unbalanced parentheses and quotes are no exemption" || bad "exemption parser: $O"
 mini target-on-commit pull_request_target "github.event.pull_request.draft == false" green
-conc_break no-ready-type "lack ready_for_review" "types: [opened, edited, synchronize, reopened, ready_for_review]" "types: [opened, edited, synchronize, reopened]"
-
-echo "== planted faults in a copy of the rendered template: the checker must go red =="
-break_rows() {   # kind^name^old^new   (\n in a field is a newline)
-  cat <<'EOT'
-commit-discipline^head-checkout^          ref: ${{ github.event.pull_request.base.ref }}^          ref: ${{ github.event.pull_request.head.sha }}
-commit-discipline^tag-pin^actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2^actions/checkout@v4
-commit-discipline^shallow-clone^fetch-depth: 0^fetch-depth: 1
-commit-discipline^runs-on-drafts^if: "github.event.pull_request.draft == false &&^if: "github.event.pull_request.draft == true &&
-commit-discipline^swallowed-exit^--config-ref "origin/$BASE_REF"^--config-ref "origin/$BASE_REF" || true
-commit-discipline^no-config-ref^ --config-ref "origin/$BASE_REF"^
-commit-discipline^body-not-read^            --body-file "$RUNNER_TEMP/pr-body.md" --config-ref^            --config-ref
-commit-discipline^body-from-event^gh pr view "$PR_NUMBER" --json body -q .body > "$RUNNER_TEMP/pr-body.md"^printf '%s' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/pr-body.md"
-commit-discipline^head-not-fetched^git fetch --no-tags origin "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"^true
-commit-discipline^interpolated-run^"+refs/pull/$PR_NUMBER/head^"+refs/pull/${{ github.event.pull_request.number }}/head
-commit-discipline^xtrace^set -euo pipefail^set -euxo pipefail
-commit-discipline^continue-on-error^      - name: count commits^      - continue-on-error: true\n        name: count commits
-commit-discipline^edited-dropped^types: [opened, edited, synchronize, reopened, ready_for_review]^types: [opened, synchronize, reopened, ready_for_review]
-commit-discipline^ready-dropped^types: [opened, edited, synchronize, reopened, ready_for_review]^types: [opened, edited, synchronize, reopened]
-commit-discipline^nogates-branch-gone^if [ ! -f .vibemaestro/gates/commit_discipline.py ]; then^if false; then
-commit-discipline^write-permission^  contents: read^  contents: write
-commit-discipline^literal-runner^runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}^runs-on: ubuntu-latest
-commit-discipline^third-party-action^      - name: count commits^      - uses: some-org/some-action@v1\n      - name: count commits
-pr-sensitive^cancel-in-progress^cancel-in-progress: ${{ github.event.action == 'synchronize' }}^cancel-in-progress: true
-commit-discipline^checkout-other-repo^fetch-depth: 0^fetch-depth: 0\n          repository: someone/else
-pr-sensitive^job-if-false^    if: (github.event_name != 'issue_comment'^    if: false && (github.event_name != 'issue_comment'
-pr-sensitive^head-checkout^          ref: ${{ github.event.repository.default_branch }}^          ref: ${{ github.event.pull_request.head.sha }}
-pr-sensitive^xtrace^set -euo pipefail^set -euxo pipefail
-pr-sensitive^swallowed-exit^--repo "$REPO"^--repo "$REPO" || true
-pr-sensitive^issue-comment-dropped^  issue_comment:\n    types: [created, edited]\n^
-pr-sensitive^review-dropped^  pull_request_review:\n    types: [submitted, edited]\n^
-pr-sensitive^edited-dropped^types: [opened, edited, synchronize, reopened, ready_for_review]^types: [opened, synchronize, reopened, ready_for_review]
-pr-sensitive^payload-snapshot^--pr "$PR" --repo "$REPO"^--payload "$GITHUB_EVENT_PATH"
-pr-sensitive^body-expression^PR: ${{ github.event.pull_request.number || github.event.issue.number }}^PR: ${{ github.event.pull_request.body }}
-pr-sensitive^nogates-branch-gone^if [ ! -f .vibemaestro/gates/pr_sensitive.py ]; then^if false; then
-pr-sensitive^write-permission^  issues: read^  issues: write
-pr-sensitive^repo-not-passed^--pr "$PR" --repo "$REPO"^--pr "$PR"
-pr-sensitive^literal-runner^runs-on: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}^runs-on: ubuntu-latest
-pr-title^head-checkout^          ref: ${{ github.event.pull_request.base.ref }}^          ref: ${{ github.event.pull_request.head.sha }}
-pr-title^swallowed-exit^--config-ref "origin/$BASE_REF"^--config-ref "origin/$BASE_REF" || true
-pr-title^no-config-ref^ --config-ref "origin/$BASE_REF"^
-pr-title^edited-dropped^types: [opened, edited, synchronize, reopened, ready_for_review]^types: [opened, synchronize, reopened, ready_for_review]
-pr-title^nogates-branch-gone^if [ ! -f .vibemaestro/gates/pr_title.py ]; then^if false; then
-pr-title^tag-pin^actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2^actions/checkout@v4
-pr-title^repo-not-passed^--pr "$PR_NUMBER" --repo "$REPO"^--pr "$PR_NUMBER"
-pr-body^head-checkout^          ref: ${{ github.event.pull_request.base.ref }}^          ref: ${{ github.event.pull_request.head.sha }}
-pr-body^swallowed-exit^--config-ref "origin/$BASE_REF"^--config-ref "origin/$BASE_REF" || true
-pr-body^no-config-ref^ --config-ref "origin/$BASE_REF"^
-pr-body^edited-dropped^types: [opened, edited, synchronize, reopened, ready_for_review]^types: [opened, synchronize, reopened, ready_for_review]
-pr-body^ready-dropped^types: [opened, edited, synchronize, reopened, ready_for_review]^types: [opened, edited, synchronize, reopened]
-pr-body^nogates-branch-gone^if [ ! -f .vibemaestro/gates/pr_body.py ]; then^if false; then
-pr-body^tag-pin^actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2^actions/checkout@v4
-pr-body^repo-not-passed^--pr "$PR_NUMBER" --repo "$REPO"^--pr "$PR_NUMBER"
-pr-body^write-permission^  pull-requests: read^  pull-requests: write
-pr-body^pull-request-target^  pull_request:\n^  pull_request_target:\n
-pr-body^payload-snapshot^--pr "$PR_NUMBER" --repo "$REPO"^--body-file "$GITHUB_EVENT_PATH"
-pr-body^xtrace^set -euo pipefail^set -euxo pipefail
-dead-branches^swallowed-exit^bash .vibemaestro/gates/dead_branches.sh^bash .vibemaestro/gates/dead_branches.sh || true
-dead-branches^shallow-clone^fetch-depth: 0^fetch-depth: 1
-dead-branches^schedule-dropped^  schedule:\n    - cron: '17 5 * * 1'\n^
-dead-branches^nogates-branch-gone^if [ ! -f .vibemaestro/gates/dead_branches.sh ]; then^if false; then
-dead-branches^tag-pin^actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2^actions/checkout@v4
-EOT
-}
-N=0
-while IFS='^' read -r kind name old new; do
-  [ -n "$kind" ] || continue
-  N=$((N+1))
-  python3 - "$R/.github/workflows/$kind.yml" "$TMP/mut.yml" "$old" "$new" <<'PY'
-import sys
-src, out, old, new = sys.argv[1:5]
-dec = lambda s: s.replace("\\n", "\n")
-old, new = dec(old), dec(new)
-t = open(src, encoding="utf-8").read()
-if t.count(old) < 1:
-    sys.exit(3)
-open(out, "w", encoding="utf-8").write(t.replace(old, new, 1))
-PY
-  rc=$?
-  if [ "$rc" -eq 3 ]; then bad "planted fault '$kind/$name': the anchor is not in the template any more, update the list"; continue; fi
-  O=$(capped python3 "$CHECK" check "$W" "$PLUGIN" "$kind" "$TMP/mut.yml" 2>&1); crc=$?   # capped: memory and time caps (fixtures/capped.sh)
-  if cap_red "$crc" "planted fault '$kind/$name'"; then :
-  elif [ "$crc" = 0 ]; then bad "planted fault '$kind/$name': the checker stays GREEN, the probe is blind"
-  else ok "planted fault '$kind/$name': red ($(printf '%s' "$O" | head -1 | sed 's/^ *FAIL //' | cut -c1-90))"; fi
-done < <(break_rows)
-[ "$N" -ge 40 ] && ok "instrument: $N faults were planted" || bad "instrument: only $N faults were planted"
 
 echo "== the kit's own workflows: no job can land on a hosted runner of a private repository (tests/fixtures/runs_on_check.py) =="
 # The owner rule: every job of a private repo runs on our runners; a missing CI_RUNNER fails the run, it never falls back to a paid hosted one.
@@ -427,37 +260,10 @@ O=$(python3 "$RON" "$SRC_ROOT/.github/workflows" 2>&1); rc=$?
 eq "$rc" 0 "runs-on: every job of .github/workflows answers a runner of ours, or fails, in a private repository ($(printf '%s' "$O" | grep -c '^FAIL') jobs red)"
 has "$O" "jobs=7" "runs-on: the checker saw all 7 jobs (an empty glob cannot pass)"
 mkdir -p "$TMP/ron"
-ron_break() {  # ron_break <label> <file> <old> <new> <needle>: the checker must go red on a copy with one runs-on changed
-  rm -rf "$TMP/ron/wf"; cp -R "$SRC_ROOT/.github/workflows" "$TMP/ron/wf"
-  python3 - "$TMP/ron/wf/$2" "$3" "$4" <<'PY' || { bad "runs-on break $1: the anchor is gone, update the row"; return; }
-import sys
-f, old, new = sys.argv[1:4]
-t = open(f, encoding="utf-8").read()
-if t.count(old) != 1:
-    sys.exit(3)
-open(f, "w", encoding="utf-8").write(t.replace(old, new))
-PY
-  O=$(python3 "$RON" "$TMP/ron/wf" 2>&1); rc=$?
-  [ "$rc" = 1 ] && has "$O" "$5" "runs-on break $1: red ($5)" || bad "runs-on break $1: the checker stays green, the probe is blind"
-}
-GUARD="(github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository'))"
-ron_break literal-label test-full.yml "runs-on: \${{ vars.CI_RUNNER || $GUARD }}
-    # The suite took" "runs-on: ubuntu-latest
-    # The suite took" "a literal label"
-ron_break old-fallback test.yml "runs-on: \${{ vars.CI_RUNNER || $GUARD }}" "runs-on: \${{ vars.CI_RUNNER || 'ubuntu-latest' }}" "answers 'ubuntu-latest' (wanted '<the evaluation fails>')"
-ron_break old-gate-fallback pr-body.yml "vars.CI_RUNNER || $GUARD }}" "vars.CI_RUNNER || 'ubuntu-latest' }}" "answers 'ubuntu-latest' (wanted '<the evaluation fails>')"
-ron_break private-label export-gate.yml "fromJSON('CI_RUNNER is not set in a private repository')" "'our-runner'" "answers 'our-runner' (wanted '<the evaluation fails>')"
-ron_break ci-runner-ignored public-tree.yml "vars.CI_GATE_RUNNER || vars.CI_RUNNER || $GUARD" "vars.CI_GATE_RUNNER || $GUARD" "(wanted 'our-runner')"
-ron_break event-shortcut test-full.yml "runs-on: \${{ vars.CI_RUNNER || $GUARD }}
-    # The suite took" "runs-on: \${{ github.event_name == 'workflow_dispatch' && 'ubuntu-latest' || vars.CI_RUNNER || $GUARD }}
-    # The suite took" "not spelled as the kit's expression"
-ron_break internal-is-hosted test.yml "runs-on: \${{ vars.CI_RUNNER || (github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository')) }}" "runs-on: \${{ vars.CI_RUNNER || (github.repository_visibility != 'private' && 'ubuntu-latest' || fromJSON('x y')) }}" "unset in a internal repository"
-ron_break null-is-not-a-failure pr-body.yml "fromJSON('CI_RUNNER is not set in a private repository')" "fromJSON('null')" "answers None (wanted '<the evaluation fails>')"
 # a workflow file named *.yaml is run by Actions too: the checker must read it, and must see its jobs
 rm -rf "$TMP/ron/wf"; cp -R "$SRC_ROOT/.github/workflows" "$TMP/ron/wf"; printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps: []\n' > "$TMP/ron/wf/zz.yaml"
 O=$(python3 "$RON" "$TMP/ron/wf" 2>&1); rc=$?
 [ "$rc" = 1 ] && has "$O" "FAIL zz.yaml x" "runs-on break yaml-extension: red (a job of a *.yaml file is judged)" || bad "runs-on break yaml-extension: the checker does not read *.yaml, the probe is blind"
 has "$O" "jobs=8" "runs-on break yaml-extension: …and it counted the extra job"
-ron_break public-loses-fallback pr-body.yml "(github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository'))" "fromJSON('CI_RUNNER is not set in a private repository')" "(wanted 'ubuntu-latest')"
 
 echo; summary

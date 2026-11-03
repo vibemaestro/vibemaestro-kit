@@ -66,6 +66,27 @@ for mode in "--jobs 4" "--jobs 1" ""; do
   hasnt "$OUT" "FAIL " "green stubs [${mode:-default jobs}]: no failing assertion, including the ledger dependency"
 done
 
+echo "== wall times: on each block's summary line, and the five slowest =="
+TDIR="$TMP/stubs-time"; mkdir -p "$TDIR"
+mk_stub "$TDIR" slow 'sleep 4.2' 'ok s' 'summary'   # seconds ahead of the rest: whole-second times on a loaded runner still order it first
+for n in a1 a2 a3 a4 a5; do mk_stub "$TDIR" "$n" 'ok q' 'summary'; done
+mk_stub "$TDIR" nosum 'echo "no summary here"'
+mk_stub "$TDIR" nonl 'printf "1 ok, 0 fail"'
+run "$TDIR" --jobs 4
+eq "$(printf '%s\n' "$OUT" | grep -cE '^[0-9]+ ok, [0-9]+ fail · [0-9]+ s$')" 7 "parallel: each summary line carries the suite's wall time (7 suites with one)"
+eq "$(printf '%s\n' "$OUT" | grep -c '^################ ')" 8 "…a summary line with no final newline still leaves every header on a line of its own"
+case "$(printf '%s\n' "$OUT" | grep -A2 '^################ slow$' | tail -n 1)" in "1 ok, 0 fail · "[456]" s") ok "…a suite that sleeps 4.2 s: 4 to 6 s";; *) bad "…slow's line: $(printf '%s\n' "$OUT" | grep -A2 '^################ slow$')";; esac
+has "$OUT" $'no summary here\ntime: ' "…a suite with no summary line gets a time line of its own"
+SL=$(printf '%s\n' "$OUT" | grep '^slowest: ')
+case "$SL" in "slowest: slow "[456]" s, "*) ok "the slowest line: longest first ($SL)";; *) bad "the slowest line: [$SL]";; esac
+eq "$(printf '%s\n' "$SL" | tr ',' '\n' | grep -c ' s$')" 5 "…five suites, no more"
+eq "$(printf '%s\n' "$OUT" | grep -n -e '^slowest: ' -e '^resources: ' | cut -d: -f2 | tr '\n' ' ')" "slowest resources " "…printed just before the resource line"
+run "$TDIR" --jobs 1
+eq "$(printf '%s\n' "$OUT" | grep -cE '^time: [0-9]+ s$')" 7 "--jobs 1: a time line after each streamed block (the one with no final newline joins it)"
+has "$OUT" "slowest: slow " "--jobs 1: the slowest line too"
+run "$GREENDIR" --jobs 4
+eq "$(printf '%s\n' "$OUT" | grep '^################ ' | tail -n 1)" "################ ledger" "control: the block headers are unchanged (the ledger block last, by its plain header)"
+
 echo "== a red suite makes run-all red (parallel, sequential, default) =="
 for mode in "--jobs 4" "--jobs 1" ""; do
   # shellcheck disable=SC2086
@@ -271,6 +292,17 @@ eq "$RC" 143 "SIGTERM: run-all exits 143"
 sleep 2
 [ ! -e "$MARK.after" ] && ok "SIGTERM: the running suite was stopped too (it never reached its next command)" || bad "SIGTERM: the suite ran on as an orphan"
 has "$(cat "$TMP/sig-term.out")" "resources: jobs 2 (asked)" "SIGTERM (a CI timeout): the resource line is printed all the same"
+has "$(cat "$TMP/sig-term.out")" "stopped: sleeper after " "SIGTERM: a suite still running is named with the time it had"
+has "$(cat "$TMP/sig-term.out")" "slowest: sleeper " "SIGTERM: the slowest line counts it"
+MARK="$TMP/sig-term1"
+env -u NET_LOG RUN_ALL_SUITE_DIR="$SIGDIR" SIG_MARK="$MARK" bash "$RUN" --jobs 1 > "$TMP/sig-term1.out" 2>&1 &
+RP=$!
+for _ in $(seq 1 50); do [ -e "$MARK.started" ] && break; sleep 0.1; done
+kill -TERM "$RP"; wait "$RP"
+sleep 2
+[ ! -e "$MARK.after" ] && ok "SIGTERM with --jobs 1: the running suite is stopped too, not run to its end" || bad "SIGTERM with --jobs 1: the suite ran on to its end"
+has "$(cat "$TMP/sig-term1.out")" "stopped: sleeper after " "SIGTERM with --jobs 1: the suite that was running is named with its time"
+has "$(cat "$TMP/sig-term1.out")" "slowest: sleeper " "…and the slowest line counts it"
 
 echo "== --changed runs the planner's suites, exact names; anything it cannot give is the full suite =="
 # A stub planner (RUN_ALL_PLANNER): it logs its arguments, prints PLAN_OUT one name per line, a `plan:` line on stderr, exits PLAN_RC.

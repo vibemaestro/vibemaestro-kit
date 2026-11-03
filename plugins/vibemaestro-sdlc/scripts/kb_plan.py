@@ -760,8 +760,9 @@ def link_problems(root):
     return probs
 
 
-def changed_files(root, base):
-    """(set of changed repo paths or None for 'every file', label of the base)."""
+def merge_base(root, base=None):
+    """(merge-base commit or None, the ref it came from or why there is none): of REF (default `origin/HEAD`, else
+    `origin/main`) and HEAD, the ref's own commit when they share none. The one base `check links` and `check spec` judge by."""
     refs = [base] if base else ["origin/HEAD", "origin/main"]
     for ref in refs:
         rc, sha = _git(root, "rev-parse", "--verify", "--quiet", ref + "^{commit}")
@@ -771,7 +772,14 @@ def changed_files(root, base):
         return None, "no base (%s does not resolve)" % " or ".join(refs)
     sha = sha.decode().strip()
     rc, mb = _git(root, "merge-base", sha, "HEAD")
-    mb = mb.decode().strip() if rc == 0 and mb.strip() else sha
+    return (mb.decode().strip() if rc == 0 and mb.strip() else sha), ref
+
+
+def changed_files(root, base):
+    """(set of changed repo paths or None for 'every file', label of the base)."""
+    mb, ref = merge_base(root, base)
+    if mb is None:
+        return None, ref
     rc1, diff = _git(root, "diff", "--name-only", "--no-renames", mb)
     rc2, new = _git(root, "ls-files", "--others", "--exclude-standard", "--", "kb")
     if rc1 or rc2:

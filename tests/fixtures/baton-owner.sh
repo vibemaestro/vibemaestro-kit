@@ -8,8 +8,10 @@
 # sandbox pod holds a PermissionRequest hook there), the account's home from the password database, and every ancestor
 # process. A suite must not depend on the machine it runs on, so the copy reads <copy>.isolate/managed-settings.json and the
 # account home <copy>.isolate/account, and stops its ancestor walks at the suite's shell: only what a case starts is an ancestor.
-# It also turns LINEAGE off (a case has no Claude Code process to bind a record to); fam_owner_lineage turns it back on.
-baton_isolate() {
+# It also turns LINEAGE off (a case has no Claude Code process to bind a record to); fam_owner_lineage turns it back on. The
+# machine mode policy is read at <copy>.isolate/no-policy/baton-mode, which never exists: a pod whose image sets one runs the
+# suites as any machine does (tests/test-baton-mode-policy.sh points it at its own tree).
+baton_isolate() {  # the copy's isolation from the machine, not a break
   local iso="${1%/}.isolate"; mkdir -p "$iso/account"
   python3 - "$1/scripts/baton.py" "$iso" "$$" <<'PY' || { bad "baton_isolate: a line to isolate was not found in $1"; return 1; }
 import re, sys
@@ -19,7 +21,8 @@ subs = ((r"(?m)^MANAGED_SETTINGS = \(.*\)$", 'MANAGED_SETTINGS = ("%s/managed-se
         (r"(?m)^        return pwd\.getpwuid\(os\.getuid\(\)\)\.pw_dir$", '        return "%s/account"' % iso),
         (r"(?m)^        if pid <= 1:$", "        if pid <= 1 or pid == SUITE_PID:"),
         (r"(?m)^        if pid < 2:$", "        if pid < 2 or pid == SUITE_PID:"),
-        (r"(?m)^LINEAGE = True ", "LINEAGE = False "))
+        (r"(?m)^LINEAGE = True ", "LINEAGE = False "),
+        (r'(?m)^MODE_POLICY = ".*"$', 'MODE_POLICY = "%s/no-policy/baton-mode"' % iso))
 for pat, new in subs:
     s, n = re.subn(pat, lambda _: new, s)
     if n != 1:

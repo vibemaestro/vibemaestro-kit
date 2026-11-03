@@ -1,29 +1,42 @@
 #!/usr/bin/env python3
 """vibemaestro-brain hooks: one entry for every event, `brain_hook.py <event>` with the hook JSON on stdin.
 
-    session-start  string 1: inject hot memory (pins, windows, Now) and the Shelf index through additionalContext (≤ 8,000
-                   characters); log the episode; mark an item whose anchor names a closed issue or merged PR, and in the
-                   writer's session close an item whose `closes` anchors are all done (brain_stale.py). It renders strings 2
-                   and 3 in the same pass and hands each over in a file of `starts/` (Claude Code runs the three commands in
-                   parallel); the command that prints one deletes its file, so a hand-over is used once
-    session-start-sessions, session-start-plan
-                   strings 2 (`## Brain · sessions`: S, Q) and 3 (`## Brain · plan`: X, T, Done, F), ≤ 9,500 characters each:
-                   what session-start handed over for this SessionStart, else, after START_WAIT, their own part from the
-                   log without lookups; nothing when the part is empty and has no note
+    session-start  string 1: the head line, the precedence line, the configuration line, the review card (at
+                   SessionStart:compact only), the left brain's first string (goals, pins with their quotes, windows) and the
+                   Shelf index through additionalContext (≤ 9,500 UTF-16 units); log the episode; start a due backup in the
+                   background (`brain backup --if-due`, never waited on); mark an
+                   item whose anchor names a closed issue or merged PR, and in the writer's session close an item whose
+                   `closes` anchors are all done (brain_stale.py). It renders every other string in the same pass and hands
+                   each over in a file of `starts/` (Claude Code runs a plugin's commands of one event in parallel); the
+                   command that prints one deletes its file, so a hand-over is used once
+    session-start-2 … session-start-14
+                   strings 2 to 14 (the rest of the left brain, then the right brain: Focus, Requests, Now, Sessions, the
+                   owner queue, Next, Traps, Done, Facts), ≤ 9,500 units each: what session-start handed over for this
+                   SessionStart, else, after
+                   START_WAIT, that string rendered here from the log without lookups; nothing when there is no such string,
+                   or it is the right brain's, which is empty and has no note
     pre-compact    log the trigger and the context size (S1) from the transcript's tail; add the calls since the saved
-                   byte offset to the session's running cost sums (B1.3); never blocks
+                   byte offset to the session's running cost sums (B1.3); start a due backup in the background; never blocks
     post-compact   save compact_summary (0600, never injected) and log the loss score
     session-end    delete this session's "asked" records; append the `cost` line from the saved sums (B1.3); log the end
                    (no fold, no transcript read: a 1.5-second budget)
-    guard-bash     deny `brain op` from a subagent (agent_id present)
+    guard-bash     deny `brain op` and `brain import` from a subagent (agent_id present)
     guard-edit     deny Edit/Write/NotebookEdit under the brain state root
-    guard-owner    on an owner-shaped Bash command: ask with the one-line dialog and write the "asked" record in a dialog
-                   mode; deny otherwise (owner-confirmation spec)
+    guard-owner    on an owner-shaped Bash command: ask with the one-line dialog (an import: one dialog, a line per owner item
+                   of the bundle, its text's hash kept in the record) and write the "asked" record in a dialog mode; deny
+                   otherwise (owner-confirmation spec)
+    prompt         UserPromptSubmit, in the writer's session: at most every 10 minutes, start `close-linked-bg` in the
+                   background when a live item names a `closes` anchor and gh is on PATH; never waits
+    close-linked-bg  that run: `brain op close-linked` as the writer, its outcome or refusal one episode line
+    note-format    on a `brain` command (hooks.json's `if`): a session whose last start ran an older brain was reloaded
+                   (/reload-plugins), since this hook runs this one: log `session-format` once, so doctor stops warning
     update-check   the update reminder: vibemaestro-sdlc's scripts/update_check.py run with brain's own root and data
                    (one `systemMessage` line when a newer public brain exists); silent when sdlc is not found
 
-Every event is silent under BRAIN_OFF and in a sandbox worker (INTENT_SLUG and SEAT); every event but guard-owner and
-session-end is silent in a project with no hot memory. Fail-open: an error is one line on stderr and rc 0. A guard denies or
+Every event is silent under BRAIN_OFF and in a worker session (VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and SEAT); every
+event but guard-owner and
+session-end is silent in a project with no hot memory. A plugin that extends the brain adds lines to string 1 (brain_ext,
+imported only when one is found). Fail-open: an error is one line on stderr and rc 0. A guard denies or
 asks only on a positive match; a guard-owner that fails writes no record (or voids the one it wrote), so the CLI refuses.
 Standard library only, Python 3.8.
 """
@@ -100,25 +113,25 @@ import time  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-BLOCK_MAX = 8000
+STRINGS = 14                            # SessionStart string commands in hooks.json: brain_store.SLOTS (test-brain-layers.sh [e] holds them equal)
 START_WAIT = 6.0                        # seconds strings 2 and 3 wait for string 1's hand-over (worst case: 4 s of waits, then its work)
 SIBLINGS = 1.0                          # seconds between the starts of the commands of one SessionStart, at most (measured: 2 ms)
 T_START = time.time()                   # this process's start: the commands of one SessionStart start together
-PART_EVENTS = {"session-start-sessions": "sessions", "session-start-plan": "plan"}
+SLOT_EVENTS = {"session-start-%d" % n: n for n in range(2, STRINGS + 1)}
 SHELF_MAX = 1000
 SHELF_LINE = 100
 PLUGIN_LINE = 200
 TAIL_BYTES = 256 * 1024                 # design value: the transcript tail read for the last `usage`
 SUMMARIES_KEPT = 200
 VERSION_FLOOR = (2, 1, 211)
-OWNER_VERBS = ("add", "unpin", "supersede", "promote")
 TEST_ASK_MODES = ("plan", "bypassPermissions")   # the only modes BRAIN_TEST_ASK_MODES may add, and only with BRAIN_TEST=1
 LITERAL = ("write one `brain owner …` command alone in the Bash call, with literal arguments: no variable, substitution, "
            "backslash, glob, ~ or redirect, and nothing before or after it, so the dialog shows exactly what runs")
 
 
 def off():
-    return (os.environ.get("BRAIN_OFF", "") not in ("", "0")
+    """BRAIN_OFF, or a worker session: VIBEMAESTRO_ROLE exactly `worker`, or INTENT_SLUG and SEAT both set (brain_store.worker)."""
+    return (os.environ.get("BRAIN_OFF", "") not in ("", "0") or os.environ.get("VIBEMAESTRO_ROLE") == "worker"
             or bool(os.environ.get("INTENT_SLUG") and os.environ.get("SEAT")))
 
 
@@ -148,9 +161,18 @@ def episode(d, inp, kind, **fields):
     store().episode_line(d, inp.get("session_id"), kind, **fields)
 
 
+class NoDirectory(Exception):
+    """The hook has no directory to resolve a project from (the shell's was deleted, and the input names no other): silent."""
+
+
 def cwd_of(inp):
     c = inp.get("cwd")
-    return c if isinstance(c, str) and os.path.isabs(c) and os.path.isdir(c) else os.getcwd()
+    if isinstance(c, str) and os.path.isabs(c) and os.path.isdir(c):
+        return c
+    try:
+        return os.getcwd()
+    except OSError:
+        raise NoDirectory()
 
 
 def unwritten(s, sid, d):
@@ -422,9 +444,10 @@ def enabled_plugins(s, project):
 
 
 def shelf_index(s, project):
-    """The Shelf index, ≤ SHELF_MAX characters: project and user skills one line each, plugin skills as names per plugin.
-    Lines are chosen round-robin across the three sources, so each shows when the cap is hit, and are dropped whole."""
-    one = lambda name, first: ("- %s — %s" % (s.clean_line(name), s.clean_line(first)))[:SHELF_LINE]
+    """The Shelf index, ≤ SHELF_MAX UTF-16 units (as Claude Code counts the string 1 it ends; an emoji is 2): project and user
+    skills one line each, plugin skills as names per plugin. Lines are chosen round-robin across the three sources, so each shows
+    when the cap is hit, and are dropped whole."""
+    one = lambda name, first: s.cut_symbols("- %s — %s" % (s.clean_line(name), s.clean_line(first)), SHELF_LINE)
     proj = [one(*k) for k in skills(os.path.join(project, ".claude", "skills"))]
     user = [one(*k) for k in skills(os.path.join(s.config_dir(), "skills"))]
     plug, counts = [], {}
@@ -432,28 +455,21 @@ def shelf_index(s, project):
         names = [s.clean_line(k[0]) for k in skills(os.path.join(path, "skills"))]
         if not names:
             continue
-        line, shown = "- %s: " % s.clean_line(name), 0
-        for k in names:
-            rest = len(names) - shown - 1
-            cand = line + (", " if shown else "") + k
-            if len(cand) + (len(" +%d" % rest) if rest else 0) > PLUGIN_LINE:
-                break
-            line, shown = cand, shown + 1
-        line += " +%d" % (len(names) - shown) if shown < len(names) else ""
+        line = s.fit_items("- %s: " % s.clean_line(name), names, ", ", PLUGIN_LINE)
         plug.append(line)
         counts[line] = len(names)
     if not (proj or user or plug):
         return ""
     sources = [("project", proj), ("user", user), ("plugins", plug)]
     title = "## Shelf index (skills you can invoke; plugin skills by name)"
-    chosen, used, dropped = {k: [] for k, _ in sources}, len(title) + 1, 0
+    chosen, used, dropped = {k: [] for k, _ in sources}, s.units(title) + 1, 0
     reserve = 40                                         # room for the dropped-count line
     for r in range(max([len(l) for _, l in sources] + [0])):
         for k, l in sources:
             if r < len(l):
-                if used + len(l[r]) + 1 + reserve <= SHELF_MAX:
+                if used + s.units(l[r]) + 1 + reserve <= SHELF_MAX:
                     chosen[k].append(l[r])
-                    used += len(l[r]) + 1
+                    used += s.units(l[r]) + 1
                 else:
                     dropped += counts.get(l[r], 1)
     lines = [title]
@@ -465,11 +481,11 @@ def shelf_index(s, project):
 
 
 def units(text):
-    """The length Claude Code counts a hook string in: UTF-16 code units, so an emoji or another character past U+FFFF is 2."""
-    return len(text.encode("utf-16-le")) // 2
+    """The length Claude Code counts a hook string in (the store's measure: UTF-16 code units)."""
+    return store().units(text)
 
 
-def cut(block, limit=BLOCK_MAX):
+def cut(block, limit):
     """The hard cut at `limit` UTF-16 units (a backstop): whole lines, then one line naming the sections it cut lines of."""
     if units(block) <= limit:
         return block, 0
@@ -506,43 +522,69 @@ def sources_ok(source):
 
 
 def read_state(s, d):
-    """The state, read under the store lock: a read between a write's line and its head would see a broken log (rc 5). When the
-    lock stays held past LOCK_WAIT (a writer stuck), or the lock file cannot be opened (a read-only or full disk), the read goes
-    on without it."""
+    """(state, ops), read under the store lock: a read between a write's line and its head would see a broken log (rc 5). When
+    the lock stays held past LOCK_WAIT (a writer stuck), or the lock file cannot be opened (a read-only or full disk), the read
+    goes on without it. The ops are those the read parsed anyway (the review card's ledger lines read them)."""
     try:
         with s.locked(d, s.LOCK_WAIT):
-            return s.load(d)[1]
+            return s.load_ops(d)[1:]
     except s.Refused as e:
         if e.rc != 1:                               # 1: the lock was not free in time; anything else is the log's answer
             raise
     except OSError:
         pass
-    return s.load(d)[1]
+    return s.load_ops(d)[1:]
 
 
-def start_file(d, sid, part):
-    """The hand-over of one session's SessionStart string `part` (sessions or plan), in the project's state directory."""
-    return os.path.join(d, "starts", "%s.%s.json" % (hashlib.sha256(sid.encode("utf-8")).hexdigest()[:32], part))
+def start_file(d, sid, n):
+    """The hand-over of one session's SessionStart string `n` (2 … STRINGS), in the project's state directory."""
+    return os.path.join(d, "starts", "%s.%d.json" % (hashlib.sha256(sid.encode("utf-8")).hexdigest()[:32], n))
 
 
 def hand_over(s, d, sid, hand):
-    """Write one hand-over file per part (0600, atomic); old ones of other sessions are swept. Never raises: the other commands
-    then render their own parts."""
+    """Write one hand-over file per string 2 … STRINGS (0600, atomic; an empty text when there is no such string to print);
+    old ones of other sessions are swept. Never raises: the other commands then render their own strings."""
     try:
         sd = os.path.join(d, "starts")
         if not os.path.isdir(sd):
             with contextlib.suppress(FileExistsError):
                 os.mkdir(sd, 0o700)
-        for p in PART_EVENTS.values():
-            one = {k: v for k, v in hand.items() if k != "parts"}
-            s._write_file(start_file(d, sid, p), s.dumps(dict(one, part=p, text=hand["parts"].get(p, ""))) + "\n")
+        for n in SLOT_EVENTS.values():
+            one = {k: v for k, v in hand.items() if k != "strings"}
+            s._write_file(start_file(d, sid, n), s.dumps(dict(one, part=n, text=hand["strings"].get(n, ""))) + "\n")
         for name in os.listdir(sd):
             with contextlib.suppress(OSError):
                 q = os.path.join(sd, name)
                 if time.time() - os.lstat(q).st_mtime > 86400:
                     os.unlink(q)
     except OSError as e:
-        sys.stderr.write("brain: strings 2 and 3 were not handed over: %s\n" % e.__class__.__name__)
+        sys.stderr.write("brain: strings 2 to %d were not handed over: %s\n" % (STRINGS, e.__class__.__name__))
+
+
+def review_card(s, st, d, did, ops, extra=(), sid=None):
+    """The review card for string 1 after a compaction, the extensions' lines (`extra`) after brain's own; an error costs the
+    card's lines, never the string. Its ledger lines read the ops the state was read with (an auto-close since only closed
+    items, which the ledger lines do not name); its loss score is this session's compaction's (`last_loss`)."""
+    try:
+        own = s.card_lines(st, time.time(), did.get("stale") or (), s.last_loss(d, sid), ops=ops, d=d)
+        return s.card_text(own + ([s.EXT_NOTE] + list(extra) if extra else []))
+    except Exception as e:  # noqa: BLE001 — string 1 carries the left brain: a card must not take it down
+        return s.card_text(["the card could not be computed (%s): brain doctor" % e.__class__.__name__])
+
+
+def ext_lines(s, d, st, ops, source, sid, project, closed=False):
+    """String 1's lines from the plugins that extend the brain: [] and no import when no plugin ships the marker; an error
+    costs the lines, never the string. After an auto-close (`closed`) the state and its ops are read again, together."""
+    if not s.extension_roots(project):
+        return []
+    try:
+        if closed and source == "compact":
+            st, ops = read_state(s, d)
+        import brain_ext
+        return brain_ext.start_lines(d, st, ops if source == "compact" else None, source, source == "compact", session=sid,
+                                     project=project)
+    except Exception as e:  # noqa: BLE001 — string 1 carries the left brain: an extension must not take it down
+        return ["extensions could not be read (%s): brain doctor" % e.__class__.__name__]
 
 
 def session_start(inp):
@@ -556,40 +598,51 @@ def session_start(inp):
     sid = inp.get("session_id")
     sid = sid if isinstance(sid, str) else ""
     head_line = ("# vibemaestro-brain — re-injected at SessionStart:%s; change it only with `brain op` / `brain owner` "
-                 "(skill brain)\n" % s.clean_line(source)[:20])
-    hand = {"session": sid, "source": source, "t": T_START, "parts": {}}
-    for p in PART_EVENTS.values() if sid else ():  # an earlier SessionStart's leftovers: never this one's strings
+                 "(skill brain)\n" % s.clean_line(source[:20]))
+    hand = {"session": sid, "source": source, "t": T_START, "strings": {}}
+    handed = []
+    for n in SLOT_EVENTS.values() if sid else ():  # an earlier SessionStart's leftovers: never this one's strings
         with contextlib.suppress(OSError):
-            os.unlink(start_file(d, sid, p))
+            os.unlink(start_file(d, sid, n))
+    s.use_project(project)                          # its .vibemaestro/brain.json
     try:
         try:
-            st = read_state(s, d)
-            parts = s.render_parts(st)
+            st, ops = read_state(s, d)
+            strings = s.render_strings(st, limit=s.SLOTS)
         except s.Refused as e:
-            hand["error"] = "refused"               # strings 2 and 3 read the log themselves, and stay silent if it refuses them too
+            hand["error"] = "refused"               # the other strings read the log themselves, and stay silent if it refuses them too
             warn = "brain: hot memory was not injected: %s; run `brain doctor`" % s.printable(e.msg)
             emit("SessionStart", additionalContext=warn)
             sys.stderr.write(warn + "\n")
             return
         import brain_stale
-        parts, stale, did, st = brain_stale.annotate(parts, st, d, sid or None)
-        block, gone = cut(head_line + parts["hot"] + "\n" + shelf_index(s, project))
-        more = {p: cut(parts[p], s.STRING_MAX) if p in did["noted"] or not s.part_empty(st, p) else ("", 0)
-                for p in ("sessions", "plan")}
-        hand["parts"] = {p: more[p][0] for p in more}
+        strings, stale, did, st = brain_stale.annotate(strings, st, d, sid or None)
+        cfg = s.config_line()
+        right = not s.half_empty(st, "right")      # the right brain's strings print when it holds anything, or with a note
+        more = {i + 1: cut(text, s.STRING_MAX) if half == "left" or right or i in did["noted"] else ("", 0)
+                for i, (half, text) in enumerate(strings) if i}
+        hand["strings"] = {n: more[n][0] for n in more}
+        if sid:                                     # handed over before any extension is called: the others never wait on it
+            hand_over(s, d, sid, hand)
+            handed.append(True)
+        ext = ext_lines(s, d, st, ops, source, sid, project, closed=bool(did["closed"]))
+        card = (review_card(s, st, d, did, ops, ext, sid) if source == "compact" else
+                s.card_text(ext, s.EXT_TITLE) if ext else "")       # no card: the extensions' lines take its room
+        block, gone = cut(head_line + s.PRECEDENCE + "\n" + (cfg + "\n" if cfg else "") + card
+                          + strings[0][1] + "\n" + shelf_index(s, project), s.STRING_MAX)
     except BaseException:
         hand["error"] = "failed"                    # the other commands render their own parts
         raise
     finally:
-        if sid:                                     # a hand-over is matched by session: none without an id
+        if sid and not handed:                      # a hand-over is matched by session: none without an id
             hand_over(s, d, sid, hand)
     emit("SessionStart", additionalContext=block)
     if did["closed"]:
         episode(d, inp, "auto-close", hook="SessionStart", ids=[i for i, _ in did["closed"]],
                 anchors=[a["anchor"] for _, an in did["closed"] for a in an])
     fields = {"source": source, "transcript": inp.get("transcript_path"), "injected": len(block), "cut": gone, "stale": stale,
-              "format": s.FORMAT, "injected_sessions": len(more["sessions"][0]), "cut_sessions": more["sessions"][1],
-              "injected_plan": len(more["plan"][0]), "cut_plan": more["plan"][1]}
+              "format": s.FORMAT, "injected_strings": [len(more[n][0]) for n in sorted(more)],
+              "cut_strings": [more[n][1] for n in sorted(more)]}
     fields.update({k: v for k, v in (("closed", len(did["closed"])), ("held", did["held"])) if v})
     if rebound:
         fields["rebound_from"] = rebound
@@ -597,13 +650,14 @@ def session_start(inp):
         fields.update({k: inp[k] for k in ("context_tokens", "prompt_cache_likely_expired", "estimated_cache_write_usd")
                        if k in inp})
     episode(d, inp, "session-start", **fields)
+    kick_backup(s, d, project)
 
 
-def taken_over(d, sid, source, part):
-    """The hand-over of `part` string 1's command wrote for this SessionStart (same session and source, started within SIBLINGS
-    seconds of this command), waiting up to START_WAIT seconds for it, and deleted once read: an earlier SessionStart's was
-    taken by its own command. None when none came."""
-    p, end = start_file(d, sid, part), T_START + START_WAIT
+def taken_over(d, sid, source, n):
+    """The hand-over of string `n` string 1's command wrote for this SessionStart (same session and source, started within
+    SIBLINGS seconds of this command), waiting up to START_WAIT seconds for it, and deleted once read: an earlier SessionStart's
+    was taken by its own command. None when none came."""
+    p, end = start_file(d, sid, n), T_START + START_WAIT
     while True:
         try:
             with open(p, encoding="utf-8") as f:
@@ -621,12 +675,14 @@ def taken_over(d, sid, source, part):
         time.sleep(0.005 if time.time() < T_START + 0.5 else 0.05)   # string 1 usually hands over within half a second
 
 
-def session_part(inp, part):
-    """String 2 or 3: string 1's hand-over for this SessionStart, else this part rendered here from the log, without lookups."""
+def session_part(inp, n):
+    """String `n` (2 … STRINGS): string 1's hand-over for this SessionStart, else that string rendered here from the log,
+    without lookups."""
     s = store()
-    _, d, _ = resolve(inp, record=False)            # string 1's command records the session
+    project, d, _ = resolve(inp, record=False)      # string 1's command records the session
     if not has_state(d):
         return
+    s.use_project(project)
     source = str(inp.get("source") or "startup")
     if not sources_ok(source):
         return
@@ -634,19 +690,21 @@ def session_part(inp, part):
     sid = sid if isinstance(sid, str) else ""
     sd = os.path.join(d, "starts")
     waits = bool(sid) and (os.access(sd, os.W_OK | os.X_OK) if os.path.isdir(sd) else not os.path.lexists(sd))   # else no place
-    h = taken_over(d, sid, source, part) if waits else None
+    h = taken_over(d, sid, source, n) if waits else None
     if h is not None and not h.get("error"):
         text = h["text"]
     else:
         try:
-            st = read_state(s, d)
+            st, _ = read_state(s, d)
         except s.Refused as e:
-            if h is None or h.get("error") != "refused":            # string 1 has not said it already
-                emit("SessionStart", additionalContext="brain: the %s string was not injected: %s; run `brain doctor`"
-                     % (part, s.printable(e.msg)))
+            if n == 2 and (h is None or h.get("error") != "refused"):   # once, and only if string 1 has not said it already
+                emit("SessionStart", additionalContext="brain: strings 2 to %d were not injected: %s; run `brain doctor`"
+                     % (STRINGS, s.printable(e.msg)))
             return
-        text = "" if s.part_empty(st, part) else cut(s.render_part(st, part) + "stale-anchor check: skipped (string 1 handed "
-                                                                               "nothing over)\n", s.STRING_MAX)[0]
+        strings = s.render_strings(st, limit=s.SLOTS)
+        half, body = strings[n - 1] if n <= len(strings) else ("", "")
+        text = cut(body + "stale-anchor check: skipped (string 1 handed nothing over)\n", s.STRING_MAX)[0] if (
+            half == "left" or (half == "right" and not s.half_empty(st, "right"))) else ""
     if text:
         emit("SessionStart", additionalContext=text)
 
@@ -683,7 +741,7 @@ def hot_version(s, d):
 
 def pre_compact(inp):
     s = store()
-    d = resolve(inp)[1]
+    project, d, _ = resolve(inp)
     if not has_state(d):
         return
     episode(d, inp, "pre-compact", trigger=inp.get("trigger"), context_before=last_context(inp.get("transcript_path")),
@@ -692,6 +750,16 @@ def pre_compact(inp):
     if isinstance(sid, str) and sid and isinstance(tr, str) and os.path.isabs(tr):
         import brain_cost
         brain_cost.update(d, sid, tr, s._write_file)
+    kick_backup(s, d, project)
+
+
+def kick_backup(s, d, project):
+    """A due backup started in the background (`brain backup --if-due`, a session of its own): the hook never waits on it, and
+    a failure here costs only that start."""
+    try:
+        s.backup_kick(d, project)
+    except Exception as e:  # noqa: BLE001 — a backup must not take the hook down
+        sys.stderr.write("brain: the due backup was not started: %s\n" % e.__class__.__name__)
 
 
 def anchor_found(anchor, text):
@@ -773,9 +841,9 @@ def session_end(inp):
         return
     if sid:
         s.void_records(d, sid)
-        for p in PART_EVENTS.values():
+        for n in SLOT_EVENTS.values():
             with contextlib.suppress(OSError):
-                os.unlink(start_file(d, sid, p))
+                os.unlink(start_file(d, sid, n))
     episode(d, inp, "session-end", reason=inp.get("reason"))
     cost_line(s, d, inp)                            # the episode's last line (the parent spec's hook map)
 
@@ -810,9 +878,9 @@ def guard_bash(inp):
         return
     for text, _ in segments(cmd):
         ws = words(text) or text.split()
-        if any(is_brain(w) and ws[i + 1:i + 2] == ["op"] for i, w in enumerate(ws)):
+        if any(is_brain(w) and ws[i + 1:i + 2] in (["op"], ["import"]) for i, w in enumerate(ws)):
             decide("deny", "brain: hot memory is written by the main session only; report back, and the main session runs "
-                           "`brain op`")
+                           "`brain op` or `brain import`")
             return
 
 
@@ -869,26 +937,9 @@ def parse_owner(args):
     return ns.verb, ns
 
 
-def dialog_line(s, ns, st):
-    """The one line of the dialog. Every field the session wrote is quoted, the source (or pointer) before the text, and the
-    store refuses `"` in them, so no field can end its quotes and imitate another (round 4: a label blocklist could not keep
-    up with look-alike letters and colons)."""
-    if ns.verb == "add":
-        letter = s.KINDS[ns.kind]
-        iid = s.next_id(st, letter)
-        if letter == "D":
-            return 'Pin owner decision %s, from "%s": "%s"' % (iid, ns.where, ns.text)
-        ts = s.parse_iso(ns.expires)
-        until = s.now_iso(ts)[5:16].replace("T", " ") + "Z"
-        return 'Grant window %s until %s, from "%s": "%s"' % (iid, until, ns.where, ns.text)
-    it = s.get_live(st, ns.id, s.OWNER_LETTERS)
-    noun = "decision" if ns.id[0] == "D" else "window"
-    text = s.clean_line(it["text"])
-    if ns.verb == "unpin":
-        return 'Unpin owner %s %s: "%s"' % (noun, ns.id, text)
-    if ns.verb == "supersede":
-        return 'Replace %s with: "%s"' % (ns.id, ns.text)
-    return 'Promote owner %s %s to "%s": "%s"' % (noun, ns.id, ns.pointer, text)
+def dialog_line(s, ns, st, ops=(), d=None, session=None):
+    """The one line of the dialog (brain_store.owner_line, which a batch's dialog repeats per item)."""
+    return s.owner_line(ns, st, ops, d, session)
 
 
 def pending_marker(sid):
@@ -920,6 +971,79 @@ def mark_pending(s, sid, d):
     s._write_file(pending_marker(sid), d + "\n")
 
 
+CLOSE_EVERY = 600       # seconds between two background close-linked runs of one brain, started by the writer's prompts
+
+
+def prompt(inp):
+    """UserPromptSubmit, in the writer's session only: when the last background close-linked of this brain started at least
+    CLOSE_EVERY seconds ago and a live item names a `closes` anchor, start `close-linked-bg` as a process of its own session and
+    never wait for it (a long session closes what merged without a SessionStart). The stamp is written before the start, so a
+    run that fails or is refused is not started again before CLOSE_EVERY. Silent."""
+    sid = inp.get("session_id")
+    if not isinstance(sid, str) or not sid or inp.get("agent_id"):
+        return
+    s = store()
+    project, d, _ = resolve(inp, record=False)
+    if not has_state(d):
+        return
+    stamp = os.path.join(d, "close-linked.json")
+    try:
+        with open(stamp, encoding="utf-8") as f:
+            last = json.loads(f.read()).get("t")
+    except (OSError, ValueError, AttributeError):
+        last = None
+    now = time.time()
+    if isinstance(last, (int, float)) and not isinstance(last, bool) and 0 <= now - last < CLOSE_EVERY:
+        return
+    try:
+        _, st = s.load(d)
+    except s.Refused:
+        return
+    if st["writer"] != sid:                         # only the session that holds the claim; another one's prompt leaves no stamp
+        return
+    s._write_file(stamp, json.dumps({"t": now, "session": sid}) + "\n")
+    import brain_stale
+    import shutil
+    if not brain_stale.linked_items(st) or shutil.which("gh") is None:
+        return
+    p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "close-linked-bg"], cwd=project,
+                         env=dict(os.environ, CLAUDE_CODE_SESSION_ID=sid), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    p.stdin.write(json.dumps(inp).encode("utf-8"))
+    p.stdin.close()
+
+
+def close_linked_bg(inp):
+    """The background run `prompt` starts: `brain op close-linked` as the writer, its outcome or its refusal one `close-linked`
+    episode line. link-close is a machine op: like close-linked by hand, it spends none of the session's retirement budget."""
+    s = store()
+    d = resolve(inp, record=False)[1]
+    import brain_stale
+    try:
+        fields = {"result": s.printable(brain_stale.close_linked())[:500]}
+    except s.Refused as e:
+        fields = {"refused": e.rc, "why": s.printable(e.msg)[:300]}
+    episode(d, inp, "close-linked", hook="UserPromptSubmit", **fields)
+
+
+def note_format(inp):
+    """A `brain` command in a session whose last start ran an older brain: this hook runs this brain, so the session was
+    reloaded (/reload-plugins starts no session); log its format once, so doctor stops warning about it. Silent."""
+    cmd = command_of(inp)
+    sid = inp.get("session_id")
+    if not isinstance(sid, str) or not sid or inp.get("agent_id"):
+        return
+    if not any(is_brain(w) for text, _ in segments(cmd, heredoc=True) for w in (words(text) or text.split())):
+        return
+    s = store()
+    d = resolve(inp, record=False)[1]
+    if not has_state(d):
+        return
+    n = s.session_format(d, sid)
+    if n is not None and n < s.FORMAT:
+        episode(d, inp, "session-format", format=s.FORMAT)
+
+
 def guard_owner(inp):
     cmd = command_of(inp)
     sid = inp.get("session_id") or ""
@@ -941,6 +1065,7 @@ def guard_owner(inp):
         return
     s = store()
     project, d, _ = resolve(inp)                    # the project `brain owner` will write to, whatever the shell's directory
+    s.use_project(project)                          # its caps
     mode = str(inp.get("permission_mode") or "unknown")
     log = {"mode": mode}
 
@@ -966,17 +1091,32 @@ def guard_owner(inp):
     dialog = mode in ("default", "acceptEdits") or (mode == "auto" and version_ok()) or mode in ask_modes()
     if not dialog:
         return deny(s.NO_DIALOG, "no-dialog")
+    try:
+        s.check_config()                            # a config error refuses the write: never ask the owner for it
+    except s.Refused as e:
+        return deny(s.printable(e.msg), "config")
     ans = s.answerers(s.project_root(project))
     if ans:
         return deny("owner items are refused while something can answer the permission prompt in place of a human: "
                     + s.printable("; ".join(ans)), "answerer")
+    plan = None
     try:
-        _, st = s.load(d) if has_state(d) else (None, s.empty_state())
-        line = dialog_line(s, ns, st)
+        if verb == "import":                        # one dialog for the whole batch, its text bound to the record by its hash
+            import brain_transfer                   # only for these two verbs: never on SessionStart's path
+            line, plan = brain_transfer.owner_import_ask(d, os.path.join(cwd_of(inp), ns.bundle))
+        elif verb == "backup":
+            import brain_transfer
+            line = brain_transfer.owner_backup_line(d, ns, project)
+        elif verb == "batch":                       # one dialog for 2 to 5 items, bound to the file's bytes and its text
+            _, st, ops = s.load_ops(d) if has_state(d) else (None, s.empty_state(), [])
+            line, plan = s.owner_batch_ask(d, os.path.join(cwd_of(inp), ns.file), st, ops)
+        else:
+            _, st, ops = s.load_ops(d) if has_state(d) else (None, s.empty_state(), [])
+            line = dialog_line(s, ns, st, ops, d, sid)
     except s.Refused as e:
         return deny(s.printable(e.msg), "state")
     mark_pending(s, sid, d)                         # first: a marker with no record is harmless, a record with none is not
-    rid = s.record_asked(d, sid, mode, args)
+    rid = s.record_asked(d, sid, mode, args, plan=plan)
     try:
         decide("ask", line)
     except Exception:
@@ -1003,10 +1143,10 @@ def update_check(inp):
         pass
 
 
-HANDLERS = {"session-start": session_start, "session-start-sessions": lambda inp: session_part(inp, "sessions"),
-            "session-start-plan": lambda inp: session_part(inp, "plan"), "pre-compact": pre_compact, "post-compact": post_compact,
+HANDLERS = {"session-start": session_start, "pre-compact": pre_compact, "post-compact": post_compact,
             "session-end": session_end, "guard-bash": guard_bash, "guard-edit": guard_edit, "guard-owner": guard_owner,
-            "update-check": update_check}
+            "update-check": update_check, "note-format": note_format, "prompt": prompt, "close-linked-bg": close_linked_bg}
+HANDLERS.update({e: (lambda n: lambda inp: session_part(inp, n))(n) for e, n in SLOT_EVENTS.items()})
 
 
 def main(argv):
@@ -1021,7 +1161,11 @@ def main(argv):
         return 0
     try:
         HANDLERS[event](inp)
+    except NoDirectory:
+        pass
     except Exception as e:  # noqa: BLE001 — fail-open: a hook error must never block the session
+        if e.__class__.__name__ == "Gone" and e.__class__.__module__ == "brain_store":
+            return 0                                # the shell's directory was deleted: nothing to say, as NoDirectory
         sys.stderr.write("brain hook %s: %s: %s\n" % (event, e.__class__.__name__, str(e)[:200]))
     return 0
 

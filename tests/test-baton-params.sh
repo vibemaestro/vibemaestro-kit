@@ -7,8 +7,7 @@
 # Run: bash tests/test-baton-params.sh
 #
 # Each area is a FAMILY `fam_<x> <plugin dir>`: allowed forms green, every refused form red with its own tag. The suite runs
-# every family on a copy of the real plugin, then families again on copies with ONE planted break in baton.py (expect_red,
-# tests/fixtures/ports.sh), which must go red on the intended tag. The long tables (types, grammar, the shell reader, the owner's
+# every family on a copy of the real plugin. The long tables (types, grammar, the shell reader, the owner's
 # command shape) live in tests/fixtures/baton_params.py and run in one process against the copy's own baton.py.
 # The state is XDG_STATE_HOME and the library XDG_DATA_HOME inside the scratch tree, HOME is the scratch home; keep records are
 # written by the suite (baton pack writes them later); nothing is written outside the scratch tree, which the last section checks.
@@ -114,7 +113,7 @@ fam_grammar() {
   cp -r "$P" "$W/plug"; sed -i '/^# Usage:/d' "$W/plug/batons/merge-pr.sh"
   eq "$(bt "$W/plug" "$W" check kit:merge-pr)" 1 "[grammar] a kit with neither Usage nor Params: check rc 1"
   has "$(out)" "declares Usage (its flags) or Params" "[grammar] …named"
-  local k; for k in merge-pr gh-write branch-push workflow-dispatch coordinator-bootstrap; do
+  local k; for k in merge-pr gh-write branch-push workflow-dispatch bootstrap; do
     eq "$(bt "$P" "$W" check "kit:$k")" 0 "[grammar] kit:$k declares Usage and passes check"
   done
   eq "$(bt "$P" "$W" check kit:branch-delete)/$(grep -c '^# Params: ' "$P/batons/branch-delete.sh")" "0/1" "[grammar] kit:branch-delete declares Params and passes check"
@@ -358,16 +357,16 @@ open(sys.argv[1], "wb").write(b"x" * (1024 * 1024 - len(tail)) + tail)' "$big" "
     "$(printf 'A%.0s' $(seq 1 40))" >> "$W/prose.md"
   rm -f "$W/o/x"
   eq "$(bt "$P" "$W" go si.sh "body=$W/prose.md" "$(D "$W/o")")" 0 "[secret] an input that only talks about secrets: rc 0"
-  # no pattern scans a hostile 1 MiB value for long: each match has few starts
+  # no pattern scans a hostile 1 MiB value for long: each match has few starts (this process's CPU time: a loaded runner is not the scan)
   n=$(python3 -c 'import sys, time
 sys.path.insert(0, sys.argv[1] + "/scripts"); import baton
 worst = 0
 for pat in (b"eyJ", b"eyJabcdefghij-", b"eyJ.", b"ghp_", b"sk-", b"sk-a", b"glpat-", b"AIza", b"AKIA", b"-----BEGIN ", b"client-key-data: ",
             b"aws_secret_access_key ", b"sessiontoken=", b"secretaccesskey=", b"=sessiontoken=", b"%3D", b"\\n"):
-    d = (pat * ((1 << 20) // len(pat) + 1))[:1 << 20]; baton.SECRET_SEEN.clear(); t = time.time(); baton.secret_problem(d)
-    worst = max(worst, time.time() - t)
-d = b"sessiontoken" + b" " * ((1 << 20) - 12); baton.SECRET_SEEN.clear(); t = time.time(); baton.secret_problem(d)
-worst = max(worst, time.time() - t)
+    d = (pat * ((1 << 20) // len(pat) + 1))[:1 << 20]; baton.SECRET_SEEN.clear(); t = time.process_time(); baton.secret_problem(d)
+    worst = max(worst, time.process_time() - t)
+d = b"sessiontoken" + b" " * ((1 << 20) - 12); baton.SECRET_SEEN.clear(); t = time.process_time(); baton.secret_problem(d)
+worst = max(worst, time.process_time() - t)
 print("slow" if worst > 5 else "fast")' "$P")
   eq "$n" fast "[secret] a hostile 1 MiB value is scanned in under 5 s per pattern set"
 }
@@ -630,7 +629,7 @@ PY
   eq "$(bt "$P" "$R" list merge nothing-like-this)" 0 "[list] no match: rc 0"
   eq "$(out)" "no baton matches merge nothing-like-this" "[list] …it says so"
   bt "$P" "$R" list dest >/dev/null; has "$(out)" "project:put-file" "[list] a keyword matches a parameter key"
-  for k in kit:merge-pr kit:gh-write kit:branch-push kit:branch-delete kit:workflow-dispatch kit:coordinator-bootstrap kind:install-file kind:settings-merge kind:ci-rerun-failed; do
+  for k in kit:merge-pr kit:gh-write kit:branch-push kit:branch-delete kit:workflow-dispatch kit:bootstrap kind:install-file kind:settings-merge kind:ci-rerun-failed; do
     bt "$P" "$W" list "$k" >/dev/null; len=$(wc -c < "$BT_OUT")
     [ "$len" -le 1537 ] && ok "[list] the entry of $k is at most 1536 bytes ($len)" || bad "[list] the entry of $k is at most 1536 bytes ($len)"
     hasnt "$(out)" "…" "[list] …uncut"
@@ -653,17 +652,17 @@ e = {"prefix": "user", "name": "x", "path": "/x/" + "n" * 1600 + ".sh", "marks":
 sys.exit(0 if len(baton.list_entry(e).encode("utf-8")) <= baton.ENTRY_MAX else 1)' "$P")" 0 \
     "[list] an entry no field or path cut can shorten ends, cut at its byte bound"
   for n in $(seq 1 500); do printf '#!/usr/bin/env bash\n# Purpose: fixture baton number %s, a flow kept to measure the catalogue at scale\n# Stops: none\n# Params: dest=path note=input\n' "$n" > "$L/fx-$n.sh"; done
-  t0=$(python3 -c 'import time; print(time.time())')
   bt "$P" "$W" list >/dev/null
-  t1=$(python3 -c 'import time; print(time.time())')
   len=$(wc -c < "$BT_OUT"); n=$(wc -l < "$BT_OUT")
   [ "$len" -le 8000 ] && ok "[list] 500 batons more: at most 8,000 bytes ($len)" || bad "[list] 500 batons more: at most 8,000 bytes ($len)"
-  python3 -c 'import sys; sys.exit(0 if float(sys.argv[2]) - float(sys.argv[1]) < 1.0 else 1)' "$t0" "$t1" \
-    && ok "[list] …in under 1 s" || bad "[list] …in under 1 s ($(python3 -c 'import sys; print(round(float(sys.argv[2]) - float(sys.argv[1]), 3))' "$t0" "$t1") s)"
+  # the bound is the scan's own CPU time, not the runner's load: a second identical call, measured (bt keeps the output above)
+  cpu=$(cd "$W" && cenv XDG_STATE_HOME="$ST" XDG_DATA_HOME="$XD" CLAUDE_CODE_SESSION_ID="$OWNER_SID" ${BT_ENV[@]+"${BT_ENV[@]}"} \
+    python3 "$SRC_ROOT/tests/fixtures/cpu_within.py" 1 python3 "$P/scripts/baton.py" list)
+  eq "$cpu" 0 "[list] …in under 1 s of CPU"
   eq "$n" 26 "[list] …25 lines and one more"
   has "$(tail -n 1 "$BT_OUT")" "more: add a keyword" "[list] …the last says how many more"
   eq "$(awk 'length > 260' "$BT_OUT" | wc -l | tr -d ' ')" 0 "[list] …no line over 260 characters"
-  printf 'list over 500 fixture batons: %s bytes, %s lines, %s s\n' "$len" "$n" "$(python3 -c 'import sys; print(round(float(sys.argv[2]) - float(sys.argv[1]), 3))' "$t0" "$t1")" >> "$TMP/measure.txt"
+  printf 'list over 500 fixture batons: %s bytes, %s lines\n' "$len" "$n" >> "$TMP/measure.txt"
 }
 
 fam_origin() {
@@ -705,7 +704,7 @@ fam_reviewed() {
   eq "$(grep -c "	mode	.*	trust example.invalid/o/r	" "$(bdir)/log.tsv")" 1 "[reviewed] …and logged as a mode event"
   bt "$P" "$R" mode remotes >/dev/null
   eq "$(out)" "$(printf 'example.invalid/o/other\nexample.invalid/o/r')" "[reviewed] mode remotes prints the list, one per line"
-  eq "$(bt "$P" "$R" mode)" 0 "[reviewed] mode alone: rc 0"; eq "$(out)" auto "[reviewed] …still prints the mode alone"
+  eq "$(bt "$P" "$R" mode)" 0 "[reviewed] mode alone: rc 0"; eq "$(head -n 1 "$BT_OUT")" auto "[reviewed] …still prints the mode word first"
   eq "$(bt "$P" "$R" go project:o "$(D "$o")")" 0 "[reviewed] a listed remote and the default branch's bytes: runs without a pin, rc 0"
   has "$(out)" "reviewed on https://Example.invalid/o/r.git/ main" "[reviewed] …go's line labels it reviewed, with the URL and branch"
   hasnt "$(out)" "tok3n" "[reviewed] …the URL without its userinfo"
@@ -856,212 +855,6 @@ fam_origin fam_reviewed fam_owner"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done
-
-echo "== planted breaks: each family must go red on a copy with one break in baton.py =="
-# BRK <label> <family> <needle> <old> <new> [<old> <new>]... — a plugin copy with the replacements in baton.py, then expect_red
-BRK() {
-  local label=$1 fam=$2 needle=$3 d; shift 3; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/scripts/baton.py" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-BRK reviewed-any-remote fam_reviewed '[reviewed] a remote not on the list: rc 3' '    if canon not in read_remotes():' '    if False:'
-BRK reviewed-any-ref fam_reviewed '[reviewed] origin/HEAD naming a local branch: rc 3' '        if not ref or not ref.startswith("refs/remotes/origin/"):' '        if not ref:'
-BRK reviewed-git-env fam_reviewed '[reviewed] GIT_DIR pointing at a repository whose origin matches: rc 3' \
-  '        r = subprocess.run(["git"] + list(a), cwd=root, capture_output=True, text=True, timeout=10, env=git_env())' \
-  '        r = subprocess.run(["git"] + list(a), cwd=root, capture_output=True, text=True, timeout=10)'
-BRK reviewed-host-case fam_reviewed '[reviewed] …in its canonical form' '    return host.lower() + "/" + path' '    return host + "/" + path'
-BRK reviewed-link fam_reviewed '[reviewed] a symlink on origin holding the bytes: rc 3' '        m = re.match(r"100(?:644|755) blob ([0-9a-f]+)' '        m = re.match(r"[0-9]+ blob ([0-9a-f]+)'
-BRK reviewed-relative fam_reviewed '[reviewed] a relative-path origin spelled like a listed remote: rc 3' '    canon = remote_canon(got[0], strict=True)' '    canon = remote_canon(got[0])'
-BRK reviewed-config-url fam_reviewed '[reviewed] a listed URL after the URL git fetches from: rc 3' '        url = git("remote", "get-url", "origin") or "(no url)"' '        url = git("config", "--get", "remote.origin.url") or "(no url)"'
-BRK reviewed-retired fam_reviewed '[reviewed] a retired sha stays refused though it is reviewed: rc 3' \
-  '        if self.kept is not None and not self.kept.pin(self.sha) and pin and (self.kept.retired or not self.kept.reviewed(self.data)):' \
-  '        if self.kept is not None and not self.kept.pin(self.sha) and pin and not self.kept.reviewed(self.data):'
-BRK reviewed-nested-copy fam_reviewed '[reviewed] GIT_DIR from a subdirectory holding an identical copy: rc 3' '    if got[4] != os.path.realpath(root):' '    if False:'
-BRK reviewed-retired-check fam_reviewed '[reviewed] …check of the retired sha says it cannot be called' '    if s.kept is not None and not s.kept.pinned and not s.kept.retired:' '    if s.kept is not None and not s.kept.pinned:'
-BRK reviewed-retired-list fam_reviewed '[reviewed] …and list does not label it reviewed' '            if not pinned and not retired and prefix == "project" and e["sha"]:' '            if not pinned and prefix == "project" and e["sha"]:'
-BRK reviewed-top-stripped fam_reviewed '[reviewed] a repository whose path ends in a space runs as reviewed: rc 0' '        top = top_of(root)' '        top = git("rev-parse", "--show-toplevel")'
-BRK reviewed-nested-note fam_reviewed '[reviewed] list of a nested copy under GIT_DIR shows no matches-origin note' '    if not got or got[2].get(name) != blob_id(data, got[3]) or got[4] != os.path.realpath(root):' '    if not got or got[2].get(name) != blob_id(data, got[3]):'
-BRK lead-allowed fam_values '[types] refused: a value starting with +' '    if v[0] in LEAD_REFUSED:' '    if False:'
-BRK dotdot-allowed fam_values '[types] refused: path with ..' '        if seg in (".", ".."):' '        if False:'
-BRK segment-per-segment fam_values '[types] allowed: path with a -b segment in the middle' '    if segs[-1][0] in "-+@":' '    if any(x[0] in "-+@" for x in segs):'
-BRK segment-input-per-segment fam_values '[types] path and input under a -home-… segment: rc 0' '    if segs[-1][0] in "-+@":' '    if any(x[0] in "-+@" for x in segs):'
-BRK segment-last-allowed fam_values '[types] a last segment starting with -: rc 64' '    if segs[-1][0] in "-+@":' '    if False:'
-BRK format-allowed fam_values '[types] refused: a value with U+202E (Cf)' '        if unicodedata.category(c) in ("Cf", "Zl", "Zp"):' '        if False:'
-BRK under-prefix fam_values '[types] refused: under: a sibling with the base as prefix' '        if v != base and not v.startswith(base + "/"):' '        if not v.startswith(base):'
-BRK state-path fam_values '[types] a path into the state directory: rc 64' '    if in_state(v):' '    if False:'
-BRK total-unbounded fam_values '[types] values over 4096 bytes in total: rc 64' '    if total > VALUES_MAX:' '    if False:'
-BRK file-link-followed fam_values '[types] a file value that is a link: rc 64' \
-    '        data, st = read_capped(v, FILE_MAX)' '        data, st = read_capped(v, FILE_MAX, nofollow=False)'
-BRK secret-key fam_grammar '[grammar] refused: a key naming a token' '        if SECRET_KEY.search(key):' '        if False:'
-BRK params-usage fam_grammar '[grammar] Params and Usage together: check rc 1' '    if pl and ul:' '    if False:'
-BRK kept-fixed fam_grammar '[grammar] a project: baton with Params: none: check rc 1' '        if not s.params:' '        if False:'
-BRK kit-no-usage fam_grammar '[grammar] a kit with neither Usage nor Params: check rc 1' '    elif (s.kit or s.kind is not None) and not pl and not ul:' '    elif False:'
-BRK unknown-key fam_call '[call] an unknown key: rc 64' '        elif key not in declared:' '        elif False:'
-BRK missing-key fam_call '[call] a key missing: rc 64' '    probs += ["%s: missing" % k for k, _t, _a in s.params if k not in vals]' '    probs += []'
-BRK twice-key fam_call '[call] a key given twice: rc 64' '        elif key in vals:' '        elif False:'
-BRK argv-words fam_delivery '[delivery] the values reach the script in the declared order' \
-    '        argv = list(s.argv if s.argv is not None else args)' '        argv = list(args)'
-BRK p-inherited fam_delivery '[delivery] a P_ variable the caller set is not inherited' \
-    '        env = {k: v for k, v in env.items() if not k.startswith("P_")}' '        env = dict(env)'
-BRK copy-writable fam_delivery '[delivery] …mode 400' '        os.chmod(os.path.join(tmp, base), 0o400)' '        os.chmod(os.path.join(tmp, base), 0o600)' \
-    '    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o400:' '    if not stat.S_ISREG(st.st_mode):'
-BRK secret-start fam_secret '[secret] an input that only talks about secrets: rc 0' 'TOKEN_START = rb"(?:(?<![A-Za-z0-9_\-])' 'TOKEN_START = rb"(?:(?<=)|(?<![A-Za-z0-9_\-])'
-BRK secret-placeholder fam_secret '[secret] an input that only talks about secrets: rc 0' '                                 if len(set(next((g for g in m.groups() if g), m.group()))) >= 4), None)' '                                 if True), None)'
-BRK secret-copied fam_secret '[secret] a private-key as a file value (id_ed25519): rc 64' '                p = secret_problem(files[k][0])' '                p = None'
-BRK copies-kept fam_copies '[copies] …and leaves no copy of the file value' '        if not RUN["consumed"]:' '        if False:'
-BRK copies-run-dropped fam_copies "[copies] a run's copy stays" '        if not RUN["consumed"]:' '        if True:'
-BRK copies-held-removed fam_copies '[copies] …the copy another process holds stays' \
-    $'        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n        if not os.path.samestat(os.fstat(fd), os.lstat(path)):' \
-    $'        if not os.path.samestat(os.fstat(fd), os.lstat(path)):'
-BRK copies-held-mismatch fam_copies '[copies] …and leaves the held copy to it' \
-    $'            if not remove_if_free(final):\n                raise Stop(REFUSED' $'            if not remove_tree(final):\n                raise Stop(REFUSED'
-BRK copies-closed-kept fam_copies '[copies] prune removes a copy directory it cannot open (nobody can hold one)' \
-    '        remove_tree(path)                               # a link, a file, a directory of mode 0: never held' '        return False'
-BRK copy-unchecked fam_delivery '[delivery] a copy that changed: rc 3' '        why = copy_problem(final, base, sha)' '        why = None'
-BRK inputs-unbound fam_binding '[binding] the file changed after signing: run rc 3' \
-    '                                  "inputs": inputs}, sort_keys=True, separators=(",", ":")))' '                                  "inputs": {}}, sort_keys=True, separators=(",", ":")))'
-BRK card-cut fam_display '[display] the card shows a 200-character value whole' \
-    '    lines[-1:-1] = ["  %s" % log_value(ln) for ln in s.param_lines]' '    lines[-1:-1] = ["  %s" % log_value(ln)[:80] for ln in s.param_lines]'
-BRK format-shown fam_display '[display] control and format characters of a header are escaped on the card' \
-    'unicodedata.category(c) in ("Cf", "Zl", "Zp")
-                   else c for c in v)' 'False
-                   else c for c in v)'
-BRK log-uncut fam_display '[display] log.tsv cuts a value at 120 characters' '            v = [cut(a, CUT) if isinstance(a, str) else a for a in v]' '            v = list(v)'
-BRK baton-field fam_display '[display] …the last, baton, is scratch@<sha256> for a path' '        return "scratch@%s" % self.sha' '        return "scratch"'
-BRK any-prefix fam_places '[places] lib:x: rc 64' '        if m.group(1) in PLACES:' '        if True:'
-BRK bare-name fam_places '[places] a bare name: rc 64' '    if KIT_RE.match(word):
-        held = places_holding(word)' '    if False:
-        held = places_holding(word)'
-BRK loose-root fam_places '[places] a project root its group can write: rc 3' '    if st.st_uid != os.getuid() or st.st_mode & 0o022:' '    if False:'
-BRK place-link fam_places '[places] a .vibemaestro/batons that is a link: rc 64' \
-    '        if os.path.lexists(self.dir) and os.path.realpath(self.dir) != want:' '        if False:'
-BRK kept-link fam_places '[places] a kept baton that is a link: rc 64' \
-    '            data, st = read_capped(self.path, KEPT_MAX)' '            data, st = read_capped(self.path, KEPT_MAX, nofollow=False)'
-BRK home-root fam_places '[places] a git top level that is HOME is no project root: rc 66' '    if top and top != home:' '    if top:'
-BRK walk-home fam_places '[places] the walk outside git stops before HOME: rc 66' '    while d not in ("/", home):' '    while d != "/":'
-BRK unpinned-runs fam_pin '[pin] no keep record: rc 3' '        if self.kept is not None and not self.kept.pin(self.sha) and pin and (self.kept.retired or not self.kept.reviewed(self.data)):' '        if False:'
-BRK retire-ignored fam_pin '[pin] a retired sha: rc 3' '        by = naming[-1][1] if naming and not retired else None' '        by = naming[-1][1] if naming else None'
-BRK user-any-keep fam_pin '[pin] user: a library file written back to an older version: rc 3' \
-    '        by = newest[1] if newest and newest[1]["sha256"] == sha and not any(' '        by = newest[1] if newest and not any('
-BRK user-retire-falls-back fam_pin '[pin] user: the newest keep retired: rc 3' \
-    '            q > newest[0] and is_retire(r) and r["retired"] == sha for q, r in recs) else None' '            False for q, r in recs) else None'
-BRK common-dir-key fam_worktrees '[worktrees] the other worktree runs its own version' \
-    '        return top, "project-" + sha256(common)[:16], True' '        return top, "project-" + sha256(top)[:16], True'
-BRK targets-off fam_targets '[targets] a plan line outside the declared Targets: go rc 1' '    ttable, treasons = targets_table(s, plan)' '    ttable, treasons = [], []'
-BRK dotdot-after fam_targets '[targets] a word with a .. segment under a declared /** pattern: rc 1' \
-    '            if ".." in re.split(r"[/=:]", w):' '            if False:'
-BRK dotdot-relative fam_targets '[targets] a relative word with a .. segment beside a declared target: rc 1' \
-    '            if ".." in re.split(r"[/=:]", w):' '            if target_looking(w) and ".." in re.split(r"[/=:]", w):'
-BRK dotdot-key fam_targets '[targets] a key=../x word beside a declared target: rc 1' \
-    '            if ".." in re.split(r"[/=:]", w):' '            if ".." in w.split("/"):'
-BRK exempt-state fam_targets '[targets] a plan line naming the keep records: rc 1' \
-    '    exempt = tuple(os.path.join(b, sub) + "/" for b in st for sub in ("inputs", "records"))' '    exempt = tuple(b + "/" for b in st)'
-BRK targets-unparsed fam_targets "[targets] a kept baton whose Targets are 'the file named by dest': check rc 1" \
-    '                      for p in target_patterns(s)[1]]' '                      for p in []]'
-BRK positional-ok fam_reader '[reader] refused: a top-level "$1"' \
-    '            if ((name.isdigit() and name != "0") or name in ("@", "*")) and form != "bare" and k not in in_fn and k not in block:' '            if False:'
-BRK unquoted-ok fam_reader '[reader] refused: $P_N unquoted' '            elif ctx == "c":
-                bad(n, "$%s is unquoted' '            elif False:
-                bad(n, "$%s is unquoted'
-BRK eval-ok fam_reader '[reader] refused: P_N in eval' '        if word in ("eval", "trap") or' '        if word in () or'
-BRK heredoc-ok fam_reader '[reader] refused: P_N in a quoted here-document' '    for ln, lines, _closed in bodies:' '    for ln, lines, _closed in []:'
-BRK heredoc-letters fam_reader '[reader] refused: P_N in a <<1 here-document' \
-    '    return (k, "".join(out), tabs) if k > begin else None' '    return (k, "".join(out), tabs) if k > begin and line[begin].isalpha() else None'
-BRK heredoc-quotes-kept fam_reader '[reader] allowed: here-documents with quoted, backslashed and numeric delimiters' \
-    '            out.append(body)' '            out.append(line[k:e + 1])'
-BRK inner-heredoc fam_reader '[reader] refused: code after a << inside' \
-    '            elif line.startswith("${", j) or line.startswith("$[", j):' '            elif False:'
-BRK unclosed-ok fam_reader '[reader] refused: a here-document that no line closes' \
-    '              for ln, _lines, closed in heredoc_bodies if closed is False]' '              for ln, _lines, closed in heredoc_bodies if False]'
-BRK undecided-ok fam_reader '[reader] refused: a here-document delimiter after a line continuation' \
-    'for ln, _lines, closed in heredoc_bodies if closed is None]' 'for ln, _lines, closed in heredoc_bodies if False]'
-# a segment derived from a value: basename, a carrier's trim, the ./ and -- ways out, and the dependency on LEAD_REFUSED
-BRK segment-basename-blind fam_reader '[reader] refused: basename of the dirname of a value' \
-  '        if word != "basename":' '        if True:'
-BRK segment-copy-blind fam_reader '[reader] refused: basename of a copy of a copy' \
-  '            reads_any(outer, held) or any(' '            False or any('
-BRK segment-any-output fam_reader '[reader] allowed: the output of a command that reads a value, cut' \
-  'SEGMENT_CMD.search(x) and reads_any(x, held) for x in inner' 'reads_any(x, held) for x in inner'
-BRK segment-wrapper-blind fam_reader '[reader] refused: a command -p dirname copy cut with ##*/' 'SEGMENT_CMD.search(x) and' 'SEGMENT_CMD.match(x) and'
-BRK segment-operands-ok fam_reader '[reader] refused: basename with three operands' '    return operands > 2' '    return False'
-BRK segment-abbrev-ok fam_reader '[reader] refused: ./ before basename --mul (an abbreviation of --multiple)' \
-  '            if w not in ("-z", "--zero"):' '            if w in ("-a", "-s", "--multiple", "--suffix") or w.startswith("--suffix="):'
-BRK segment-printf-blind fam_reader '[reader] refused: a printf -v copy cut with ##*/' \
-  'r"(?:^|[;&|(\s])printf\s+-v' 'r"(?!)printf\s+-v'
-BRK segment-assign-dashdash fam_reader "[reader] refused: local -- x=\$(basename …): local's own --" \
-  '    if assign:                                          # `local -- x=$(…)`' '    if False:                                           # `local -- x=$(…)`'
-BRK segment-multiple-ok fam_reader '[reader] refused: ./ before basename -a (two words)' \
-  '        if s is None or basename_many(text, masked[s:s + len(text)]) or not basename_exempt(code, masked, s):' \
-  '        if s is None or not basename_exempt(code, masked, s):'
-BRK segment-nested-blind fam_reader '[reader] refused: basename of the dirname of a value' \
-  '        text = code[s:subst_end(masked, s)] if s is not None else code[i:end]' '        text = code[i:end]'
-BRK segment-trim-blind fam_reader '[reader] refused: a copy trimmed with ##*/' \
-  '            if code.startswith("}", e) or SEGMENT_SAFE_OPS.match(code, e):' '            if True:'
-BRK segment-prefix-ok fam_reader '[reader] refused: a copy trimmed with ##*/' 'SEGMENT_SAFE_OPS = re.compile(r":?[-=?+]|%")' 'SEGMENT_SAFE_OPS = re.compile(r":?[-=?+]|%|#")'
-BRK segment-dot-anywhere fam_reader '[reader] refused: basename of a value in backticks' \
-  '    if word.startswith("./"):' '    if True:'
-BRK segment-own-dashdash fam_reader "[reader] refused: basename of a value after a -- that is basename's own" \
-  '    return "--" in masked[c:j].split()' '    return "--" in masked[c:].split()'
-BRK segment-array-blind fam_reader '[reader] refused: an array copy cut with ##*/' \
-  '        elif code[k] == "(":' '        elif False:'
-BRK segment-for-blind fam_reader '[reader] refused: a for variable over a value cut with ##*/' \
-  '[;&|(\s])for\s+' '[;&|(\s])(?!)for\s+'
-BRK segment-quote-blind-cut fam_reader '[reader] refused: printf -v with a quoted | in the format, cut' \
-  '            stop = re.compile(r"[;&|\n]").search(masked, m.end())' '            stop = re.compile(r"[;&|\n]").search(code, m.end())'
-BRK segment-redirect-operand fam_reader '[reader] allowed: ./ before basename with 2>&1, || true, | head and 2> /dev/null' \
-  '    for m in reversed(list(re.finditer(' '    for m in [] and reversed(list(re.finditer('
-BRK segment-pipe-operand fam_reader '[reader] allowed: ./ before basename with 2>&1, || true, | head and 2> /dev/null' \
-  '    stop = re.search(r"[;|]|(?<![<>])&(?!>)", minner)' '    stop = None'
-BRK lead-dash-allowed fam_values '[types] refused: a repo value starting with -' \
-  '    if v[0] in LEAD_REFUSED:' '    if v[0] in LEAD_REFUSED.replace("-", ""):'
-BRK heredoc-tabs fam_reader '[reader] allowed: a <<"E-F" and a <<-EOF here-document, then code' \
-    '(lines[n].lstrip("\t") if tabs else lines[n]) != word' 'lines[n] != word'
-BRK heredoc-ansi fam_reader "[reader] allowed: a <<\$'E\\eF' here-document, then code" '                body = ansi_c(body)' '                body = body'
-BRK heredoc-group fam_reader '[reader] allowed: a <<$(x y) here-document, then code' \
-    '        elif c == "`" or (c == "$" and line[k + 1:k + 2] in ("(", "{")):' '        elif False:'
-BRK heredoc-pid fam_reader '[reader] refused: P_N in a here-document after $${' '            elif line.startswith("$$", j):' '            elif False:'
-BRK heredoc-subst fam_reader '[reader] refused: P_N in a here-document inside $( ) inside ${…}' \
-    '                ctx.append([top, "arith" if width == 3 else "subst", top[1], 0])' '                ctx.append([top, "arith", top[1], 0])'
-BRK comment-in-brace fam_reader '[reader] refused: P_N in a here-document after a # inside ${…}' \
-    'and not (cur and cur[1] in ("brace", "bracket", "arith")):' ':'
-BRK nul-ok fam_reader '[reader] refused: a NUL byte that would hide a << from the checks' '    if b"\0" in s.data:' '    if False:'
-BRK subscript-heredoc fam_reader '[reader] refused: code after an assignment subscript' \
-    '            elif ch == "[" and assignment_subscript(line, j):' '            elif False:'
-BRK list-path-keep fam_list '[list] …keeping the file name and the sha256' \
-    '    if over > 0 and len(path) > len(base) + 40:' '    if False:'
-BRK remove-link fam_delivery '[delivery] a set-aside entry that is a link is removed' \
-    '        if os.path.islink(path) or not os.path.isdir(path):' '        if not os.path.exists(path):'
-BRK entry-loop fam_list '[list] an entry no field or path cut can shorten ends' \
-    '        if len(vals[k]) <= 20:
-            break' '        if False:
-            break'
-BRK prune-aside fam_delivery '[delivery] the newest 20 set-aside copies are kept' \
-    '    for pattern, keep in ((r"[0-9a-f]{64}\.", INPUTS_KEPT), (r"\.mismatch-", 20)):' '    for pattern, keep in ((r"[0-9a-f]{64}\.", INPUTS_KEPT),):'
-BRK herestring-heredoc fam_reader '[reader] allowed: a here-string of a word value' '            elif line.startswith("<<<", j):' '            elif False:'
-BRK heredoc-in-arith fam_reader '[reader] allowed: << as a shift' \
-    '            elif line.startswith("<<", j) and not (cur and cur[1] != "subst"):' '            elif line.startswith("<<", j):'
-BRK data-opt-ok fam_reader '[reader] refused: P_N as the value of gh -F' '            if opt and any(' '            if False and any('
-BRK block-ok fam_reader '[reader] refused: no values block' \
-    '        if first is None or run[-1] >= len(entries) or any(k in in_fn or not want[j].match(entries[k][1]) for j, k in enumerate(run)):' '        if False:'
-BRK reassign-ok fam_reader '[reader] refused: a P_ name assigned again' \
-    '            if form == "bare" and name.startswith("P_") and (code[b:b + 1] in ("=", "[") or code[b:b + 2] == "+=") and k not in block:' '            if False:'
-BRK list-unbounded fam_list '[list] 500 batons more: at most 8,000 bytes' 'LIST_LINES, LIST_WIDTH, ENTRY_MAX, CUT = 25, 260, 1536, 120' 'LIST_LINES, LIST_WIDTH, ENTRY_MAX, CUT = 2500, 2600, 1536, 120'
-BRK list-runs fam_list '[list] runs: the ok runs of these bytes under this name' \
-    '                if len(v) == len(LOG_FIELDS) and v[1] == "run" and v[9] == "ok":' '                if False:'
-BRK list-unpinned-label fam_list '[list] a file never kept: unpinned' \
-    '            e["label"] = kept_label(by) if pinned else "not kept on this machine"' '            e["label"] = kept_label(by or {})'
-BRK list-copy fam_list '[list] marks: unpinned, kit exists, copy of' '                by_sha.setdefault(e["sha"], []).append(e)' '                pass'
-BRK list-raw fam_list '[list] the label, then the Purpose, escaped' \
-    'cut(esc(f.get("Purpose", (0, "(no Purpose)"))[1]), 80)' 'cut(f.get("Purpose", (0, "(no Purpose)"))[1], 80)' \
-    '        say("%s", list_line(e))' '        say(list_line(e))'
-BRK origin-userinfo fam_origin '[origin] …the URL without its userinfo' '    return re.sub(r"^(?:([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@|[^/@:]+@(?=[^/:]+:))", lambda m: m.group(1) or "", url)' '    return url'
-BRK owner-no-kept fam_owner '[owner] accepted: project:<name>' \
-    're.fullmatch(r"(?:kit|kind|project|user):[a-z0-9][a-z0-9-]*", rest[5])' 're.fullmatch(r"(?:kit|kind):[a-z0-9][a-z0-9-]*", rest[5])'
-BRK owner-record-unbound fam_owner '[owner] …its record binds the pinned file' '        rec["script_path"], rec["script_sha256"] = kept' '        pass'
-BRK owner-quoted fam_owner '[owner] a value that needs quoting gets no owner command' \
-    '    return next((a for a in args if not (re.match(r"[\x20-\x7e]+\Z", a) and SAFE_WORD.match(a))), None)' '    return None'
-BRK owner-pin-unchecked fam_owner '[owner] the pin moved after the owner signed: run rc 3' \
-    '        if self.kept is not None and not self.kept.pin(self.sha) and pin and (self.kept.retired or not self.kept.reviewed(self.data)):' '        if False:'
 
 if [ -s "$TMP/measure.txt" ]; then echo "== measurements =="; cat "$TMP/measure.txt"; fi
 

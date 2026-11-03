@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "name": "example",
+  "script": "brain/extension.py",
+  "checks": [
+    {"verb": "add", "kinds": ["session"], "options": ["--ticket"]},
+    {"verb": "supersede", "kinds": ["session"], "options": ["--ticket"]},
+    {"verb": "broke"}
+  ],
+  "owner": [
+    {"verb": "vouch", "effect": "pin", "args": ["tag"]},
+    {"verb": "shelve", "effect": "archive", "letters": ["T", "F"]}
+  ],
+  "calls": ["start", "record", "read"]
+}

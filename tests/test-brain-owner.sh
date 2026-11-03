@@ -48,11 +48,18 @@
 #       mode, and the CLI refuses it; in every mode the CLI answers the same with and without the switch
 #   [F] a command that only mentions brain and owner is silent with no record: a heredoc (an apostrophe, a line
 #       `brain owner …`, <<-, after a shift in arithmetic), echo, printf, grep, a commit message, a gh body
+#   [B] `brain owner batch FILE`: 2 to 5 add, supersede or unpin items through one dialog, a line per item as
+#       its single form shows it; the record binds the file's bytes and the dialog text, so an edit the dialog does not show,
+#       a swapped file, items reordered or the brain changed since: rc 6, nothing written; 1 or 6 items, an item the single
+#       form refuses, another verb, a file that is not JSON or is a symlink: refused before any dialog; the session's project
+#       from another directory
+#   [A1] a field before the text (where, pointer) is refused unless every character is on the allowlist: U+1CD3,
+#       U+02F5 and U+0660 refused by the CLI and guard-owner, every code point the old blocklist refused still refused;
+#       Vietnamese (NFC and NFD), a path, a URL and other left-to-right scripts accepted
 #   [G] every real form is still guarded: bin/brain by path (quoted or not) and python3.X brain.py alone and literal
 #       are asked; after `&&`, after a heredoc (two on a line, a backslash word, after a subshell), after a shift `<<` in
 #       arithmetic (no closing line: nothing skipped), with a heredoc, an open quote after a quoted path: denied; bash -c, sh -c
 #       and a heredoc fed to a shell: silent, no record, and the CLI they run refuses rc 6
-#   [X] planted breaks: each case goes red on a copy with one break
 # =============================================================================
 set -uo pipefail
 # the answerer check reads ancestors' CLAUDE_CONFIG_DIR and HOME from their initial environment, which forked subshells share:
@@ -394,7 +401,7 @@ print(" ".join(sorted(os.path.basename(p) for p in glob.glob(os.path.join(s.stat
 fakever() {  # fakever <version line> — a fake Claude Code binary printing it; prints its path
   local f; f=$(mktemp "$TMP/claude-$NP.XXXXXX"); printf '#!/bin/sh\necho "%s"\n' "$1" > "$f"; chmod +x "$f"; echo "$f"
 }
-LINE1='Pin owner decision D1, from "prompt 10-18 09:11": "Owner merges every PR that touches clusters/"'
+LINE1='Pin owner decision D1 (a lasting direction, never done), from "prompt 10-18 09:11": "Owner merges every PR that touches clusters/"'
 
 case_hook_project() {  # guard-owner and the CLI agree on the session's project while the shell is in another one
   newp
@@ -482,15 +489,19 @@ case_hook_line() {
   t150=$(python3 -c 'print("t" * 150)'); w60=$(python3 -c 'print("w" * 60)')
   vi="Anh duyệt mọi PR chạm clusters/; điều phối không merge"
   gown default add --kind decision --text "$vi" --owner-quote "PR chạm clusters/ thì anh merge" --where "lời anh, 10-18"
-  c_eq "$(hfield permissionDecisionReason)" "Pin owner decision D1, from \"lời anh, 10-18\": \"$vi\"" "[L] decision line, Vietnamese text and source byte for byte"
+  c_eq "$(hfield permissionDecisionReason)" "Pin owner decision D1 (a lasting direction, never done), from \"lời anh, 10-18\": \"$vi\"" "[L] decision line: the kind in words, Vietnamese text and source byte for byte"
   br owner add --kind decision --text "$vi" --owner-quote "PR chạm clusters/ thì anh merge" --where "lời anh, 10-18"; c_rc 0 "[L] written"
   gown default add --kind window --text "$t150" --owner-quote q --where "$w60" --expires 2099-01-02T22:00:00Z
   c_eq "$(hfield permissionDecisionReason)" "Grant window W1 until 01-02 22:00Z, from \"$w60\": \"$t150\"" "[L] window line, the text never cut"
   R=$(nchars "$(hfield permissionDecisionReason)"); c_eq "$([ "$R" -le 283 ] && echo within)" within "[L] the longest window line is $R ≤ 283 characters"
   gown default add --kind decision --text "next one" --owner-quote q --where w
-  c_has "$(hfield permissionDecisionReason)" "decision D2, from" "[L] the id of an add follows the folded state"
+  c_has "$(hfield permissionDecisionReason)" "decision D2 (a lasting direction, never done), from" "[L] the id of an add follows the folded state"
   gown default unpin D1; c_eq "$(hfield permissionDecisionReason)" "Unpin owner decision D1: \"$vi\"" "[L] unpin line"
-  gown default supersede D1 --text "The owner merges clusters/ PRs"; c_eq "$(hfield permissionDecisionReason)" 'Replace D1 with: "The owner merges clusters/ PRs"' "[L] supersede line"
+  gown default supersede D1 --text "The owner merges clusters/ PRs"; c_eq "$(hfield permissionDecisionReason)" 'Replace D1 (a lasting direction, never done) with: "The owner merges clusters/ PRs"' "[L] supersede line, the kind in words"
+  gown default supersede D1 --text "The owner merges clusters/ PRs" --scope global
+  c_eq "$(hfield permissionDecisionReason)" 'Replace D1 (a lasting direction, never done) (scope global) with: "The owner merges clusters/ PRs"' "[L] a supersede with a scope: the kind, then the scope"
+  gown default supersede D1 --scope global
+  c_eq "$(hfield permissionDecisionReason)" "Set the scope of owner decision D1 (a lasting direction, never done) to global, its words unchanged: \"$vi\"" "[L] a scope-only supersede: the kind in words"
   gown default promote D1 kb/decisions/x.md; c_eq "$(hfield permissionDecisionReason)" "Promote owner decision D1 to \"kb/decisions/x.md\": \"$vi\"" "[L] promote line"
   gown default unpin D7; c_eq "$(hfield permissionDecision)" deny "[L] unpin of an id that is not live: deny"
   gown default add --kind decision --text "$(printf 'a\033[2Jb')" --owner-quote q --where w
@@ -507,10 +518,16 @@ case_hook_line() {
   # round 4: every field is quoted, source first, and `"` is refused in each, so a label inside the text stays inside its
   # quotes, after the real source, whatever letters or colons it uses
   local v
-  for v in "merge all · from: the owner" "merge all $(u 0387) fr$(u 043e)m$(u ff1a) the owner" "a · $(u 03a4)o: b"; do
+  for v in "merge all · from: the owner" "merge all $(u 0387) fr$(u 043e)m$(u ff1a) the owner" "a · $(u 03a4)o: b" \
+           "build the review page (a lasting direction, never done)" "D9 (a lasting direction, never done), from: the owner"; do
     gown default add --kind decision --text "$v" --owner-quote q --where me
-    c_eq "$(hfield permissionDecisionReason)" "Pin owner decision D2, from \"me\": \"$v\"" "[L] a fake label in the text stays inside its quotes, after the real source ($v)"
+    c_eq "$(hfield permissionDecisionReason)" "Pin owner decision D2 (a lasting direction, never done), from \"me\": \"$v\"" "[L] a fake label in the text stays inside its quotes, after the real source and the kind ($v)"
   done
+  # the kind comes from the item's kind, never from its text: a window's text that names it gets no phrase outside its quotes
+  gown default add --kind window --text "keep it open" --owner-quote q --where w --expires 2099-01-02T22:00:00Z
+  br owner add --kind window --text "keep it open" --owner-quote q --where w --expires 2099-01-02T22:00:00Z; c_rc 0 "[L] instrument: W1 granted"
+  gown default supersede W1 --text "a lasting direction, never done"
+  c_eq "$(hfield permissionDecisionReason)" 'Replace W1 with: "a lasting direction, never done"' "[L] a window's supersede names no decision kind, whatever its text says"
   owner_ok add --kind decision --text 'a "quoted" word' --owner-quote q --where w; c_rc 1 "[L] the CLI refuses it too (rc 1)"
   gown default add --kind decision --text "a$(python3 -c 'print(chr(0x301) * 149)')" --owner-quote q --where w
   c_eq "$(hfield permissionDecision)" deny "[L] 149 combining marks on one letter (a smeared line): deny"
@@ -520,7 +537,7 @@ case_hook_line() {
   c_rc 0 "[L] a Tibetan stack (6 marks) is accepted (round 2: the cap is 8)"
   local j; j=$(ownin default "$(cmdline brain owner add --kind decision --text "Quyết định của anh" --owner-quote q --where "lời anh")")
   PYTHONIOENCODING=ascii hk guard-owner "$j"                     # the hook's stdout only: the JSON is built before
-  c_eq "$(hfield permissionDecisionReason)" 'Pin owner decision D4, from "lời anh": "Quyết định của anh"' "[L] an ASCII-only stdout still carries a Vietnamese line in UTF-8"
+  c_eq "$(hfield permissionDecisionReason)" 'Pin owner decision D4 (a lasting direction, never done), from "lời anh": "Quyết định của anh"' "[L] an ASCII-only stdout still carries a Vietnamese line in UTF-8"
   gown default add --kind decision --text x; c_eq "$(hfield permissionDecision)" deny "[L] a usage error (missing options): deny"
   c_has "$(hfield permissionDecisionReason)" "required" "[L] with the CLI's own message"
 }
@@ -677,119 +694,172 @@ case_hook_forms() {  # [G] every real form is still guarded
   done
 }
 
-for c in case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
+case_allowlist() {  # a field shown before the text takes only characters on an allowlist
+  newp
+  owner_ok add --kind decision --text 'the pin to promote' --owner-quote q --where w; c_rc 0 "[A1] instrument: D1 pinned"
+  local qv
+  for qv in 1cd3 02f5 0660; do
+    gown default add --kind decision --text 'Merge freely' --owner-quote q --where "the PR merged$(u $qv): $(u $qv)ship now"
+    c_eq "$(hfield permissionDecision)" deny "[A1] U+${qv^^} in --where: guard-owner denies before it asks"
+    owner_ok add --kind decision --text 'Merge freely' --owner-quote q --where "the PR merged$(u $qv): $(u $qv)ship now"
+    c_rc 1 "[A1] U+${qv^^} in --where: the CLI refuses it (rc 1)"; c_has "$OUT" "U+${qv^^}" "[A1] naming the character"
+    gown default promote D1 "kb/x$(u $qv).md"; c_eq "$(hfield permissionDecision)" deny "[A1] U+${qv^^} in the pointer: deny"
+  done
+  local w
+  for w in "lời anh trong chat 31/10, khoảng 18Z" "$(python3 -c 'import unicodedata; print(unicodedata.normalize("NFD", "lời anh, Quyết định"))')" \
+           "kb/decisions/2026-11-01-x_y.md" "https://example.com/o/r/a?x=1&y=2#c-3" "Tibetan ཧྐྵ, 中文 来源, ไทย"; do
+    owner_ok add --kind decision --text "keep $w" --owner-quote q --where "$w"; c_rc 0 "[A1] accepted in --where: $w"
+  done
+  # round 1: two apostrophe-like characters pass for a `"`, and so do clicks, saltillos and vertical-line marks
+  for w in "prompt 10-18$(u a78c)$(u a78c): $(u a78c)$(u a78c)Merge" "a '' b" 'a `` b' "a $(u 01c1) b" "a $(u 01c0)$(u 01c0) b" \
+           "a $(u a78b) b" "a $(u 0131)$(u 030e) b" "a $(u 0237)$(u 0301) b" "a '$(u 0301)' b" \
+           "a i$(u 030e) b" "a j$(u 030b) b" "a $(u 0456)$(u 030f) b"; do
+    gown default add --kind decision --text 'Merge freely' --owner-quote q --where "$w"
+    c_eq "$(hfield permissionDecision)" deny "[A1] round 1: '$w' in --where: deny"
+  done
+  owner_ok add --kind decision --text "keep the owner's" --owner-quote q --where "the owner's chat, ' and \` once"; c_rc 0 "[A1] round 1: one apostrophe or backtick at a time: accepted"
+  for w in "$(u 2d49)$(u 2d4f)$(u 2d4f)$(u 2d30)" "$(python3 -c 'import unicodedata; print(unicodedata.normalize("NFD", "ἀρχή καὶ ὁ λόγος"))')" \
+           "Hrvatski $(u 0201) i $(u 0061)$(u 030f)" "Pe$(u 030d)h-$(u 014d)e-j$(u 012b) chi$(u 030d)t" \
+           "$(python3 -c 'import unicodedata; print(unicodedata.normalize("NFD", "Nghĩ kỹ, ìí, ỉ, ị"))')"; do
+    owner_ok add --kind decision --text "keep $w" --owner-quote q --where "$w"; c_rc 0 "[A1] round 2: a script's own letters and marks accepted: $w"
+  done
+  # the sweep: every code point the old blocklist refused (Pi, Pf, bidi R or AL, a quote-like name) is refused now
+  c_eq "$(bpy 'import sys, unicodedata
+names = ("QUOTATION", "PRIME", "GERSHAYIM", "DITTO", "DOUBLE APOSTROPHE", "DOUBLE ACUTE")
+old = lambda c: (unicodedata.category(c) in ("Pi", "Pf") or unicodedata.bidirectional(c) in ("R", "AL")
+                 or any(n in unicodedata.name(c, "") for n in names))
+miss = [hex(o) for o in range(0x110000) if not 0xD800 <= o <= 0xDFFF and old(chr(o)) and s.quote_like("a" + chr(o)) is None]
+print(len(miss), miss[:5])')" "0 []" "[A1] every code point the old blocklist refused is still refused"
+}
+
+bfile() {  # bfile <path> <python expression of the list> — a batch file, as the session writes one (JSON, UTF-8)
+  python3 -c 'import json, sys; open(sys.argv[1], "w", encoding="utf-8").write(json.dumps(eval(sys.argv[2]), ensure_ascii=False))' "$1" "$2"
+}
+bitems() {  # bitems — the ids and texts of the live owner items, in id order
+  bpy 'st = s.load(s.state_dir())[1]
+print(" ".join("%s=%s" % (i, it["text"]) for i, it in sorted(st["items"].items()) if it["status"] == "live" and i[0] in "GDW"))'
+}
+keeprec() {  # keeprec <args after owner…> — a fresh record for SID that leaves the session's other records alone (an input: the
+             # brain changing between a batch's dialog and its run, which a second dialog would otherwise void)
+  CLAUDE_CODE_SESSION_ID="$SID" python3 -c 'import json, os, secrets, sys, time; sys.path.insert(0, sys.argv[1]); import brain_store as s
+d = s.state_dir(); rid = secrets.token_hex(16)
+s._write_file(os.path.join(d, "asked", rid + ".json"), json.dumps({"id": rid, "session": sys.argv[2], "mode": "default",
+              "args": sys.argv[3:], "t": time.time()}) + "\n")' "$BROOT/scripts" "$SID" "$@"
+}
+case_batch() {  # several owner items through one dialog, bound to the file's bytes and to the state
+  newp
+  bfile b.json '[["add", "--kind", "decision", "--text", "first pin", "--owner-quote", "anh nói", "--where", "chat 31/10"],
+                 ["add", "--kind", "decision", "--text", "second pin", "--owner-quote", "q2", "--where", "chat 31/10", "--anchor", "run-41"]]'
+  br owner batch b.json; c_rc 6 "[B] no dialog: rc 6"
+  OUT=$(VIBEMAESTRO_ROLE=worker CLAUDE_CODE_SESSION_ID="$SID" "$BROOT/bin/brain" owner batch missing.json 2>&1); RC=$?
+  c_rc 4 "[B] a worker: rc 4 before the file is read (a missing file is not named)"; c_hasnt "$OUT" "missing.json" "[B] the file is not named"
+  gown default batch b.json
+  c_eq "$(hfield permissionDecision)" ask "[B] guard-owner asks once for the whole file"
+  c_eq "$(hfield permissionDecisionReason)" 'Owner batch of 2, one approval for all:
+1. Pin owner decision D1 (a lasting direction, never done), from "chat 31/10": "first pin"
+2. Pin owner decision D2 (a lasting direction, never done), from "chat 31/10": "second pin"' "[B] a line per item, each its single form's line, the ids as the earlier items leave them"
+  br owner batch b.json; c_rc 0 "[B] the CLI writes both"
+  c_has "$OUT" "pinned D1; pinned D2" "[B] and says so"
+  c_eq "$(bitems)" "D1=first pin D2=second pin" "[B] both live"
+  c_eq "$(grep -c '"record"' "$(sdir)/hot.jsonl")" 2 "[B] each op carries the one record"
+  c_eq "$(bpy 'st = s.load(s.state_dir())[1]; print(st["items"]["D2"]["anchors"], st["items"]["D1"]["source"]["quote"])')" \
+    "['run-41'] anh nói" "[B] every field as the file wrote it"
+  br owner batch b.json; c_rc 6 "[B] the same run again: rc 6 (the record is spent)"
+  # the file changed between the dialog and the run: edited where the dialog does not show it, swapped, items reordered
+  local three='[["add", "--kind", "decision", "--text", "third pin", "--owner-quote", "q", "--where", "w"],
+                ["unpin", "D1"], ["supersede", "D2", "--text", "second pin, reworded"]]'
+  bfile c.json "$three"; gown default batch c.json; c_eq "$(hfield permissionDecision)" ask "[B] instrument: asked for c.json"
+  bfile c.json "$(printf '%s' "$three" | sed 's/"q"/"another quote"/')"
+  br owner batch c.json; c_rc 6 "[B] the owner's quote edited after the dialog (not on its line): rc 6"
+  c_has "$OUT" "changed since the owner's dialog" "[B] saying the file or the brain changed"
+  bfile c.json "$three"; gown default batch c.json; mv c.json c.old; bfile c.json '[["unpin", "D1"], ["unpin", "D2"]]'
+  br owner batch c.json; c_rc 6 "[B] the file swapped for another after the dialog: rc 6"
+  bfile c.json "$three"; gown default batch c.json
+  bfile c.json '[["unpin", "D1"], ["add", "--kind", "decision", "--text", "third pin", "--owner-quote", "q", "--where", "w"],
+                 ["supersede", "D2", "--text", "second pin, reworded"]]'
+  br owner batch c.json; c_rc 6 "[B] the items reordered after the dialog: rc 6"
+  c_eq "$(bitems)" "D1=first pin D2=second pin" "[B] nothing was written by any of the three"
+  # the brain changed between the dialog and the run: the id the dialog showed is no longer the one that would be written
+  bfile c.json "$three"; gown default batch c.json
+  c_has "$(hfield permissionDecisionReason)" "1. Pin owner decision D3" "[B] instrument: the dialog names D3"
+  keeprec add --kind decision --text "a pin in between" --owner-quote q --where w
+  br owner add --kind decision --text "a pin in between" --owner-quote q --where w; c_rc 0 "[B] instrument: D3 pinned in between"
+  br owner batch c.json; c_rc 6 "[B] the brain changed after the dialog (D3 taken): rc 6"
+  gown default batch c.json; br owner batch c.json; c_rc 0 "[B] asked again: written"
+  c_eq "$(bitems)" "D3=a pin in between D4=third pin D5=second pin, reworded" "[B] in order: D4 added, D1 unpinned, D2 superseded by D5"
+  # all or none: a write that fails after the first item writes nothing, and the record stays usable
+  local big; big=$(python3 -c 'print("x" * 290)')
+  bfile w.json "[[\"add\", \"--kind\", \"decision\", \"--text\", \"$big %d\" % i, \"--owner-quote\", \"q\" * 590, \"--where\", \"w\"] for i in range(3)]"
+  gown default batch w.json; c_eq "$(hfield permissionDecision)" ask "[B] round 1: instrument: asked for three big items"
+  local size lim; size=$(wc -c < "$(sdir)/hot.jsonl"); lim=$(( (size + 1500) / 1024 + 1 ))
+  OUT=$( (trap '' XFSZ; ulimit -f "$lim"; CLAUDE_CODE_SESSION_ID="$SID" "$BROOT/bin/brain" owner batch w.json) 2>&1 ); RC=$?
+  c_rc 1 "[B] round 1: the log can take one item, not three: rc 1"
+  c_has "$OUT" "nothing was written" "[B] round 1: saying nothing was written"
+  c_hasnt "$OUT" "run brain doctor" "[B] round 2: and not that the log may be left past its head"
+  c_eq "$(bitems)" "D3=a pin in between D4=third pin D5=second pin, reworded" "[B] round 1: none of the three is live"
+  br doctor; c_hasnt "$OUT" "problem" "[B] round 1: the chain and caches hold"
+  br owner batch w.json; c_rc 0 "[B] round 1: the same record writes them once there is room"
+  bfile u.json '[["unpin", "D6"], ["unpin", "D7"], ["unpin", "D8"]]'; gown default batch u.json; br owner batch u.json
+  c_eq "$(bitems)" "D3=a pin in between D4=third pin D5=second pin, reworded" "[B] round 1: instrument: the three unpinned again"
+  # sizes and refusals before any dialog
+  bfile one.json '[["unpin", "D3"]]'
+  gown default batch one.json; c_eq "$(hfield permissionDecision)" deny "[B] a 1-item file: deny (a single item has its own form)"
+  c_has "$(hfield permissionDecisionReason)" "2 to 5 owner items, not 1" "[B] saying why"
+  br owner batch one.json; c_rc 1 "[B] and the CLI refuses it"
+  bfile six.json '[["add", "--kind", "decision", "--text", "p%d" % i, "--owner-quote", "q", "--where", "w"] for i in range(6)]'
+  gown default batch six.json; c_eq "$(hfield permissionDecision)" deny "[B] a 6-item file: deny"
+  c_has "$(hfield permissionDecisionReason)" "2 to 5" "[B] naming the size"
+  bfile bad.json '[["unpin", "D3"], ["add", "--kind", "decision", "--text", "x", "--owner-quote", "q", "--where", "merged᳓: ᳓ship"]]'
+  gown default batch bad.json; c_eq "$(hfield permissionDecision)" deny "[B] an item the single form refuses (U+1CD3 in --where): deny"
+  c_has "$(hfield permissionDecisionReason)" "item 2" "[B] naming the item"
+  br owner batch bad.json; c_rc 1 "[B] and the CLI refuses it"
+  bfile seq.json '[["supersede", "D3", "--text", "x"], ["unpin", "D3"]]'
+  gown default batch seq.json; c_eq "$(hfield permissionDecision)" deny "[B] unpin of an item an earlier one superseded: deny (the state the earlier items leave)"
+  c_has "$(hfield permissionDecisionReason)" "item 2: " "[B] naming the second item"
+  local v
+  for v in promote demote import backup batch; do
+    bfile v.json "[[\"$v\", \"D3\", \"x\"], [\"unpin\", \"D4\"]]"
+    gown default batch v.json; c_eq "$(hfield permissionDecision)" deny "[B] a $v item: deny (add, supersede and unpin only)"
+    c_has "$(hfield permissionDecisionReason)" "item 1: a batch takes add, supersede and unpin" "[B] $v: saying why"
+  done
+  printf '[["unpin", "D3"], ["unpin", "D4"]' > broken.json
+  gown default batch broken.json; c_eq "$(hfield permissionDecision)" deny "[B] a file that is not JSON: deny"
+  c_has "$(hfield permissionDecisionReason)" "not JSON" "[B] saying why"
+  bfile real.json '[["unpin", "D3"], ["unpin", "D4"]]'; ln -s real.json link.json
+  gown default batch link.json; c_eq "$(hfield permissionDecision)" deny "[B] FILE a symlink: deny"
+  c_has "$(hfield permissionDecisionReason)" "is a symlink" "[B] saying why"
+  gown default batch real.json; c_eq "$(hfield permissionDecision)" ask "[B] instrument: the regular file is asked"
+  mv real.json target.json; ln -s target.json real.json
+  br owner batch real.json; c_rc 1 "[B] FILE turned into a symlink after the dialog: refused"
+  c_eq "$(bitems)" "D3=a pin in between D4=third pin D5=second pin, reworded" "[B] nothing written by the refusals"
+  # the session's project A while the shell is in B, the file in B
+  local A=$P B="$TMP/other$NP" dB
+  mkdir -p "$B"; git_ -C "$B" init -q -b main; dB=$(cd "$B" && bpy 'import os; print(s.state_dir(os.getcwd()))')
+  cd "$B" || return 1
+  bfile b2.json '[["unpin", "D3"], ["unpin", "D4"]]'
+  P=$B CLAUDE_PROJECT_DIR=$A gown default batch b2.json
+  c_eq "$(hfield permissionDecision)" ask "[B] guard-owner with the shell in B for a session of A: ask"
+  c_has "$(hfield permissionDecisionReason)" "Unpin owner decision D3" "[B] the dialog reads A's items"
+  br owner batch b2.json; c_rc 0 "[B] the CLI in B writes A"
+  c_eq "$([ -e "$dB" ] && echo made || echo none)" none "[B] B has no brain state"
+  cd "$A" || return 1
+  c_eq "$(bitems)" "D5=second pin, reworded" "[B] D3 and D4 unpinned in A"
+}
+
+case_batch_fresh() {  # round 2: a fresh brain's claim goes in the batch's one write, so a refused batch leaves the log empty
+  newp
+  local big; big=$(python3 -c 'print("x" * 290)')
+  bfile w.json "[[\"add\", \"--kind\", \"decision\", \"--text\", \"$big %d\" % i, \"--owner-quote\", \"q\" * 590, \"--where\", \"w\"] for i in range(3)]"
+  gown default batch w.json; c_eq "$(hfield permissionDecision)" ask "[B] round 2: instrument: asked on a brain with no log yet"
+  OUT=$( (trap '' XFSZ; ulimit -f 1; CLAUDE_CODE_SESSION_ID="$SID" "$BROOT/bin/brain" owner batch w.json) 2>&1 ); RC=$?
+  c_rc 1 "[B] round 2: the write fails: rc 1"
+  c_eq "$(cat "$(sdir)/hot.jsonl" 2>/dev/null | wc -l | tr -d ' ')" 0 "[B] round 2: not even the claim line was written"
+  br owner batch w.json; c_rc 0 "[B] round 2: the record still writes the batch, its claim first"
+  c_eq "$(head -n 1 "$(sdir)/hot.jsonl" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["op"])')" claim "[B] round 2: the claim line opens the log"
+}
+
+for c in case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
   run_case $c; done
 cd "$TMP" || exit 1
-
-echo "== planted breaks =="
-ST=scripts/brain_store.py
-plant record-not-required case_norecord $ST '        if rec is None:
-            raise Refused(6, NO_DIALOG' '        if rec is None:
-            rec, path = {"mode": "default", "id": "0" * 32}, ""
-        if False:
-            raise Refused(6, NO_DIALOG'
-plant args-not-compared case_mismatch $ST 'r.get("args") == list(args)' 'True'
-plant age-cap-6000 case_mismatch $ST 'RECORD_MAX_AGE = 600 ' 'RECORD_MAX_AGE = 6000 '
-plant future-record-accepted case_mismatch $ST '0 <= age <= RECORD_MAX_AGE' 'age <= RECORD_MAX_AGE'
-plant session-not-compared case_mismatch $ST 'if (r.get("session") == session_id() and' 'if (True and'
-plant mode-not-checked case_mismatch $ST 'r.get("mode") in DIALOG_MODES' 'True'
-plant spent-ids-ignored case_used $ST 'r.get("id") not in st["spent"]' 'True'
-plant record-not-spent case_used $ST '        after = lambda: os.path.exists(path) and os.unlink(path)' '        after = None'
-plant earlier-records-kept case_void $ST '        void_records(d, session)
-        rid' '        rid'
-plant confirm-without-mode case_fresh $ST '        confirm = {"asked": True, "mode": rec["mode"], "record": rec["id"]}' '        confirm = {"asked": True, "record": rec["id"]}'
-plant owner-supersede-drops-anchors case_verbs $ST '"expires": old.get("expires"), "links": old.get("links", []), "anchors": old.get("anchors", []),
-                "supersedes": ns.id}' '"expires": old.get("expires"), "links": old.get("links", []), "anchors": [],
-                "supersedes": ns.id}'
-plant owner-refused-by-budget case_owner_budget $ST '        old = get_live(st, ns.id, OWNER_LETTERS)' '        old = get_live(st, ns.id, OWNER_LETTERS)
-        if budget_used(st, session_id(), time.time()) >= BUDGET_N:
-            raise Refused(1, "budget")'
-plant owner-retirements-not-counted case_owner_budget $ST '               if r["session"] == session and' '               if r["session"] == session and not r["op"].startswith("owner") and'
-plant control-chars-allowed case_chars $ST '    bad = [c for c in value if is_bad(c)]' '    bad = []'
-plant where-cap-600 case_chars $ST '"where": 60,' '"where": 600,'
-plant answerers-ignored case_answerer $ST '        ans = answerers()' '        ans = []'
-plant prompt-tool-flag-missed case_answerer $ST '        if any(a == "--permission-prompt-tool" or a.startswith("--permission-prompt-tool=") for a in argv):' '        if False:'
-plant prompt-tool-substring case_answerer $ST '        if any(a == "--permission-prompt-tool" or a.startswith("--permission-prompt-tool=") for a in argv):' '        if any("--permission-prompt-tool" in a for a in argv):'
-plant worktrees-not-read case_answerer2 $ST '    roots = [project or project_root()] + _worktrees() + [a[1] for a in anc if a[1]]' '    roots = [project or project_root()] + [a[1] for a in anc if a[1]]'
-plant home-config-dropped case_answerer2 $ST '(os.environ.get("HOME", ""), account_home())' '(account_home(),)'
-plant account-home-dropped case_homes $ST '(os.environ.get("HOME", ""), account_home())' '(os.environ.get("HOME", ""),)'
-plant relative-config-ignored case_homes $ST '    return os.path.join(cwd or os.getcwd(), c) if c else os.path.join(home(), ".claude")' '    return c if os.path.isabs(c) else os.path.join(home(), ".claude")'
-plant parent-home-not-read case_parenthome $ST '    cfgs += [os.path.join(rel(h, cwd), ".claude") for _, cwd, _, h in anc if h]' ''
-plant newline-kept case_nlname $ST '    return "".join(c if not is_bad(c) else' '    return "".join(c if c == "\n" or not is_bad(c) else'
-plant ancestors-not-bounded case_isolation $ST '        if pid <= 1 or pid == SUITE_PID:' '        if pid <= 1:'
-plant doctor-output-raw case_rawname scripts/brain.py '        sys.stdout.write("%-8s %s\n" % (level, s.printable(text)))' '        sys.stdout.write("%-8s %s\n" % (level, text))'
-plant dash-value-refused case_grammar2 scripts/brain.py '        ns = parser().parse_args(argv[:1] + owner_argv(argv[1:]))' '        ns = parser().parse_args(argv)'
-plant settings-eq-form-missed case_answerer2 $ST '        elif a.startswith(flag + "="):' '        elif False:'
-plant settings-relative-to-own-cwd case_answerer2 $ST '                s = _json_file(v if os.path.isabs(v) or not cwd else os.path.join(cwd, v))' '                s = _json_file(v)'
-plant plugin-dir-not-read case_answerer2 $ST '        for v in _flag_values(argv, "--plugin-dir"):' '        for v in []:'
-plant manifest-hooks-path-not-read case_answerer2 $ST '        if isinstance(h, str) and _has_permission_request(_json_file(os.path.join(root, h))):' '        if False:'
-plant grammar-not-checked case_grammar scripts/brain.py '    if not args or args[0] not in OWNER_OPTIONS:
-        return' '    return'
-plant abbrev-allowed case_grammar2 scripts/brain.py '            if a not in single | multi:' '            if not any(o.startswith(a) for o in single | multi):'
-plant disabled-plugin-read case_answerer $ST '        if enabled.get(key) is not True:' '        if False:'
-plant worker-check-removed case_worker $ST '    if os.environ.get("INTENT_SLUG") and os.environ.get("SEAT"):' '    if False:'
-plant writer-check-removed case_worker $ST '        check_writer(st)
-        test_pause()' '        test_pause()'
-HK=scripts/brain_hook.py
-plant guard-owner-follows-cwd case_hook_project $HK '    project, d, _ = resolve(inp)  ' '    project, d, _ = (cwd_of(inp), s.state_dir(cwd_of(inp)), None)  '
-plant hook-mode-not-checked case_hook_deny $HK 'dialog = mode in ("default", "acceptEdits") or (mode == "auto" and version_ok()) or mode in ask_modes()' 'dialog = True'
-plant hook-version-floor-ignored case_hook_ask $HK '(mode == "auto" and version_ok())' '(mode == "auto")'
-plant hook-subagent-allowed case_hook_deny $HK '    if inp.get("agent_id"):
-        return deny("owner items' '    if False:
-        return deny("owner items'
-plant hook-record-not-written case_hook_ask $HK '    rid = s.record_asked(d, sid, mode, args)' '    rid = "x"'
-plant hook-void-removed case_hook_void $HK '        s.void_records(d, sid)                 # every' '        pass                 # every'
-plant hook-literal-not-checked case_hook_literal $HK 'if len(found) > 1 or len(segs) > 1 or found[0][0] is None or found[0][1]:' 'if found[0][0] is None:'
-plant hook-text-cut case_hook_line $HK "'Pin owner decision %s, from \"%s\": \"%s\"' % (iid, ns.where, ns.text)" "'Pin owner decision %s, from \"%s\": \"%s\"' % (iid, ns.where, ns.text[:40])"
-plant quote-lookalike-allowed case_hook_line $ST '        if value and field != "text":' '        if False:'
-plant source-after-text case_hook_line $HK "'Pin owner decision %s, from \"%s\": \"%s\"' % (iid, ns.where, ns.text)" "'Pin owner decision %s: \"%s\" · from: %s' % (iid, ns.text, ns.where)"
-plant hook-answerers-ignored case_hook_answerer $HK '    ans = s.answerers(s.project_root(project))' '    ans = []'
-plant switch-records-default case_hook_switch $HK '    rid = s.record_asked(d, sid, mode, args)' '    rid = s.record_asked(d, sid, "default" if mode in ask_modes() else mode, args)'
-plant switch-without-brain-test case_hook_switch $HK '    if os.environ.get("BRAIN_TEST") != "1":
-        return []' '    if False:
-        return []'
-plant switch-any-mode case_hook_switch $HK 'if m in TEST_ASK_MODES and m not in dialog]' 'if m]'
-plant store-accepts-test-modes case_hook_switch $ST 'DIALOG_MODES = ("default", "acceptEdits", "auto")' 'DIALOG_MODES = ("default", "acceptEdits", "auto", "plan", "bypassPermissions")'
-
-plant hook-pending-not-cleared case_hook_next $HK '    if sid:
-        clear_pending(store(), sid)' '    if False:
-        clear_pending(store(), sid)'
-plant hook-fast-path-ignores-pending case_hook_next $HK '                        waiting = True' '                        waiting = False'
-plant hook-marker-not-written case_hook_next $HK '    mark_pending(s, sid, d)                         # first' '    pass                         # first'
-plant end-clears-marker-only case_hook_next $HK '        clear_pending(s, sid)                       # the record' '        os.unlink(pending_marker(sid)) if os.path.exists(pending_marker(sid)) else None   # the record'
-plant stale-markers-kept case_hook_next $HK '                    else:
-                        os.unlink(_p)' '                    else:
-                        pass'
-plant marker-after-record case_hook_next $HK '    mark_pending(s, sid, d)                         # first: a marker with no record is harmless, a record with none is not
-    rid = s.record_asked(d, sid, mode, args)' '    rid = s.record_asked(d, sid, mode, args)
-    mark_pending(s, sid, d)'
-plant sweep-age-600 case_hook_next $HK 'SWEEP_AGE = 1200 ' 'SWEEP_AGE = 600 '
-plant future-markers-kept case_hook_next $HK '                    if -SWEEP_AGE < _age < SWEEP_AGE:' '                    if _age < SWEEP_AGE:'
-plant python-runs-wrapper case_hook_deny $HK '    if i and os.path.basename(ws[1] if ws[1:] else "") != "brain.py":' '    if False:'
-plant hook-alone-not-required case_hook_literal $HK 'if len(found) > 1 or len(segs) > 1 or found[0][0] is None' 'if len(found) > 1 or found[0][0] is None'
-# no plant for the `escape` flag: every input it denies is also denied by the `$`/backtick flag, the open-quote flag or the
-# store's control-character check (a newline), so it is defence in depth that no single break can show red
-plant hook-help-on-stdout case_hook_literal $HK 'with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):' 'with contextlib.redirect_stderr(err):'
-plant hook-owner-anywhere case_hook_deny $HK '    if ws[i:i + 1] and is_brain(ws[i]) and ws[i + 1:i + 2] == ["owner"]:
-        return ws[i + 2:]' '    for i in range(len(ws)):
-        if is_brain(ws[i]) and ws[i + 1:i + 2] == ["owner"]:
-            return ws[i + 2:]'
-plant mention-anywhere case_hook_mention $HK '            if owner_tokens(lead_words(text)) is not None:' '            if re.search(r"(?:^|[\s/])brain(?:\.py)?\b.*\bowner\b", text):'
-plant heredoc-not-skipped case_hook_mention $HK 'segments(cmd, heredoc=True)' 'segments(cmd)'
-plant heredoc-never-closes case_hook_mention $HK '            if (line.lstrip("\t") if strip else line) == word:' '            if False:'
-plant heredoc-dash-keeps-tabs case_hook_mention $HK '            if (line.lstrip("\t") if strip else line) == word:' '            if line == word:'
-plant heredoc-quotes-kept case_hook_mention $HK '        elif c in "'"'"'\"":
-            q = c' '        elif False:
-            q = c'
-plant heredoc-closing-not-required case_hook_forms $HK '                i = j
-                break
-    return i' '                break
-        i = j
-    return i'
-plant lead-words-split case_hook_forms $HK '            if owner_tokens(lead_words(text)) is not None:' '            if owner_tokens(text.split()[:3]) is not None:'
-plant switch-may-name-auto case_hook_switch $HK 'TEST_ASK_MODES = ("plan", "bypassPermissions")' 'TEST_ASK_MODES = ("plan", "bypassPermissions", "auto")'
-plant quote-allowed case_hook_line $ST "        if value and '\"' in value:" "        if False:"
-plant marks-unbounded case_hook_line $ST '    if _marks_run(value) > MARKS_RUN_MAX:' '    if False:'
-plant stdout-locale case_hook_line $HK '    sys.stdout.buffer.write(out.encode("utf-8"))' '    sys.stdout.write(out)'
 
 summary

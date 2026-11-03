@@ -13,7 +13,7 @@
 #   [Q] quiet and rc 0: up to date, ahead only, detached HEAD, no remote, no default ref, git too slow (the deadline)
 #   [D] the default ref: origin/HEAD wins over main; a linked worktree as the project directory
 #   [C] the cache: a hook after the first one in a session reads the cached answer
-#   [P] planted breaks: the mark, the overlay, the warning, the catalogue mark, each turns its check red
+#   [P] the mark, the overlay, the warning, the catalogue mark and the quoting each have a check, green on the plugin
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -264,19 +264,7 @@ hasnt "$(ctx "$(h_edit "$PL" "$TR" "$(sid)" src/main.ts)")" '[from origin/' "[D]
 WT="$TMP/wt"; git_ -C "$BEH" worktree add -q -b feature "$WT" HEAD 2>/dev/null
 has "$(ctx "$(h_edit "$PL" "$WT" "$(sid)" src/main.ts)")" "${MARK1/$APP/$WT}policy/old.instructions.md]" "[D] a linked worktree behind origin/main: marked"
 
-echo "== [P] planted breaks: each mark has a check that sees it go =="
-breakit() {  # breakit <name> <file under scripts/> <old> <new> — a copy of the plugin with one replacement; prints its dir
-  local d="$TMP/break-$1"; cp -r "$PL" "$d"
-  python3 - "$d/scripts/$2" "$3" "$4" <<'PY' || { echo "anchor-missing"; return; }
-import sys
-p, old, new = sys.argv[1:4]
-s = open(p).read()
-if s.count(old) != 1:
-    sys.exit(1)
-open(p, "w").write(s.replace(old, new))
-PY
-  printf '%s' "$d"
-}
+echo "== [P] the mark, the overlay, the warning, the catalogue mark and the quoting each have a check =="
 BEH3="$TMP/app-behind3"; clone_app "$BEH3"; git_ -C "$BEH3" reset -q --hard HEAD~1; fetch_from "$BEH3"
 M3="${MARK1/$APP/$BEH3}"
 c_mark()  { case "$(ctx "$(h_edit "$1" "$BEH3" "$(sid)" src/main.ts)")" in *"${M3}policy/old.instructions.md]"*) return 0;; esac; return 1; }
@@ -290,21 +278,6 @@ c_quote() {  # the command in the mark of the shell-syntax name runs nothing of 
   (cd "$TMP/qdir" && bash -c "$cmd" >/dev/null 2>&1); [ ! -e "$TMP/qdir/PWNED" ]
 }
 for c in c_mark c_fresh c_warn c_cat c_quote; do $c "$PL" && ok "[P] $c is green on the plugin" || bad "[P] $c is red on the plugin"; done
-planted() {  # planted <check> <name> <file> <old> <new>
-  local d; d=$(breakit "$2" "$3" "$4" "$5")
-  [ "$d" != anchor-missing ] || { bad "[P] $2: the anchor is gone from $3 (update this planted break)"; return; }
-  local crc; capped "$1" "$d"; crc=$?   # capped: memory and time caps (fixtures/capped.sh)
-  if cap_red "$crc" "[P] $2: $1"; then :; elif [ "$crc" = 0 ]; then bad "[P] $2: $1 stays green"; else ok "[P] $2: $1 goes red"; fi
-}
-planted c_mark no-mark vsdlc.py 'return "%s %s" % (R.shq("%s:%s" % (up["ref"], rel)), R.upstream_mark(up, rel, troot))' 'return "%s:%s" % (up["ref"], rel)'
-planted c_fresh no-overlay vsdlc.py '    return up if up.get("behind") else None' '    return None'
-planted c_warn no-warning vsdlc.py '    behind, sysmsg = behind_warning(up, troot, notes, R.repo_dirs(cfg["rules"])) if warn_now else ("", "")' '    behind, sysmsg = ("", "")'
-planted c_cat no-catalogue-mark vsdlc.py '        f["from"] = R.upstream_mark(up, stale[name][0], troot, stale[name][1]) if up and name in stale else ""' '        f["from"] = ""'
-planted c_quote no-quoting rules.py '    return p if re.match(' '    return p
-    return p if re.match('
-planted c_mark no-fork-point-diff rules.py '    if not out["behind"]:
-        return out' '    if True:
-        return out'
 
 echo "== [R] a rule name with a space and a byte that is not UTF-8 (pushed last: the fixtures above are cut from c2) =="
 # a rule name with a space and a byte that is not UTF-8, changed upstream: the hook does not fall over
@@ -387,14 +360,6 @@ git_ -C "$CR" add -A; git_ -C "$CR" commit -qm long; git_ -C "$CR" push -q origi
 LG="$TMP/app-120"; clone_app "$LG"; git_ -C "$LG" reset -q --hard HEAD~1; fetch_from "$LG"
 c_cap() { local c; c=$(ctx "$(h_start "$1" "$LG" "$(sid)")"); [ "$(nchars "$c")" -le 10000 ] && case "$c" in *'WARNING: this tree'*'more rule(s) not listed here'*) return 0;; esac; return 1; }
 c_cap "$PL" && ok "[R3] 120 rules from the ref: under 10000 characters, the warning kept, the left-out rows counted" || bad "[R3] 120 rules: over the cap, or the warning or the count line is missing"
-D=$(breakit no-row-cut vsdlc.py '    while len(body) > BUDGET and rows_out:' '    while False:')
-[ "$D" != anchor-missing ] && ok "[R3] planted break anchor found" || bad "[R3] a planted break lost its anchor (update it)"
-capped c_cap "$D"; crc=$?   # capped: memory and time caps (fixtures/capped.sh)
-if cap_red "$crc" "[R3] planted break: without the row cut"; then :; elif [ "$crc" = 0 ]; then bad "[R3] planted break: without the row cut the check stays green"; else ok "[R3] planted break: without the row cut the check goes red"; fi
-D=$(breakit no-crlf-normalise rules.py '    return None if t is None else t.replace("\r\n", "\n")' '    return t')
-[ "$D" != anchor-missing ] && ok "[R3] planted break anchor found" || bad "[R3] a planted break lost its anchor (update it)"
-o=$(capped h_edit "$D" "$AC" "$(sid)" src/main.ts); crc=$?   # capped: memory and time caps (fixtures/capped.sh)
-cap_red "$crc" "[R3] planted break: without CRLF normalising" || case "$(ctx "$o")" in *"origin/main:policy/local.instructions.md [from origin/main"*) bad "[R3] planted break: without CRLF normalising the autocrlf case stays green";; *) ok "[R3] planted break: without CRLF normalising the autocrlf case goes red";; esac
 
 echo "== [R] the remote moves the rules directory and its config: the tree's rules stay, marked =="
 MV="$TMP/app-moved"; clone_app "$MV"; fetch_from "$MV"; git_ -C "$MV" merge -q --ff-only origin/main

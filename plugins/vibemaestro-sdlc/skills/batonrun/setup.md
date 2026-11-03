@@ -4,7 +4,7 @@ Read this when there is no launcher yet, or SessionStart says the permission che
 `<launcher> help setup`.
 
 Once per machine (the session runs these; the owner applies the result). The kit run
-`kit:coordinator-bootstrap` can do steps 1 and 2 in one run the owner signs, on any machine: follow the skill `coordinator-bootstrap`.
+`kit:bootstrap` can do steps 1 and 2 in one run the owner signs, on any machine: follow the skill `bootstrap`.
 
 1. `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/baton.py permissions --install-launcher`: copies the launcher to
    `<state-dir>/bin/baton`. Run it from the installed vibemaestro-sdlc, the one the registry

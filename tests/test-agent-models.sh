@@ -28,11 +28,11 @@ plugin = sys.argv[1]
 sys.path.insert(0, os.path.join(plugin, "scripts"))
 import sdlc_config as C
 # what "tells the session to spawn an agent" looks like: any standalone word agent (not an agents.* key), a subagent, the
-# Task tool, a worker (not worker_model, not worker-branch), spawn, delegate, dispatch, a fresh context. Wide on purpose: a
+# Task tool, a worker (not worker_model, not worker-branch, not the value of VIBEMAESTRO_ROLE=worker), spawn, delegate, dispatch, a fresh context. Wide on purpose: a
 # sentence that mentions an agent without spawning one is listed in NOT_SPAWN whole (whitespace collapsed), so a new mention, or
 # a spawn added to a listed sentence, fails closed until someone decides which it is; a listed sentence no text has any more is
 # reported too
-SPAWN = re.compile(r"\bagents?\b(?!\.[a-z_*<])|\bsub-?agents?\b|\bTask tool\b|\bworkers?\b(?![-_])|\bspawn|\bdelegat"
+SPAWN = re.compile(r"\bagents?\b(?!\.[a-z_*<])|\bsub-?agents?\b|\bTask tool\b|(?<!=)(?<!= )\bworkers?\b(?![-_])|\bspawn|\bdelegat"
                    r"|\bdispatch|fresh[- ]context|context mới", re.I)
 NOT_SPAWN = (
     "What a subagent returns is a claim, not evidence: run the acceptance command again yourself before you believe it.",

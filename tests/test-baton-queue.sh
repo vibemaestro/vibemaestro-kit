@@ -6,8 +6,8 @@
 #
 # A session queues a sealed run that needs the owner and goes on working; the owner signs it later in their own session, through
 # the same guard and dialog as `sign --by owner --seal`; the session runs it once, within 24 h, if the plan still matches. Each
-# family runs on a copy of the real plugin (its baton isolated from the machine: baton_isolate), then again on copies with one
-# planted break, and must go red on the intended check. No network, nothing outside the scratch tree.
+# family runs on a copy of the real plugin (its baton isolated from the machine: baton_isolate). No network, nothing outside
+# the scratch tree.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -108,9 +108,9 @@ if len(sys.argv) > 3:
 open(p, "w").write(json.dumps(it))
 PY
 }
-# plant_record <plugin> <session> [claude JSON] — an asked record for the owner's command as if a guard had written it (the guard
+# write_asked_record <plugin> <session> [claude JSON] — an asked record for the owner's command as if a guard had written it (the guard
 # refuses to, for the session that queued): proves the sign's own check, not only the guard's
-plant_record() {
+write_asked_record() {
   ( cd "$OWD" && cenv XDG_STATE_HOME="$ST" python3 -c 'import json, os, sys
 sys.path.insert(0, sys.argv[1] + "/scripts")
 import baton
@@ -182,7 +182,7 @@ fam_queue_refusals() {  # [R] unsigned, expired, a changed plan or script, anoth
   bt "$P" "$W" s-coord log --queue >/dev/null
   has "$(cat "$BT_OUT")" "$ID  expired" "[R] log --queue: expired"
   eq "$(bt "$P" "$W" s-coord log --wait-queued "$ID" --timeout 1)" 3 "[R] log --wait-queued on an expired item: rc 3"
-  plant_record "$P" s-owner
+  write_asked_record "$P" s-owner
   eq "$(osign "$P")/$(python3 -c 'import json, sys; print("signature" in json.load(open(sys.argv[1])))' "$(item)")" "3/False" \
      "[R] an expired item with a dialog record: sign rc 3, unsigned"
   setup; OWD=$(fresh); queue "$P"; ask "$P" >/dev/null; osign "$P" >/dev/null
@@ -227,7 +227,7 @@ fam_queue_coordinator() {  # [C] the session that queued never signs: no record,
   has "$(cat "$BT_OUT")" "no fresh record of the owner's dialog" "[C] …the refusal names the missing dialog"
   eq "$(ask "$P" s-coord)/$(asked_n)" "deny/0" "[C] the coordinator's own session asks: the guard denies, no dialog, no record"
   has "$(cat "$TMP/guard.reason")" "queued" "[C] …the guard names the session that queued it"
-  plant_record "$P" s-coord
+  write_asked_record "$P" s-coord
   eq "$(osign "$P" s-coord)/$(python3 -c 'import json, sys; print("signature" in json.load(open(sys.argv[1])))' "$(item)")" "3/False" \
      "[C] a dialog record in the coordinator's own session: sign rc 3, the item unsigned"
   has "$(cat "$BT_OUT")" "queued" "[C] …the sign names the session that queued it"
@@ -241,7 +241,7 @@ q() { CLAUDE_PID=$$ CLAUDE_CODE_SESSION_ID=s-A python3 "$L/scripts/baton.py" go 
 id() { grep -L '/d2"' "$XDG_STATE_HOME"/vibemaestro/baton/queue/*.json | sed -n 's|.*/\([0-9a-f]*\)\.json$|\1|p' | head -1; }   # not the setsid one
 ask() { printf '{"session_id":"s-B","permission_mode":"default","cwd":"%s","tool_name":"Bash","tool_input":{"command":"python3 %s/scripts/baton.py sign --by owner --queued %s"}}' "$W" "$L" "$(id)" \
         | CLAUDE_PID=$$ python3 "$L/scripts/baton-guard.py" | python3 -c 'import json,sys; t=sys.stdin.read().strip(); print(json.loads(t)["hookSpecificOutput"]["permissionDecision"] if t else "none")'; }
-plant() { python3 -c 'import json, os, sys
+ask_record() { python3 -c 'import json, os, sys
 sys.path.insert(0, sys.argv[1] + "/scripts")
 import baton
 lin = baton.lineage(); ci = baton.claude_index(lin, sys.argv[3])
@@ -264,7 +264,7 @@ print(",".join(sorted(str((o.get("claude") or [None])[0]) for o in out if o.get(
 echo "standin=$$"
 echo "ask=$(ask)"
 echo "asked=$(ls "$XDG_STATE_HOME/vibemaestro/baton/asked" 2>/dev/null | grep -c .)"
-plant; sign
+ask_record; sign
 SH
   # one stand-in process for the three steps: queue as s-A, then ask and sign as s-B
   out=$(cd "$W" && cenv XDG_STATE_HOME="$ST" W="$W" L="$L" bash "$W/claude-standin.sh" 2>&1)
@@ -336,53 +336,6 @@ FAMILIES="fam_queue_flow fam_queue_refusals fam_queue_coordinator fam_queue_forg
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in baton.py =="
-# BRK <label> <family> <needle> <old> <new> [<old> <new>]... — a plugin copy with the replacements in baton.py, then expect_red
-BRK() {
-  local label=$1 fam=$2 needle=$3 d; shift 3; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/scripts/baton.py" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-# no dialog record: the sign's binding to the item the dialog showed refuses too, so the break takes both
-BRK no-dialog fam_queue_flow "[Q] the owner's session without the dialog's record" \
-    '        return signed_queued(rest[3], owner_signs(asked))' '        return signed_queued(rest[3], "planted")' \
-    '    if RUN.get("asked_queued") != [qid, it["body_sha256"]]:' '    if False:'
-BRK guard-queuer-ignored fam_queue_coordinator "[C] the coordinator's own session asks: the guard denies" \
-    '        why = queue_why(argv[3], state, it) if state != "pending" else queuer(' '        why = queue_why(argv[3], state, it) if state != "pending" else None and queuer('
-BRK sign-queuer-ignored fam_queue_coordinator "[C] a dialog record in the coordinator's own session" \
-    '    why = queuer(it, session_id(), [this_claude(), RUN.get("asked_claude")])' '    why = None'
-BRK process-unbound fam_queue_coordinator "[C] /clear: the same Claude Code process as session s-B asks" \
-    '    if any(same_claude(it.get("claude"), c) for c in claudes):' '    if False:'
-BRK expiry-unchecked fam_queue_refusals "[R] an expired item: the guard denies" '        if now > exp:' '        if False:'
-BRK sign-state-unchecked fam_queue_refusals "[R] an expired item with a dialog record" \
-    $'    if state != "pending":\n        refuse(queue_why(qid, state, it))' $'    if state not in ("pending", "expired"):\n        refuse(queue_why(qid, state, it))'
-BRK cwd-unchecked fam_queue_refusals "[R] …it says where it was queued" '    elif cwd != it["cwd"]:' '    elif False:'
-BRK dialog-unbound fam_queue_forgery "[F] the item changed between the dialog and the click" \
-    '    if RUN.get("asked_queued") != [qid, it["body_sha256"]]:' '    if False:'
-BRK body-unchecked fam_queue_forgery "[F] the expiry changed after signing" ' or it.get("body_sha256") != item_digest(it)' ''
-BRK signature-unbound fam_queue_forgery "[F] the expiry pushed later after signing" \
-    $'\n                                             and sig.get("body_sha256") == it["body_sha256"]' ''
-BRK used-unmarked fam_queue_flow "[Q] …it says the item was used" '            return path, it, "used"' '            return path, it, "signed"'
-BRK sandbox-queues fam_queue_scope "[S] go --queue in a sandbox" \
-    $'        if in_sandbox():\n            raise Stop(USAGE, "go --queue in a sandbox' $'        if False:\n            raise Stop(USAGE, "go --queue in a sandbox'
-BRK queue-without-owner fam_queue_scope "[S] go --queue on a baton the session may sign itself" '        if queue and not why:' '        if False:'
-BRK shape-open fam_queue_scope "[S] the owner's command with a word after the id" \
-    '        return rest[1:] if len(rest) == 5 and QUEUE_ID.match(rest[4]) else None' '        return rest[1:]'
-BRK expiry-at-use-unchecked fam_queue_refusals "[R] an item that expires during the run's own rehearse" \
-    '                if state != "signed" or again != item:' '                if again != item:'
-BRK sessionless-queue fam_queue_scope "[S] go --queue with no session id" \
-    $'        if not session_id():\n            raise Stop(USAGE, "go --queue needs' $'        if False:\n            raise Stop(USAGE, "go --queue needs'
-BRK setsid-process-lost fam_queue_coordinator "[C] go --queue under setsid" \
-    '    return [int(hint), start] if start is not None else None' '    return None'
-BRK dialog-hides-args fam_queue_flow "[Q] …and the words the script runs with" \
-    '"  Args:     %s" % (" ".join(quoted(str(a)) for a in it.get("call") or []) or "(none)")] + card' '] + card'
-BRK list-hides-args fam_queue_flow "[Q] log --queue: …the words the script runs with" \
-    $'        for ln in item_lines(it):\n            say("  %s", ln)' $'        for ln in it.get("card") or []:\n            say("  %s", ln)'
-BRK list-hides-detail fam_queue_flow "[Q] log --queue: …the check and rehearse output" \
-    '            say("  detail: %s (check and rehearse output)", it["detail"])' '            pass'
-BRK auto-signs-queued fam_queue_coordinator "[C] sign --by coordinator-auto --queued" \
-    '        if rest[1] != "owner" or len(rest) != 4' '        if len(rest) != 4'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

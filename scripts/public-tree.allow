@@ -75,8 +75,6 @@ tests/test-gate-current-state.sh	diary	2026-10-12
 tests/test-gate-current-state.sh	ref	#123
 tests/test-gate-current-state.sh	ref	#45
 tests/test-gate-current-state.sh	ref	PR 123
-tests/test-gates-body.sh	ref	#11
-tests/test-gates-body.sh	ref	#12
 tests/test-gates-sensitive.sh	home	C:\\Users/alice
 tests/test-gates-sensitive.sh	home	C:\\Users\\Default
 tests/test-gates-sensitive.sh	home	C:\\Users\\Public

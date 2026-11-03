@@ -5,9 +5,8 @@
 # Run: bash tests/test-baton.sh
 #
 # Every acceptance item of the baton runner is a FAMILY
-# `fam_<x> <plugin dir>` with a positive case and a planted case in the baton script (a missing undo, an edit after signing, ...).
-# The suite runs every family on a copy of the real plugin, then each family again on a copy with ONE planted break in baton.py
-# (expect_red, tests/fixtures/ports.sh) and requires red on the intended check, so a check that cannot fail is caught.
+# `fam_<x> <plugin dir>` with a positive case and a negative case on a bad baton script (a missing undo, an edit after signing, ...).
+# The suite runs every family on a copy of the real plugin.
 # The state directory is XDG_STATE_HOME inside the scratch tree, HOME is the scratch home (clean_env); nothing is written
 # outside the scratch tree, which the last section checks. No network, no `sleep` (fam_wait waits on baton's own clock, a few s). Assertions read exit codes, files and the
 # PLAN/VERDICT lines of the protocol; prose is asserted only in section [text]: one key phrase per owner decision.
@@ -67,14 +66,9 @@ act_in() { cp "$SRC_ROOT/tests/fixtures/baton-positional.sh" "$2/act.sh"; printf
 POSTCHECK_OK=$'postcheck() {\n  holds_text\n}'; POSTCHECK_NO=$'postcheck() {\n  false\n}'
 # in_act <script> <line> — plant one line at the top of the act
 in_act() { mutate "$1" $'act() {\n' $'act() {\n  '"$2"$'\n'; }
-# within <seconds> <command...> — the command's rc, or "timeout" when it runs longer (portable: no coreutils timeout)
-within() {
-  python3 -c 'import subprocess, sys
-try:
-    print(subprocess.run(sys.argv[2:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=float(sys.argv[1])).returncode)
-except subprocess.TimeoutExpired:
-    print("timeout")' "$@"
-}
+# cpu_within <cpu seconds> <command...> — the command's rc, `cpu` when it used more CPU than that, `timeout` at the wall backstop (a hang).
+# The bound is the scan's own CPU time (tests/fixtures/cpu_within.py), not the clock: a loaded runner must not fail a linear scan
+cpu_within() { python3 "$SRC_ROOT/tests/fixtures/cpu_within.py" "$@"; }
 # `docker` is spelled through $DK (for the deleted suite-independence suite; harmless to keep)
 DK='dock''er'
 # baton_dir — the state directory baton uses under $ST
@@ -199,10 +193,10 @@ fam_check_unwrapped() {
   f="$W/u11.sh"; cp "$A" "$f"; in_act "$f" 'gh workflow run deploy.yml'
   eq "$(bt "$P" "$W" check "$f")" 1 "[check-unwrapped] gh workflow run outside write(): rc 1"
   f="$W/u12.sh"; cp "$A" "$f"; in_act "$f" "write \"x\" $DK $(printf -- '--tlsverify=true %.0s' $(seq 1 2000))push a"
-  eq "$(within 10 env XDG_STATE_HOME="$ST" python3 "$P/scripts/baton.py" check "$f")" 0 \
+  eq "$(cpu_within 10 env XDG_STATE_HOME="$ST" python3 "$P/scripts/baton.py" check "$f")" 0 \
      "[check-unwrapped] a line with 2000 options is checked in well under 10 s"
   f="$W/u13.sh"; cp "$A" "$f"; in_act "$f" "git $(printf -- '--work-tree %.0s' $(seq 1 2000))status"
-  eq "$(within 10 env XDG_STATE_HOME="$ST" python3 "$P/scripts/baton.py" check "$f")" 0 \
+  eq "$(cpu_within 10 env XDG_STATE_HOME="$ST" python3 "$P/scripts/baton.py" check "$f")" 0 \
      "[check-unwrapped] a git line with 2000 global options is checked in well under 10 s"
 }
 fam_check_round3() {
@@ -229,7 +223,7 @@ fam_check_round3() {
   r3 0 "gh repo set-default is not a write" 'gh repo set-default acme/app'
   r3 0 "a helper whose plan line holds \$(…) with nested quotes" 'merge_it() { gh pr merge "$1" --squash; }; write "merge $(printf "%s" 12)" merge_it 12'
   f="$W/dk.sh"; cp "$A" "$f"; in_act "$f" "$DK $(printf -- '--tlsverify=true %.0s' $(seq 1 2000))ps"
-  eq "$(within 10 env XDG_STATE_HOME="$ST" python3 "$P/scripts/baton.py" check "$f")" 0 \
+  eq "$(cpu_within 10 env XDG_STATE_HOME="$ST" python3 "$P/scripts/baton.py" check "$f")" 0 \
      "[check-round3] a bare line with 2000 options (outside write) is checked in well under 10 s"
   f="$W/nl1.sh"; cp "$A" "$f"; in_act "$f" 'printf "no newline before the plan line"'
   eq "$(bt "$P" "$W" rehearse "$f" "$W/o.txt" hi)" 0 "[check-round3] output without a final newline before a write: the plan still reads"
@@ -264,8 +258,31 @@ fam_check_round4() {
   r4 1 "a write in backticks inside double quotes" 'echo "`gh pr merge 12`"'
   r4 1 "a write in backticks inside an assignment's quotes" 'x="`gh pr merge 12`"'
   f="$W/pp.sh"; cp "$A" "$f"; in_act "$f" "$(printf 'kubectl/%.0s' $(seq 1 12000)) x"
-  eq "$(within 3 env XDG_STATE_HOME="$ST" python3 "$P/scripts/baton.py" check "$f")" 0 \
+  eq "$(cpu_within 3 env XDG_STATE_HOME="$ST" python3 "$P/scripts/baton.py" check "$f")" 0 \
      "[check-round4] a 12000-segment path prefix is checked in under 3 s (a prefix in the regex took about 8 s)"
+}
+# the helper behind the linear-time checks: CPU seconds are the bound, wall time is not (a bad input it must report is built here and
+# run through capped)
+fam_cpu_within() {
+  local burn='import time
+while time.process_time() < 0.7: pass'
+  eq "$(cpu_within 5 python3 -c 'print(1)')" 0 "[cpu-within] a quick command: its rc, 0"
+  eq "$(cpu_within 5 python3 -c 'import sys; sys.exit(7)')" 7 "[cpu-within] a failing command: its rc, 7"
+  eq "$(cpu_within 1 python3 -c 'import time; time.sleep(2)')" 0 "[cpu-within] 2 s of wall time and no CPU, bound 1 s of CPU: rc 0"
+  eq "$(capped cpu_within 1 python3 -c 'while True: pass')" cpu "[cpu-within] a loop that never ends, bound 1 s of CPU: cpu"
+  eq "$(capped cpu_within 1 bash -c "for i in 1 2; do python3 -c '$burn'; done")" cpu "[cpu-within] two children of 0.7 s each, bound 1 s of CPU: cpu (summed)"
+  eq "$(cpu_within 5 bash -c "python3 -c '$burn'")" 0 "[cpu-within] one child of 0.7 s, bound 5 s of CPU: rc 0"
+  eq "$(CPU_WITHIN_WALL=1 capped cpu_within 5 python3 -c 'import time; time.sleep(30)')" timeout "[cpu-within] a hang, wall backstop 1 s: timeout"
+  local pf="$TMP/cpu-within-bg.pid" bg stp
+  cpu_within 5 bash -c "sleep 30 & echo \$! > '$pf'" >/dev/null; bg=$(cat "$pf" 2>/dev/null); sleep 0.3
+  if [ -n "$bg" ] && kill -0 "$bg" 2>/dev/null; then kill -KILL "$bg" 2>/dev/null; bad "[cpu-within] a background child of the command does not outlive the check"
+  else ok "[cpu-within] a background child of the command does not outlive the check"; fi
+  rm -f "$pf"
+  python3 "$SRC_ROOT/tests/fixtures/cpu_within.py" 60 bash -c "echo \$\$ > '$pf'; exec sleep 31" >/dev/null 2>&1 & stp=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$pf" ] && break; sleep 0.2; done
+  bg=$(cat "$pf" 2>/dev/null); kill -TERM "$stp" 2>/dev/null; wait "$stp" 2>/dev/null; sleep 0.3
+  if [ -n "$bg" ] && kill -0 "$bg" 2>/dev/null; then kill -KILL "$bg" 2>/dev/null; bad "[cpu-within] the check stopped by SIGTERM takes the command with it"
+  else ok "[cpu-within] the check stopped by SIGTERM takes the command with it"; fi
 }
 fam_run_after_use() {
   local P=$1 W A
@@ -584,7 +601,8 @@ print(subprocess.run(sys.argv[1:], cwd=os.environ["W"], stdout=subprocess.DEVNUL
 }
 fam_modes() {
   local P=$1 W A f; fresh_state; W=$(fresh); A=$(act_in "$P" "$W")
-  eq "$(bt "$P" "$W" mode)/$(cat "$BT_OUT")" "0/manual" "[modes] the default mode is manual"
+  eq "$(bt "$P" "$W" mode)/$(head -n 1 "$BT_OUT")" "0/manual" "[modes] the default mode is manual"
+  eq "$(sed -n 2p "$BT_OUT")" "baton: mode manual from the default" "[modes] …and the source line names the default"
   eq "$(sg "$P" "$W" coordinator-auto "$A" "$W/a.txt" hello)" 3 "[modes] manual: coordinator-auto cannot sign: rc 3"
   eq "$(nsig)" 0 "[modes] manual: nothing signed"
   eq "$(bt "$P" "$W" mode auto)" 0 "[modes] mode auto: rc 0"
@@ -781,7 +799,7 @@ fam_rule() {
   # a privileged command inside a baton script: the hook sees `baton.py run …`, never the script body
   printf 'gh pr merge 12 --squash\ngit push --force origin feat/x\n' > "$RAPP/deploy.sh"
   for c in run 'sign --by owner' rehearse check; do silent "python3 $P/scripts/baton.py $c deploy.sh 12 abc123"; done
-  eq "$(within 5 python3 -c 'import re, sys
+  eq "$(cpu_within 5 python3 -c 'import re, sys
 sys.path.insert(0, sys.argv[1]); import rules
 rx = rules.front(open(sys.argv[2]).read(), "applyWhen")
 for w, o in (("claude", "--verbose"), ("dock" "er", "--verbose"), ("git", "--verbose"), ("git", "--work-tree"), ("git", "-P")):
@@ -985,6 +1003,26 @@ PY2
   kd_dep_refused "sdlc and two dependent plugins ship the name" \
     "both vibemaestro-sdlc and dep-two@vibemaestro and dependent-fixture@vibemaestro ship batons/fixture-kit.sh"
   rm -f "$S/batons/fixture-kit.sh"
+  # sdlc's kit:bootstrap and its old name kit:coordinator-bootstrap: a dependent plugin's kit of either name collides, and says why
+  kd_reg "$R" "$sid" "$did"
+  cp "$KD_FIX/batons/fixture-kit.sh" "$D/batons/bootstrap.sh"
+  eq "$(bt "$S" "$W" check kit:bootstrap)" 64 "[kit-dep] a dependent plugin ships batons/bootstrap.sh: kit:bootstrap refused, rc 64"
+  has "$(cat "$BT_OUT")" "(vibemaestro-sdlc's kit:bootstrap is the new name of kit:coordinator-bootstrap)" "[kit-dep] …the refusal says sdlc's kit is new under that name"
+  eq "$(bt "$S" "$W" check kit:coordinator-bootstrap)" 64 "[kit-dep] …the old name refused too, rc 64"
+  hasnt "$(cat "$BT_OUT")" "is the old name of kit:bootstrap" "[kit-dep] …with no old-name line pointing at a kit that does not run"
+  rm -f "$D/batons/bootstrap.sh"
+  cp "$KD_FIX/batons/fixture-kit.sh" "$D/batons/coordinator-bootstrap.sh"
+  eq "$(bt "$S" "$W" check kit:coordinator-bootstrap)" 64 "[kit-dep] a dependent plugin ships batons/coordinator-bootstrap.sh: the old name refused, rc 64"
+  has "$(cat "$BT_OUT")" "dependent-fixture@vibemaestro ships batons/coordinator-bootstrap.sh, and coordinator-bootstrap is the old name of vibemaestro-sdlc's kit:bootstrap" "[kit-dep] …the refusal names the collision"
+  has "$(cat "$BT_OUT")" "call kit:bootstrap for vibemaestro-sdlc's" "[kit-dep] …and the name that still runs"
+  eq "$(bt "$S" "$W" check kit:bootstrap)" 0 "[kit-dep] …kit:bootstrap itself still runs: rc 0"
+  eq "$(bt "$S" "$W" list)" 0 "[kit-dep] list beside it: rc 0"
+  eq "$(grep -c '^kit:bootstrap ' "$BT_OUT")/$(grep -c 'coordinator-bootstrap' "$BT_OUT")" "1/0" "[kit-dep] …kit:bootstrap once, the old name never"
+  cp "$KD_FIX/batons/fixture-kit.sh" "$D/batons/bootstrap.sh"
+  eq "$(bt "$S" "$W" check kit:coordinator-bootstrap)" 64 "[kit-dep] the dependent ships both names: the old name refused, rc 64"
+  hasnt "$(cat "$BT_OUT")" "call kit:bootstrap" "[kit-dep] …pointing at no kit:bootstrap, which is refused too"
+  eq "$(bt "$S" "$W" check kit:bootstrap)" 64 "[kit-dep] …and kit:bootstrap is refused: rc 64"
+  rm -f "$D/batons/coordinator-bootstrap.sh" "$D/batons/bootstrap.sh"
   kd_plugin "$M/vibemaestro/linked/1.0.0"; rm -rf "$M/vibemaestro/linked/1.0.0/batons"; ln -s "$D/batons" "$M/vibemaestro/linked/1.0.0/batons"
   kd_reg "$R" "$sid" "linked@vibemaestro=$M/vibemaestro/linked/1.0.0"
   kd_dep_refused "a batons/ that is a symlink" "leads outside"
@@ -1561,7 +1599,7 @@ print(" ".join(l for l in b.BRANCH_DELETE_LABELS if l not in labels) or "none")'
   refok 'cat.sh "$DEST" | git update-ref --stdin'
   refok 'echo x > "$DEST/refs.txt"'
   # the lint runs per body line: a long line of repeated stdin feeds stays far from cubic
-  eq "$(within 5 python3 -c 'import importlib.util, re, sys
+  eq "$(cpu_within 5 python3 -c 'import importlib.util, re, sys
 s = importlib.util.spec_from_file_location("b", sys.argv[1]); b = importlib.util.module_from_spec(s); s.loader.exec_module(b)
 for line in ("git update-ref --stdin " * 1000, "cat <<x | " * 1000, "delete refs/heads/x " * 1000, "rm refs/ " * 1000,
              "cp settings.json " * 1000, "rm .claude/settings " * 1000, "x=.claude/settings " * 1000,
@@ -1575,11 +1613,11 @@ for line in ("git update-ref --stdin " * 1000, "cat <<x | " * 1000, "delete refs
   # a Claude Code settings file: the guard denies a plain-tool write that widens one, a baton's writes run where no hook sees
   # them; the plugin's own settings writers declare security-boundary and check clean
   local k
-  for k in kind:settings-merge kit:coordinator-bootstrap kit:permissions-upgrade; do
+  for k in kind:settings-merge kit:bootstrap kit:permissions-upgrade; do
     eq "$(bt "$P" "$W" check "$k")" 0 "[stop-hint] check $k (Stops: security-boundary): rc 0"
   done
   f="$W/allow.sh"; cp "$A" "$f"
-  in_act "$f" "write \"allow Bash(*)\" python3 -I -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s.setdefault(\"permissions\", {}).setdefault(\"allow\", []).append(\"Bash(*)\"); json.dump(s, open(p, \"w\"))' \"\$HOME/.claude/settings.json\""
+  in_act "$f" "write \"allow Bash(*)\" python3 -I -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s.setdefault(\"permissions\", {}).setdefault(\"allow\", []).append(\"Bash(*)\"); json.dump(s, open(p, \"w\"))' \"\$HOME/.claude/settings.json\""
   eq "$(bt "$P" "$W" check "$f")" 1 "[stop-hint] a Stops: none baton that adds an allow rule to \$HOME/.claude/settings.json: check rc 1"
   has "$(cat "$BT_OUT")" 'looks like stop category `security-boundary`: matched `settings*.json under .claude|$CLAUDE_CONFIG_DIR written' \
     "[stop-hint] …as security-boundary, a settings write"
@@ -1607,41 +1645,41 @@ for line in ("git update-ref --stdin " * 1000, "cat <<x | " * 1000, "delete refs
   setw "$SW" 'write "add" dd if="$DEST" of="$HOME/.claude/settings.json"'
   setw "$SW" 'write "put back" git checkout -- .claude/settings.json'
   setw "$SW" 'write "add" cp "$DEST" /etc/claude-code/managed-settings.json'
-  setw "$SW" $'python3 -I - "$DEST" <<\'PY\'\nimport json, os\nwith open(os.path.expanduser("~/.claude/settings.json"), "w") as f:\n    f.write("{}")\nPY'
-  setw "$SW" $'python3 -I - <<\'PY\'\nfrom pathlib import Path\n(Path.home() / ".claude" / "settings.json").write_text("{}")\nPY'
+  setw "$SW" $'python3 -I -B - "$DEST" <<\'PY\'\nimport json, os\nwith open(os.path.expanduser("~/.claude/settings.json"), "w") as f:\n    f.write("{}")\nPY'
+  setw "$SW" $'python3 -I -B - <<\'PY\'\nfrom pathlib import Path\n(Path.home() / ".claude" / "settings.json").write_text("{}")\nPY'
   # review round 1: a redirection or comment after the copy, `$(…)` in the word, CLAUDE_CONFIG_DIR read in code, the macOS
   # managed path (a space in it), a directory copied whole into .claude
   setw "$SW" 'write "add" cp "$DEST" "$HOME/.claude/settings.json" 2>/dev/null'
   setw "$SW" 'write "add" cp "$DEST" "$HOME/.claude/settings.json"  # put it back'
   setw "$SW" 'echo "$DEST" > "$(git rev-parse --show-toplevel)/.claude/settings.json"'
   setw "$SW" 'printf x | tee "$(pwd)/.claude/settings.json"'
-  setw "$SW" $'python3 -I - <<\'PY\'\nimport os\nwith open(os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "settings.json"), "w") as f:\n    f.write("{}")\nPY'
+  setw "$SW" $'python3 -I -B - <<\'PY\'\nimport os\nwith open(os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "settings.json"), "w") as f:\n    f.write("{}")\nPY'
   setw "$SW" 'echo "$DEST" > "/Library/Application Support/ClaudeCode/managed-settings.json"'
   setw "$SW" 'write "sync" rsync -a "$DEST/" ~/.claude/'
   # the path as an argument of write() (a helper that writes it) or of an interpreter whose program is a heredoc, a variable
   # named for the directory, flags with a digit or the long yq spelling, a download, pathlib's .open("w")
   setw "$SW" 'write "merge" merge_rules "$HOME/.claude/settings.json" "$DEST"'
-  setw "$SW" $'write "add" python3 -I - "$HOME/.claude/settings.json" <<\'PY\'\nimport sys\nprint(sys.argv[1])\nPY'
+  setw "$SW" $'write "add" python3 -I -B - "$HOME/.claude/settings.json" <<\'PY\'\nimport sys\nprint(sys.argv[1])\nPY'
   setw "$SW" 'cp "$DEST" "$CLAUDE_DIR/settings.json" 2>&1'
   setw "$SW" "perl -0pi -e 's/a/b/' \"\$HOME/.claude/settings.json\""
   setw "$SW" "yq eval --inplace '.a = 1' \"\$HOME/.claude/settings.json\""
   setw "$SW" 'curl -fsSL -o "$HOME/.claude/settings.json" "$DEST"'
-  setw "$SW" $'python3 -I - <<\'PY\'\nfrom pathlib import Path\nwith (Path.home() / ".claude" / "settings.json").open("w") as f:\n    f.write("{}")\nPY'
+  setw "$SW" $'python3 -I -B - <<\'PY\'\nfrom pathlib import Path\nwith (Path.home() / ".claude" / "settings.json").open("w") as f:\n    f.write("{}")\nPY'
   setw "$SH" 'S=$(git rev-parse --show-toplevel)/.claude/settings.json'
   setw "$SH" 'S="$HOME/.claude/settings.json"'
   setw "$SH" 'S="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"'
-  setw "$SH" $'python3 -I - <<\'PY\'\nimport os\np = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")\nPY'
+  setw "$SH" $'python3 -I -B - <<\'PY\'\nimport os\np = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")\nPY'
   setw "$SH" 'for s in "$HOME"/.claude/settings*.json; do echo "$s"; done'
   setw "$SH" ': "${S:=$HOME/.claude/settings.json}"'
   # review round 2: quoted pieces inside the word, the path held through an operator, an f-string or a list
   setw "$SW" 'echo x > "$HOME/".claude/settings.json'
   setw "$SW" "echo x > ~/'.claude'/settings.json"
   setw "$SW" 'echo x > `pwd`/.claude/settings.json'
-  setw "$SH" $'python3 -I - <<\'PY\'\nfrom pathlib import Path\np = Path.home() / ".claude" / "settings.json"\nq = f"{Path.home()}/.claude/settings.json"\nPY'
-  setw "$SH" $'python3 -I - <<\'PY\'\npaths = ["~/.claude/settings.json"]\nPY'
+  setw "$SH" $'python3 -I -B - <<\'PY\'\nfrom pathlib import Path\np = Path.home() / ".claude" / "settings.json"\nq = f"{Path.home()}/.claude/settings.json"\nPY'
+  setw "$SH" $'python3 -I -B - <<\'PY\'\npaths = ["~/.claude/settings.json"]\nPY'
   # review round 3: a curl with headers before -o, `+ "/settings.json"`, a quoted .claude or a spaced redirection after a copy
   setw "$SW" 'curl -fsSL --retry 3 --connect-timeout 10 -H "Authorization: Bearer $DEST" -H "Accept: application/vnd.github.raw+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/o/some-long-repository-name/contents/a/b/c/settings.json?ref=refs/heads/main" --output "$HOME/.claude/settings.json"'
-  setw "$SH" $'python3 -I - <<\'PY\'\nimport os\np = os.environ["CLAUDE_CONFIG_DIR"] + "/settings.json"\nPY'
+  setw "$SH" $'python3 -I -B - <<\'PY\'\nimport os\np = os.environ["CLAUDE_CONFIG_DIR"] + "/settings.json"\nPY'
   setw "$SW" "write \"sync\" cp -r \"\$DEST\" ~/'.claude'"
   setw "$SW" 'write "sync" cp -r "$DEST/" "$HOME/.claude/" > /dev/null'
   # the natural two-line write: the path in a name, then a write through it; the FAIL line says what to do
@@ -1667,7 +1705,7 @@ for line in ("git update-ref --stdin " * 1000, "cat <<x | " * 1000, "delete refs
   setok 'cp "$HOME/.claude/settings.json" "$DEST.bak" 2>/dev/null'
   setok 'SUM=$(sha256sum "$HOME/.claude/settings.json" | cut -c1-64); echo "$SUM" > "$DEST"'
   setok 'LC_ALL=C grep -c allow "$HOME/.claude/settings.json" > "$DEST.count"'
-  setok "python3 -I -c 'import json, sys; json.dump(json.load(open(sys.argv[1])), sys.stdout)' \"\$HOME/.claude/settings.json\""
+  setok "python3 -I -B -c 'import json, sys; json.dump(json.load(open(sys.argv[1])), sys.stdout)' \"\$HOME/.claude/settings.json\""
   setok "perl -Mstrict -ne 'print if /allow/' \"\$HOME/.claude/settings.json\""
   setok 'cp "$DEST" "$DEST/foo.claude/settings.json"'
   setok 'echo x > "$CFG/settings.json"'
@@ -1677,9 +1715,9 @@ for line in ("git update-ref --stdin " * 1000, "cat <<x | " * 1000, "delete refs
   setok 'LOG=tmp/x jq . ~/.claude/settings.json'
   setok 'curl -fsSL "https://x/y?ref=refs/heads/main" | jq . ~/.claude/settings.json'
   setok 'X=`cat "$HOME/.claude/settings.json"`; echo "$X" > "$DEST"'
-  setok $'python3 -I - <<\'PY\'\nimg = Image.open("a.png"); q = 1 if img else os.path.exists(".claude/settings.json")\nPY'
-  setok $'python3 -I - <<\'PY\'\nimport os\nok = os.path.exists(os.path.expanduser("~/.claude/settings.json"))\nPY'
-  setok $'python3 -I - <<\'PY\'\nimport json, os\ndata = json.load(open(file=os.path.expanduser("~/.claude/settings.json")))\nPY'
+  setok $'python3 -I -B - <<\'PY\'\nimg = Image.open("a.png"); q = 1 if img else os.path.exists(".claude/settings.json")\nPY'
+  setok $'python3 -I -B - <<\'PY\'\nimport os\nok = os.path.exists(os.path.expanduser("~/.claude/settings.json"))\nPY'
+  setok $'python3 -I -B - <<\'PY\'\nimport json, os\ndata = json.load(open(file=os.path.expanduser("~/.claude/settings.json")))\nPY'
   setok '# write "add" cp "$DEST" "$HOME/.claude/settings.json"'
   out=$(python3 - "$P/skills/batonrun/limits.md" "$P/scripts/baton.py" <<'PY'
 import importlib.util, re, sys
@@ -2096,7 +2134,7 @@ print("%s/%s" % (m.bash_matches(sys.argv[3] + " go:*", sys.argv[2]), m.bash_matc
 PY
 )
   eq "$ctl" "True/False" "[pipe-trap] the rule '<launcher> go:*' matches the documented call (baton.py's model; control: not a run)"
-  eq "$(within 5 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import vsdlc
+  eq "$(cpu_within 5 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import vsdlc
 for c in ("x=$((1<<2))\n" * 20000, "".join("cat <<d%d\n" % i for i in range(20000)), "bash " * 20000, "a\n" * 200000,
           "bash x <<EOF\n" + "y\n" * 30000 + "EOF"): vsdlc.launcher_trap(c)' "$P/scripts")" 0 \
      "[pipe-trap] 20000 shells, heredocs or unclosed '<<': the scan stays linear (under 5 s; it runs before every Bash command)"
@@ -2326,7 +2364,7 @@ PY
 }
 
 FAMILIES="fam_new fam_check_header fam_check_rehearse_path fam_check_undo fam_check_syntax fam_check_pipefail fam_check_fidelity
-fam_check_source fam_check_gate fam_check_unwrapped fam_check_round3 fam_check_round4 fam_check_set fam_check_stops fam_rehearse_expect fam_rehearse_verdict fam_run_signed fam_sign_seal fam_sign_by fam_run_edited fam_run_args fam_run_dir
+fam_check_source fam_check_gate fam_check_unwrapped fam_check_round3 fam_check_round4 fam_cpu_within fam_check_set fam_check_stops fam_rehearse_expect fam_rehearse_verdict fam_run_signed fam_sign_seal fam_sign_by fam_run_edited fam_run_args fam_run_dir
 fam_run_env fam_run_diverged fam_run_pipe fam_run_plan fam_run_undo fam_run_interrupt fam_start_interrupt fam_run_after_use fam_round2_streams fam_modes fam_mode_choice fam_log_env fam_state_place fam_rule fam_kit fam_kit_dep fam_plugin_script fam_plan_env fam_each
 fam_go_equiv fam_go_owner fam_go_attack fam_go_retry fam_go_fresh fam_check_refuses fam_skill_skeleton
 fam_stop_hint fam_gh_state fam_wait fam_skill_refs fam_expect_doc fam_expect_header fam_core_ops fam_pipe_trap fam_run_line fam_run_last fam_go_stdin fam_go_dash_guidance"
@@ -2334,406 +2372,6 @@ fam_stop_hint fam_gh_state fam_wait fam_skill_refs fam_expect_doc fam_expect_hea
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in baton.py or the rule =="
-B=plugins/vibemaestro-sdlc/scripts/baton.py
-# BRK <label> <family> <needle> <old> <new> [<old> <new>]... — a plugin copy with the replacements in baton.py, then expect_red
-BRK() {
-  local label=$1 fam=$2 needle=$3 d; shift 3; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/scripts/baton.py" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-BRK each-count-unchecked fam_each '[each] a planted extra plan line' '        elif counts[0] < 1 or counts[0] != len(plan):' '        elif False:'
-BRK each-in-session-baton fam_each '[each] Each in a session baton: check rc 1' '                if not s.kit:' '                if False:'
-BRK each-empty-line fam_each '[each] an empty plan line' '        good = p is not None and e is not None and fnmatch.fnmatchcase(p, e) and (each is None or p != "")' '        good = p is not None and e is not None and (fnmatch.fnmatchcase(p, e) or p == "")'
-BRK new-overwrites fam_new '[new] an existing file: rc 6' 'os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644' 'os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644'
-BRK header-undo-dropped fam_check_header '[check-header] no Undo field' '"Blast", "Undo", "Pre"' '"Blast", "Pre"'
-BRK rehearse-path-unchecked fam_check_rehearse_path '[check-rehearse-path] no rehearse branch' \
-    $'    for ph in PHASES:\n        what =' $'    for ph in [x for x in PHASES if x != "rehearse"]:\n        what ='
-BRK undo-unchecked fam_check_undo '[check-undo] no undo() function' 'if ph in ("postcheck", "undo") and not defs.get(ph):' 'if ph in ("postcheck",) and not defs.get(ph):'
-BRK bash-n-skipped fam_check_syntax '[check-syntax] a syntax error' 'subprocess.run([shutil.which("bash"), "-n"], input=s.data' 'subprocess.run([shutil.which("true")], input=s.data'
-BRK pipefail-lint-off fam_check_pipefail '[check-pipefail] unguarded diff' '        for w in unguarded_pipes(masked):' '        for w in []:'
-BRK fidelity-lint-off fam_check_fidelity '[check-fidelity] the phase tested outside write()' 'if k not in inside and not PHASE_LINE.match(code)' 'if False and k not in inside and not PHASE_LINE.match(code)'
-BRK phase-reread-allowed fam_check_fidelity '[check-fidelity] BATON_PHASE read a second time' 'for n in phase_reads[1:]]' 'for n in phase_reads[9:]]'
-BRK source-lint-off fam_check_source "[check-source] '. ./lib.sh'" '        if sources_file(masked):' '        if False:'
-BRK stop-lint-off fam_check_stops '[check-stops] gh repo delete' 'm = None if cat in declared else re.search(rx, joined)' 'm = None'
-BRK expect-not-compared fam_rehearse_expect '[rehearse-expect] plan differs from Expect' 'good = p is not None and e is not None and fnmatch.fnmatchcase(p, e)' 'good = True'
-BRK verdict-not-required fam_rehearse_verdict '[rehearse-verdict] rc 0 and the plan, but no verdict' '    if not verdict_ok(lines, "rehearse"):' '    if False:'
-# run without a signature: a missing record is written on the fly (the bypass the signature exists to stop)
-BRK unsigned-runs fam_run_signed '[run-signed] unsigned: rc 3' \
-    $'    rec = load_json(sig) if os.path.exists(sig) else None\n' \
-    $'    if not os.path.exists(sig):\n        _g, _p, _r = rehearse(s, args, [])\n        write_private(sig, json.dumps({"binding": binding, "script_sha256": s.sha, "args": args, "cwd": cwd, "env": env, "signed_by": "owner", "v": 2, "dialog": "planted", "plan_sha256": plan_sha(_p)}))\n    rec = load_json(sig) if os.path.exists(sig) else None\n'
-BRK signature-reused fam_run_signed '[run-single-use] the same run again: rc 3' 'os.rename(sig, os.path.join(d, "used", "%s-%s.json" % (stamp, binding)) if queued is None' 'os.path.exists(sig) or (sig, os.path.join(d, "used", "%s-%s.json" % (stamp, binding)) if queued is None'
-# the binding and the record check both ignore the script bytes / the arguments / the directory (two defences, so two edits)
-BRK bytes-unbound fam_run_edited '[run-edited] edited after signing: rc 3' \
-    '{"v": 1, "script_sha256": script_sha, "args"' '{"v": 1, "script_sha256": "", "args"' \
-    '(rec.get("binding"), rec.get("script_sha256"), rec.get("args"), rec.get("cwd"),' '(rec.get("binding"), s.sha, rec.get("args"), rec.get("cwd"),'
-BRK args-unbound fam_run_args '[run-args] other arguments: rc 3' \
-    '"args": list(args), "cwd": cwd, "env": env}' '"args": [], "cwd": cwd, "env": env}' \
-    'rec.get("args"), rec.get("cwd"),' 'args, rec.get("cwd"),'
-BRK dir-unbound fam_run_dir '[run-dir] run from another directory: rc 3' \
-    '"args": list(args), "cwd": cwd, "env": env}' '"args": list(args), "cwd": "", "env": env}' \
-    'rec.get("args"), rec.get("cwd"),' 'rec.get("args"), cwd,'
-BRK plan-unbound fam_run_plan '[run-plan] the plan changed since signing: rc 3' '            if plan_sha(plan) != rec.get("plan_sha256"):' '            if False:'
-BRK undo-not-called fam_run_undo '[run-undo] post-check mismatch: rc 4' $'            if result != "ok":\n                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [], undo_only=undo_only)' $'            if False:\n                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [], undo_only=undo_only)'
-BRK auto-ignores-stops fam_modes '[modes] auto + a declared stop: coordinator-auto cannot sign' $'    if stops:\n        return "the script declares stop' $'    if False:\n        return "the script declares stop'
-# the rule: one alternative removed, and a pattern that would read baton itself
-BRKF() {
-  local label=$1 fam=$2 needle=$3 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/$4" "$5" "$6" && expect_red "$label" "$fam" "$d" "$needle"
-}
-BRKF rule-misses-merge fam_rule "[rule] 'gh pr merge 12 --squash' reminds" rules/batonrun.instructions.md 'merge\b|' 'merge-never\b|'
-BRKF rule-exponential fam_rule '[rule] the applyWhen regex stays linear' rules/batonrun.instructions.md '\bclaude(?:\s+-{1,2}(?!-)' '\bclaude(?:\s+-{1,2}'
-BRKF rule-misses-ref-delete fam_rule "[rule] 'git -C /lab/remote.git update-ref -d" rules/batonrun.instructions.md \
-  'update-ref\b(?:[^|;&\n]*\s(?:-d\b|' 'update-ref\b(?:[^|;&\n]*\s(?:-never\b|'
-BRKF rule-reads-baton fam_rule "[rule] 'python3" rules/batonrun.instructions.md 'applyWhen: "' 'applyWhen: "baton\.py\s+run\b|'
-BRK unwrapped-lint-off fam_check_unwrapped '[check-unwrapped] a privileged command outside write()' 'unwrapped_writes(entries, TRUSTED_RUN, True) if s.kit else unwrapped_writes(entries, PLUGIN_SCRIPT_RUN, False)' '[]'
-BRK set-off-ignored fam_check_set "[check-set] a later 'set +e" '        flags = (flags | on) - off' '        flags = flags | on'
-BRK branches-unchecked fam_check_fidelity '[check-fidelity] the rehearse) and run) branches differ' 'bodies["rehearse"] != bodies["run"]:' 'False:'
-BRK plan-echo-allowed fam_check_fidelity '[check-fidelity] a PLAN line printed outside write()' 'if k not in gate and re.search(' 'if False and re.search('
-BRK by-defaults-owner fam_log_env '[usage] sign without --by' \
-    '    if len(rest) < 2 or rest[0] != "--by" or rest[1] not in SIGNERS:' '    if rest[:1] == ["--by"] and rest[1:2] and rest[1] not in SIGNERS:' \
-    '    by, rest = rest[1], rest[2:]' '    by, rest = (rest[1], rest[2:]) if rest[:1] == ["--by"] else ("owner", rest)'
-BRK last-by-wins fam_sign_by '[sign-by] --by coordinator-auto --by owner' \
-    '        if rest[0] == "--seal" and len(rest) > 1 and seal is None:' $'        if rest[0] == "--by" and len(rest) > 1:\n            by, rest = rest[1], rest[2:]\n        elif rest[0] == "--seal" and len(rest) > 1 and seal is None:'
-BRK interrupt-before-run-unknown fam_run_interrupt '[run-interrupt] an interrupt in the rehearse before the run' '            if not consumed:' '            if False:'
-BRK group-not-stopped fam_run_interrupt "[run-interrupt] the phase's process group was stopped" 'stderr=subprocess.STDOUT, env=env, start_new_session=True,' 'stderr=subprocess.STDOUT, env=env, start_new_session=False,'
-BRK start-unmasked fam_start_interrupt "[start-interrupt] …the phase's group was stopped" '            signal.pthread_sigmask(signal.SIG_BLOCK, stops)' '            signal.pthread_sigmask(signal.SIG_BLOCK, set())'
-BRK start-int-unmasked fam_start_interrupt "[start-interrupt] …the phase's group was stopped: no late write (SIGINT)" 'stops = {signal.SIGTERM, signal.SIGHUP, signal.SIGINT}' 'stops = {signal.SIGTERM, signal.SIGHUP}'
-BRK start-cleanup-once fam_start_interrupt "[start-interrupt] …the phase's group was stopped: no late write (SIGTERM+HUP)" \
-    $'            try:\n                _stop_phase(proc, stops)\n            except BaseException:\n                try:' \
-    $'            if True:\n                _stop_phase(proc, stops)\n            if False:\n                try:'
-BRK gate-unchecked fam_check_gate '[check-gate] a write() that also executes' 'gate_body(s.text) != want:' 'False:'
-BRK branch-mask-allowed fam_check_gate "[check-gate] both branches run 'act || true'" 'if any(re.search(r"\|\||&&", st) or re.match(r"^(?:if|!)\s", st) for st in stmts):' 'if False:'
-BRK local-run-allowed fam_check_source '[check-source] running a local ./helper.sh' '        if LOCAL_RUN.match(raw) and not (trusted and trusted_outside and trusted.match(raw)):' '        if False:'
-BRK seal-unchecked fam_sign_seal '[sign-seal] the script changed since it was shown' '    if seal_of(binding, plan) != seal:' '    if False:'
-BRK env-unbound fam_run_env '[run-env] run with another GH_REPO' \
-    '"cwd": cwd, "env": env}, sort_keys=True' '"cwd": cwd, "env": {}}, sort_keys=True' \
-    'rec.get("env")) != (binding, s.sha, args, cwd, env):' 'env) != (binding, s.sha, args, cwd, env):'
-BRK bash-env-kept fam_run_env '[run-env] BASH_ENV is not run' 'if k not in SHELL_HOOKS and not k.startswith("BASH_FUNC_")}' 'if True}'
-BRK do-lines-unchecked fam_run_diverged '[run-diverged] the run did other writes' '            elif done != plan:' '            elif False:'
-BRK do-lines-from-stdout fam_run_diverged '[run-diverged] control: such output is not read as writes' '            elif done != plan:' '            elif [x[3:] for x in lines if x.startswith("DO ")] != plan:'
-BRK tools-as-wrapped fam_check_unwrapped '[check-unwrapped] reading and writing with the same tool' 'wrapped = set(name for name in target.values() if name in spans)' 'wrapped = set(target.values())'
-BRK dry-push-flagged fam_check_unwrapped '[check-unwrapped] dry runs and auth can-i are reads' '    return bool(DRY_RUN.search(masked) or' '    return False and bool(DRY_RUN.search(masked) or'
-BRK git-options-ambiguous fam_check_unwrapped '[check-unwrapped] a git line with 2000 global options' '|--(?!(?:git-dir|work-tree|namespace)(?:\s|$))[\w-]+' '|--[\w-]+'
-BRK verdict-echo-only fam_check_gate '[check-gate] control: printf verdicts' 'if not re.search(r"VERDICT\s+\w+\s+ok", st)]' 'if not re.match(r"^echo\s+VERDICT", st)]'
-BRK signals-unhandled fam_round2_streams "[round2] the stopped rehearse's script did not write late" '            signal.signal(sig, _on_term)' '            pass'
-BRK closed-stdout fam_round2_streams '[round2] run with stdout closed' 'stream = getattr(sys, name) or open(os.devnull, "w")' 'stream = getattr(sys, name)'
-BRK stdout-breaks fam_run_pipe "[run-pipe] 'run | head' of a failing run" '        setattr(sys, name, SafeOut(stream))' '        setattr(sys, name, stream)'
-BRK manual-run-unchecked fam_modes '[modes] manual again: a pending coordinator-auto signature is refused' '    why = allowed(signer, mode, stops, s.value_why())' '    why = None'
-BRK substitutions-unsplit fam_check_round3 '[check-round3] a write inside local x=' 'SEPARATORS = re.compile(r"\|\||&&|;;|(?<![<>&])&(?![&>])|[;|\n`()]|\$\(\(?|[<>]\(")' 'SEPARATORS = re.compile(r"\|\||&&|;;|(?<![<>&])&(?![&>])|[;|\n]")'
-BRK path-prefix-missed fam_check_round3 '[check-round3] a write with a path prefix' 'prefix = re.match(r"\S*/", whole)' 'prefix = None'
-BRK xargs-arg-missed fam_check_round3 '[check-round3] a write behind xargs -I %' '"xargs": "ILnPdEsa", ' '"xargs": "", '
-BRK bang-not-stripped fam_check_round3 '[check-round3] a write after !' 'HEAD = re.compile(r"\s*(?:\{|\(|\"?\$\(|!|' 'HEAD = re.compile(r"\s*(?:\{|\(|\"?\$\(|'
-BRK dry-on-raw fam_check_round3 '[check-round3] a quoted --dry-run' 'not is_dry(word, whole_masked)' 'not is_dry(word, whole)'
-BRK dry-false-is-dry fam_check_round3 '[check-round3] --dry-run=false' 'DRY_RUN = re.compile(r"\s--dry-run(?:=(?:server|client|true))?(?![\w=-])")' 'DRY_RUN = re.compile(r"\s--dry-run")'
-BRK attached-field-missed fam_check_round3 '[check-round3] gh api -ftitle' '(?=[^|;&\n]*\s(?:-[fF]\S*|--(?:raw-)?field|--input)(?:\s|=|$))' '(?=[^|;&\n]*\s(?:-[fF]|--(?:raw-)?field|--input)(?:\s|=|$))'
-BRK mutation-missed fam_check_round3 '[check-round3] a graphql mutation' '    r"gh\s+api\s+graphql\b(?=[^|;&\n]*(?i:mutation))",' ''
-BRK update-branch-missed fam_check_round3 '[check-round3] gh pr update-branch' '|rerun|cancel|run|update-branch)(?![\w-])' '|rerun|cancel|run)(?![\w-])'
-BRK quoted-delete-missed fam_check_round3 '[check-round3] a quoted DELETE' $'(?:-X\\s*|--method[\\s=]+)[\\"\']?(?i:DELETE)\\b"),' $'(?:-X\\s*|--method[\\s=]+)(?i:DELETE)\\b"),'
-BRK verb-word-boundary fam_check_round3 '[check-round3] gh repo set-default' '|rerun|cancel|run|update-branch)(?![\w-])' '|rerun|cancel|run|update-branch)\b'
-BRK plan-end-naive fam_check_round3 '[check-round3] a helper whose plan line holds' '    c = word_end(code, j)' '    c = j + len(re.match(r"\S*", code[j:]).group(0))'
-BRK push-options-ambiguous fam_check_round3 '[check-round3] a bare line with 2000 options' '    r"dock''er(?:\s+-{1,2}(?!-)[\w-]+' '    r"dock''er(?:\s+-{1,2}[\w-]+'
-BRK plan-from-stdout fam_check_round3 '[check-round3] output without a final newline before a write' '    rc, lines, plan = run_phase(s, args, "rehearse", sinks)' '    rc, lines, plan = run_phase(s, args, "rehearse", sinks); plan = [x[5:] for x in lines if x.startswith("PLAN ")]'
-BRK verdict-exact fam_check_round3 '[check-round3] output without a final newline before the verdict' 'tail[-1].endswith("VERDICT %s ok" % phase)' 'tail[-1] == "VERDICT %s ok" % phase'
-BRK writes-strict fam_check_round3 '[check-round3] a plan line with a non-UTF-8 byte' 'w.decode("utf-8", "backslashreplace")' 'w.decode("utf-8", "surrogateescape")' 'data.encode("utf-8", "surrogateescape")).hexdigest()' 'data.encode("utf-8")).hexdigest()'
-BRK sighup-unhandled fam_round2_streams "[round2] the SIGHUP-stopped rehearse's script" '    for sig in (signal.SIGTERM, signal.SIGHUP):
-        if signal.getsignal' '    for sig in (signal.SIGTERM,):
-        if signal.getsignal'
-BRK nohup-overridden fam_round2_streams '[round2] under nohup' 'if signal.getsignal(sig) is not signal.SIG_IGN:' 'if True:'
-BRK git-config-unbound fam_round2_streams '[round2] run with another GIT_CONFIG_COUNT' ' | set(k for k in os.environ if k.startswith(("GIT_CONFIG", "PYTHON")))' ''
-BRK stderr-unwrapped fam_round2_streams '[round2] run with a stderr nobody reads' '        setattr(sys, name, SafeOut(stream))' '        setattr(sys, name, SafeOut(stream) if name == "stdout" else stream)'
-BRK whole-command-unread fam_check_round4 '[check-round4] git -C' '            whole, whole_masked = command_text(code, masked, i)' '            whole, whole_masked = code[i:end], masked[i:end]'
-BRK labels-as-commands fam_check_round4 '[check-round4] a case pattern ./*)' 'if masked[pos:end].strip() and not (label or inert or after_group):' 'if masked[pos:end].strip():'
-BRK xargs-i-swallows fam_check_round4 '[check-round4] xargs -i keeps the command' '"xargs": "ILnPdEsa", ' '"xargs": "IiLlnPdEsa", '
-BRK paren-label-blind fam_check_round4 '[check-round4] source after a (a) case label' '|^\s*\(?[^\s()|;&]+(?:\s*\|' '|^\s*[^\s()|;&]+(?:\s*\|'
-BRK dq-backtick-masked fam_check_round4 '[check-round4] a write in backticks inside double quotes' $'                elif ch == "`":\n                    stack.append(["c", 0, True, "`"])' $'                elif False:\n                    stack.append(["c", 0, True, "`"])'
-BRK consumed-ignored fam_run_after_use "[run-after-use] Ctrl-C after the signature was used" '        if RUN["consumed"]:' '        if False:'
-BRK term-after-run fam_run_after_use '[run-after-use] SIGTERM once the phases are over' $'                signal.signal(sig, signal.SIG_IGN)' $'                pass'
-BRK auto-in-manual fam_modes '[modes] manual: coordinator-auto cannot sign' '    if mode != "auto":' '    if False:'
-
-BRK kit-name-loose fam_kit '[kit] kit:a.b: rc 64' 'KIT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\Z")' 'KIT_RE = re.compile(r"^[A-Za-z0-9./-]*\Z")'
-BRK kit-link-followed fam_kit '[kit] kit:t-link: rc 64' '    if os.path.dirname(os.path.realpath(path)) != root:' '    if False:'
-BRK kit-root-unbound fam_kit '[kit] a signature from another plugin copy' '            self.bind_sha = sha256(self.sha + "\0kit:" + self.from_kit.batons)' '            self.bind_sha = self.sha'
-BRK kit-dep-dependency-unread fam_kit_dep '[kit-dep] a plugin without the dependency: refused' '            elif not depends_on_sdlc(' '            elif False and not depends_on_sdlc('
-BRK kit-dep-dependency-any-market fam_kit_dep "[kit-dep] a dependency on another marketplace's" '        if n in (SDLC, "%s@%s" % (SDLC, market)):' '        if isinstance(n, str) and n.startswith(SDLC):'
-BRK kit-dep-market-unchecked fam_kit_dep '[kit-dep] …a plugin from another marketplace: named' '            if m != market:' '            if False:'
-BRK kit-dep-path-unchecked fam_kit_dep '[kit-dep] an id of our marketplace installed under another: refused' '            elif os.path.dirname(real) != home or not' '            elif not'
-BRK kit-dep-both-run fam_kit_dep '[kit-dep] a kit name sdlc also ships: refused' $'        if found:\n            raise Stop(USAGE, "%s: both' $'        if False:\n            raise Stop(USAGE, "%s: both'
-BRK kit-dep-ineligible-blocks fam_kit_dep '[kit-dep] an sdlc kit that ineligible plugins also ship' $'        if found:\n            raise Stop(USAGE, "%s: both' $'        if found or refused:\n            raise Stop(USAGE, "%s: both'
-BRK kit-dep-sdlc-entry-raises fam_kit_dep '[kit-dep] a NUL or a lone surrogate in an sdlc installPath' \
-    '    if not any(isinstance(e, dict) and usable_path(e.get("installPath")) and' '    if not any(isinstance(e, dict) and isinstance(e.get("installPath"), str) and'
-BRK kit-dep-dep-entry-raises fam_kit_dep '[kit-dep] a dependent entry with a NUL or a lone surrogate' \
-    $'        if not usable_path(inst):\n            continue' $'        if not isinstance(inst, str) or not os.path.isabs(inst) or "\\0" in inst:\n            continue'
-BRK kit-dep-version-dir-loose fam_kit_dep '[kit-dep] a version directory named latest: refused' \
-    'or not INSTALL_DIR.match(os.path.basename(real)):' 'or os.path.basename(real).startswith("."):'
-BRK kit-dep-version-dir-any fam_kit_dep '[kit-dep] a version directory the launcher would not accept: refused' \
-    '            elif os.path.dirname(real) != home or not INSTALL_DIR.match(os.path.basename(real)):' '            elif os.path.dirname(real) != home:'
-BRK kit-dep-subdir-refused fam_kit_dep '[kit-dep] a dependent plugin at a git-subdir directory' \
-    '(?:-[0-9a-f]{8})?|unknown)\Z")' '|unknown)\Z")'
-BRK kit-dep-subdir-loose fam_kit_dep '[kit-dep] a git-subdir directory with 7 hex after the dash: refused' \
-    '(?:-[0-9a-f]{8})?|unknown)\Z")' '(?:-[0-9a-f]{7,8})?|unknown)\Z")'
-BRK kit-dep-manifest-link fam_kit_dep '[kit-dep] a .claude-plugin/ that is a symlink: refused' '            elif os.path.realpath(manifest) != manifest:' '            elif False:'
-BRK kit-dep-registry-any-version fam_kit_dep '[kit-dep] a registry of another version' \
-    '    ids = data.get("plugins") if isinstance(data, dict) and data.get("version") == REGISTRY_VERSION else None' '    ids = data.get("plugins") if isinstance(data, dict) else None'
-BRK kit-dep-card-unnamed fam_kit_dep "[kit-dep] …the card's first line names the plugin" \
-    '" (a kit of %s)" % log_value(s.from_kit.pid) if s.kit and s.from_kit.pid else ""' '""'
-BRK kit-dep-two-run fam_kit_dep '[kit-dep] two dependent plugins ship the name: refused' '    if len(found) > 1:' '    if False:'
-BRK kit-dep-link-followed fam_kit_dep '[kit-dep] a kit file that is a symlink out of its batons/: refused' '            elif os.path.dirname(os.path.realpath(path)) != batons:' '            elif False:'
-BRK kit-dep-bound-to-sdlc fam_kit_dep '[kit-dep] a signature from another install' '            self.bind_sha = sha256(self.sha + "\0kit:" + self.from_kit.batons)' '            self.bind_sha = sha256(self.sha + "\0kit:" + KIT_ROOT)'
-BRK kit-dep-sdlc-root fam_kit_dep "[kit-dep] …BATON_PLUGIN_ROOT is the dependent plugin's root" '            env["BATON_PLUGIN_ROOT"] = s.from_kit.root' '            env["BATON_PLUGIN_ROOT"] = plugin_real()'
-BRK kit-dep-self-unlisted fam_kit_dep '[kit-dep] a registry that does not list this sdlc copy' ' and os.path.realpath(e["installPath"]) == me' ''
-BRK kit-dep-registry-from-env fam_kit_dep '[kit-dep] …even with CLAUDE_CONFIG_DIR' \
-    '    if os.path.basename(parent) != SDLC or os.path.basename(cache) != "cache":' '    if False:' \
-    '    plugins, market = os.path.dirname(cache), os.path.basename(mdir)' '    plugins, market = os.path.join(claude_config_dir(), "plugins"), "vibemaestro"' \
-    ' and os.path.realpath(e["installPath"]) == me' ''
-# two defences keep a gate out of a session baton: the trusted form is the kit's only, and the variable's one word is scripts/
-BRK trusted-anywhere fam_kit '[kit] the same line in a session baton: check rc 1' \
-    'unwrapped_writes(entries, PLUGIN_SCRIPT_RUN, False)' 'unwrapped_writes(entries, TRUSTED_RUN, True)' \
-    '    if names != runs:' '    if False:'
-BRK trusted-loose fam_kit '[kit] a kit baton with another form (python3 -I -B "$BATON_PLUGIN_ROOT/gates/../scripts/x.py")' 'TRUSTED_GATE = r"gates/[A-Za-z0-9_]+\.py"' 'TRUSTED_GATE = r"[^\"]*"'
-# plugin scripts in a session baton: each defence on its own (two edits where two defences cover one case)
-BRK ps-count-unchecked fam_plugin_script '[plugin-script] refused at check: R=$(dirname' '    if names != runs:' '    if False:'
-BRK ps-run-outside-write fam_plugin_script '[plugin-script] refused at check: bash "$BATON_PLUGIN_ROOT/scripts/t-tool.sh" "$DEST"' \
-    'unwrapped_writes(entries, PLUGIN_SCRIPT_RUN, False)' 'unwrapped_writes(entries, PLUGIN_SCRIPT_RUN, True)' '    if names != runs:' '    if False:'
-BRK ps-sha-not-in-plan fam_plugin_script '[plugin-script] a plan line with the sha of another file' \
-    '        if not sha or not any(re.search(r"(?<![0-9a-fA-F])%s(?![0-9a-fA-F])" % sha, p) for p in plan):' '        if False:'
-BRK ps-sha-substring fam_plugin_script '[plugin-script] the sha only inside a longer hex word' \
-    're.search(r"(?<![0-9a-fA-F])%s(?![0-9a-fA-F])" % sha, p)' 'sha in p'
-BRK ps-tree-unbound fam_plugin_script '[plugin-script] a sibling under scripts/ edited after signing' \
-    '"\0" + self.tree_sha)' '"\0")'
-BRK ps-root-unbound fam_plugin_script '[plugin-script] the same baton under a second plugin copy' \
-    '"\0plugin:" + plugin_real() + "\0"' '"\0plugin:" + "\0"'
-BRK ps-python-unbound fam_plugin_script '[plugin-script] the run with a PYTHONPATH the signature did not see' \
-    'k.startswith(("GIT_CONFIG", "PYTHON"))' 'k.startswith("GIT_CONFIG")'
-BRK ps-caller-root fam_plugin_script '[plugin-script] …run (a caller sets BATON_PLUGIN_ROOT=/planted)' \
-    '            env["BATON_PLUGIN_ROOT"] = plugin_real()' '            env.setdefault("BATON_PLUGIN_ROOT", plugin_real())'
-BRK ps-pycache-shared fam_plugin_script '[plugin-script] …and with a bytecode directory of its own' \
-    '            env["PYTHONPYCACHEPREFIX"] = os.path.join(tmpd, "pycache")' '            pass'
-BRK ps-no-rehash fam_plugin_script '[plugin-script] …the runner names scripts/ that changed during the phase' \
-    '        if s.plugin_scripts and scripts_tree_sha() != s.tree_sha:' '        if False:'
-BRK ps-link-followed fam_plugin_script '[plugin-script] refused at check: the file scripts/t-link.sh' \
-    'os.path.islink(path) or os.path.dirname(os.path.realpath(path)) != d' 'False' '    if links:' '    if False:'
-BRK ps-links-allowed fam_plugin_script '[plugin-script] refused at check: a link under scripts/' '    if links:' '    if False:'
-BRK ps-baton-case fam_plugin_script '[plugin-script] refused at check: the file scripts/Baton.py' \
-    'if name.lower() in PLUGIN_SCRIPTS_REFUSED or ' 'if '
-BRK ps-baton-allowed fam_plugin_script '[plugin-script] refused at check: the file scripts/baton.py' \
-    'if name.lower() in PLUGIN_SCRIPTS_REFUSED or ' 'if ' \
-    ' or any(same_file(path, os.path.join(d, x)) for x in PLUGIN_SCRIPTS_REFUSED)' ''
-BRK ps-hardlink fam_plugin_script '[plugin-script] refused at check: the file scripts/t-hard.py' \
-    ' or any(same_file(path, os.path.join(d, x)) for x in PLUGIN_SCRIPTS_REFUSED)' ''
-BRK ps-root-in-rehearse fam_plugin_script '[plugin-script] …the rehearse phase gets no real plugin root' \
-    '        elif s.plugin_scripts and phase in ("run", "undo"):' '        elif s.plugin_scripts:'
-BRK ps-dotdot fam_plugin_script '[plugin-script] refused at check: the file scripts/../batons/merge-pr.sh' \
-    'bash "\$BATON_PLUGIN_ROOT/scripts/([A-Za-z0-9_-]+\.sh)"' 'bash "\$BATON_PLUGIN_ROOT/scripts/([^"]+\.sh)"' \
-    'os.path.islink(path) or os.path.dirname(os.path.realpath(path)) != d' 'os.path.islink(path)'
-BRK plan-unexported fam_plan_env '[plan-env] run: BATON_PLAN holds the signed plan' '            env["BATON_PLAN"] = planf' '            pass'
-BRK plan-name-fixed fam_plan_env '[plan-env] run a script named plan' '            pfd, planf = tempfile.mkstemp(prefix="signed-plan-", dir=tmpd)' '            planf = os.path.join(tmpd, "plan"); pfd = os.open(planf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)'
-BRK root-inherited fam_kit '[kit] a session baton never gets BATON_PLUGIN_ROOT' '        env.pop("BATON_PLUGIN_ROOT", None)' '        pass'
-# go: each step it calls, removed or bent in go alone; the equivalence, step, card, attack or retry test goes red
-BRK go-check-skipped fam_go_equiv '[go-steps] check: stopped at check' '        probs = check_script(s)' '        probs = []'
-BRK go-rehearse-ignored fam_go_equiv '[go-equiv] verdict: go gives the separate commands' $'        if seal is None:\n            sys.stdout.write(held.text())' $'        if False:\n            sys.stdout.write(held.text())'
-BRK go-expect-ignored fam_go_equiv '[go-equiv] expect: go gives the separate commands' $'        if seal is None:\n            sys.stdout.write(held.text())' $'        if seal is None and not all(r.startswith("plan line") for r in reasons):\n            sys.stdout.write(held.text())'
-BRK go-seal-at-sign fam_go_attack '[go-attack] the script edited inside rehearse 1' '            rc = signed("coordinator-auto", seal, path, args, sheld)' '            rc = signed("coordinator-auto", rehearsed(checked(path), args, Held())[2], path, args, sheld)'
-BRK go-sign-skipped fam_go_equiv '[go-equiv] good: go exits 0' '            rc = signed("coordinator-auto", seal, path, args, sheld)' '            rc = OK'
-BRK go-run-skipped fam_go_equiv '[go-equiv] good: go wrote the file' '            rc, result, _line, out_path = signed_run(path, args, quiet=rheld, preamble=held)' '            rc, result, _line, out_path = OK, "ok", "", ""'
-BRK go-postcheck-misnamed fam_go_equiv '[go-steps] pcfail: stopped at post-check' '"post-check" if at_check else "run"' '"run"'
-BRK go-ok-noisy fam_go_equiv '[go-ok] good: one line, stdout and stderr together' 'signed_run(path, args, quiet=rheld, preamble=held)' 'signed_run(path, args, preamble=held)'
-BRK go-ok-on-pcfail fam_go_equiv "[go-ok] pcfail: no 'go: ok'" '        if rc != OK or result != "ok":' '        if result in ("run-failed", "run-diverged"):'
-BRK go-run-output-hidden fam_go_equiv "[go-fail] runfail: the run step's output is printed (its DO line)" $'            sys.stdout.write(rheld.text())\n            say("full output: %s", out_path)' $'            say("full output: %s", out_path)'
-BRK go-rehearse-output-hidden fam_go_equiv "[go-fail] verdict: the step's output is printed" $'        if seal is None:\n            sys.stdout.write(held.text())' $'        if seal is None:\n            pass'
-BRK go-sign-output-hidden fam_go_attack "[go-fail] sign: the sign step's output is printed" $'        except BaseException:\n            sys.stdout.write(sheld.text())' $'        except BaseException:\n            pass'
-BRK go-log-unnamed fam_go_equiv "[go-ok] good: the line names this run's log" '        say("go: ok — %d write%s — %s", len(plan), "" if len(plan) == 1 else "s", out_path)' '        say("go: ok — %d write%s — %s", len(plan), "" if len(plan) == 1 else "s", d)'
-BRK header-twice-allowed fam_check_refuses '[check-refuses] a header field given twice' \
-    '            problems.append((i + 1, "header field %s is given twice" % key))' '            pass'
-BRK no-expect-allowed fam_check_refuses '[check-refuses] no Expect line' \
-    '            probs.append((0, "header: no Expect line (one per planned write)"))' '            pass'
-BRK write-twice-allowed fam_check_refuses '[check-refuses] write() defined twice' '    if len(defs.get("write", [])) != 1:' '    if not defs.get("write"):'
-BRK postcheck-unchecked fam_check_refuses '[check-refuses] no postcheck() function' \
-    'if ph in ("postcheck", "undo") and not defs.get(ph):' 'if ph in ("undo",) and not defs.get(ph):'
-BRK set-missing-allowed fam_check_refuses '[check-refuses] no set -euo pipefail at all' '    if not {"e", "u", "pipefail"} <= flags:' '    if False:'
-BRKF skeleton-unchecked fam_skill_skeleton '[skeleton] it passes check as written' skills/batonrun/SKILL.md \
-    $'set -euo pipefail\nPHASE=${BATON_PHASE:-rehearse}\nwrite() {' $'PHASE=${BATON_PHASE:-rehearse}\nwrite() {'
-BRK waits-warning-on-stderr fam_go_retry '[go-retry] a BATON_POSTCHECK_WAITS that is ignored: go still prints one line' \
-    '        for out in sinks or [sys.stderr]:' '        for out in [sys.stderr]:'
-BRK go-fresh-unchecked fam_go_fresh '[go-fresh] a script last written 600 s ago: rc 1' '        stale = None if reuse else stale_input(s, args)' '        stale = None'
-BRK go-fresh-by-path fam_go_fresh '[go-fresh] a fresh symlink to an old file: rc 1' '                self.mtime = os.fstat(f.fileno()).st_mtime' '                self.mtime = os.lstat(path).st_mtime'
-BRK go-fresh-future fam_go_fresh '[go-fresh] a file dated 600 s in the future: rc 1' '    if age < -FUTURE_SLACK:' '    if False:'
-BRK go-reuse-dropped fam_go_fresh '[go-fresh] …and the exact command with --reuse' '"%s go %s--reuse %s"' '"%s go %s%s"'
-BRK go-signs-stop-list fam_go_owner '[go-owner] auto-stops: exit 8' '        why = allowed("coordinator-auto", mode, stops, s.value_why())' '        why = None'
-BRK go-by-owner-accepted fam_go_attack '[go-attack] go --by owner: 64' 'if rest[0] != "--by" or len(rest) < 2 or rest[1] != "coordinator-auto":' 'if rest[0] != "--by" or len(rest) < 2 or rest[1] not in SIGNERS:'
-BRK go-card-after-detail fam_go_owner "[go-card] auto-stops: '== OWNER DECISION: ' on the card, in order" \
-    $'            for ln in card:\n                say("%s", ln)\n            say("detail: %s (check and rehearse output)", detail)' \
-    $'            say("detail: %s (check and rehearse output)", detail)\n            for ln in card:\n                say("%s", ln)'
-BRK go-card-no-blast fam_go_owner "[go-card] auto-stops: '  Blast:    that one file' on the card" '"  Blast:    %s" % f("Blast"), ' ''
-BRK retry-absent fam_go_retry '[go-retry] a post-check that holds on its second reading' '    for k in range(len(waits) + 1):' '    for k in range(1):'
-BRK retry-reruns-run fam_go_retry '[go-retry] …one failed-attempt line, the run phase ran once' \
-    $'        rc, lines, _w = run_phase(s, args, "postcheck", sinks)\n        if rc == 0 and verdict_ok(lines, "postcheck"):' \
-    $'        if k:\n            run_phase(s, args, "run", sinks)\n        rc, lines, _w = run_phase(s, args, "postcheck", sinks)\n        if rc == 0 and verdict_ok(lines, "postcheck"):'
-BRK retry-fail-logs-ok fam_go_retry '[go-retry] a post-check that never holds: exit 4' $'                return False\n    return False\n' $'                return False\n    return True\n'
-BRK go-card-not-first fam_go_owner '[go-card] auto-stops: the output starts with the card' '        say("go: check ok", out=held)' '        say("go: check ok")'
-BRK go-signature-left fam_go_attack '[go-attack] …the signature go made was withdrawn (2)' $'        except Stop:\n            sys.stdout.write(rheld.text())\n            withdraw()\n            raise' $'        except Stop:\n            raise'
-BRK go-card-raw fam_go_owner '[go-card] auto-stops: control characters on the card are escaped' '    n, f = len(plan), lambda key: log_value(s.field(key))' '    n, f = len(plan), lambda key: s.field(key)' \
-    $'            for ln in card:\n                say("%s", ln)' $'            for ln in card:\n                sys.stdout.write(ln + "\\n")'
-BRK go-reason-dropped fam_go_attack '[go-attack] …the stop line gives the reason (1)' '        say("go: stopped at %s (exit %d): %s", step, e.rc, e.text)' '        say("go: stopped at %s (exit %d)", step, e.rc)'
-BRK retry-wait-interrupt-unknown fam_go_retry '[go-retry] SIGTERM while waiting to read again: exit 4, undone' $'            except (KeyboardInterrupt, Interrupted):           # the failure is known' $'            except ():           # the failure is known'
-BRK go-interrupt-keeps-signature fam_go_attack '[go-attack] an interrupt between sign and run' $'        if step in ("sign", "run"):                     # an interrupt' $'        if False:                     # an interrupt'
-BRK go-withdraws-any fam_go_attack '[go-attack] …a signature file another signer rewrote' '            if f.read() != text:' '            if False:'
-BRK go-detail-printed fam_go_owner "[go-card] auto-stops: '== rehearse' is in the detail file, not printed" '            say("detail: %s (check and rehearse output)", detail)' '            say("detail: %s (check and rehearse output)", detail); sys.stdout.write(held.text())'
-BRK retry-longer-taken fam_go_retry '[go-retry] a longer wait is ignored' 'any(not 0 <= w <= d for w, d in' 'any(not 0 <= w for w, d in'
-BRK stop-hint-unnamed fam_stop_hint "[stop-hint] …the pattern's label" '"looks like stop category `%s`: matched `%s` (`%s`) in: %s; if the act does that, "' '"looks like stop category `%s`: %.0s%.0s in: %s; if the act does that, "'
-BRK stop-misses-update-ref-d fam_stop_hint '[stop-hint] write "delete feature/old" git -C /lab/remote.git update-ref -d' \
-  '(?:-d|--delete)\b"),' '(?:-never)\b"),'
-BRK stop-misses-quoted-refspec fam_stop_hint '[stop-hint] write "delete b" git push --force-with-lease=' \
-  '|\s[\"'"'"']?\+?:[^\s:\"'"'"']+)"),' '|\s:[^\s:]+)"),'
-BRK stop-misses-git-p fam_stop_hint '[stop-hint] write "delete x" git -P -C /lab/remote update-ref -d' '|-[pP](?!\S)|' '|'
-BRK stop-misses-stdin-file fam_stop_hint '[stop-hint] git -C /lab/remote.git update-ref --stdin < "$DEST.ops"' \
-  '(?=[^|;&\n]*?\s--stdin\b)[^|;&\n<]*<"),' '(?=[^|;&\n]*?\s--stdin\b)[^|;&\n<]*<<<never"),'
-BRK stop-misses-refs-dir fam_stop_hint '[stop-hint] write "drop all" rm -rf "$DEST"/refs/*' '|refs/?\*?' '|refs'
-BRK stop-misses-combined-flags fam_stop_hint '[stop-hint] write "drop x" git branch -Dq' \
-  'BR_FLAGS = r"[acCdDfilmMqrtuv]"' 'BR_FLAGS = r"[A-Z]"'
-BRK stop-kit-hint-dropped fam_stop_hint '[stop-hint] …the FAIL line names kit:branch-delete' \
-  '+ (BRANCH_KIT_HINT if label in BRANCH_DELETE_LABELS else "")' '+ ""'
-BRK stop-misses-settings fam_stop_hint '[stop-hint] a Stops: none baton that adds an allow rule' \
-    'SETTINGS_PATH = (SETTINGS_DIR + ' 'SETTINGS_PATH = (r"(?!)" + SETTINGS_DIR + '
-BRK stop-settings-hint-dropped fam_stop_hint '[stop-hint] …the FAIL line says how a read-only baton passes' \
-    '(SETTINGS_HELD_HINT if label == SETTINGS_HELD_LABEL else "")' '""'
-BRK stop-label-drift fam_stop_hint "[stop-hint] the pattern list (limits.md) equals" '("secrets", "gh secret", ' '("secrets", "gh secrets", '
-BRKF stop-label-doc-only fam_stop_hint "[stop-hint] the pattern list (limits.md) equals" skills/batonrun/limits.md '; `vault kv|read|write|delete`' ''
-BRKF gh-state-any-output fam_gh_state '[gh-state] a 404 JSON body without headers' skills/batonrun/SKILL.md '    "0 HTTP/"*" 200") GH_STATE=exists ;;' '    *) GH_STATE=exists ;;'
-BRKF gh-state-rc-uncoupled fam_gh_state '[gh-state] a 200 with a non-zero exit' skills/batonrun/SKILL.md '    "0 HTTP/"*" 200") GH_STATE=exists ;;' '    *" HTTP/"*" 200") GH_STATE=exists ;;'
-BRKF gh-state-no-http fam_gh_state '[gh-state] a first line that is not HTTP/' skills/batonrun/SKILL.md '    [1-9]*" HTTP/"*" 404") GH_STATE=absent ;;' '    [1-9]*" "*" 404") GH_STATE=absent ;;'
-BRK gh-state-lint-off fam_gh_state "[gh-state] check refuses 'S=\$(gh_state" '    for n in sorted(set(gh_state_in_subshell(entries))):' '    for n in []:'
-BRK gh-state-lint-on-code fam_gh_state "[gh-state] control: check accepts 'gh_state \"a|b\"'" $'    for n, _code, masked in entries:\n        masked = FUNC_HEAD.sub' $'    for n, masked, _m in entries:\n        masked = FUNC_HEAD.sub'
-BRK gh-state-nested-unseen fam_gh_state "[gh-state] check refuses 'x=\$(cd /; gh_state y)'" '                    if "(" in groups or "`" in groups or prev == "|"' '                    if prev == "|"'
-BRK gh-state-block-unseen fam_gh_state "[gh-state] check refuses '{ gh_state y; } | cat'" $'                    if blocks and blocks.pop()[1]:\n                        pending = len(groups)' $'                    if blocks:\n                        blocks.pop()'
-BRK gh-state-first-keyword-only fam_gh_state "[gh-state] check refuses 'while a; do if a; then if b; then :; fi; fi; gh_state x; done | cat'" '                    if kw.group(1) in BLOCK_OPENERS:' '                    if kw.group(1) in BLOCK_OPENERS and k == 0:'
-BRK gh-state-brace-after-paren fam_gh_state "[gh-state] check refuses '{ v=\${V:-\$(c)}; w=\${W:-\$(c)}; gh_state x; } | cat'" '                while prev != ")":                      # `${V:-$(cmd)}`: a `}` right after `)` closes no block' '                while True:'
-BRK gh-state-pipe-amp fam_gh_state "[gh-state] check refuses 'cat |& gh_state x'" '            if not (sep == "&" and prev == "|" and not seg.strip()):   # `|&` is a pipe: keep prev at `|`' '            if True:'
-BRKF gh-state-failure-absent fam_gh_state '[gh-state] a 404 JSON body without headers' skills/batonrun/SKILL.md '  case "$rc $proto ${code%$'"'"'\r'"'"'}" in' '  [ "$rc" = 0 ] || { proto=HTTP/2; code=404; }; case "$rc $proto ${code%$'"'"'\r'"'"'}" in'
-BRK wait-since-dropped fam_wait '[wait] a name with only an old ok line' '                if t is None or t < since:' '                if t is None:'
-BRK wait-failed-counts fam_wait '[wait] only a postcheck-failed line: rc 9' '                if v[9] == "ok":' '                if v[9] in ("ok", "postcheck-failed"):'
-BRK wait-first-ok-wins fam_wait '[wait] ok, then a failed re-run' $'                else:\n                    oks.pop(v[2], None)\n' ''
-BRK wait-reads-once fam_wait '[wait] a line written during the wait ends it' '            if len(oks) == len(set(names)) or time.time() >= deadline:' '            if True:'
-BRK help-other-file fam_skill_refs '[skill-refs] help kits prints kits.md' '        with open(os.path.join(HELP_DIR, rest[0] + ".md"), encoding="utf-8") as f:' '        with open(os.path.join(HELP_DIR, "SKILL.md"), encoding="utf-8") as f:'
-
-# PR E: the Expect paragraph of the core against the matcher, and the core's examples against the code
-BRK expect-prefix fam_expect_doc "[expect-doc] the core's FAIL example" 'fnmatch.fnmatchcase(p, e) and (each is None' '(fnmatch.fnmatchcase(p, e) or p.startswith(e)) and (each is None'
-BRK expect-casefold fam_expect_doc '[expect-doc] case-sensitive' 'fnmatch.fnmatchcase(p, e) and (each is None' 'fnmatch.fnmatchcase(p.lower(), e.lower()) and (each is None'
-BRK expect-order-free fam_expect_doc '[expect-doc] order: the same Expect lines swapped' '    for i in range(max(len(plan), len(expect))):' $'    plan, expect = sorted(plan), sorted(expect)\n    for i in range(max(len(plan), len(expect))):'
-BRK expect-count-free fam_expect_doc '[expect-doc] count: two writes, one Expect line' 'for i in range(max(len(plan), len(expect))):' 'for i in range(min(len(plan), len(expect))):'
-BRKF expect-doc-flipped fam_expect_doc "[expect-doc] the core's ok example" skills/batonrun/SKILL.md \
-    $'Expect `create *` → ok\n- plan `create docs/a.txt`, Expect `create` → FAIL' $'Expect `create *` → FAIL\n- plan `create docs/a.txt`, Expect `create` → ok'
-BRK expect-space-prefix fam_expect_doc "[expect-doc] not a prefix, with a space" 'fnmatch.fnmatchcase(p, e) and (each is None' '(fnmatch.fnmatchcase(p, e) or (" " in e and p.startswith(e))) and (each is None'
-BRK expect-suffix fam_expect_doc '[expect-doc] the whole line from its start' 'fnmatch.fnmatchcase(p, e) and (each is None' 're.search(fnmatch.translate(e), p) and (each is None'
-BRK expect-strip fam_expect_doc '[expect-doc] the whole line to its end' 'fnmatch.fnmatchcase(p, e) and (each is None' 'fnmatch.fnmatchcase(p.strip(), e.strip()) and (each is None'
-BRKF expect-text-prefix fam_expect_doc '[expect-doc] the core states it is not a prefix match' skills/batonrun/SKILL.md 'It is not a prefix match.' 'It is a prefix match.'
-BRKF expect-text-slash fam_expect_doc '[expect-doc] the core states the glob' skills/batonrun/SKILL.md '(spaces and `/` too)' '(spaces, not `/`)'
-BRKF expect-text-count fam_expect_doc '[expect-doc] the core states the count' skills/batonrun/SKILL.md 'The counts must be equal:' 'Extra plan lines are ignored:'
-# PR E: the launcher warning of the hook
-BRKF trap-once fam_pipe_trap '[pipe-trap] the same piped run, second time in one session' scripts/vsdlc.py \
-    '    trap = launcher_trap(cmd) if any(n == BATON_RULE for n, _t in rules) else ""' '    trap = launcher_trap(cmd) if any(n == BATON_RULE for n, _t in rules) and once("trap", sid) else ""'
-BRKF trap-quotes-ignored fam_pipe_trap "[pipe-trap] no warning: /state/vibemaestro/baton/bin/baton go x.sh 'a|b'" scripts/vsdlc.py '        elif c == "'"'"'":' '        elif False:'
-BRKF trap-semicolon-dropped fam_pipe_trap '[pipe-trap] warns: /state/vibemaestro/baton/bin/baton sign --by owner' scripts/vsdlc.py 'SHELL_OP_CHARS = "|&;<>()"' 'SHELL_OP_CHARS = "|&<>()"'
-BRKF trap-rule-ignored fam_pipe_trap '[pipe-trap] no warning (the batonrun rule disabled)' scripts/vsdlc.py '    trap = launcher_trap(cmd) if any(n == BATON_RULE for n, _t in rules) else ""' '    trap = launcher_trap(cmd)'
-BRKF trap-ansi-c-plain fam_pipe_trap "[pipe-trap] warns: /state/vibemaestro/baton/bin/baton run x.sh \$'" scripts/vsdlc.py '        elif c == "$" and cmd.startswith("$'"'"'", i):' '        elif False:'
-BRKF trap-wrapper-c-only fam_pipe_trap "[pipe-trap] warns: bash -lc" scripts/vsdlc.py '        args = [a for a in seg[j + 1:] if not a.startswith("-")]' '        args = seg[j + 2:j + 3] if seg[j + 1:j + 2] == ["-c"] else []'
-BRKF trap-prefix-unseen fam_pipe_trap '[pipe-trap] warns: time ' scripts/vsdlc.py '    found = [prefix] if prefix else []' '    found = []'
-BRKF trap-anywhere fam_pipe_trap '[pipe-trap] no warning: git status && echo baton run' scripts/vsdlc.py \
-    $'    for seg in _segments(words).values():\n        i, prefix = 0, ""' $'    for seg in _segments(words).values():\n        if _call_in(seg):\n            return _call_in(seg), ""\n        i, prefix = 0, ""'
-BRKF trap-not-string fam_pipe_trap '[pipe-trap] a command that is not a string' scripts/vsdlc.py $'    if not isinstance(cmd, str):\n        return ""\n' ''
-BRKF trap-keywords-unseen fam_pipe_trap '[pipe-trap] warns: for f in a b; do' scripts/vsdlc.py '        while i < len(seg) and (ASSIGNMENT.match(seg[i]) or seg[i] in KEYWORDS):' '        while i < len(seg) and ASSIGNMENT.match(seg[i]):'
-BRKF trap-wrapper-args fam_pipe_trap '[pipe-trap] warns: sudo -u root' scripts/vsdlc.py '            sub = _call_in(seg[i + 1:])' '            sub = _call_in([w for w in seg[i + 1:] if not w.startswith("-")][:2])'
-BRKF trap-shell-first-only fam_pipe_trap '[pipe-trap] warns: env bash -c' scripts/vsdlc.py '        j = next((j for j, w in enumerate(seg) if os.path.basename(w) in SHELLS), None)' '        j = 0 if os.path.basename(seg[0]) in SHELLS else None'
-BRKF trap-nested-unseen fam_pipe_trap '[pipe-trap] warns: bash -c "bash -c' scripts/vsdlc.py '            sub = _launcher_call(inner)[0] or _wrapped_call(inner, depth + 1)' '            sub = _launcher_call(inner)[0]'
-# a generator, not a list: the planted break is slow, never memory-hungry (a 2 GB list starved the CI runner)
-BRKF trap-wrapped-quadratic fam_pipe_trap '[pipe-trap] 20000 shells' scripts/vsdlc.py \
-    $'        for t in ([" ".join(args)] if os.path.basename(seg[j]) == "eval" else args):' $'        for t in (" ".join(seg[k + 1:]) for k in range(j, len(seg))):'
-BRKF trap-open-quote-hides fam_pipe_trap '[pipe-trap] warns (an apostrophe in a heredoc body before it)' scripts/vsdlc.py '    if sub is None and "\n" in cmd:' '    if False:'
-# PR E: run prints one line when it holds
-BRK run-streams fam_run_line '[run-line] a run that holds prints one line' '        rc, result, _line, out_path = signed_run(path, args, quiet=held, queued=queued)' '        rc, result, _line, out_path = signed_run(path, args, queued=queued)'
-BRK run-fail-hidden fam_run_line '[run-line] a failed run prints its whole output' $'    sys.stdout.write(held.text())\n    say("full output: %s", out_path)\n    return rc' $'    say("full output: %s", out_path)\n    return rc'
-BRK last-pointer-unwritten fam_run_last '[last] the last log line is the run-start line' '        mark_started(d, out_path, signed_by=signer, **common)
-' ''
-BRK last-start-is-run fam_run_last '[last] the last log line is the run-start line' 'log_event(d, event="run-start", output=out_path, **common)' 'log_event(d, event="run", output=out_path, **common)'
-BRK last-not-replaced fam_run_last '[last] …prints that run log' 'os.replace(tmp, os.path.join(d, "runs", "LAST"))' 'pass'
-
-# PR F: the core's four-line header and its op list
-BRK expect-header-order-free fam_expect_header '[expect-header] the same header with two Expect lines swapped' '    for i in range(max(len(plan), len(expect))):' $'    plan, expect = sorted(plan), sorted(expect)\n    for i in range(max(len(plan), len(expect))):'
-BRKF expect-header-no-star fam_expect_header '[expect-header] …exactly one of them uses' skills/batonrun/SKILL.md '# Expect: ref create refs/tags/v2 *' '# Expect: ref create refs/tags/v2'
-BRKF expect-header-three-lines fam_expect_header '[expect-header] instrument: the core holds one header example' skills/batonrun/SKILL.md $'# Expect: release create v2\n```' '```'
-BRKF core-ops-extra-in-core fam_core_ops '[core-ops] the op list in the core equals' skills/batonrun/SKILL.md 'file-pr; never by hand (' 'file-pr, label-create; never by hand ('
-BRKF core-ops-missing-in-core fam_core_ops '[core-ops] the op list in the core equals' skills/batonrun/SKILL.md 'pr-body-edit, issue-reopen' 'pr-body-edit'
-BRKF core-ops-extra-in-code fam_core_ops '[core-ops] the op list in the core equals' gates/gh_write.py '    "pr-ready": ({"pr", "head"}, set(), False),' $'    "pr-ready": ({"pr", "head"}, set(), False),\n    "label-create": ({"name"}, set(), False),'
-BRKF core-ops-undo-text fam_core_ops '[core-ops] the core says what an undo that cannot delete does' skills/batonrun/SKILL.md 'and exits non-zero' 'and exits zero'
-BRKF core-ops-never-by-hand fam_core_ops "[core-ops] the core says the kit's ops are never hand-written" skills/batonrun/SKILL.md 'file-pr; never by hand (' 'file-pr ('
-BRKF core-ops-handwritten-text fam_core_ops '[core-ops] the core names what needs a hand-written baton' skills/batonrun/SKILL.md 'Labels, tags, releases, a push: hand-written.' 'A push: hand-written.'
-
-# go - and the hook's one-call shape
-BRK stdin-not-read fam_go_stdin '[go-stdin] a baton on stdin: rc 0' $'        if path == "-":\n            path = stdin_script()\n' ''
-BRK stdin-writable fam_go_stdin '[go-stdin] …read-only (0400)' 'getattr(os, "O_NOFOLLOW", 0), 0o400)' 'getattr(os, "O_NOFOLLOW", 0), 0o600)'
-BRK stdin-overwrites fam_go_stdin '[go-stdin] …a second stored file' \
-    'path = os.path.join(d, "%s-%s.sh" % (stamp, sha256(data)[:12]))' 'path = os.path.join(d, "%s-%s.sh" % ("0", sha256(data)[:12]))' \
-    'os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o400)' 'os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)'
-BRK stdin-cap-off fam_go_stdin '[go-stdin] more than 256 KiB on stdin: rc 64' '    if len(data) > STDIN_MAX:' '    if False:'
-BRK stdin-empty-ok fam_go_stdin '[go-stdin] empty stdin: rc 64' '    if not data.strip():' '    if False:'
-BRK stdin-tty-read fam_go_stdin '[go-stdin] stdin a terminal: rc 64' '    if stream is None or sys.stdin.isatty():' '    if stream is None:'
-BRK stdin-reuse-ok fam_go_stdin '[go-stdin] --reuse -: rc 64' '    if path == "-" and reuse:' '    if False:'
-BRK stdin-seal-unchecked fam_go_stdin "[go-stdin] a byte changed during go's rehearse (before sign): rc 3" '    if seal_of(binding, plan) != seal:' '    if False:'
-BRK stdin-bytes-unbound fam_go_stdin "[go-stdin] a byte changed during sign's rehearse (before run): rc 3" \
-    '{"v": 1, "script_sha256": script_sha, "args"' '{"v": 1, "script_sha256": "", "args"' \
-    '(rec.get("binding"), rec.get("script_sha256"), rec.get("args"), rec.get("cwd"),' '(rec.get("binding"), s.sha, rec.get("args"), rec.get("cwd"),'
-# BRKFM <label> <family> <needle> <file> <old> <new> [<old> <new>]... — BRKF with several replacements in one file
-BRKFM() {
-  local label=$1 fam=$2 needle=$3 file=$4 d; shift 4; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/$file" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-BRKF trap-stdin-shape-unknown fam_pipe_trap "[pipe-trap] no warning (the one-call form" scripts/vsdlc.py $'    if why == "":\n        return ""\n    if why:' $'    if why:'
-BRKF trap-stdin-unquoted-ok fam_pipe_trap '[pipe-trap] warns (an unquoted delimiter)' scripts/vsdlc.py \
-    '    m = QUOTED_DELIM.search(first)' '    m = QUOTED_DELIM.search(first) or re.search(r"<<[ \t]*()([A-Za-z_][A-Za-z0-9_]*)[ \t]*$", first)'
-BRKF trap-stdin-tail-ok fam_pipe_trap '[pipe-trap] warns (a command after the closing line)' scripts/vsdlc.py \
-    '    if any(x.strip(" \t") for x in lines[lines.index(delim) + 1:]):' '    if False:'
-BRKF trap-stdin-last-delim fam_pipe_trap '[pipe-trap] warns (a body line equal to the delimiter ends it early)' scripts/vsdlc.py \
-    '    if any(x.strip(" \t") for x in lines[lines.index(delim) + 1:]):' '    if any(x.strip(" \t") for x in lines[len(lines) - lines[::-1].index(delim):]):'
-BRKFM trap-stdin-pipe-ok fam_pipe_trap '[pipe-trap] warns (a pipe on the first line)' scripts/vsdlc.py \
-    '    if other or ops.count("<<") != 1:' '    if False:' \
-    '    if [n for _w, n in words[:-1]] != [0] * (len(words) - 1) or words[-1][1] != 1:' '    if False:' \
-    'QUOTED_DELIM = re.compile(r"<<[ \t]*(?:'"'"'([A-Za-z_][A-Za-z0-9_]*)'"'"'|\"([A-Za-z_][A-Za-z0-9_]*)\")[ \t]*$")' 'QUOTED_DELIM = re.compile(r"<<[ \t]*(?:'"'"'([A-Za-z_][A-Za-z0-9_]*)'"'"'|\"([A-Za-z_][A-Za-z0-9_]*)\")")'
-BRKFM trap-stdin-chain-ok fam_pipe_trap '[pipe-trap] warns (a chain before it)' scripts/vsdlc.py \
-    '    if other or ops.count("<<") != 1:' '    if False:' \
-    '    if [n for _w, n in words[:-1]] != [0] * (len(words) - 1) or words[-1][1] != 1:' '    if False:' \
-    '    if sub != "go" or prefix:' '    if False:'
-BRKFM trap-stdin-dash-ok fam_pipe_trap '[pipe-trap] warns (<<-)' scripts/vsdlc.py \
-    '    if "<<-" in first:' '    if False:' \
-    'QUOTED_DELIM = re.compile(r"<<[ \t]*' 'QUOTED_DELIM = re.compile(r"<<-?[ \t]*'
-BRKF trap-stdin-unclosed-ok fam_pipe_trap '[pipe-trap] warns (never closed)' scripts/vsdlc.py \
-    $'    if delim not in lines:\n        return "no line `%s` closes the heredoc" % delim, None\n' $'    if delim not in lines:\n        return "", first\n'
-BRKF trap-stdin-rules-on-body fam_pipe_trap "[pipe-trap] the one-call form: the body's gh pr merge" scripts/vsdlc.py \
-    '    rcmd = first if why == "" else cmd' '    rcmd = cmd'
-BRKF trap-stdin-rules-first-always fam_pipe_trap '[pipe-trap] control: the same body with a line after' scripts/vsdlc.py \
-    '    rcmd = first if why == "" else cmd' '    rcmd = cmd.split("\n", 1)[0] if why is not None else cmd'
-BRKF trap-stdin-cr-ok fam_pipe_trap '[pipe-trap] warns (a CR inside the body' scripts/vsdlc.py '    if "\r" in cmd:' '    if False:'
-BRKF trap-stdin-unicode-blank fam_pipe_trap '[pipe-trap] warns (a control character after the closing line' scripts/vsdlc.py \
-    '    if any(x.strip(" \t") for x in lines[lines.index(delim) + 1:]):' '    if any(x.strip() for x in lines[lines.index(delim) + 1:]):'
-BRK stdin-prune-young fam_go_stdin '[go-stdin] …the prune keeps a stored script younger than 7 days' \
-    '            if i < hard or time.time() - os.lstat(os.path.join(d, n)).st_mtime > STDIN_KEEP_DAYS * 86400:' '            if True:'
-BRK stdin-hard-cap-off fam_go_stdin '[go-stdin] …a burst of young ones is still cut to the newest 1000' \
-    '            if i < hard or time.time()' '            if time.time()'
-# the guidance on `go -` is pinned against the measured verdicts (tests/fixtures/go-dash-verdict.txt)
-BRKF go-dash-core-recommends fam_go_dash_guidance '[go-dash] the core and the rule' skills/batonrun/SKILL.md \
-    'Never the baton in a heredoc on `go -`: Claude Code blocks it (`limits.md`).' "One call: \`<launcher> go - <args> <<'BATON_EOF'\`, the baton, a last line \`BATON_EOF\`."
-BRKF go-dash-rule-recommends fam_go_dash_guidance '[go-dash] the core and the rule' rules/batonrun.instructions.md \
-    'never in a heredoc on `go -` (Claude Code blocks it)' "or in a heredoc on \`go -\`"
-BRKF go-dash-act-recommends fam_go_dash_guidance '[go-dash] every other mention' skills/batonrun/act.md \
-    $'exists, but it is not how a session sends a baton: the only way to feed it is a heredoc on\nthe command, and Claude Code blocks a heredoc that holds the skeleton. Measured, not assumed: `limits.md`. Do not rewrite the skeleton\nto get past that check.' \
-    $'is one call a session sends as a heredoc on the command.'
-BRKF go-dash-act-same-paragraph fam_go_dash_guidance '[go-dash] every other mention' skills/batonrun/act.md \
-    'Do not rewrite the skeleton' $'A one-call alternative is `go - <args>` with the script after it. Do not rewrite the skeleton'
-BRKF go-dash-hook-teaches fam_go_dash_guidance "[go-dash] the hook's warning" scripts/vsdlc.py \
-    'and Claude Code blocks a heredoc that holds a baton skeleton in any shape. Write' "and \`<launcher> go - <args> <<'BATON_EOF'\` is the one bare call. Write"
-BRKF go-dash-help-teaches fam_go_dash_guidance "[go-dash] the hook's warning" scripts/baton.py \
-    'not for a baton: Claude Code blocks a' 'for a baton too: Claude Code takes a'
 
 echo "== [text] the decisions the skill, the rule and the template carry =="
 # The one place this suite reads prose: one key phrase per decision, whitespace folded, so a lesson cannot drop out unnoticed.

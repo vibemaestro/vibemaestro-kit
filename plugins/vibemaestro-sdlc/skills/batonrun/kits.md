@@ -92,8 +92,8 @@ The pull-request ops pin what they act on:
 Deletions (but a merged branch: `kit:branch-delete` below), public repositories and anything outside these kinds stay
 hand-written batons, signed by the owner.
 
-`kit:coordinator-bootstrap` sets up BatonRun on a machine (the launcher, the permission block, attribution off where a key is
-absent) in one run the owner signs (`Stops: security-boundary`); it takes no argument. Follow the skill `coordinator-bootstrap`:
+`kit:bootstrap` sets up BatonRun on a machine (the launcher, the permission block, attribution off where a key is
+absent) in one run the owner signs (`Stops: security-boundary`); it takes no argument. Follow the skill `bootstrap`:
 on a new machine there is no launcher yet, so it runs through the plugin's `baton.py`, and the owner types the signature.
 A session whose sdlc is not the installed one (started before a plugin update) is refused at rehearse with one line naming both versions: restart Claude Code, then run it again.
 
@@ -265,7 +265,7 @@ post-check wants it at the pinned head (gh starts it by branch name, so a branch
 and undo cancels that run). Undo cancels the run only when the record says `sent`, and only for its own record; two new
 matches, a new match without `sent`, or `sent` with no run showing, are left for the owner (exit 5).
 
-In a sandbox session (`SEAT` and `INTENT_SLUG` both set) it refuses at rehearse, before any gh call: the pod's token has no `actions:write`, so ask the coordinator to start the workflow run.
+In a sandbox session (`VIBEMAESTRO_ROLE=worker`, or `SEAT` and `INTENT_SLUG` both set, deprecated) it refuses at rehearse, before any gh call: the pod's token has no `actions:write`, so ask whoever briefed the session to start the workflow run.
 
 ## A kit from a dependent plugin
 
@@ -329,15 +329,15 @@ pinned bytes, so an edit by hand is not callable until it is kept again. `pack` 
 commits a `project:` baton on its branch. A `user:` keep prints one line starting `owner:` (what was kept, its `Stops`, its
 sha256, what changed, `not reviewed`, its Purpose): copy it into the next reply to the owner.
 
-**In a sandbox** (`INTENT_SLUG` and `SEAT` both set): `pack <path> <name>` keeps `project:<name>`, and `user:` is refused,
+**In a sandbox** (`VIBEMAESTRO_ROLE=worker`, or `INTENT_SLUG` and `SEAT` both set, deprecated): `pack <path> <name>` keeps `project:<name>`, and `user:` is refused,
 since a pod's library is lost with the pod. A pod never gets the owner's signature, so a flow that stops for the owner is handed over:
 1. `go <path> key='value'…` to the owner's card (exit 8): check, rehearse and plan against Expect all held;
 2. `pack <path> <name>`: these bytes keep as `project:<name>` on that stop (its line says `not run: stop-list, the owner signs
    after merge`); a `Stops: none` script keeps only on a stop of the pod's mode manual, and its line, keep record and
-   hand-off say it never ran (the coordinator's `go` is its first run); no `Params`: add them and `go` again first;
-3. commit it on the branch and open the PR; tell the coordinator the call (`go project:<name> key='value'…`).
+   hand-off say it never ran (the `go` of whoever briefed the session is its first run); no `Params`: add them and `go` again first;
+3. commit it on the branch and open the PR; tell whoever briefed the session the call (`go project:<name> key='value'…`).
 
-The coordinator merges the PR after its post-check (the default deny globs leave `.vibemaestro/batons/` to the guard), then
+Whoever briefed it merges the PR after a post-check (the default deny globs leave `.vibemaestro/batons/` to the guard), then
 runs it with the owner's signature: as `project:<name>` from the merged default branch when the remote is on the owner's list
 (below), else from a fresh scratch copy of the merged file, which it then packs.
 

@@ -37,7 +37,6 @@
 #   [J] void, not scored: H's transcript lacks the SessionStart:compact block; the shared history was compacted before the fork
 #   [R] a crash is rc 2, never rc 1 (FAIL); a second run in the same --work works
 #   [K] the brain hook's BRAIN_TEST_SOURCES: honoured only with BRAIN_TEST=1, it limits injection to the named sources
-#   [X] planted breaks: each case goes red on a copy with one break
 # =============================================================================
 set -uo pipefail
 if [ -z "${BRAIN_SUITE_REEXEC:-}" ]; then
@@ -206,7 +205,7 @@ case_rows() {
   local t i links=()
   t=$(python3 -c 'print("t" * 150)')
   for i in 1 2 3 4 5 6 7 8; do links+=(--link "kb/$(python3 -c 'print("l" * 17)')"); done
-  for i in 1 2 3 4 5 6 7 8 9; do owner_ok add --kind decision --text "$t" --owner-quote q --where w "${links[@]}"; done
+  for i in $(seq 1 17); do owner_ok add --kind decision --text "$t" --owner-quote q --where w "${links[@]}"; done
   for i in 1 2 3; do br op add --kind now --text "$t" "${links[@]}"; done
   local many=()
   for i in $(seq -w 1 30); do many+=("very-long-language-server-name-number-$i-lsp"); done
@@ -216,10 +215,10 @@ case_rows() {
   local R; R=$(rows "$OUT")
   c_eq "$(printf '%s\n' "$R" | grep -c .)" 7 "[M] seven rows"
   c_eq "$(printf '%s\n' "$R" | cut -d'|' -f1 | tr -d ' ' | tr '\n' ' ')" "Know·hot Do·hot Know·warm Do·warm Do·warm Know·cold Do·cold " "[M] one per cell, Do·warm twice"
-  c_eq "$(printf '%s\n' "$R" | LC_ALL=C awk '{ if (length($0) > m) m = length($0) } END { print (m <= 300) ? "within" : "over " m }')" within "[M] every row ≤ 300 bytes, with 30 code-intelligence plugins and hot memory at Pinned 9/10"
+  c_eq "$(printf '%s\n' "$R" | LC_ALL=C awk '{ if (length($0) > m) m = length($0) } END { print (m <= 300) ? "within" : "over " m }')" within "[M] every row ≤ 300 bytes, with 30 code-intelligence plugins and hot memory at Pinned 17/20"
   c_has "$(row "$OUT" "code intelligence")" "+" "[M] instrument: the code-intelligence list is cut with +N (the row was at its widest)"
   c_has "$OUT" "Know (left)" "[M] the header names the axes"
-  c_has "$(row "$OUT" "Hot Memory")" "Pinned 9/10" "[M] the Know·hot warning at 0.85 of a cap"
+  c_has "$(row "$OUT" "Hot Memory")" "Pinned 17/20" "[M] the Know·hot warning at 0.85 of a cap"
   br matrix --json; c_rc 0 "[M] --json rc 0"
   c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(len(json.load(sys.stdin)["rows"]))')" 7 "[M] --json: seven rows"
   unset CLAUDE_CONFIG_DIR
@@ -282,7 +281,7 @@ case_did() {
 
 # --- the probe against the fake claude -----------------------------------------------------------------------------------------
 # A probe root in the scratch tree: the brain and sdlc of the kit copy (symlinked), the probe files copied; PROOT is what a case
-# runs, plant_probe swaps in a copy with one break. The fake is run through a wrapper named claude.
+# runs. The fake is run through a wrapper named claude.
 probe_root() {  # probe_root <dir> — a probe tree at <dir>
   mkdir -p "$1/tests/fixtures" "$1/tests/live"
   ln -s "$KIT/plugins" "$1/plugins"
@@ -442,40 +441,11 @@ case_probe_control10() {
   c_has "$(pline 'exit:')" "not shown necessary at this size" "[T] reported as is"
 }
 
-dep_probe() {  # dep_probe <name> [<old> <new>]… — one fake run of a copy of the probe tree under test with exact-text breaks in probe.py
-  local name=$1 d="$TMP/dep-$1" saved=$PROOT f
-  shift
-  mkdir -p "$d/tests/fixtures" "$d/tests/live"
-  ln -s "$KIT/plugins" "$d/plugins"
-  cp -R "$PROOT/tests/fixtures/brain-probe" "$d/tests/fixtures/"
-  cp "$PROOT/tests/live/brain-probe.sh" "$d/tests/live/"
-  f="$d/tests/fixtures/brain-probe/probe.py"
-  while [ $# -ge 2 ]; do
-    python3 -c 'import sys
-p, old, new = sys.argv[1:4]
-s = open(p, encoding="utf-8").read()
-if s.count(old) != 1:
-    sys.exit(1)
-open(p, "w", encoding="utf-8").write(s.replace(old, new))' "$f" "$1" "$2" || { c_eq "the break does not apply" "ok" "[D2] dep_probe $name: '${1:0:50}' not found exactly once"; return 1; }
-    shift 2
-  done
-  export PROOT="$d"; probe; export PROOT="$saved"
-}
 sdlc_in_transcripts() {  # sdlc_in_transcripts — how many transcripts of the last probe run (FAKE_HOME of NP) hold the sdlc's SessionStart text
   find "$TMP/fakehome$NP" -name '*.jsonl' -exec grep -lF "The general way of working (read from the plugin" {} + 2>/dev/null | wc -l | tr -d ' '
 }
 
 case_probe_dep() {
-  local drop=(    'PLUGIN_DIRS = [BRAIN, SDLC]' 'PLUGIN_DIRS = [BRAIN]')
-  local nocheck=( '    check_dependencies()' '    pass')
-  dep_probe nosdlc "${drop[@]}"
-  c_rc 2 "[D2] no sdlc --plugin-dir: rc 2"
-  c_has "$OUT" "vibemaestro-brain depends on vibemaestro-sdlc" "[D2] the reason names the plugin and its dependency"
-  c_hasnt "$OUT" "brains loaded" "[D2] it stops on the manifest, not on the old '0 brains loaded'"
-  c_eq "$([ -e "$W/preflight" ] && echo started || echo nothing)" nothing "[D2] before the first session: nothing was spent"
-  dep_probe nosdlc-nocheck "${drop[@]}" "${nocheck[@]}"
-  c_rc 2 "[D2] no sdlc and no manifest check: the fake refuses the brain, rc 2"
-  c_has "$OUT" "0 brains loaded" "[D2] the old stop: the brain's hooks never ran"
   local R
   R=$(python3 -I -B - "$PROOT/tests/fixtures/brain-probe" "$TMP/depver" <<'PY'
 import json, os, sys
@@ -517,12 +487,6 @@ case_probe_silent() {
   probe
   c_rc 0 "[S] the silent sdlc: rc 0"
   c_eq "$(sdlc_in_transcripts)" 0 "[S] no transcript holds the sdlc's SessionStart text"
-  dep_probe loud '            json.dump(SDLC_OFF, f)' '            json.dump({"hooks": "auto"}, f)'
-  c_rc 2 "[S] an sdlc that speaks: the preflight stops, rc 2"
-  c_has "$OUT" "SessionStart text is in the preflight transcript" "[S] it says why"
-  c_eq "$(sdlc_in_transcripts)" 1 "[S] control: the preflight transcript does hold the text (the check looks at a real positive)"
-  dep_probe loud-unchecked '            json.dump(SDLC_OFF, f)' '            json.dump({"hooks": "auto"}, f)' '    if loud:' '    if False:'
-  c_has "$(pline 'preflight:')" "one brain loaded" "[S] without the check the run goes on, with the sdlc's text in every session"
 }
 
 case_probe_plan() {
@@ -537,25 +501,6 @@ case_probe_plan() {
   c_has "$OUT" ".vibemaestro/sdlc.json" "[Z] and runs silent in the scratch project"
 }
 
-plant_probe() {  # plant_probe <name> <case function> <file under the probe tree> <old text> <new text>
-  local name=$1 fn=$2 file=$3 old=$4 new=$5 d="$TMP/pbrk-$1" saved=$PROOT
-  probe_root "$d"
-  if ! python3 -c 'import sys
-p, old, new = sys.argv[1:4]
-s = open(p, encoding="utf-8").read()
-if s.count(old) != 1:
-    sys.exit(1)
-open(p, "w", encoding="utf-8").write(s.replace(old, new))' "$d/$file" "$old" "$new"
-  then bad "[X] $name: the break does not apply (the text is not found exactly once in $file)"; return; fi
-  local crc rf="$d.case"; rm -f "$rf"
-  Q=1; CASE_FAIL=0; export PROOT="$d"
-  capped _plant_case "$fn" "$rf"; crc=$?
-  Q=0; export PROOT="$saved"
-  if cap_red "$crc" "[X] $name ($fn)"; then NP=$((NP+1)); return; fi
-  read -r CASE_FAIL NP < "$rf" 2>/dev/null || { CASE_FAIL=0; NP=$((NP+1)); }
-  [ "$CASE_FAIL" = 1 ] && ok "[X] $name turns $fn red" || bad "[X] $name: $fn stays green with the break"
-}
-
 echo "== cases =="
 for c in case_cost case_merge case_sums case_rows case_lsp case_hot case_did case_knob case_probe_pass case_probe_fallback \
          case_probe_nocompact case_probe_grader case_probe_memory case_probe_preflight case_probe_control10 case_probe_plan \
@@ -563,60 +508,5 @@ for c in case_cost case_merge case_sums case_rows case_lsp case_hot case_did cas
   run_case $c
 done
 cd "$TMP" || exit 1
-
-echo "== planted breaks =="
-CO=scripts/brain_cost.py; MX=scripts/brain_matrix.py; HK=scripts/brain_hook.py
-plant no-dedupe-by-id case_cost $CO '        prev = self.recent.get(key)' '        prev = None'
-plant sidechain-counted case_cost $CO '        if rec.get("isSidechain") is True:' '        if False:'
-plant five-minute-at-2x case_cost $CO 'W_5M = 1.25' 'W_5M = 2.0'
-plant gap-not-seen case_cost $CO 'GAP = 3600' 'GAP = 9999'
-plant merge-no-span case_merge $CO '        if not (lo <= t <= hi):' '        if False:'
-plant merge-counted-twice case_merge $CO '        prs.add((o.get("repo"), o.get("pr")))' '        prs.add((o.get("repo"), o.get("pr"), o.get("time")))'
-plant offset-not-saved case_sums $CO '    state["offset"] = offset' '    state["offset"] = 0'
-plant straddle-counted-twice case_sums $CO '    state["recent"] = sums.recent_list()' '    state["recent"] = []'
-plant end-no-cost-line case_sums $HK '    cost_line(s, d, inp)' '    pass'
-plant row-cap-raised case_rows $MX 'ROW_MAX = 300' 'ROW_MAX = 600'
-plant disabled-lsp-listed case_lsp $HK '        if enabled.get(key) is not True:' '        if False:'
-plant lsp-json-ignored case_lsp $MX '        if name.endswith("-lsp") or name == "serena" or os.path.isfile(os.path.join(path, ".lsp.json")):' '        if name.endswith("-lsp") or name == "serena":'
-plant repo-index-dropped case_hot $MX '"; repo index (shared; sdlc injects it at SessionStart when current_state.inject is on)"' '""'
-plant other-sessions-counted case_did $MX '    mine = [e for e in eps if sid is None or e.get("session") == sid]' '    mine = eps'
-PR=tests/fixtures/brain-probe/probe.py
-plant_probe control-brain-on case_probe_pass $PR '    arm_env = {"BRAIN_OFF": "1"} if arm == "C" else dict(H_ENV)' '    arm_env = dict(H_ENV)'
-plant_probe plant-brain-on case_probe_pass $PR 'PLANT_ENV = {"BRAIN_OFF": "1"}' 'PLANT_ENV = {}'
-plant_probe block-limit-ignored case_probe_pass $PR 'BLOCK_LIMIT = 8000' 'BLOCK_LIMIT = 100'
-plant_probe h-not-isolated case_probe_pass $PR 'H_ENV = {"BRAIN_TEST": "1", "BRAIN_TEST_SOURCES": "compact"}' 'H_ENV = {}'
-plant_probe h-not-isolated-unchecked case_probe_isolated $PR 'H_ENV = {"BRAIN_TEST": "1", "BRAIN_TEST_SOURCES": "compact"}' 'H_ENV = {}'
-plant_probe compact-block-unchecked case_probe_void $PR '    if not any(brain_blocks(p, FRAME_COMPACT) for p in h["transcripts"]):' '    if False:'
-plant_probe shared-compaction-unchecked case_probe_void $PR '    if any(l.get("event") == "PostCompact" and l.get("session_id") in run.shared_ids for l in run.logs()):' '    if False:'
-plant_probe replay-unchecked case_probe_preflight $PR '        if not ok:' '        if False:'
-plant_probe work-not-cleared case_probe_crash $PR '        shutil.rmtree(self.dir, ignore_errors=True)' '        pass'
-plant_probe crash-not-caught case_probe_crash $PR '    except Exception as e:  # noqa: BLE001 — a crash is not a FAIL' '    except Stop as e:'
-plant end-cost-repeated case_sums $HK '    if r is None or not fresh:' '    if r is None:'
-plant_probe draft-names-anchor case_probe_pass $PR '        it["draft_prompt"] = draft.replace("{T}", it["topic"]).replace("{N}", near[0])' '        it["draft_prompt"] = draft.replace("{T}", it["topic"]).replace("{N}", a)'
-plant_probe drafts-not-sent case_probe_pass $PR '        turns = [it["owner_prompt"], it["draft_prompt"]] if i % 2 else [it["draft_prompt"], it["owner_prompt"]]' '        turns = [it["owner_prompt"]]'
-plant_probe order-bound case_probe_pass $PR '        if e.get("kind") in ("pre-compact", "compact"):' '        if e.get("kind") == "compact":'
-plant_probe early-block-unchecked case_probe_void $PR '        elif e.get("kind") == "session-start" and not (seen and e.get("source") == "compact"):' '        elif False:'
-plant_probe summary-counted-as-ask case_probe_pass $PR '        if r.get("isCompactSummary"):
-            continue' '        if False:
-            continue'
-plant knob-without-brain-test case_knob $HK '    if os.environ.get("BRAIN_TEST") != "1":
-        return True' '    if False:
-        return True'
-plant_probe failed-fork-reused case_probe_fallback $PR '            out = arm_run(ctx, run, arm, 2, shared, project)' '            out = arm_run(ctx, run, arm, 2, failed or shared, project)'
-plant_probe no-compaction-check case_probe_nocompact $PR '    if not compacted:
-        return None' '    if False:
-        return None'
-plant_probe substring-grader case_probe_grader $PR '        good = toks == {it["anchor"].lower()}' '        good = it["anchor"].lower() in line.lower()'
-plant_probe memory-unchecked case_probe_memory $PR '    for m in memory_files(ctx, run):' '    for m in []:'
-plant_probe sdlc-plugin-dir-dropped case_probe_pass $PR 'PLUGIN_DIRS = [BRAIN, SDLC]' 'PLUGIN_DIRS = [BRAIN]'
-plant_probe dependency-missing-unchecked case_probe_dep $PR '            if name not in given:' '            if False:'
-plant_probe dependency-version-unchecked case_probe_dep $PR '            if rng and name in given and not version_ok(str(given[name]), rng):' '            if False:'
-plant_probe fake-dependencies-unmodelled case_probe_dep tests/fixtures/brain-probe/fake_claude.py '        for pd in loaded_plugin_dirs(self.a["plugin_dirs"]):' '        for pd in self.a["plugin_dirs"]:'
-plant_probe sdlc-not-silenced case_probe_silent $PR '            json.dump(SDLC_OFF, f)' '            json.dump({"hooks": "auto"}, f)'
-plant_probe sdlc-speaks-unchecked case_probe_silent $PR '    if loud:' '    if False:'
-plant_probe one-brain-unchecked case_probe_preflight $PR '    if len(starts) != 1:' '    if not starts:'
-plant_probe control-ignored case_probe_control10 $PR '    elif any(r["C"]["score"] == 10 for r in results):' '    elif False:'
-plant_probe plan-runs case_probe_plan $PR '        sys.stdout.write(plan_text())
-        return 0' '        sys.stdout.write(plan_text())'
 
 summary

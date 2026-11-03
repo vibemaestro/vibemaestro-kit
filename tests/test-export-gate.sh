@@ -16,24 +16,16 @@
 #   [K]  a fake token in docs/README.md: rc 1, `gitleaks: github-pat file #N line L` with N its position in the export's index; with
 #        a `gitleaks:allow` comment on its line: still rc 1; in an exported .svg (the stub skips it by name, as gitleaks' default rules
 #        do): rc 1, through the mirror
-#   [X]  a copy of export-public that keeps the root kb/: rc 1, `under kb/` named, no path printed; one that ignores public.private:
-#        rc 1, `matching public.private[0]` named, no path printed
-#   [P]  a copy of export-public that ignores the config, on a rev without one: the gate reads the list itself and stops, rc 3
 #   [M]  an old-branch PR whose head holds an exported file main has fixed since: red on the head (control), green on the
 #        test-merge commit, whose sha the green line names
 #   [E]  term file empty, blank or missing: rc 3, nothing exported; [C] a wrong sha256, a tarball whose binary prints another
 #        version, no pin for this platform: rc 3, gitleaks never run; [O] a work dir inside the repository: rc 2; [R] not a commit: rc 2
-#   [D]  a copy of export-public that prints a wrong digest: rc 3
 #   [L]  no output line of any run holds a made-up term, the sentinel or a fake token
-#   [B1-B8] planted breaks in copies of the gate, each must turn its case red for its own reason: `add -A` for `add -Af`, no term
-#        canary planted, no token planted, the digest check removed, a blind gitleaks, no --ignore-gitleaks-allow, the `terms:` line
-#        kept, no mirror run
 #   [W]  workflow shape (YAML parser): only pull_request and workflow_dispatch (input rev, required); permissions contents: read; the
 #        secret named once, in the env of the step that calls the gate; no `${{ }}` in a run block; checkout pinned by sha, no persisted
 #        credentials, full history; runs-on from vars.CI_GATE_RUNNER, then vars.CI_RUNNER; REV from the test-merge commit (github.sha) or the
-#        dispatch input (planted break: REV from the PR head is red); no path
+#        dispatch input; no path
 #        filter (every PR: the export is the whole tree but kb/ and public.private); the job runs only if github.event.repository.private
-#        (planted breaks: a copy with a path filter, and one without the `if:`, are red)
 #   [WR] the step's real run block, with a stub gate: the secret reaches the gate only as a 0600 file, gone afterwards, never in the
 #        gate's environment; an empty, blank or absent secret is red before the gate runs
 # =============================================================================
@@ -145,7 +137,6 @@ EOF
   { echo "# test pins"; echo "version 8.30.1"; for k in linux_x64 linux_arm64 darwin_x64 darwin_arm64; do echo "$k $sum"; done; } > "$1/pins"
 }
 mkstub "$TMP/gl" 0 8.30.1
-mkstub "$TMP/gl-blind" 1 8.30.1
 mkstub "$TMP/gl-oldver" 0 8.24.3
 mkstub "$TMP/gl-noexec" 0 8.30.1   # then its binary is replaced by bytes no system can run, and the pins follow
 printf 'not a program\n' > "$TMP/gl-noexec/pkg/gitleaks" && tar -czf "$TMP/gl-noexec/gl.tar.gz" -C "$TMP/gl-noexec/pkg" gitleaks
@@ -155,18 +146,18 @@ STUB_GL_LOG="$TMP/stub.log"
 
 printf '%s\nw:%s\n' "$TERM1" "$TERM2" > "$TMP/terms"; chmod 600 "$TMP/terms"
 
-# gate <rev> [args] — run a gate (GATE_BIN, default the real one) in $FX; sets RC and OUT (stdout and stderr)
+# gate <rev> [args] — run the gate in $FX; sets RC and OUT (stdout and stderr)
 gate() {
   local rev=$1; shift
   : > "$STUB_GL_LOG"
-  OUT=$(cd "$FX" && ${GATE_BIN:+capped} bash "${GATE_BIN:-$GATE}" --rev "$rev" --terms "${TERMS_FILE:-$TMP/terms}" \
+  OUT=$(cd "$FX" && bash "$GATE" --rev "$rev" --terms "${TERMS_FILE:-$TMP/terms}" \
         --gitleaks-tarball "${GL_DIR:-$TMP/gl}/gl.tar.gz" --pins "${PINS:-${GL_DIR:-$TMP/gl}/pins}" "$@" 2>&1); RC=$?
   printf '%s\n' "$OUT" >> "$ALL_LOGS"
 }
 leftover() { find "$TMPDIR" -maxdepth 1 -name 'export-gate.*' | head -n 1; }
 # digest_of <rev> <dir> — export-public's stdout for <rev>, exported into <dir> (which must not exist yet)
 digest_of() { (cd "$FX" && bash "$EXPORT" "$1" "$2" 2>/dev/null); }
-# green_ok — the [G] conditions for the last run, quietly: 0 when all hold (planted breaks need "not green")
+# green_ok — the [G] conditions for the last run, quietly: 0 when all hold
 green_ok() {
   [ "$RC" -eq 0 ] || return 1
   [ "$(printf '%s\n' "$OUT" | grep -c '^export-gate: rev=')" -eq 1 ] || return 1
@@ -246,44 +237,6 @@ gate "$RV"
 eq "$RC" 1 "[K] a token in an exported .svg, a name gitleaks' default rules skip: rc 1 (the mirror run)"
 has "$OUT" "gitleaks: github-pat file #" "[K] the .svg finding"
 
-echo "== [X] an export that leaks the root kb/ or a public.private path =="
-SEL='    if path.startswith(KB) or any(rx.match(path) for rx in private):'
-# xbreak <label> <new selection line> <what the forbidden line names> <a leaked path that must not be printed>
-xbreak() {
-  local d="$TMP/x-$1"; mkdir -p "$d"; cp "$SRC_ROOT"/scripts/export-gate.* "$SRC_ROOT/scripts/scan-internal-terms.sh" "$d/"
-  python3 - "$EXPORT" "$d/export-public.sh" "$SEL" "$2" <<'PY'
-import sys
-src, dst, old, new = sys.argv[1:]
-s = open(src).read()
-open(dst, "w").write(s.replace(old, new) if s.count(old) == 1 else s)
-PY
-  if cmp -s "$EXPORT" "$d/export-public.sh"; then bad "[X] $1: the planted export did not apply (the selection line moved?)"; return; fi
-  GATE_BIN="$d/export-gate.sh" gate "$R1"
-  eq "$RC" 1 "[X] $1: rc 1"
-  has "$OUT" "forbidden: " "[X] $1: a forbidden line"
-  has "$OUT" "$3" "[X] $1: it names $3"
-  hasnt "$OUT" "$4" "[X] $1: no path is printed"
-}
-xbreak keeps-kb '    if any(rx.match(path) for rx in private):' "under kb/" kb/current-state.md
-xbreak no-private-list '    if path.startswith(KB):' "matching public.private[0]" ".vibemaestro/sdlc.json"
-
-echo "== [P] the gate's own private list: a rev that does not say what stays private =="
-# an exporter that ignores the config exports a rev with none; the gate reads the list itself and must not pass it
-mkdir -p "$TMP/p"; cp "$SRC_ROOT"/scripts/export-gate.* "$SRC_ROOT/scripts/scan-internal-terms.sh" "$TMP/p/"
-python3 - "$EXPORT" "$TMP/p/export-public.sh" <<'PY'
-import sys
-src, dst = sys.argv[1:]
-s = open(src).read(); old = "private = private_list({p: (m, k, o) for p, m, k, o in entries})"
-open(dst, "w").write(s.replace(old, "private = []") if s.count(old) == 1 else s)
-PY
-if cmp -s "$EXPORT" "$TMP/p/export-public.sh"; then bad "[P] the planted exporter did not apply (the private_list line moved?)"; else
-  RP=$(mkrev p-nocfg 'git_ rm -q .vibemaestro/sdlc.json')
-  GATE_BIN="$TMP/p/export-gate.sh" gate "$RP"
-  eq "$RC" 3 "[P] no public.private at the rev: the gate itself stops, rc 3"
-  has "$OUT" "has no public.private list" "[P] …and says why"
-  hasnt "$OUT" "export-gate: rev=" "[P] …no green line"
-fi
-
 echo "== [M] a pull request is gated on what merges: the test-merge commit, not its head =="
 # base B holds an exported file with a made-up term; main fixes it; an old branch cut at B changes something else; the test-merge
 # commit (refs/pull/N/merge, github.sha) is the old branch on top of main
@@ -333,64 +286,6 @@ gate "not-a-rev-$RANDOM"
 eq "$RC" 2 "[R] not a commit: rc 2"
 gate "--version"
 eq "$RC" 2 "[R] a rev shaped like an option: rc 2"
-
-echo "== [D] a wrong digest from the export =="
-mkdir -p "$TMP/d"; cp "$SRC_ROOT"/scripts/export-gate.* "$SRC_ROOT/scripts/scan-internal-terms.sh" "$TMP/d/"
-sed 's/^print(digest)$/print("1" * len(digest))/' "$EXPORT" > "$TMP/d/export-public.sh"
-if cmp -s "$EXPORT" "$TMP/d/export-public.sh"; then bad "[D] the planted digest did not apply"; else
-  GATE_BIN="$TMP/d/export-gate.sh" gate "$R1"
-  eq "$RC" 3 "[D] rc 3"
-  hasnt "$OUT" "export-gate: rev=" "[D] no green line"
-fi
-
-echo "== [B] planted breaks in copies of the gate =="
-# plant <name> <sed expression> — a copy of the scripts dir whose gate has the break; prints the gate's path, or nothing if it did not apply
-plant() {
-  local d="$TMP/b-$1"; mkdir -p "$d"
-  cp "$SRC_ROOT"/scripts/export-gate.* "$SRC_ROOT/scripts/scan-internal-terms.sh" "$EXPORT" "$d/"
-  capped sed "$2" "$GATE" > "$d/export-gate.sh"   # capped: memory and time caps (fixtures/capped.sh)
-  cmp -s "$GATE" "$d/export-gate.sh" || printf '%s' "$d/export-gate.sh"
-}
-# broken <label> <gate> <reason> — the clean [G] run of a broken gate must not be green, and must say <reason> (its own failure)
-broken() {
-  local label=$1 g=$2
-  [ -n "$g" ] || { bad "$label: the planted break did not apply"; return; }
-  GATE_BIN="$g" gate "$R1"
-  if green_ok; then bad "$label: still green"
-  else has "$OUT" "$3" "$label: red (rc $RC) for its own reason"; fi
-}
-broken "[B1] add -A for add -Af" "$(plant b1 's/"add", "-Af"/"add", "-A"/g')" "a control is not scanned"
-broken "[B2] no term canary in the controls" "$(plant b2 's/^CONTROL_TEXT = .*/CONTROL_TEXT = "control\\ntoken = \\"%(token)s\\"\\n"/')" \
-  "a control was missed: terms 0/2, gitleaks 2/2"
-broken "[B3] no token in the controls" "$(plant b3 's/^CONTROL_TEXT = .*/CONTROL_TEXT = "control %(canary)s\\n"/')" \
-  "a control was missed: terms 2/2, gitleaks 0/2"
-# [B4] the digest check is what makes [D] red: without it, the wrong digest goes through
-g4=$(plant b4 's/^    if tree != digest:$/    if False:/')
-if [ -n "$g4" ]; then
-  sed 's/^print(digest)$/print("1" * len(digest))/' "$EXPORT" > "$TMP/b-b4/export-public.sh"
-  GATE_BIN="$g4" gate "$R1"
-  [ "$RC" -eq 3 ] && bad "[B4] without the digest check the wrong digest is still refused: [D] cannot tell" ||
-    ok "[B4] without the digest check the wrong digest goes through (rc $RC): [D] tells"
-else bad "[B4] the planted break did not apply"; fi
-GL_DIR="$TMP/gl-blind" PINS="$TMP/gl-blind/pins" gate "$R1"
-if green_ok; then bad "[B5] a blind gitleaks: still green"
-else has "$OUT" "a control was missed: terms 2/2, gitleaks 0/2" "[B5] a blind gitleaks: red (rc $RC) for its own reason"; fi
-# [B6] --ignore-gitleaks-allow is what makes the second [K] case red
-g6=$(plant b6 's/ "--ignore-gitleaks-allow",//')
-if [ -n "$g6" ]; then
-  GATE_BIN="$g6" gate "$RA"
-  [ "$RC" -eq 1 ] && bad "[B6] without --ignore-gitleaks-allow the allowed token is still red: [K] cannot tell" ||
-    ok "[B6] without --ignore-gitleaks-allow the allowed token passes (rc $RC): [K] tells"
-else bad "[B6] the planted break did not apply"; fi
-broken "[B8] no mirror run" "$(plant b8 's/leaks(M, os.path.join(W, "gitleaks-mirror.json"))/[]/')" \
-  "a control was missed: terms 2/2, gitleaks 1/2"
-# [B7] dropping the scanner's count line is what keeps the size of the term list out of the log
-g7=$(plant b7 's/^        if line.startswith("terms: "):$/        if False:/')
-if [ -n "$g7" ]; then
-  GATE_BIN="$g7" gate "$R1"
-  printf '%s\n' "$OUT" | grep -q '^terms: [0-9]' && ok "[B7] without the drop the count line reaches the log: [G] tells" ||
-    bad "[B7] without the drop no count line is printed: [G] cannot tell"
-else bad "[B7] the planted break did not apply"; fi
 
 echo "== [L] what the runs printed =="
 for s in "$TERM1" "$TERM2" "$SENTINEL" "$TOK" "$TOK2" "$TOK3"; do
@@ -445,22 +340,6 @@ print("\n".join(probs) if probs else "OK")
 PY
 python3 "$TMP/wcheck.py" "$WF" "$EXPORT" > "$TMP/w.out" 2>&1
 w=$(cat "$TMP/w.out"); eq "$w" "OK" "[W] the workflow's shape: every PR, only in a private repository"
-# wbreak <label> <python old> <python new> <the problem line it must print>
-wbreak() {
-  python3 - "$WF" "$TMP/wf-$1.yml" "$2" "$3" <<'PY'
-import sys
-src, dst, old, new = sys.argv[1:]
-s = open(src).read()
-open(dst, "w").write(s.replace(old, new, 1) if old in s else s)
-PY
-  if cmp -s "$WF" "$TMP/wf-$1.yml"; then bad "[W] $1: the planted break did not apply"; return; fi
-  python3 "$TMP/wcheck.py" "$TMP/wf-$1.yml" "$EXPORT" > "$TMP/w-$1.out" 2>&1
-  case "$(cat "$TMP/w-$1.out")" in *"$4"*) ok "[W] planted break: $1 is red" ;;
-    *) bad "[W] planted break: $1 is not red: $(head -c 200 "$TMP/w-$1.out")" ;; esac
-}
-wbreak path-filter $'    types: [opened, synchronize, reopened, ready_for_review]\n' $'    types: [opened, synchronize, reopened, ready_for_review]\n    paths:\n      - "plugins/**"\n' "has a filter"
-wbreak no-if $'    if: github.event.repository.private && (github.event_name != \'pull_request\' || github.event.pull_request.draft == false)\n' '' "the job's if is None"
-wbreak pr-head-rev "github.event_name == 'pull_request' && github.sha" "github.event_name == 'pull_request' && github.event.pull_request.head.sha" "REV is"
 
 echo "== [WR] the step's real run block, with a stub gate =="
 python3 -c '

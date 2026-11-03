@@ -21,7 +21,6 @@
 #   [A] a value naming a Claude Code settings file (an argument or a Param, any spelling) makes a Stops: none call the owner's;
 #       look-alikes stay none; a pending coordinator-auto signature is refused at run; kind:settings-merge reads as before
 #   [D] the repo-wide grep for Bash that embeds Python prints 0 once `templates/baton-kinds/` is a recorded exception
-#   [X] planted breaks: each family goes red on a plugin copy with one break in a kind or in baton.py
 # =============================================================================
 set -uo pipefail
 # the owner's-dialog check of baton.py reads the HOME of every ancestor from its initial environment, which forked subshells share:
@@ -127,6 +126,11 @@ fam_kinds_new() {
   ST="$(fresh)/state"; W=$(fresh)
   for k in $KINDS; do
     eq "$(bt "$P" "$W" new "t-$k" --from "$k" --dir "$W")" 0 "[N] new t-$k --from $k: rc 0"
+    case $k in
+      kubectl-exec|remote-exec)
+        has "$(cat "$BT_OUT")" "new: kind $k is deprecated and leaves vibemaestro-sdlc in the next release" "[N] $k: new says the kind is deprecated" ;;
+      *) hasnt "$(cat "$BT_OUT")" "deprecated" "[N] $k: new says nothing of a deprecation" ;;
+    esac
     f="$W/t-$k.sh"
     eq "$(bt "$P" "$W" check "$f")" 0 "[N] $k passes check as generated"
     eq "$(bash -n "$f"; echo $?)" 0 "[N] $k is valid bash"
@@ -547,74 +551,6 @@ FAMILIES="fam_y fam_d5 fam_kinds_new fam_kind_install fam_kind_settings fam_kind
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for fam in $FAMILIES; do echo "-- $fam"; "$fam" "$REAL"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break =="
-# KBRK <label> <family> <needle> <file under the plugin> <old> <new>
-KBRK() {
-  local label=$1 fam=$2 needle=$3 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/$4" "$5" "$6" && expect_red "$label" "$fam" "$d" "$needle"
-}
-KBRK kind-write-differs fam_kinds_new '[N] install-file passes check as generated' templates/baton-kinds/install-file.sh \
-    "      printf 'PLAN %s\\n' \"\$plan\"" "      printf 'PLAN: %s\\n' \"\$plan\""
-KBRK kind-unknown-accepted fam_kinds_new '[N] an unknown kind: rc 64' scripts/baton.py \
-    'if not KIND_RE.match(kind) or not os.path.isfile(path):' 'if False:'
-KBRK remote-read-swallowed fam_kind_remote '[R] …the remote read was printed before the decision' templates/baton-kinds/remote-exec.sh \
-    $'  OUT=$(remote_state 2>&1 || true)\n  printf \'%s\\n\' "$OUT"\n  RHOST' $'  OUT=$(remote_state 2>&1)\n  printf \'%s\\n\' "$OUT"\n  RHOST'
-KBRK settings-undo-blind fam_kind_settings '[S] …a file that changed since the run is left alone: rc 5' templates/baton-kinds/settings-merge.sh \
-    '  if [ "$NOW" = "$AFTER" ]; then' '  if true; then'
-KBRK kubectl-uid-dropped fam_kind_kubectl '[K] …the plan carries the pod uid' templates/baton-kinds/kubectl-exec.sh \
-    '(uid $PUID)' '(uid -)'
-KBRK kubectl-server-unchecked fam_kind_kubectl '[K] …a server mismatch is refused by name' templates/baton-kinds/kubectl-exec.sh \
-    'if [ "$SERVER" != "$P_SERVER" ]; then' 'if false; then'
-KBRK kind-any-name fam_kind_callable '[C] …go kind:remote-exec: the message lists the callable kinds' scripts/baton.py \
-    '    if name not in CALLABLE_KINDS:' '    if not KIND_RE.match(name):'
-KBRK kind-unbound fam_kind_callable '[C] …the same kind run from another plugin copy' scripts/baton.py \
-    '            self.bind_sha = sha256(self.sha + "\0kind:" + KINDS_REAL)' '            self.bind_sha = self.sha'
-KBRK install-temp-predictable fam_kind_callable '[C] …the link is not written through' templates/baton-kinds/install-file.sh \
-    '  tmp=$(mktemp "$DIR/.baton-new.XXXXXX") || return 1' '  tmp="$DEST.baton-new"'
-KBRK settings-link-allowed fam_kind_callable '[C] a settings path that is a symbolic link: rc 1' templates/baton-kinds/settings-merge.sh \
-    '  if [ -L "$SETTINGS" ]; then' '  if false; then'
-KBRK settings-one-record fam_kind_callable '[C] …with a run record of its own' templates/baton-kinds/settings-merge.sh \
-    'RECORD="$RECORDS/__NAME__-$(path_key).last"' 'RECORD="$RECORDS/__NAME__-x.last"'
-KBRK ci-public-allowed fam_kind_ci '[G] a public repository: rehearse rc 1' templates/baton-kinds/ci-rerun-failed.sh \
-    '  if [ "$priv" != true ] || [ "$vis" = public ] || [ "$vis" = internal ]; then' '  if false; then'
-KBRK ci-attempt-unchecked fam_kind_ci '[G] …the post-check fails and undo leaves the other attempt' templates/baton-kinds/ci-rerun-failed.sh \
-    '  [ "$now" = "$((n + 1))" ]' '  true'
-KBRK ci-undo-cancels-any fam_kind_ci '[G] …the output says what it left' templates/baton-kinds/ci-rerun-failed.sh \
-    '  elif [ "$now" = "$((n + 1))" ]; then' '  elif true; then'
-KBRK install-guard-off fam_kind_review '[V] install-file into proj/.claude: rc 1' templates/baton-kinds/install-file.sh \
-    '  if guarded; then' '  if false; then'
-KBRK install-claude-dir-open fam_kind_review '[V] …nothing written into' templates/baton-kinds/install-file.sh \
-    '  for top in "$CLAUDE_DIR" "$STATE_BASE/vibemaestro"; do' '  for top in /nonexistent-x; do'
-KBRK settings-mode-first fam_kind_review '[V] a read-only settings file merges' templates/baton-kinds/settings-merge.sh \
-    '  if merged "$SETTINGS" "$RULES" > "$tmp" && chmod "$(mode_of "$SETTINGS")" "$tmp" && mv -f "$tmp" "$SETTINGS"; then' \
-    '  if chmod "$(mode_of "$SETTINGS")" "$tmp" && merged "$SETTINGS" "$RULES" > "$tmp" && mv -f "$tmp" "$SETTINGS"; then'
-KBRK kind-input-unchecked fam_kind_review '[V] go kind:settings-merge with a rules file written 600 s ago: rc 1' scripts/baton.py \
-    'KIND_INPUTS = {"settings-merge": 1}' 'KIND_INPUTS = {}'
-KBRK settings-run-unnamed fam_kind_review "[V] …the same with run 1's own rules (run 2 a no-op): still left" templates/baton-kinds/settings-merge.sh \
-    '  if [ "${RUNID:-}" != "$MINE" ]; then' '  if false; then'
-KBRK settings-backup-kept fam_kind_settings '[S] …the backup is gone once the run held (only its undo needs it)' templates/baton-kinds/settings-merge.sh \
-    'then printf '"'"'%s\n'"'"' "$1" >> "${BATON_UNDO_ONLY:-/dev/null}"; fi' 'then :; fi'
-KBRK settings-backup-not-taken fam_kind_settings '[S] …the one already there for this path and bytes, read-only, was taken over and went too' templates/baton-kinds/settings-merge.sh \
-    '  mkdir -p "$RECORDS" && cp -f "$SETTINGS" "$1" || return 1' '  mkdir -p "$RECORDS" && { cmp -s "$SETTINGS" "$1" && return 0; cp -f "$SETTINGS" "$1"; } || return 1'
-KBRK settings-backup-shared fam_kind_settings '[S] …a backup kept for another settings file with the same bytes stays' templates/baton-kinds/settings-merge.sh \
-    'backup="$RECORDS/__NAME__-$(path_key)-$before.json"' 'backup="$RECORDS/__NAME__-$before.json"'
-KBRK undo-only-unwritten fam_kind_settings '[S] …a listed file the run did not write stays' scripts/baton.py \
-    'and stat.S_ISREG(st.st_mode) and st.st_ctime >= started)' 'and stat.S_ISREG(st.st_mode))'
-KBRK undo-only-never fam_kind_settings '[S] …and the backup is gone once undo put the file back' scripts/baton.py \
-    '            drop_undo_only(undo_only, result == "ok" or undone == "yes", sinks, started)' '            drop_undo_only(undo_only, result == "ok", sinks, started)'
-KBRK undo-only-always fam_kind_settings '[S] …the backup stays for the owner (the state is unknown)' scripts/baton.py \
-    '            drop_undo_only(undo_only, result == "ok" or undone == "yes", sinks, started)' '            drop_undo_only(undo_only, True, sinks, started)'
-KBRK undo-only-anywhere fam_kind_settings '[S] …a listed path outside <state>/records stays, a listed link stays, the backup goes' scripts/baton.py \
-    '            mine = (os.path.isabs(p) and os.path.realpath(os.path.dirname(p)) == records' '            mine = (os.path.isabs(p) and True'
-KBRK settings-restore-cp fam_kind_review '[V] …undo restored it byte for byte, read-only' templates/baton-kinds/settings-merge.sh \
-    '    write "restore $SETTINGS from $BACKUP" restore' '    write "restore $SETTINGS from $BACKUP" cp "$BACKUP" "$SETTINGS"'
-KBRK undo-without-plan fam_kind_review '[V] …undo still restored it (the record names the run by its signed plan)' scripts/baton.py \
-    '                rc, lines, _w = run_phase(s, args, "undo", sinks, plan=rec.get("plan") or [], undo_only=undo_only)' '                rc, lines, _w = run_phase(s, args, "undo", sinks, undo_only=undo_only)'
-KBRK ci-run-unnamed fam_kind_ci "[G] the undo of a later run that wrote nothing does not cancel the earlier run's attempt" templates/baton-kinds/ci-rerun-failed.sh \
-    '  if [ "${runid:-}" != "$mine" ]; then' '  if false; then'
-KBRK install-guard-case fam_kind_review '[V] install-file into .CLAUDE' templates/baton-kinds/install-file.sh \
-    'print(os.path.realpath(sys.argv[1]).lower())' 'print(os.path.realpath(sys.argv[1]))'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

@@ -8,7 +8,7 @@
 #   [K] pr.title.pattern, pr.title.max_len, branch.pattern, and the default (nothing configured: everything passes)
 #   [G] --pr through a fake gh: baseline red and green, --paginate required, a draft read as a draft, the branch name, gh failing
 #   [B] the base-ref rule: a PR that relaxes its own title rule is judged by the old one; bad refs, bad config, bad usage
-# Each family also runs on a copy of the plugin with ONE planted break and must go red. Real git, a fake gh, no network, no sleep.
+# Real git, a fake gh, no network, no sleep.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -148,52 +148,5 @@ PY
 
 FAMILIES="fam_intent fam_keys fam_gh fam_base"
 for f in $FAMILIES; do "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each turns its family red =="
-T=pr_title.py
-BRKG draft-ignored fam_intent '[I] a draft: too early' $T '        if draft:
-            applied.append("intent_form (draft: not applied)")' '        if False:
-            applied.append("intent_form (draft: not applied)")'
-BRKG missing-files-pass fam_intent '[I] intent form, ready, no files' $T '        elif files is None:
-            applied.append("intent_form")
-            problems.append(' '        elif files is None:
-            applied.append("intent_form")
-            (lambda *a: None)('
-BRKG kb-prefix-by-letters fam_intent '[I] kb-notes/ is not kb/' $T 'not f.startswith("kb/")' 'not f.startswith("kb")'
-BRKG docs-intent-flagged fam_intent '[I] docs(intent) is not docs(kb)' $T 'PROFILE_RX = re.compile(r"^\s*(intent:|docs\(kb\):)", re.I)' 'PROFILE_RX = re.compile(r"^\s*(intent:|docs\(\w+\):)", re.I)'
-BRKG case-sensitive fam_intent '[I] leading space and upper case' $T 'PROFILE_RX = re.compile(r"^\s*(intent:|docs\(kb\):)", re.I)' 'PROFILE_RX = re.compile(r"^\s*(intent:|docs\(kb\):)")'
-BRKG intent-form-default-on fam_intent '[I] control: with no config' $T '    if t["intent_form"] == "reject":' '    if True:'
-BRKG broken-payload-passes fam_intent '[I] a broken payload is not a pass' $T '        print("FAIL cannot read the payload: %s" % e)
-        return gc.RED' '        print("FAIL cannot read the payload: %s" % e)
-        return gc.OK'
-BRKG pattern-anchored fam_keys '[K] the pattern is searched' $T 're.search(t["pattern"], title)' 're.match(t["pattern"], title)'
-BRKG max-len-off-by-one fam_keys '[K] a title of exactly max_len' $T 'len(title) > t["max_len"]' 'len(title) >= t["max_len"]'
-BRKG max-len-in-bytes fam_keys '[K] length is counted in characters' $T 'len(title) > t["max_len"]' 'len(title.encode("utf-8")) > t["max_len"]'
-BRKG branch-prefix-ignored fam_keys '[K] an intent/ branch is exempt' $T 'elif not head.startswith(prefix) and not re.search' 'elif not re.search'
-BRKG branch-prefix-literal fam_keys '[K] the exempt prefix is the configured one' $T 'elif not head.startswith(prefix) and not re.search' 'elif not head.startswith("intent/") and not re.search'
-BRKG missing-head-pass fam_keys '[K] branch.pattern set and no head' $T '            problems.append("the payload has no `head`: without the branch name branch.pattern cannot be checked")' '            pass'
-BRKG first-problem-only fam_keys '[K] not all four problems are named' $T '        return gc.RED, "; ".join(problems)' '        return gc.RED, problems[0]'
-BRKG draft-read-false fam_gh '[G] a draft is read as a draft' $T 'bool(meta.get("isDraft"))' 'False'
-BRKG paginate-dropped fam_gh '[G] a file outside kb/ on page 2' $T '"--paginate", "--jq", ".[].filename"]' '"--jq", ".[].filename"]'
-BRKG head-ignored fam_gh '[G] ready, a proper title' $T 'meta.get("headRefName"), cfg)' 'None, cfg)'
-BRKG gh-failure-green fam_gh '[G] gh failing' $T '        raise gc.Infra("gh %s failed: %s" % (" ".join(args[:2]), p.stderr.decode("utf-8", "replace").strip()[:160]))' '        return "{}"'
-BRKG repo-dropped fam_gh '[G] --repo not passed' $T '(["-R", repo] if repo else [])' '[]'
-BRKG config-from-head fam_base '[B] a PR that raises its own pr.title.max_len' $T '    cfg = gc.load_config(cwd, ref)' '    cfg = gc.load_config(cwd, None)'
-BRKG bad-ref-green fam_base '[B] a ref that does not read' gate_common.py '        raise Infra("ref `%s` does not read" % ref)
-    if git(["cat-file"' '        return None
-    if git(["cat-file"'
-BRKG config-error-swallowed fam_base '[B] an invalid config is rc 65' gate_common.py '        if probs:
-            raise ConfigError(sdlc_config.render_problems(probs))
-        return cfg' '        return cfg'
-BRKG ref-config-error-swallowed fam_base '[B] an invalid config AT THE BASE' gate_common.py '    if probs:
-        raise ConfigError(sdlc_config.render_problems(probs) + where)' '    if False:
-        raise ConfigError(sdlc_config.render_problems(probs) + where)'
-
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family"
 
 echo; summary

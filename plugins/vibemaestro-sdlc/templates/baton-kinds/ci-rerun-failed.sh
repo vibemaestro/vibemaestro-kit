@@ -3,7 +3,7 @@
 # Targets: the workflow run the arguments name (its failed and cancelled jobs, and the jobs that need them); a run record under the baton state directory
 # Blast: one new attempt of that run and the CI time of its re-run jobs; nothing in the repository changes
 # Undo: cancels the new attempt while it is queued or in progress; a finished attempt stays (GitHub keeps every attempt); the run record is removed; an earlier run's record (another signed plan) is left alone
-# Pre: not a sandbox session (SEAT and INTENT_SLUG set: refused, ask the coordinator); the repository is private (not internal, not public); the run is completed with conclusion failure, cancelled or timed_out
+# Pre: not a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set: refused, ask the coordinator); the repository is private (not internal, not public); the run is completed with conclusion failure, cancelled or timed_out
 # Stops: none
 #   Why none: it re-runs, on the same commit, jobs CI already ran once, in a private repository: no code, no setting, nothing
 #   published, and the new attempt can be cancelled while it runs. A public or internal repository is refused at rehearse.
@@ -111,10 +111,12 @@ rerun() {
   return 1
 }
 
-# in_sandbox — a sandbox pod session: SEAT and INTENT_SLUG both set and not blank (the test of in_sandbox() in baton.py: one alone
-# can sit in a laptop shell). Its token has no actions:write, so a write to Actions there ends in HTTP 403 after the owner's sign.
+# in_sandbox — a worker session: VIBEMAESTRO_ROLE=worker, or (deprecated, leaves in the next release) SEAT and INTENT_SLUG both
+# set and not blank (the test of in_sandbox() in baton.py: one alone can sit in a laptop shell). Its token has no actions:write, so a
+# write to Actions there ends in HTTP 403 after the owner's sign.
 in_sandbox() {
   local s=${SEAT:-} i=${INTENT_SLUG:-}
+  [ "${VIBEMAESTRO_ROLE:-}" = worker ] && return 0
   [ -n "${s//[[:space:]]/}" ] && [ -n "${i//[[:space:]]/}" ]
 }
 
@@ -122,7 +124,7 @@ in_sandbox() {
 act() {
   local out vals priv vis status concl attempt head wf
   if in_sandbox; then
-    echo "REFUSE a sandbox session (SEAT and INTENT_SLUG are set): its token cannot write to Actions (HTTP 403). Ask the coordinator to re-run the failed jobs of run $RUN of $REPO" >&2
+    echo "REFUSE a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set): its token cannot write to Actions (HTTP 403). Ask the coordinator to re-run the failed jobs of run $RUN of $REPO" >&2
     return 3
   fi
   out=$(gh api "repos/$REPO" 2>&1 || true)

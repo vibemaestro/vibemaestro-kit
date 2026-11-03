@@ -8,6 +8,7 @@
 # Params: ctx=name ns=name pod=name server=url rpath=path body=input
 # Expect: pod * create *
 #
+# Deprecated: kind kubectl-exec leaves vibemaestro-sdlc in the next release; keep the script it writes as your own baton.
 # A baton script of kind kubectl-exec (BatonRun), written by `baton new __NAME__ --from kubectl-exec`. The contract (the header above,
 # the phases, the write() gate, check, rehearse, sign, run) is the one `baton new` writes without --from: its comments
 # explain each part. Run the launcher bare, one command per call: <launcher> go __NAME__.sh ctx='<context>' ns='<namespace>'

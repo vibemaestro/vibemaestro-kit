@@ -6,18 +6,26 @@ printed by `<launcher> help modes`.
 The owner's rule: the session confirms a normal baton itself, and asks the owner only for a big risk. The mode is
 the owner's standing decision, not the session's per-script choice: `mode` prints it, `mode manual|auto` sets it, only on the
 owner's word: a mode change takes the owner's dialog as `sign --by owner` does (below), and is refused without it. It lives in the
-user's state directory, never in a repository.
+user's state directory, never in a repository; where the owner has not chosen, a machine policy (below) may set it.
 
-- **manual** (the default until the owner chooses): the owner signs each script after seeing it. Right after the decision card the
-  session runs `sign --by owner --seal <seal> <script> <args>`; that command opens a dialog showing the seal, and the owner's click is the
-  signature. A seal that no longer matches (anything changed since it was shown) is refused.
+- **manual** (the default until the owner chooses, where no machine policy sets it): the owner signs each script after seeing it.
+  Right after the decision card the session runs `sign --by owner --seal <seal> <script> <args>`; that command opens a dialog
+  showing the seal, and the owner's click is the signature. A seal that no longer matches (anything changed since it was shown) is
+  refused.
 - **auto**: for a script whose header says `Stops: none`, the session signs `sign --by coordinator-auto --seal <seal>` and runs
   it with no dialog and no question; it reports the one line `go: ok — <n> writes — <run log>`. A script with any stop word
   needs `sign --by owner`, with the owner's dialog, as in manual. A failed precondition or an Expect mismatch is not a stop:
   fix the script and rehearse again, as long as the fix does not widen what it touches. A fix that widens it needs the owner.
 
-**Not chosen yet.** A fresh install has no mode file: it reads as manual, and the card of an exit 8 on a `Stops: none` baton says
-`Stop:     mode manual (not chosen yet)`. Ask the owner once (AskUserQuestion where the harness has it), with what each mode means:
+**The machine policy.** Where nobody chose, a machine's builder may set the mode as root in `/etc/vibemaestro/baton-mode`
+(`auto` or `manual`; a sandbox image sets `auto`): the owner's choice wins, then this file, then manual. It counts only as a
+regular file, root's and closed to group and other, under directories that are all root's and closed (none a link), read in the
+machine's own user namespace; a file there that fails any of this is ignored with a `NOTE` in `permissions --check`. `mode`
+names where the mode came from, on stderr; a mode change in a sandbox stays refused, and names the policy when it set the mode.
+
+**Not chosen yet.** A fresh install has no mode file: with no machine policy it reads as manual, and the card of an exit 8 on a
+`Stops: none` baton says `Stop:     mode manual (not chosen yet)`. Ask the owner once (AskUserQuestion where the harness has it),
+with what each mode means:
 **auto**, recommended on a solo machine (the session signs a `Stops: none` baton; a stop-list baton still needs the owner), or
 **manual** (the owner signs every baton). Only right after the owner's own answer, the session runs the command the card's
 `Mode:` line names, `<launcher> mode <answer>`, alone in its Bash call: the plugin's hook opens the owner's dialog and writes
@@ -55,7 +63,7 @@ not one started before (a background loop) or under another session. It lives 10
 up whatever the outcome (an attempt from a process the Claude Code process did not start after the ask leaves it, checked
 first), and the session's next Bash call voids it (one carrying an `agent_id` too). The owner's click is the signature, and
 the signature names the record (a signature without one does not `run`). Never run the command unprompted, as a test, after a
-refusal, or by another route. The hook denies the call: in a sandbox (`INTENT_SLUG` and `SEAT`: whoever answers there is not
+refusal, or by another route. The hook denies the call: in a sandbox (`VIBEMAESTRO_ROLE=worker`, or `INTENT_SLUG` and `SEAT` (deprecated); whoever answers there is not
 the owner), from a call carrying an `agent_id`, in `plan`, `dontAsk`, `bypassPermissions`, a `-p` run or `auto` before Claude Code 2.1.211, while
 a `PermissionRequest` hook or a permission-prompt tool could answer, and while an allow rule matches `sign --by owner`; `sign`
 refuses (rc 3) without the record and checks the sandbox, `-p`, the answerers and the allow rules again. A refusal or a rejected dialog is pending: tell the owner, do not
@@ -74,7 +82,7 @@ record the item as pending and say so; never retry `sign` in a loop or read sile
 ### The owner's queue
 
 An open dialog freezes the session that asked until the owner clicks, and its record lives 10 minutes. When the owner is not
-at the screen (or the session coordinates others and must keep answering), queue the run instead of signing it:
+at the screen (or the session is busy with other work), queue the run instead of signing it:
 
 1. `go --queue <script> [args…]` in place of `go`: the same check, rehearse and seal; where `go` would stop at exit 8 it writes an
    item (`<state-dir>/queue/<id>.json`: seal, arguments, directory, script sha256, plan, card, the session and Claude Code

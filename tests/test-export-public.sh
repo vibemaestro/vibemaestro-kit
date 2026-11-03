@@ -3,7 +3,7 @@
 # Public kit — scripts/export-public.sh: the published tree of one rev, read from git objects only, and its one tree digest
 # =============================================================================
 # Run: bash tests/test-export-public.sh
-#      PLUGIN_REQUIRE_CLAUDE=1 bash …   # no `claude` is RED (default: the install part [I] [B1] is SKIPPED, loudly)
+#      PLUGIN_REQUIRE_CLAUDE=1 bash …   # no `claude` is RED (default: the install part [I] is SKIPPED, loudly)
 #
 # Every case runs the real script on a
 # scratch repository whose first commit R1 holds this checkout's tracked files (work tree content), a LICENSE and a NOTICE when the
@@ -29,27 +29,22 @@
 #   [W] an untracked, a modified and a staged file in the work tree do not appear; the digest stays R1's
 #   R1, the fixture, is this tree in the private unreleased form whatever tree runs the suite: each `## X.Y.Z` section leaves the
 #       CHANGELOG (a private tree after a release cut, a released export); on the public export (fixtures/lib.sh tree_shape) each
-#       manifest also loses its `version` and `repository`, and a sibling dependency the export turned into >=0.1.0 is named bare again; a private
+#       manifest also loses its `version` and `repository`, and a sibling dependency the export turned into >=X.Y.Z is named bare again; a private
 #       manifest is copied as it is, so a version there stays red (instrument lines in [V])
 #   [V] the version: a rev whose CHANGELOGs start with `## 0.1.0` exports
 #       each manifest with version 0.1.0 right after name and >=0.1.0 on each bare sibling dependency, the digest still the written
 #       tree; an unreleased rev exports each manifest byte for byte with a WARN; a manifest version that differs from its
 #       CHANGELOG's is refused; a pre-reset manifest whose version equals its CHANGELOG's is exported as it is plus `repository`;
 #       each released manifest gets `repository`, https://github.com/ and --repository <owner/name> (default the kit's public
-#       repository), a value that is not owner/name is rc 2, and a source manifest with another `repository` is refused
-#   [B4] planted break: a copy of the script that ignores the CHANGELOG makes [V1] red
+#       repository), a value that is not owner/name is rc 2, and a source manifest with another `repository` is refused;
+#       the floor: a brain section whose `Released together:` line names sdlc 0.2.0 exports `>=0.2.0`, and a later rev that
+#       releases only sdlc exports brain's manifest byte for byte (still `>=0.2.0`) while sdlc's moves; a sibling the line does
+#       not name gets >=0.1.0; a heading `##  X.Y.Z` reads as the version does; a line that does not read (an empty one too),
+#       two lines in a section and a floor above the sibling's release are refused (rc 3)
 #   [I] isolated install (`claude`, no login, no model): CLAUDE_CONFIG_DIR and HOME in scratch, `marketplace add <export>`, the two
 #       plugins install into the cache with their LICENSE and NOTICE; the export is deleted; the cached sdlc SessionStart hooks print
 #       their context; after one `brain op add` by the installed brain (control: silent before it) the cached brain hook prints its
 #       banner
-#   [B1] planted break: an sdlc hook that reads a root scripts/ file runs fine from the source tree and is red once installed from the
-#       export (the cache holds only the plugin directory, so this break is red from any source)
-#   [B3] planted break the export decides: a marketplace entry whose source is on the private list installs from the source tree
-#       and not from the export
-#   [B2] planted breaks, each makes [L] red: a copy of the script that keeps the root kb/, one that ignores public.private, and one
-#       that drops every kb/ directory (the fixture's kb/ below the root too)
-# Each red-expected planted run ([B1] the planted hook, [B2] the broken copies, [B3] the install) goes through `capped`
-# (tests/fixtures/capped.sh: memory and time caps); a cap hit counts as red.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -96,7 +91,7 @@ PY
 # files_of <dir> — every non-directory under <dir>, relative, sorted
 files_of() { (cd "$1" && find . ! -type d | sed 's#^\./##' | LC_ALL=C sort); }
 # expected <rev> — this suite's own expansion of <rev>: the tree minus the root kb/ and the fixture's private list, spelled out here
-# as plain prefixes (kept apart from the script's glob code on purpose, see [B2])
+# as plain prefixes (kept apart from the script's glob code on purpose)
 expected() {
   git_ -C "$FX" ls-tree -r -z --name-only "$1" | python3 -c '
 import sys
@@ -145,13 +140,13 @@ rm -f "$FX"/plugins/*/LICENSE "$FX"/plugins/*/NOTICE   # a published tree holds 
 python3 - "$FX" "$(tree_shape "$SRC_ROOT")" $PLUGINS <<'PY' || bad "fixture: R1's conversion to the private unreleased form failed"
 import json, os, re, sys
 root, shape, names = sys.argv[1], sys.argv[2], sys.argv[3:]
-RANGE = {"version": ">=0.1.0"}
+RANGE = re.compile(r">=(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")   # the floor the export writes on a sibling
 REL = re.compile(r"## (0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\s*$")
 for n in names:
     p = os.path.join(root, "plugins", n, ".claude-plugin", "plugin.json")
     m = json.load(open(p, encoding="utf-8"))
     deps = m.get("dependencies")
-    ranged = lambda d: isinstance(d, dict) and set(d) == {"name", "version"} and d["name"] in names and d["version"] == RANGE["version"]
+    ranged = lambda d: isinstance(d, dict) and set(d) == {"name", "version"} and d["name"] in names and bool(RANGE.fullmatch(d["version"]))
     if shape == "export" and ("version" in m or "repository" in m or any(ranged(d) for d in deps or [])):
         m.pop("version", None)
         m.pop("repository", None)
@@ -443,44 +438,65 @@ RR=$(mkrev ownrepo 'relcl 0.1.0 vibemaestro-sdlc; python3 -c "import json; p=\"p
 ORP="$TMP/orepo"; ex "$RR" "$ORP"; refused "a source manifest whose repository is another one" "$ORP"
 ORP2="$TMP/orepo2"; DIG=$(cd "$FX" && bash "$EXPORT" --repository other/kit "$RR" "$ORP2" 2>/dev/null); RC=$?
 eq "$RC:$(mf "$ORP2" vibemaestro-sdlc 'm["repository"]')" "0:https://github.com/other/kit" "[V5] …and the same repository given: rc 0, kept"
-NOVER="$TMP/export-nover.sh"
-sed 's#^        released\[n\] = m.get("version") if isinstance(m, dict) and isinstance(m.get("version"), str) else rel$#        released[n] = m.get("version") if isinstance(m, dict) and isinstance(m.get("version"), str) else None#' "$EXPORT" > "$NOVER"
-cmp -s "$EXPORT" "$NOVER" && bad "[B4] the break did not change the copy (the released line moved?)" || ok "[B4] the copy ignores the CHANGELOG"
-OB4="$TMP/ob4"; (cd "$FX" && capped bash "$NOVER" "$RV" "$OB4" >/dev/null 2>&1); brc=$?
-if ! cap_red "$brc" "[B4] the copy that ignores the CHANGELOG"; then
-  [ "$(mf "$OB4" vibemaestro-sdlc 'm.get("version")')" != 0.1.0 ] && ok "[B4] planted break: the CHANGELOG ignored, [V1] goes red" ||
-    bad "[B4] planted break: [V1] stays green with the CHANGELOG ignored"
-fi
-
-echo "== [B2] planted breaks: each broken copy makes [L] red =="
-# b2 <label> <python old> <python new> <leaked path, or a path that goes missing with ->
-b2() {
-  local copy="$TMP/export-$1.sh" out="$TMP/ob-$1" brc
-  python3 - "$EXPORT" "$copy" "$2" "$3" <<'PY'
+# relct <version> <line> <plugin>... — (in $FX) relcl, the new section starting with <line> (release.py cut's `Released together:`)
+relct() {  # builds the export's input, not a break
+  local v=$1 l=$2 n; shift 2
+  for n in "$@"; do
+    python3 - "plugins/$n/CHANGELOG.md" "$v" "$l" <<'PY'
 import sys
-src, dst, old, new = sys.argv[1:]
-s = open(src).read()
-open(dst, "w").write(s.replace(old, new) if s.count(old) == 1 else s)
+p, v, l = sys.argv[1:4]; t = open(p).read(); i = t.find("\n## ")
+open(p, "w").write(t[:i + 1] + "## %s\n\n%s\n\n- minor: more\n\n" % (v, l) + t[i + 1:])
 PY
-  cmp -s "$EXPORT" "$copy" && { bad "[B2] $1: the break did not change the copy (the selection line moved?)"; return; }
-  (cd "$FX" && capped bash "$copy" "$R1" "$out" >/dev/null 2>&1); brc=$?   # capped: memory and time caps
-  if ! cap_red "$brc" "[B2] $1"; then
-    [ "$(files_of "$out")" != "$(expected "$R1")" ] && ok "[B2] $1: the [L] comparison goes red" || bad "[B2] $1: the [L] comparison stays green"
-    case $4 in
-      -*) hasnt "$(files_of "$out")" "${4#-}" "[B2] $1: …because ${4#-} went missing" ;;
-      *)  has "$(files_of "$out")" "$4" "[B2] $1: …because $4 leaked" ;;
-    esac
-  fi
+    git_ add "plugins/$n/CHANGELOG.md"
+  done
 }
-SEL='    if path.startswith(KB) or any(rx.match(path) for rx in private):'
-b2 keeps-kb "$SEL" '    if any(rx.match(path) for rx in private):' kb/planted.md
-b2 no-private-list "$SEL" '    if path.startswith(KB):' private-dir/a/b.md
-b2 drops-every-kb "$SEL" '    if "kb/" in path or any(rx.match(path) for rx in private):' -tests/fixtures/f/kb/planted.md
-
+# exc <rev> <outdir> — ex for a run that must be refused (through capped)
+exc() { DIG=$(cd "$FX" && capped bash "$EXPORT" "$1" "$2" 2>"$TMP/ex.err"); RC=$?; ERR=$(cat "$TMP/ex.err"); }
+TOG="Released together: vibemaestro-sdlc"
+B_CMDS="relcl 0.1.0 vibemaestro-sdlc vibemaestro-brain; relct 0.2.0 '$TOG 0.2.0, vibemaestro-brain 0.2.0' vibemaestro-sdlc vibemaestro-brain"
+RB=$(mkrev floor-b "$B_CMDS")
+RC2=$(mkrev floor-c "$B_CMDS; relct 0.3.0 '$TOG 0.3.0, vibemaestro-brain 0.2.0' vibemaestro-sdlc")
+OB="$TMP/ofb"; ex "$RB" "$OB"
+eq "$RC" 0 "[V6] a release whose brain section names sdlc 0.2.0: rc 0"
+eq "$(mf "$OB" vibemaestro-brain 'm["version"], m["dependencies"]')" "('0.2.0', [{'name': 'vibemaestro-sdlc', 'version': '>=0.2.0'}])" \
+  "[V6] brain 0.2.0 needs the sdlc it was released with: >=0.2.0"
+eq "$DIG" "$(plan_digest "$OB")" "[V6] …and the digest is the written tree"
+OC="$TMP/ofc"; ex "$RC2" "$OC"
+eq "$RC:$(mf "$OC" vibemaestro-sdlc 'm["version"]')" "0:0.3.0" "[V7] a later release of sdlc alone: rc 0, sdlc 0.3.0"
+eq "$(cmp "$OB/plugins/vibemaestro-brain/.claude-plugin/plugin.json" "$OC/plugins/vibemaestro-brain/.claude-plugin/plugin.json" && echo same)" same \
+  "[V7] …brain's version did not move: its exported manifest is byte for byte the earlier release's"
+eq "$(mf "$OC" vibemaestro-brain 'm["dependencies"]')" "[{'name': 'vibemaestro-sdlc', 'version': '>=0.2.0'}]" "[V7] …still >=0.2.0"
+eq "$(cmp -s "$OB/plugins/vibemaestro-sdlc/.claude-plugin/plugin.json" "$OC/plugins/vibemaestro-sdlc/.claude-plugin/plugin.json" || echo moved)" moved \
+  "[V7] …while sdlc's manifest moved (control)"
+RN=$(mkrev floor-none "relcl 0.1.0 vibemaestro-sdlc vibemaestro-brain; relct 0.2.0 'Released together: vibemaestro-brain 0.2.0, other 1.0.0' vibemaestro-sdlc vibemaestro-brain")
+ON="$TMP/ofn"; ex "$RN" "$ON"
+eq "$RC:$(mf "$ON" vibemaestro-brain 'm["dependencies"]')" "0:[{'name': 'vibemaestro-sdlc', 'version': '>=0.1.0'}]" \
+  "[V8] a line that does not name sdlc: >=0.1.0, as a section with no line ([V1])"
+RX=$(mkrev floor-bad "relcl 0.1.0 vibemaestro-sdlc vibemaestro-brain; relct 0.2.0 '$TOG 0.2, vibemaestro-brain 0.2.0' vibemaestro-sdlc vibemaestro-brain")
+OXB="$TMP/ofx"; exc "$RX" "$OXB"; refused "a \`Released together:\` line that does not read" "$OXB"
+eq "$RC" 3 "[V9] …rc 3"; has "$ERR" "is not \`Released together: <name> X.Y.Z" "[V9] …naming the line's form"
+RH=$(mkrev floor-high "relcl 0.1.0 vibemaestro-sdlc vibemaestro-brain; relct 0.2.0 '$TOG 0.3.0, vibemaestro-brain 0.2.0' vibemaestro-sdlc vibemaestro-brain")
+OH="$TMP/ofh"; exc "$RH" "$OH"; refused "a floor above the sibling's released version" "$OH"
+eq "$RC" 3 "[V10] …rc 3"; has "$ERR" "needs vibemaestro-sdlc >=0.3.0" "[V10] …naming the floor no install could meet"
+# spaced <version> <plugin> — (in $FX) its `## <version>` heading written `##  <version>` (two spaces), staged
+spaced() {  # builds the export's input, not a break
+  sed "s/^## $1\$/##  $1/" "plugins/$2/CHANGELOG.md" > "$TMP/spaced.md" && cat "$TMP/spaced.md" > "plugins/$2/CHANGELOG.md" && git_ add "plugins/$2/CHANGELOG.md"
+}
+RS=$(mkrev floor-space "$B_CMDS; spaced 0.2.0 vibemaestro-brain")
+OS="$TMP/ofs"; ex "$RS" "$OS"
+eq "$RC:$(mf "$OS" vibemaestro-brain 'm["version"], m["dependencies"]')" "0:('0.2.0', [{'name': 'vibemaestro-sdlc', 'version': '>=0.2.0'}])" \
+  "[V11] a released heading with two spaces (\`##  0.2.0\`): the version and the floor read from the same section"
+RE=$(mkrev floor-empty "relcl 0.1.0 vibemaestro-sdlc vibemaestro-brain; relct 0.2.0 'Released together: ' vibemaestro-sdlc vibemaestro-brain")
+OE="$TMP/ofe"; exc "$RE" "$OE"; refused "an empty \`Released together:\` line" "$OE"
+eq "$RC" 3 "[V12] …rc 3, not a silent >=0.1.0"
+RT=$(mkrev floor-two "relcl 0.1.0 vibemaestro-sdlc vibemaestro-brain; relct 0.2.0 '$TOG 0.2.0, vibemaestro-brain 0.2.0
+$TOG 0.1.0, vibemaestro-brain 0.2.0' vibemaestro-sdlc vibemaestro-brain")
+OT="$TMP/oft"; exc "$RT" "$OT"; refused "two \`Released together:\` lines in one section" "$OT"
+eq "$RC" 3 "[V12] …rc 3"
 echo "== [I] isolated install from the export =="
 if ! command -v claude >/dev/null 2>&1; then
   if [ "${PLUGIN_REQUIRE_CLAUDE:-}" = 1 ]; then bad "no 'claude' while PLUGIN_REQUIRE_CLAUDE=1"; else
-    echo "  SKIP *** no 'claude' on this machine: the install cases [I] [B1] did NOT run ***"; fi
+    echo "  SKIP *** no 'claude' on this machine: the install cases [I] did NOT run ***"; fi
   echo; summary; exit $?
 fi
 APP="$TMP/app"; mk_app "$APP"
@@ -521,54 +537,15 @@ bstart() { printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart
 empty "$(ctx "$(bstart)")" "[I] control: the cached brain hook is silent while the project has no brain state"
 O=$(cd "$APP" && CLAUDE_CODE_SESSION_ID="$SB" CLAUDE_PROJECT_DIR="$APP" CLAUDE_CONFIG_DIR="$CFG" "$IB/bin/brain" op add --kind now --text 'export check item' 2>&1)
 eq "$?" 0 "[I] the installed brain adds one item: rc 0 ($O)"
-BC=$(ctx "$(bstart)")
+# bctx <n> — the additionalContext of the n-th SessionStart command of the cached brain, given its own input as Claude Code
+# gives each command; the first writes the hand-over the later ones read, so 1 runs first
+bctx() {
+  ctx "$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$SB" "$APP" |
+    (cd "$APP" && CLAUDE_PLUGIN_ROOT="$IB" CLAUDE_PROJECT_DIR="$APP" CLAUDE_CONFIG_DIR="$CFG" bash -c "$(hook_cmds "$IB/hooks/hooks.json" SessionStart '' | sed -n "$1p")" 2>/dev/null))"
+}
+BC=$(bctx 1); BA=$BC
+for n in $(seq 2 "$(hook_cmds "$IB/hooks/hooks.json" SessionStart '' | wc -l)"); do BA="$BA$(bctx "$n")"; done
 has "$BC" 're-injected at SessionStart:startup' "[I] the cached brain SessionStart hook prints its banner"
-has "$BC" 'export check item' "[I] …with the item just added"
-
-echo "== [B1] planted break: an sdlc hook that reads a root scripts/ file =="
-cat > "$TMP/plant.py" <<'PY'
-import re, sys
-p = sys.argv[1]; s = open(p).read()
-line = 'open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "scripts", "planted.sh")).read()  # planted\n'
-s, n = re.subn(r"(?m)^import sys\n", lambda m: m.group(0) + line, s, count=1)
-assert n == 1
-open(p, "w").write(s)
-PY
-RX=$(mkrev root-read 'python3 "$TMP/plant.py" plugins/vibemaestro-sdlc/scripts/session-start.py && git_ add plugins/vibemaestro-sdlc/scripts/session-start.py')
-has "$(git_ -C "$FX" show "$RX:plugins/vibemaestro-sdlc/scripts/session-start.py")" planted.sh "[B1] the break is planted in the rev"
-git_ -C "$FX" checkout -q root-read
-has "$(sdlc_ctx "$FX/plugins/vibemaestro-sdlc" 2)" 'vibemaestro-sdlc:intake' "[B1] control: from the source tree the planted hook looks fine"
-git_ -C "$FX" checkout -q main
-MKB="$TMP/mk-bad"; ex "$RX" "$MKB"
-eq "$RC" 0 "[B1] the planted rev exports (rc 0)"
-eq "$(install "$MKB" "$TMP/cfg-bad" vibemaestro-sdlc)" "$(printf 'marketplace add rc 0\ninstall vibemaestro-sdlc rc 0')" "[B1] the planted export installs"
-BO=$(capped sdlc_ctx "$(ipath "$TMP/cfg-bad" vibemaestro-sdlc)" 2); brc=$?   # capped: memory and time caps
-cap_red "$brc" "[B1] the planted hook" || hasnt "$BO" 'vibemaestro-sdlc:intake' \
-  "[B1] installed from the export, the planted hook loses its banner: the install check goes red"
-
-echo "== [B3] planted break the export decides: a marketplace source on the private list =="
-cat > "$TMP/addsrc.py" <<'PY'
-import json, os
-os.makedirs("private-dir/k2x-plugin/.claude-plugin")
-json.dump({"name": "k2x-plugin", "version": "0.0.1", "description": "d", "author": {"name": "t"}},
-          open("private-dir/k2x-plugin/.claude-plugin/plugin.json", "w"))
-m = json.load(open(".claude-plugin/marketplace.json"))
-m["plugins"].append({"name": "k2x-plugin", "source": "./private-dir/k2x-plugin", "description": "d"})
-json.dump(m, open(".claude-plugin/marketplace.json", "w"), indent=2)
-PY
-RM=$(mkrev outside-src 'python3 "$TMP/addsrc.py" && git_ add private-dir .claude-plugin/marketplace.json')
-git_ -C "$FX" checkout -q outside-src
-eq "$(install "$FX" "$TMP/cfg-src" k2x-plugin)" "$(printf 'marketplace add rc 0\ninstall k2x-plugin rc 0')" \
-  "[B3] control: from the source tree the plugin whose source is private-dir/ installs"
-git_ -C "$FX" checkout -q main
-MKS="$TMP/mk-src"; ex "$RM" "$MKS"
-eq "$RC" 0 "[B3] the rev exports (rc 0)"
-I=$(capped install "$MKS" "$TMP/cfg-exp" k2x-plugin); brc=$?   # capped: memory and time caps
-if ! cap_red "$brc" "[B3] the install from the export"; then
-  has "$I" 'marketplace add rc 0' "[B3] the export is still a valid marketplace (add rc 0)"
-  [ "$(printf '%s\n' "$I" | sed -n 's/^install k2x-plugin rc //p')" -ne 0 ] 2>/dev/null &&
-    ok "[B3] from the export that one plugin does not install: the install check goes red on what the private list drops" ||
-    bad "[B3] the plugin whose source is on the private list installed from the export ($I)"
-fi
+has "$BA" 'export check item' "[I] …with the item just added, in one of its strings"
 
 echo; summary

@@ -24,13 +24,57 @@ def marker_name(kind):
     return "%s-%s" % (head, hashlib.sha1(kind.encode("utf-8", "replace")).hexdigest()[:20])
 
 
-def once(kind, sid):
+def session_key(payload):
+    """The payload's `session_id` when it is a non-empty string, else None (a hostile or broken payload: no marks, say it)."""
+    sid = payload.get("session_id") if isinstance(payload, dict) else None
+    return sid if isinstance(sid, str) and sid else None
+
+
+def scope_id(payload):
+    """The once() scope of what a context has SEEN: the session, or, inside a subagent (`agent_id` set: the subagent's tool hooks
+    carry the parent's session id), a scope of that subagent's own, so a rule the parent saw still reaches the subagent once and
+    the subagent's first sighting does not hide it from the parent. What the machine has COMPUTED (the upstream cache, a slow
+    rule-pack mark) stays keyed by `session_key`. The parent part is cut before the agent part is added, so `session_dir`'s
+    64-character cut never folds two scopes into one."""
+    sid = session_key(payload)
+    aid = payload.get("agent_id") if isinstance(payload, dict) else None
+    if not sid or not isinstance(aid, str) or not aid:
+        return sid
+    return "%s-agent-%s" % (re.sub(r"[^A-Za-z0-9_-]", "", sid)[:40], hashlib.sha1(aid.encode("utf-8", "replace")).hexdigest()[:16])
+
+
+REMINDERS = "reminders"     # the subdirectory of a session's marks that holds what a compaction drops from the context
+
+
+def marks_dir(sid, reminder=False):
+    return os.path.join(session_dir(sid), REMINDERS) if reminder else session_dir(sid)
+
+
+def forget_reminders(sid):
+    """Drop the reminder marks of session `sid` (its `reminders/` directory): a compaction dropped those reminders from the
+    context. Warnings (config, import, plugin) keep their marks. Never raises; True when there was something to drop."""
+    if not isinstance(sid, str) or not sid:
+        return False
+    import shutil
+    d = marks_dir(sid, True)
+    if not os.path.isdir(d):
+        return False
+    shutil.rmtree(d, ignore_errors=True)
+    return True
+
+
+def marked(kind, sid, reminder=False):
+    """`once(kind, sid, reminder)` already said (nothing is marked here)."""
+    return bool(sid) and os.path.exists(os.path.join(marks_dir(sid, reminder), marker_name(kind)))
+
+
+def once(kind, sid, reminder=False):
     """True nếu đây là lần đầu `kind` được nói trong phiên `sid` (và ghi dấu). Không có session_id hoặc không
-    ghi được dấu thì cứ nói — thà lặp còn hơn im."""
+    ghi được dấu thì cứ nói — thà lặp còn hơn im. `reminder`: a reminder a compaction drops (its mark goes in `reminders/`)."""
     if not sid:
         return True
     try:
-        d = session_dir(sid)
+        d = marks_dir(sid, reminder)
         os.makedirs(d, exist_ok=True)
         m = os.path.join(d, marker_name(kind))
         if os.path.exists(m):
@@ -105,7 +149,7 @@ def import_failed(event, exc):
         if isinstance(exc, KeyboardInterrupt):
             return
         try:
-            sid = (json.loads(sys.stdin.read()) or {}).get("session_id")
+            sid = session_key(json.loads(sys.stdin.read()))
         except Exception:
             sid = None
         why = " ".join(str(exc).split())[:160]

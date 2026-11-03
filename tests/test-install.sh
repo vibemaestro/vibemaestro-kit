@@ -23,7 +23,12 @@
 #       that puts the public range >=0.1.0 on the private sdlc (no version) fails to load too: why the private repo names sdlc bare;
 #       on a released export (sdlc 0.1.0) the same range is met and the copy is enabled
 # The manifests' shape follows the tree (fixtures/lib.sh tree_shape): the private repo and an unreleased export carry no version,
-#   a released export carries the CHANGELOG's version, and brain's range >=0.1.0 on sdlc once sdlc is released
+#   a released export carries the CHANGELOG's version, and brain's floor on sdlc once sdlc is released: >= sdlc's version on the
+#   `Released together:` line of brain's released section, else >=0.1.0
+#   [F] config F: two real exports of a copy of the repo (A: both 0.1.0; B: both 0.2.0, brain's section naming sdlc 0.2.0) in one
+#       marketplace directory that is a git repository, tagged <plugin>--v<version> (added by path, so Claude Code records it as a
+#       directory source; the dependency resolves at the tags): brain installed from A, then updated alone to B, fails to load and names
+#       the sdlc it requires; once sdlc is updated too, both are enabled
 #   [E] config E: installing brain prints `(+ 1 dependency: vibemaestro-sdlc)`; with the dependent plugin, three plugins are
 #       enabled; the installed `brain` finds sdlc's sensitive-value filter through the real registry
 # =============================================================================
@@ -57,6 +62,21 @@ echo "== part 1: manifest, dependency, marketplace =="
 # The public export carries each plugin's released version (none before the first release) and turns the bare sdlc dependency
 # into the range >=0.1.0 (scripts/export-public.sh). TS names the tree, SV and BVW the versions the manifests must carry.
 TS=$(tree_shape "$SRC_ROOT"); SV=$(want_version "$SRC_ROOT" "$SDLC"); BVW=$(want_version "$SRC_ROOT" "$BRAIN")
+# BFL: brain's floor on sdlc as the export writes it: sdlc's version on the `Released together:` line of brain's released section
+# (release.py cut writes it), else 0.1.0; read here only on the released export
+BFL=$([ -n "$SV" ] && [ -n "$BVW" ] && python3 - "$BRAIN" "$BVW" <<'PY'
+import os, sys
+lines = [l.rstrip() for l in open(os.path.join(sys.argv[1], "CHANGELOG.md"), encoding="utf-8", errors="replace").read().split("\n")]
+floor = "0.1.0"
+for l in lines[lines.index("## " + sys.argv[2]) + 1:]:
+    if l.startswith("## "):
+        break
+    if l.startswith("Released together: "):
+        floor = dict(i.split(" ", 1) for i in l[len("Released together: "):].split(", ")).get("vibemaestro-sdlc", floor)
+print(floor)
+PY
+)
+BFL=${BFL:-0.1.0}
 GV=unknown; BV=${BVW:-unknown}
 python3 - "$DEP/.claude-plugin/plugin.json" "$SDLC/.claude-plugin/plugin.json" "$MP" "$SV" <<'PY' && ok "fixture manifest: name, no version, vibemaestro-sdlc named bare (no range); sdlc version ${SV:-none} on the $TS tree; marketplace: sdlc first, brain second, nothing else" || bad "fixture manifest, sdlc manifest or marketplace entries wrong"
 import json, re, sys
@@ -71,12 +91,12 @@ assert m["plugins"][0]["source"] == "./plugins/vibemaestro-sdlc" and m["plugins"
 assert m["plugins"][1]["source"] == "./plugins/vibemaestro-brain" and m["plugins"][1].get("description"), m["plugins"][1]
 PY
 # the export writes the range when the DEPENDENCY is released (sdlc's version), whatever brain's own
-python3 - "$BRAIN/.claude-plugin/plugin.json" "$BVW" "$SV" <<'PY' && ok "brain manifest: name, version ${BVW:-none} on the $TS tree, vibemaestro-sdlc $([ -n "$SV" ] && echo "as the range >=0.1.0 (sdlc released)" || echo "named bare")" || bad "brain manifest or its dependency wrong"
+python3 - "$BRAIN/.claude-plugin/plugin.json" "$BVW" "$SV" "$BFL" <<'PY' && ok "brain manifest: name, version ${BVW:-none} on the $TS tree, vibemaestro-sdlc $([ -n "$SV" ] && echo "as the range >=$BFL (sdlc released; brain's floor)" || echo "named bare")" || bad "brain manifest or its dependency wrong"
 import json, re, sys
-b = json.load(open(sys.argv[1])); want, sdlc = sys.argv[2:4]
+b = json.load(open(sys.argv[1])); want, sdlc, floor = sys.argv[2:5]
 assert b["name"] == "vibemaestro-brain" and (b.get("version") == want if want else "version" not in b), (b.get("version", "<absent>"), want)
 assert b.get("description") and b.get("author", {}).get("name"), b
-dep = [{"name": "vibemaestro-sdlc", "version": ">=0.1.0"}] if sdlc else ["vibemaestro-sdlc"]
+dep = [{"name": "vibemaestro-sdlc", "version": ">=" + floor}] if sdlc else ["vibemaestro-sdlc"]
 assert b["dependencies"] == dep, b["dependencies"]
 PY
 [ -x "$BRAIN/bin/brain" ] && ok "brain ships an executable bin/brain" || bad "no executable bin/brain"
@@ -270,6 +290,63 @@ has "$(HOME=/ctl-real home_leaks "$BP/scripts" brain_store _ancestors)" "'/ctl-r
 O=$(cd "$APP" && XDG_STATE_HOME="$TMP/state-e" "$BP/bin/brain" doctor 2>&1)
 has "$O" "the sensitive-value filter runs (clean 0, token 1)" "[E] the installed brain finds sdlc's filter through the registry"
 hasnt "$O" "was not found" "[E] instrument: no missing-filter line"
+
+echo "-- [F] config F: brain updated alone past its sdlc floor"
+# a copy in the private unreleased form (no released section, no manifest version, sdlc named bare), then two release revs of it
+FS="$TMP/floor-src"; copy_kit "$FS"; rm -f "$FS"/plugins/*/LICENSE "$FS"/plugins/*/NOTICE
+[ -e "$FS/.vibemaestro/sdlc.json" ] || { mkdir -p "$FS/.vibemaestro"; printf '{"public": {"private": [".vibemaestro/sdlc.json"]}}\n' > "$FS/.vibemaestro/sdlc.json"; }
+python3 - "$FS" <<'PY'   # the copy's private form, the export's input: not a break
+import json, os, re, sys
+root = sys.argv[1]
+REL = re.compile(r"## \d+\.\d+\.\d+\s*$")
+for n in ("vibemaestro-sdlc", "vibemaestro-brain"):
+    p = os.path.join(root, "plugins", n, ".claude-plugin", "plugin.json")
+    m = json.load(open(p, encoding="utf-8"))
+    m.pop("version", None); m.pop("repository", None)
+    if "dependencies" in m:
+        m["dependencies"] = [d["name"] if isinstance(d, dict) else d for d in m["dependencies"]]
+    open(p, "w", encoding="utf-8").write(json.dumps(m, indent=2) + "\n")
+    p = os.path.join(root, "plugins", n, "CHANGELOG.md")
+    out, skip = [], False
+    for line in open(p, encoding="utf-8").read().split("\n"):
+        if line.startswith("## "):
+            skip = bool(REL.match(line))
+        if not skip:
+            out.append(line)
+    open(p, "w", encoding="utf-8").write("\n".join(out).rstrip("\n") + "\n\n")
+PY
+# section <version> [line] — a release of both plugins: `## <version>` (its first line <line>) at the end of each CHANGELOG
+section() {  # writes a release into the copy, the export's input: not a break
+  local n
+  for n in vibemaestro-sdlc vibemaestro-brain; do printf '## %s\n\n%s- minor: release %s\n\n' "$1" "${2:+$2$'\n\n'}" "$1" > "$TMP/sec.md"
+    { sed -n '1,/^## /{/^## /!p;}' "$FS/plugins/$n/CHANGELOG.md"; cat "$TMP/sec.md"; sed -n '/^## /,$p' "$FS/plugins/$n/CHANGELOG.md"; } > "$TMP/cl.md"
+    cat "$TMP/cl.md" > "$FS/plugins/$n/CHANGELOG.md"; done
+}
+git_ -C "$FS" init -q -b main && git_ -C "$FS" add -Af && git_ -C "$FS" commit -qm unreleased
+section 0.1.0; git_ -C "$FS" commit -qam "release A"
+EA="$TMP/export-a"; (cd "$FS" && bash "$SRC_ROOT/scripts/export-public.sh" HEAD "$EA" >/dev/null 2>&1); eq "$?" 0 "[F] export A: rc 0"
+section 0.2.0 "Released together: vibemaestro-sdlc 0.2.0, vibemaestro-brain 0.2.0"; git_ -C "$FS" commit -qam "release B"
+EB="$TMP/export-b"; (cd "$FS" && bash "$SRC_ROOT/scripts/export-public.sh" HEAD "$EB" >/dev/null 2>&1); eq "$?" 0 "[F] export B: rc 0"
+eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dependencies"])' "$EB/plugins/vibemaestro-brain/.claude-plugin/plugin.json")" \
+  "[{'name': 'vibemaestro-sdlc', 'version': '>=0.2.0'}]" "[F] export B: brain 0.2.0 needs sdlc >=0.2.0"
+# the public marketplace: export A, tagged, then export B on top of it, tagged
+MK="$TMP/floor-market"; mkdir -p "$MK"; cp -R "$EA/." "$MK/"
+git_ -C "$MK" init -q -b main && git_ -C "$MK" add -Af && git_ -C "$MK" commit -qm A
+git_ -C "$MK" tag vibemaestro-sdlc--v0.1.0; git_ -C "$MK" tag vibemaestro-brain--v0.1.0
+use_cfg f
+cl plugin marketplace add "$MK" >/dev/null
+O=$(cl plugin install vibemaestro-brain@vibemaestro); eq "$?" 0 "[F] install brain 0.1.0 (it brings sdlc 0.1.0): rc 0"
+git_ -C "$MK" rm -rq . && cp -R "$EB/." "$MK/" && git_ -C "$MK" add -Af && git_ -C "$MK" commit -qm B
+git_ -C "$MK" tag vibemaestro-sdlc--v0.2.0; git_ -C "$MK" tag vibemaestro-brain--v0.2.0
+cl plugin marketplace update vibemaestro >/dev/null
+O=$(cl plugin update vibemaestro-brain@vibemaestro); eq "$?" 0 "[F] update brain alone to 0.2.0: rc 0"
+GB=$(block "$(cl plugin list)" vibemaestro-brain@vibemaestro)
+has "$GB" 'failed to load' "[F] brain 0.2.0 over sdlc 0.1.0 fails to load (the floor is enforced)"
+has "$GB" 'Requires "vibemaestro-sdlc@vibemaestro" >=0.2.0' "[F] …and names the sdlc it requires"
+O=$(cl plugin update vibemaestro-sdlc@vibemaestro); eq "$?" 0 "[F] update sdlc too: rc 0"
+L=$(cl plugin list)
+has "$(block "$L" vibemaestro-brain@vibemaestro)" 'Status: ✔ enabled' "[F] …then brain is enabled"
+has "$(block "$L" vibemaestro-sdlc@vibemaestro)" 'Status: ✔ enabled' "[F] …and sdlc too"
 
 unset CLAUDE_CONFIG_DIR
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "part 2 wrote nothing into the repo tree (it ran on copies)"

@@ -235,6 +235,40 @@ hasnt "$F" 'bắt đầu bằng' "… và không nói 'bắt đầu bằng' (int
 INK=$(cat "$PLUGIN/skills/intake/SKILL.md")
 has "$INK" 'Condition: the repo already has `kb/` — if not, do `vibemaestro-sdlc:init-kb` first.' "intake: điều kiện kb/ nguyên văn (flow khớp câu này)"
 
+echo "== solo: ngoài cây làm việc git — không lời nhắc luồng, không lời khuyên init-kb; repo git chưa có kb/ vẫn có cả hai =="
+unset PL      # the cases above left PL on a trimmed copy of the plugin; these use the real one
+# a plain folder, not a repository: the hook is run on it as it is run on an app
+PLAIN="$TMP/plain-folder"; mkdir -p "$PLAIN/notes"; : > "$PLAIN/notes/a.md"
+git -C "$PLAIN" rev-parse --is-inside-work-tree >/dev/null 2>&1 && bad "đối chứng dụng cụ: thư mục trơn lại nằm trong cây git" || ok "đối chứng dụng cụ: thư mục trơn không nằm trong cây git"
+O=$(boi "$PLAIN"); C=$(ctx "$O")
+isjson "$O" && ok "thư mục trơn: hook danh mục in JSON hợp lệ" || bad "thư mục trơn: hook danh mục không in JSON: ${O:0:100}"
+has "$C" "The plugin's common rules are in" "thư mục trơn: đối chứng — hook thật đã chạy, danh mục luật còn"
+has "$C" 'Skills of the plugin (just checked to be present):' "thư mục trơn: danh sách skill còn (không phải lời khuyên)"
+hasnt "$C" "$FLOW_HEAD" "thư mục trơn: không có lời nhắc luồng của repo app"
+hasnt "$C" 'Call the first skill of the chain' "thư mục trơn: không có câu mệnh lệnh của chuỗi skill"
+hasnt "$C" 'This repo has no `kb/` yet' "thư mục trơn: không có lời khuyên init-kb (kb_reminder)"
+NOLIST=$(printf '%s\n' "$C" | grep -v '^Skills of the plugin')
+hasnt "$NOLIST" 'init-kb' "thư mục trơn: ngoài danh sách skill không nhắc init-kb ở đâu"
+has "$(printf '%s\n' "$C" | grep '^Skills of the plugin')" 'init-kb' "đối chứng: danh sách skill tự nó có tên init-kb (grep -v ở trên thật sự cắt đúng dòng)"
+# the general way of working (the `core` hook) is the same in a plain folder and in a repository
+LP=$(ctx "$(loi "$PLAIN")"); LN=$(ctx "$(loi "$NOKB")")
+has "$LP" 'DONG-DAU-LOI-QUY-TRINH' "thư mục trơn: lõi quy trình chung vẫn được nạp"
+eq "$LP" "$LN" "thư mục trơn: lõi quy trình chung giống hệt ở repo git"
+# a plain folder that has a kb/ keeps the kb pointer (only the init-kb advice and the flow go)
+PLAINKB="$TMP/plain-with-kb"; mkdir -p "$PLAINKB/kb"; printf '# map\n' > "$PLAINKB/kb/current-state.md"
+git -C "$PLAINKB" rev-parse --is-inside-work-tree >/dev/null 2>&1 && bad "đối chứng dụng cụ: thư mục trơn có kb/ lại nằm trong cây git" || ok "đối chứng dụng cụ: thư mục trơn có kb/ không nằm trong cây git"
+C=$(ctx "$(boi "$PLAINKB")")
+has "$C" 'This repo has a `kb/`' "thư mục trơn có kb/: con trỏ tới kb/ còn"
+hasnt "$C" "$FLOW_HEAD" "thư mục trơn có kb/: vẫn không có lời nhắc luồng"
+# a git repository without kb/ still gets both (same hook, same plugin)
+C=$(ctx "$(boi "$NOKB")")
+has "$C" "$FLOW_HEAD" "repo git chưa có kb/: có lời nhắc luồng"
+has "$C" 'This repo has no `kb/` yet: use the skill `vibemaestro-sdlc:init-kb`' "repo git chưa có kb/: có lời khuyên init-kb"
+has "$(flow_lines "$C")" 'starts with `vibemaestro-sdlc:init-kb`' "repo git chưa có kb/: chuỗi luồng bắt đầu bằng init-kb"
+# a directory inside a repository's work tree is inside it; the project dir below the toplevel is still a git case
+mkdir -p "$NOKB/src/deep"; C=$(ctx "$(boi "$NOKB/src/deep")")
+has "$C" "$FLOW_HEAD" "thư mục con của cây git: vẫn là cây git, có lời nhắc luồng"
+
 echo "== P2: kb/ vắng ở cây này nhưng nhánh khung đã đẩy, chưa gộp — SessionStart chỉ tới nhánh, không bảo chạy init-kb lại =="
 # ba ca: không có khung (chữ cũ nguyên), nhánh khung chưa gộp (chữ mới, theo language), khung đã gộp (cây có kb/: không nhắc)
 unset PL      # the cases above leave PL on a plugin copy without `intake`
@@ -423,7 +457,7 @@ eq "$(grep -cF 'Brainstorm result' "$PLUGIN/skills/ship/SKILL.md" || true)" 0 "�
 has "$(cat "$PLUGIN/skills/intake/SKILL.md")" 'vibemaestro-sdlc:brainstorm' "intake gợi brainstorm khi yêu cầu mơ hồ"
 has "$(cat "$PLUGIN/skills/intake/SKILL.md")" 'do not brainstorm again' "intake không brainstorm lại khi gói đã có kết quả"
 has "$(cat "$PLUGIN/skills/spec/SKILL.md")" '## Brainstorm result' "spec lấy từ mục '## Kết quả brainstorm' của intent"
-has "$(cat "$PLUGIN/skills/spec/SKILL.md")" '`## Context`, `## Goal`, `## Out of scope`' "spec vẫn khuôn bốn mục (không đổi)"
+has "$(cat "$PLUGIN/skills/spec/SKILL.md")" '`## Context`, `## Goal`, `## Out of scope`' "spec vẫn nêu ba mục đầu của khuôn theo thứ tự"
 hasnt "$(cat "$BS")" 'kb.py new spec' "brainstorm không tạo file spec"
 has "$(cat "$BS")" '**Do not create a separate spec file and do not write into the default output directory of the third-party process plugin (under `docs/`).**' "brainstorm: câu cấm tạo spec riêng / viết vào thư mục đầu ra của plugin bên thứ ba còn nguyên"
 BS_NODOCS=$(cat "$BS"); BS_NODOCS=${BS_NODOCS//'(under `docs/`)'/}

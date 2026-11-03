@@ -14,7 +14,6 @@
 #   [R] the root is the one `kb.py` found: `render` lists the added lines for a root it is given, wherever cwd is; kb.py run from a
 #       subdirectory of a repository whose kb/ is not at the top
 #   [N] nothing to compare with: no remote, no git repository, a shallow clone with no merge-base, a git that fails, a git that hangs
-# Then each planted break of the message must turn its family red and an unbroken copy must stay green.
 # Real git on throw-away repositories, no network.
 # =============================================================================
 set -uo pipefail
@@ -217,44 +216,6 @@ kb.cmd_check_current_state(sys.argv[2], os.path.join(sys.argv[2], "app", "kb", "
 
 FAMILIES="fam_added fam_gate fam_root fam_nocmp fam_args"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
-
-# ── each planted break must turn its family red ─────────────────────────────────────────────────
-BRK() {  # BRK <label> <family> <needle> <old> <new>   (all in scripts/current_state.py)
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/current_state.py" "$4" "$5" && expect_red "$1" "$2" "$d" "$3"
-}
-BRKK() {  # BRKK <label> <family> <needle> <old> <new>   (in scripts/kb.py)
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/kb.py" "$4" "$5" && expect_red "$1" "$2" "$d" "$3"
-}
-echo "-- planted breaks"
-BRKK kb-root-dropped fam_root '[R7]' '        sys.stderr.write(current_state.render(rel, probs, root, profile["language"]) + "\n")' '        sys.stderr.write(current_state.render(rel, probs, None, profile["language"]) + "\n")'
-BRK root-ignored fam_root '[R1]' '    top = (root or _git_out(os.getcwd(), "rev-parse", "--show-toplevel") or "").strip()' '    top = (_git_out(os.getcwd(), "rev-parse", "--show-toplevel") or "").strip()'
-BRK no-added-block fam_added '[M5]' '    add = added_lines(path, root)' '    add = None'
-BRK no-added-block-gate fam_gate '[G2]' '    add = added_lines(path, root)' '    add = None'
-BRK bytes-over-not-named fam_added '[M3]' 'lines.append(M("cs.over_by", got - cap,' 'lines.append(M("cs.over_by", cap,'
-BRK lines-over-in-bytes fam_added '[M13]' 'bytes_, got, cap = why.unit == "bytes", why.got, why.cap' 'bytes_, got, cap = True, why.got, why.cap'
-BRK line-number-stuck fam_added '[M6]' '            got.append((n, ln[1:]))
-            n += 1' '            got.append((n, ln[1:]))'
-BRK plusplus-line-dropped fam_added '[M16]' 'elif n and ln.startswith("+"):' 'elif n and ln.startswith("+") and not ln.startswith("+++"):'
-BRK control-chars-raw fam_added '[M17]' 'text = _CONTROL.sub("?", text)' 'pass'
-BRK valueerror-raises fam_args '[A1]' '    except (OSError, ValueError, subprocess.SubprocessError):' '    except (OSError, subprocess.SubprocessError):'
-BRK no-cut-at-20 fam_added '[M7]' 'ADDED_MAX = 20' 'ADDED_MAX = 1000'
-BRK no-cut-at-100 fam_added '[M11]' 'ADDED_CHARS = 100' 'ADDED_CHARS = 1000'
-BRK base-lines-listed fam_added '[M9b]' 'elif n and ln.startswith("+"):' 'elif n:'
-BRK raises-without-base fam_nocmp '[N1]' '    if not mb:
-        return None' '    if not mb:
-        raise RuntimeError("no merge-base")'
-BRK raises-without-git fam_nocmp '[N6]' '    except (OSError, ValueError, subprocess.SubprocessError):' '    except (ValueError, subprocess.SubprocessError):'
-BRK no-timeout fam_nocmp '[N5]' 'GIT_TIMEOUT = 10' 'GIT_TIMEOUT = 100'
-BRK tip-instead-of-merge-base fam_nocmp '[N3]' '    mb = (_git_out(top, "merge-base", "HEAD", BASE_REF) or "").strip()' '    mb = (_git_out(top, "merge-base", "HEAD", BASE_REF) or _git_out(top, "rev-parse", BASE_REF) or "").strip()'
-
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"
 

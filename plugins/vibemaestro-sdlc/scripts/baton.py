@@ -161,6 +161,7 @@ KINDS_DIR = os.path.join(PLUGIN_ROOT, "templates", "baton-kinds")
 KIND_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\Z")
 # `kind:<name>`: the kinds a session runs with arguments only, no script to write. __NAME__ reads as the kind's name.
 CALLABLE_KINDS = ("install-file", "settings-merge", "ci-rerun-failed")
+DEPRECATED_KINDS = ("kubectl-exec", "remote-exec")       # `new --from` still writes them and says they leave in the next release
 KINDS_REAL = os.path.realpath(KINDS_DIR)
 # go and a stale file: a Write and a `go` in one response leave the file seconds old (1.9-3.0 s measured); a Write that
 # did not land leaves the older bytes. An older file, or one dated in the future, is refused unless `go --reuse`.
@@ -507,21 +508,51 @@ class Kit:
         self.path, self.batons, self.root, self.pid = path, batons, root, pid
 
 
-def kit_path(arg):
+KIT_ALIASES = {"coordinator-bootstrap": "bootstrap"}   # an old kit name: it runs the new one for one release, and says so
+OLD_NAMES_SAID = set()
+
+
+def kit_path(arg, quiet=False):
     """The Kit of `kit:<name>`: <sdlc>/batons/<name>.sh, else batons/<name>.sh of the one dependent plugin that ships it
     (dependent_kits). The name is lower-case letters, digits and '-' (no '/', no '.'), and the file must lie in its batons
     directory itself: a link that leads out is refused before anything runs, as are a name sdlc and a dependent plugin both
-    ship, a name two dependent plugins ship, and a name only plugins that may not run it ship."""
+    ship, a name two dependent plugins ship, and a name only plugins that may not run it ship. An old name (KIT_ALIASES) is
+    the new name's file, with one line on stderr per process unless `quiet` (a lookup nobody typed); a dependent plugin that
+    ships the old name collides with it as with the new one."""
     name = arg[len("kit:"):]
     if not KIT_RE.match(name):
         raise Stop(USAGE, "%s: a kit baton is named by lower-case letters, digits and '-' only (no '/', no '.')", arg)
+    if name not in KIT_ALIASES:
+        return kit_file(arg, name)
+    found = dependent_kits(arg, name)[0]
+    if found:
+        try:
+            kit_file("kit:" + KIT_ALIASES[name], KIT_ALIASES[name])
+            hint = ": call kit:%s for %s's" % (KIT_ALIASES[name], SDLC)
+        except Stop:
+            hint = ""                                    # the new name is refused too: point at nothing that does not run
+        raise Stop(USAGE, "%s: %s %s batons/%s.sh, and %s is the old name of %s's kit:%s; a kit name must be unique, so %s names "
+                   "neither%s", arg, " and ".join(k.pid for k in found), "ships" if len(found) == 1 else "ship",
+                   name, name, SDLC, KIT_ALIASES[name], arg, hint)
+    kit = kit_file(arg, KIT_ALIASES[name])
+    if not quiet and name not in OLD_NAMES_SAID:
+        OLD_NAMES_SAID.add(name)
+        say("%s is the old name of kit:%s; it runs in this release and leaves in the next: call kit:%s", arg,
+            KIT_ALIASES[name], KIT_ALIASES[name], out=sys.stderr)
+    return kit
+
+
+def kit_file(arg, name):
+    """The Kit of the kit name `name` (kit_path's rules, `arg` as typed for the messages)."""
     root = KIT_ROOT
     path = os.path.join(root, name + ".sh")
-    found, refused, why = dependent_kits(arg, name)
+    found, refused, why = dependent_kits("kit:" + name, name)
     if os.path.lexists(path):
         if found:
-            raise Stop(USAGE, "%s: both %s and %s ship batons/%s.sh; a kit name must be unique, so neither runs", arg, SDLC,
-                       " and ".join(k.pid for k in found), name)
+            new = [old for old, n in KIT_ALIASES.items() if n == name]
+            raise Stop(USAGE, "%s: both %s and %s ship batons/%s.sh; a kit name must be unique, so neither runs%s", arg, SDLC,
+                       " and ".join(k.pid for k in found), name,
+                       " (%s's kit:%s is the new name of kit:%s)" % (SDLC, name, new[0]) if new else "")
         if os.path.dirname(os.path.realpath(path)) != root:
             raise Stop(USAGE, "%s: %s leads outside %s", arg, path, root)
         return Kit(path, root, plugin_real(), None)
@@ -714,12 +745,12 @@ def places_holding(name):
     for prefix in PLACES:
         try:
             if prefix == "kit":
-                kit_path("kit:" + name)
+                kit_path("kit:" + name, quiet=True)
             elif prefix == "kind":
                 kind_path("kind:" + name)
             elif not os.path.lexists(Kept(prefix + ":" + name).path):
                 continue
-            held.append(prefix + ":" + name)
+            held.append(prefix + ":" + (KIT_ALIASES.get(name, name) if prefix == "kit" else name))
         except Stop:
             pass
     return held
@@ -1759,7 +1790,8 @@ class Script:
     def baton_id(self):
         """The `baton` field of log.tsv: <prefix>:<name>@<sha256>, or scratch@<sha256> for a script given by its path."""
         if self.kit or self.kind is not None or self.kept is not None:
-            name = self.kept.name if self.kept is not None else self.kind if self.kind is not None else self.word[len("kit:"):]
+            name = (self.kept.name if self.kept is not None else self.kind if self.kind is not None
+                    else os.path.basename(self.from_kit.path)[:-len(".sh")])
             return "%s:%s@%s" % (self.place, name, self.sha)
         return "scratch@%s" % self.sha
 
@@ -3322,27 +3354,144 @@ def write_private(path, text):
     os.replace(tmp, path)
 
 
-def mode_state():
-    """(mode, chosen): chosen is False when there is no mode file, a fresh install where nobody has chosen yet, or a file without
-    the owner's dialog line (PROOF_LINE: written by an older baton.py, or before the record); it reads as manual."""
+# The machine mode policy: a mode the machine's builder set as root (a sandbox image at build time), below the owner's own choice
+# and above the default. Only root writes it: the file and every directory above it must be root's and closed to group and
+# other, so nothing a session can write moves it; no variable, setting or argument names another path. The suites call
+# machine_policy in process with a scratch tree as `top` and their own uid as `root_uid`; every call site takes the defaults.
+MODE_POLICY = "/etc/vibemaestro/baton-mode"
+POLICY_ROOT_UID = 0
+POLICY_TOP = "/"
+PROC_SUPER_MAGIC = 0x9FA0
+SOURCES = {"owner": "the owner's choice", "policy": "the machine policy " + MODE_POLICY, "default": "the default"}
+
+
+def root_closed(st, root_uid):
+    """None when st is owned by root_uid and not writable by group or other, else why."""
+    if st.st_uid != root_uid:
+        return "owned by uid %d, not root" % st.st_uid
+    if stat.S_IMODE(st.st_mode) & 0o022:
+        return "writable by group or other (mode %04o)" % stat.S_IMODE(st.st_mode)
+    return None
+
+
+def initial_userns():
+    """None when this process is in the initial user namespace, else why. Linux only: in any other user namespace uid 0 is not
+    root (an unprivileged user maps their own uid to 0 and bind-mounts their own files), and only there /proc/self/uid_map is
+    the whole identity map. It is read from procfs (fstatfs on the open file), so a plain file mounted over it does not count;
+    a user who also mounts another procfs file there, inside a mount namespace of their own, is not stopped here, but can
+    already write the owner's own mode file, which baton never defends against."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        fd = os.open("/proc/self/uid_map", os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as e:
+        return "/proc/self/uid_map cannot be read (%s)" % (e.strerror or e)
+    try:
+        import ctypes                                   # only here: a machine without a policy file never loads it
+        buf = ctypes.create_string_buffer(512)          # struct statfs, f_type first: a native long, an int on s390x
+        if ctypes.CDLL(None, use_errno=True).fstatfs(fd, buf) != 0:
+            return "/proc/self/uid_map: fstatfs failed"
+        ftype = ctypes.c_uint if os.uname().machine.startswith("s390") else ctypes.c_long
+        if ftype.from_buffer(buf).value & 0xFFFFFFFF != PROC_SUPER_MAGIC:
+            return "/proc/self/uid_map is not on procfs"
+        if os.read(fd, 256).split() != [b"0", b"0", b"4294967295"]:
+            return "this process runs in a user namespace (/proc/self/uid_map is not the identity map), where uid 0 is not root"
+    except (OSError, AttributeError, ImportError, ValueError) as e:
+        return "/proc/self/uid_map cannot be checked (%s)" % e
+    finally:
+        os.close(fd)
+    return None
+
+
+def machine_policy(path=MODE_POLICY, root_uid=POLICY_ROOT_UID, top=POLICY_TOP):
+    """(mode, why): the mode the policy file at `path` sets, or None. why is None when there is no file (nothing changes),
+    else the one reason it is ignored. The directories from `top` down to the file's parent are checked first (lstat: a real
+    directory, root's, closed to group and other), then the file is read by read_capped (never through a link, judged on the
+    open descriptor) and must be a regular file, root's and closed: once the parents hold only root can change the chain, so no
+    process of another user can swap a link between the check and the read."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None, None
+    except OSError as e:
+        return None, "%s cannot be read (%s)" % (path, e.strerror or e)
+    top = os.path.normpath(top)
+    rel = os.path.relpath(os.path.dirname(path), top)
+    parts = [] if rel == "." else rel.split(os.sep)
+    if not os.path.isabs(path) or os.path.normpath(path) != path or parts[:1] == [".."]:
+        return None, "%s is not a plain absolute path under %s" % (path, top)
+    dirs = [top] + [os.path.join(top, *parts[:i + 1]) for i in range(len(parts))]
+    for d in dirs:
+        try:
+            st = os.lstat(d)
+        except OSError as e:
+            return None, "%s cannot be read (%s)" % (d, e.strerror or e)
+        why = ("a symlink" if stat.S_ISLNK(st.st_mode) else "not a directory" if not stat.S_ISDIR(st.st_mode)
+               else root_closed(st, root_uid))
+        if why:
+            return None, "its directory %s is %s" % (d, why)
+    why = initial_userns()
+    if why:
+        return None, why
+    try:
+        data, st = read_capped(path, 64)
+    except ValueError as e:
+        return None, "%s %s" % (path, e)
+    except OSError as e:                                # O_NOFOLLOW on a link: ELOOP, EMLINK on FreeBSD
+        return None, "%s %s" % (path, "is a symlink" if e.errno in (errno.ELOOP, errno.EMLINK)
+                                else "cannot be read (%s)" % (e.strerror or e))
+    why = root_closed(st, root_uid)
+    if why:
+        return None, "%s is %s" % (path, why)
+    for m in MODES:
+        if data in (m.encode(), m.encode() + b"\n"):
+            return m, None
+    return None, "%s holds %s, not exactly auto or manual" % (path, repr(data[:20]))
+
+
+def owner_mode():
+    """The owner's choice, or None when nobody chose: no mode file (a fresh install), or a file without the owner's dialog line
+    (PROOF_LINE: written by an older baton.py, or before the record). An unreadable file, or one with a bad value, reads as
+    the owner's manual."""
     try:
         with open(os.path.join(state_dir(), "mode"), encoding="utf-8") as f:
             lines = f.read().split("\n")
     except FileNotFoundError:
-        return "manual", False
+        return None
     except (OSError, ValueError):                                     # unreadable, or not UTF-8: chosen, read as manual
-        return "manual", True
+        return "manual"
     if not proven(lines[1:]):
-        return "manual", False
+        return None
     v = lines[0].strip()
     if v not in MODES:
         say("baton: the mode file holds %s: treated as manual", repr(v), out=sys.stderr)
-        return "manual", True
-    return v, True
+        return "manual"
+    return v
+
+
+def mode_source():
+    """(mode, source): the owner's choice wins, then the machine policy, then manual by default. source: a SOURCES key."""
+    m = owner_mode()
+    if m is not None:
+        return m, "owner"
+    m = machine_policy()[0]
+    return (m, "policy") if m is not None else ("manual", "default")
+
+
+def mode_state():
+    """(mode, chosen): chosen is False when neither the owner nor the machine policy set it; it then reads as manual."""
+    m, src = mode_source()
+    return m, src != "default"
 
 
 def read_mode():
     return mode_state()[0]
+
+
+def policy_note():
+    """The words a refused mode change adds when the machine policy sets the mode, else ''."""
+    m, src = mode_source()
+    return "; the mode here is %s from %s, which only root sets" % (m, SOURCES["policy"]) if src == "policy" else ""
 
 
 def log_value(v):
@@ -3463,7 +3612,8 @@ ASKED_MAX_AGE = 600
 VERSION_FLOOR = (2, 1, 211)                            # before it, auto mode could approve a hook's `ask` without the dialog
 DIALOG_MODES = ("default", "acceptEdits", "auto")
 MANAGED_SETTINGS = ("/etc/claude-code/managed-settings.json", "/Library/Application Support/ClaudeCode/managed-settings.json")
-SANDBOX_ENV = ("INTENT_SLUG", "SEAT")                  # vsdlc.SANDBOX_ENV: both set means a session in a sandbox pod
+SANDBOX_ENV = ("INTENT_SLUG", "SEAT")                  # vsdlc.SANDBOX_ENV: both set means a worker session (deprecated)
+ROLE_ENV = ("VIBEMAESTRO_ROLE", "worker")             # vsdlc.ROLE_ENV: the worker switch, exactly this value
 CLAUDE_PROGRAMS = ("claude", "claude.exe", "cli.js")    # an argv word naming Claude Code; also any path under claude/versions/
 PY_FLAGS = ("-I", "-B", "-E", "-s", "-S", "-u", "-O", "-OO", "-q", "-b", "-bb")  # python3 options a literal owner call may carry
 LINEAGE = True                                           # off only in the suites' isolated copies (tests/fixtures/baton-owner.sh)
@@ -3497,7 +3647,8 @@ def session_id():
 
 
 def in_sandbox():
-    return all(os.environ.get(v, "").strip() for v in SANDBOX_ENV)
+    """A worker session (vsdlc.in_sandbox): the switch, or the deprecated pair; the switch only adds."""
+    return os.environ.get(ROLE_ENV[0]) == ROLE_ENV[1] or all(os.environ.get(v, "").strip() for v in SANDBOX_ENV)
 
 
 def void_asked(session, now=None):
@@ -3825,8 +3976,9 @@ def owner_proof(argv):
     mode = argv[:1] == ["mode"]
     nod = NO_MODE_DIALOG if mode else NO_OWNER_DIALOG
     if in_sandbox():
-        return ("a sandbox session: whoever answers its dialog is not the owner, so the owner %s only outside a sandbox (%s)"
-                % (("sets the mode", "mode unchanged") if mode else ("signs", "nothing signed"))), path, rec
+        return ("a sandbox session: whoever answers its dialog is not the owner, so the owner %s only outside a sandbox (%s)%s"
+                % (("sets the mode", "mode unchanged", policy_note() if argv[1:2] and argv[1] in MODES else "") if mode
+                   else ("signs", "nothing signed", ""))), path, rec
     if not session_id():
         return "no Claude Code session (CLAUDE_CODE_SESSION_ID): " + nod, None, None
     if path is None:
@@ -4084,7 +4236,8 @@ def guard_owner(inp):
         if any("<<" in t for t, _f in segs[:at]):  # maybe a heredoc's body line: no record, so a call there refuses itself; no deny
             return None
     if in_sandbox():
-        return deny("a sandbox session: whoever answers its dialog is not the owner")
+        sets = is_mode and any(f[1] and f[1][1:2] and f[1][1] in MODES for f in found)    # a mode, not a remote list
+        return deny("a sandbox session: whoever answers its dialog is not the owner" + (policy_note() if sets else ""))
     if inp.get("agent_id"):
         return deny("a subagent never %s; it reports to the main session" % ("sets the mode" if is_mode else "signs as the owner"))
     if not literal:                 # a wrapped mode call, too: an ask rule may still show its dialog, which no click could make work
@@ -4453,6 +4606,9 @@ def cmd_new(rest):
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
     say("written %s: edit the header and the act, then `baton.py check %s`", path, path)
+    if kind in DEPRECATED_KINDS:
+        say("new: kind %s is deprecated and leaves vibemaestro-sdlc in the next release; keep the script it writes as your own "
+            "baton", kind)
     return OK
 
 
@@ -5358,7 +5514,7 @@ def catalogue_files():
         except OSError:
             continue
         for name in names:
-            if name in kits:
+            if name in kits or name in KIT_ALIASES:
                 continue
             try:
                 kit = kit_path("kit:" + name)
@@ -5548,8 +5704,9 @@ CRITICAL = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 
 def kit_names():
-    """The names a kit (of sdlc or of a dependent plugin) or a callable kind ships: a kept baton never takes one."""
-    names = set(CALLABLE_KINDS)
+    """The names a kit (of sdlc or of a dependent plugin, an old kit name included) or a callable kind ships: a kept baton never
+    takes one."""
+    names = set(CALLABLE_KINDS) | set(KIT_ALIASES)
     for d in [KIT_ROOT] + [os.path.join(real, "batons") for real in dependent_roots()]:
         try:
             names.update(f[:-3] for f in os.listdir(d) if f.endswith(".sh"))
@@ -6028,7 +6185,9 @@ def cmd_pack(rest):
 
 def cmd_mode(rest):
     if not rest:
-        say("%s", read_mode())
+        m, src = mode_source()
+        say("%s", m)                                    # stdout: the word alone, for a script that reads it
+        say("baton: mode %s from %s", m, SOURCES[src], out=sys.stderr)
         return OK
     if rest[0] in ("remotes", "trust", "untrust"):
         return cmd_remotes(rest)
@@ -6225,7 +6384,7 @@ def entry_command():
 # commit message). `permissions --check` names each one, and kit:permissions-upgrade swaps exactly these for owner_asks().
 OLD_ASKS = ("Bash(*baton* sign --by owner*)",) + tuple(
     "Bash(*%s%s mode *)" % (prog, q) for prog in ("baton.py", "/baton") for q in ("", '"', "'"))
-OLD_ASK_FINDING = "the old broad ask rule "     # its finding's text starts so: kit:coordinator-bootstrap sets it aside
+OLD_ASK_FINDING = "the old broad ask rule "     # its finding's text starts so: kit:bootstrap sets it aside
 OWNER_SUBS = ("sign --by owner", "mode")
 
 
@@ -6684,8 +6843,12 @@ def cmd_permissions(rest):
         say("%s", other_line(other))
         return OTHER_SDLC
     found = perm_findings(sources)
-    say("baton permissions: mode %s; settings read: %s", read_mode(), ", ".join(p for _l, p in sources if os.path.exists(p))
-                                                          or "none")
+    m, src = mode_source()
+    say("baton permissions: mode %s (from %s); settings read: %s", m, SOURCES[src],
+        ", ".join(p for _l, p in sources if os.path.exists(p)) or "none")
+    ignored = machine_policy()[1]
+    if ignored:
+        say("%-10s the machine policy is ignored: %s (it does not change the exit code)", "NOTE", ignored)
     for kind, text in found:
         say("%-10s %s", kind, text)
     for text in attribution_warnings(sources):

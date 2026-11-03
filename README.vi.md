@@ -105,7 +105,7 @@ Mô tả một thay đổi bằng lời thường. Lời nhắc lúc mở phiên
 
 1. **Intake.** Claude ghi nguyên văn yêu cầu của bạn thành `kb/intent/<date>-<slug>.md`, tạo branch `intent/<date>-<slug>` trong một git worktree riêng, và mở một issue theo dõi.
 2. **Brainstorm**, chỉ khi yêu cầu còn mơ hồ. Claude hỏi những câu chọn ra hướng đi và ghi câu trả lời vào intent.
-3. **Spec.** Claude viết `kb/specs/<date>-<slug>.md` theo bốn mục: bối cảnh, mục tiêu, ngoài phạm vi, tiêu chí chấp nhận, trong đó mỗi tiêu chí là một lệnh và kết quả mong đợi. **Bạn duyệt spec trước khi sửa bất kỳ dòng code nào**, hoặc nói cần đổi gì.
+3. **Spec.** Claude viết `kb/specs/<date>-<slug>.md` theo năm mục: bối cảnh, mục tiêu, ngoài phạm vi, đầu vào và tình huống hỏng (các đầu vào xấu, lạ hay hỏng giữa chừng mà nó phải chịu được, mỗi dòng kèm test), tiêu chí chấp nhận, trong đó mỗi tiêu chí là một lệnh và kết quả mong đợi. **Bạn duyệt spec trước khi sửa bất kỳ dòng code nào**, hoặc nói cần đổi gì.
 4. **Plan**, chỉ khi việc cần nhiều pull request: một file plan, mỗi pull request một dòng.
 5. **Ship.** Claude làm việc, cập nhật `kb/current-state.md`, chạy các lệnh nghiệm thu và mở một pull request nháp kèm output thật của chúng làm bằng chứng.
 6. **Review.** Trước khi pull request rời trạng thái nháp, một subagent có ngữ cảnh mới review diff cuối; phiên sửa những gì nó tìm ra, rồi chuyển pull request sang ready (`gh pr ready`) và báo bạn. Chuyển sang ready khởi động các cổng CI, nếu bạn đã cài.

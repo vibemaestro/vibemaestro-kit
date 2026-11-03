@@ -5,9 +5,9 @@ description: "Use when: on one machine (no sandbox, only vibemaestro-sdlc and vi
 
 # local-parallel — several tasks at once on one machine
 
-Local way of working: one machine, `vibemaestro-sdlc` and `vibemaestro-brain`, no sandbox. The main session takes
-the coordinating role of rule `coordinated-work` (read `${CLAUDE_PLUGIN_ROOT}/rules/coordinated-work.instructions.md`: it talks with the person, briefs, decides, post-checks, merges, and edits no file of a task);
-each task runs in a subagent started with the Agent tool on `agents.worker_model`, which does what a sandbox worker does: intake to a
+Local way of working: one machine, `vibemaestro-sdlc` and `vibemaestro-brain`, no sandbox. The main session
+talks with the person, briefs each task (what must be true, with its acceptance command), decides, post-checks, merges, and edits no file of a task;
+each task runs in a subagent started with the Agent tool on `agents.worker_model`, which works from its brief: intake to a
 draft PR. One task at a time needs none of this: run the normal flow in the main session.
 
 Read the model before the first start: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get agents.worker_model` (and

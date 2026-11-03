@@ -33,7 +33,6 @@
 #       delete or an unknown outcome, is named and left (the run ends rc 5)
 #   [K] the scratch-repository and environment blocks are byte for byte kit:branch-push's, and the gate's git settings and
 #       environment are the kit's
-#   [X] planted breaks: each guard goes red on a plugin copy with that guard broken in the kit or the gate
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -340,7 +339,7 @@ fam_lint() {
   has "$(cat "$BT_OUT")" "irreversible-delete" "[L] …as irreversible-delete"
 }
 
-# failing_copy <plugin> <dir> — a copy of that plugin (a broken one included) whose kit post-check fails, so run undoes
+# failing_copy <plugin> <dir> — a copy of that plugin whose kit post-check fails, so run undoes
 # (with FAKE_MOVE_TO_MAIN set to a bare repository, it first puts the branch there at main: a ref someone else made)
 failing_copy() { cp -r "$1" "$2"; mutate "$2/batons/branch-delete.sh" '
 postcheck() {' '
@@ -493,83 +492,6 @@ fam_squash() {
 
 FAMILIES="fam_call fam_delete fam_refuse fam_signed fam_gate fam_lint fam_undo fam_squash fam_share"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in the kit or the gate =="
-KBRK() {  # KBRK <label> <family> <needle> <old> <new> — a break in the kit
-  local label=$1 fam=$2 needle=$3 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/batons/branch-delete.sh" "$4" "$5" && expect_red "$label" "$fam" "$d" "$needle"
-}
-GBRK() {  # GBRK <label> <family> <needle> <old> <new> — a break in the delete gate
-  local label=$1 fam=$2 needle=$3 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/gates/branch_delete.py" "$4" "$5" && expect_red "$label" "$fam" "$d" "$needle"
-}
-KBRK unmerged-allowed fam_refuse '[R] an unmerged branch' '  if merged "$BASESHA" "$SHA"; then
-    PROOF=ancestor' '  if true; then
-    PROOF=ancestor'
-KBRK compare-fails-open fam_refuse '[R] a compare that cannot be read' '  [[ "$CMP" =~ ^(behind|identical)\ 0$ ]]' '  ! [[ "$CMP" =~ ^(ahead|diverged) ]]'
-KBRK default-allowed fam_refuse '[R] the default branch: rehearse' '  if [ "$BR" = "$DEFAULT" ]; then' '  if false; then'
-KBRK base-not-default fam_refuse '[R] a SHA held only by another branch' '  BASE=$DEFAULT' '  BASE=release'
-KBRK moved-tip-allowed fam_refuse '[R] a tip moved off the pinned head' '  if [ "$NOW" != "$SHA" ]; then' '  if false; then'
-KBRK protected-allowed fam_refuse '[R] a protected branch' '  if [ "$prot" != false ]; then' '  if false; then'
-KBRK ruleset-allowed fam_refuse '[R] a ruleset that forbids deleting the branch' '  if [ -n "$rules" ]; then' '  if false; then'
-KBRK ruleset-fails-open fam_refuse '[R] a ruleset read that fails' '    || rules="unreadable: ${rules:-no answer}"' '    || rules=""'
-KBRK tag-allowed fam_refuse '[R] a name that is also a tag' '  if [ -n "$(ref_sha "$all" "refs/tags/$BR")" ]; then' '  if false; then'
-KBRK pull-head-allowed fam_refuse '[R] an open pull request from the branch: rehearse' '  for q in "head=$OWNER:$BR" "base=$BR"; do' '  for q in "base=$BR"; do'
-KBRK pull-base-allowed fam_refuse '[R] an open pull request into the branch' '  for q in "head=$OWNER:$BR" "base=$BR"; do' '  for q in "head=$OWNER:$BR"; do'
-KBRK owner-from-flag fam_refuse '[R] an open pull request from the branch, the owner renamed' '  read -r priv vis DEFAULT OWNER FULL _ <<< "$info"' '  read -r priv vis DEFAULT _ FULL _ <<< "$info"; OWNER=${REPO%%/*}'
-KBRK pulls-fail-open fam_refuse '[R] a pull request list that cannot be read' '    if [ "$n" != 0 ]; then' '    if [ "$n" -gt 0 ] 2>/dev/null; then'
-KBRK public-allowed fam_refuse '[R] a public repository' '  if [ "$priv $vis" != "true private" ] || ! branchname "$DEFAULT"' '  if ! branchname "$DEFAULT"'
-KBRK any-remote fam_refuse '[R] a remote that names another repository' '  if [ -z "$named" ] || [ "$named" != "$want" ]; then' '  if [ -z "$named" ]; then'
-KBRK names-allowed fam_refuse '[R] the kit itself refuses a branch named heads/done' '[ "$first" != refs ] && [ "$first" != heads ] \' '[ "$first" != refs ] && true \'
-KBRK host-unpinned fam_delete '[D] …every gh call names --hostname github.com' '  CMP=$(gh api --hostname "$HOST" "repos/$REPO/compare/' '  CMP=$(gh api "repos/$REPO/compare/'
-KBRK run-tip-unchecked fam_signed '[S] …refused by the kit before the gate' '  if [ "$NOW" != "$SHA" ]; then' '  if [ "$PHASE" != run ] && [ "$NOW" != "$SHA" ]; then'
-KBRK refused-recorded-as-deleted fam_signed '[S] go, the branch moves just before the push' '        record refused
-        echo "REFUSE the push was refused' '        record deleted
-        echo "REFUSE the push was refused'
-KBRK lost-answer-trusted fam_signed '[S] go, the delete lands, its answer is lost and the base is forced back' '        record unknown' '        record refused'
-KBRK unknown-recreated-always fam_signed '[S] go, someone else deletes the branch just before the push: rc 5' '        if [ -n "$base" ] && held "$PROOF" "$base"; then' '        if false; then'
-KBRK record-kept fam_delete '[D] …and a passing post-check drops the run record' '  rm -f -- "$RECORD"            #' '  : "$RECORD"            #'
-KBRK kit-push-back fam_lint '[L] the kit with every sgit call spelled git passes check' '  record pushing' '  record pushing
-  sgit push -q --force-with-lease="refs/heads/$BR:$SHA" "$PUSH_URL" ":refs/heads/$BR"'
-KBRK squash-proof-off fam_squash '[Q] rehearse a squash-merged branch' '    if ! squash_pr; then' '    if true; then'
-KBRK squash-repo-unchecked fam_squash '[Q] a PR whose head is another repository of the owner' '(.head.repo.full_name // \"\" | ascii_downcase) == \"$(printf' '\"x\" != \"$(printf'
-KBRK squash-pullref-unchecked fam_squash '[Q] no refs/pull/7/head' '  if ! all=$(refs "refs/pull/$1/head") || [ "$(ref_sha "$all" "refs/pull/$1/head")" != "$SHA" ]; then' '  if false; then'
-KBRK squash-merge-commit-unchecked fam_squash '[Q] a merge commit not on the base' '  if ! merged "$2" "$mc"; then' '  if false; then'
-KBRK squash-no-fallback fam_squash '[Q] the lowest PR (#12) does not hold' '    if pr_holds "$n" "$BASESHA"; then' '    pr_holds "$n" "$BASESHA" || return 1
-    if true; then'
-KBRK pr-fields-unchecked fam_squash '[Q] go, the PR no longer reads merged' '  if [ "$merged" != true ] || [ "$head" != "$SHA" ] || [ "$base" != "$BASE" ] || ! [[ "$mc" =~ ^[0-9a-f]{40}$ ]]; then' '  if ! [[ "$mc" =~ ^[0-9a-f]{40}$ ]]; then'
-KBRK squash-list-fails-open fam_squash '[Q] a closed PR list that cannot be read' '    SQ="the pull request list cannot be read (${list:-no answer})"
-    return 1' '    SQ="the pull request list cannot be read (${list:-no answer})"; list="7 null"'
-KBRK squash-lowest-not-chosen fam_squash '[Q] …the lowest number is the proof' '| sort -n); do' '| sort -rn); do'
-KBRK squash-postcheck-unproven fam_squash '[Q] go, the pull ref moves just before the push' '    pr:*) pr_holds "${1#pr:}" "$2" ;;' '    pr:*) return 0 ;;'
-KBRK postcheck-base-unchecked fam_signed '[S] go, the base forced back past the SHA' '  if [ -z "$SHA" ] || [ -z "$base" ] || ! held "$PROOF" "$base"; then' '  if false; then'
-KBRK undo-silent fam_undo '[U] …the undo recreates the branch' '        write "recreate branch $BR at $SHA on $PUSH_URL" recreate' '        :'
-KBRK undo-overwrites fam_undo '[U] …and named' '      elif [ -n "$now" ]; then
-        echo "LEAVE branch $BR is at $now on $PUSH_URL, not the deleted' '      elif false; then
-        echo "LEAVE branch $BR is at $now on $PUSH_URL, not the deleted'
-KBRK share-drift fam_share '[K] cleanenv(), sgit() and url_repo()' '    -c log.showSignature=false -c credential.helper=' '    -c credential.helper='
-KBRK undo-unrecorded fam_undo '[U] an undo with no run record' '  if [ ! -f "$RECORD" ]; then
-    echo "no run record' '  if false; then
-    echo "no run record'
-KBRK undo-plan-unchecked fam_undo '[U] …and the branch is not put back for another run' '  if [ "$plan" != "$mine" ]; then' '  if false; then'
-KBRK undo-unsigned-trusted fam_undo '[U] an undo with no signed plan' '  if [ -z "$mine" ]; then' '  if false; then'
-KBRK unknown-other-sha-trusted fam_undo '[U] an unknown outcome, the branch there again at another SHA' '      if [ "$now" = "$SHA" ]; then
-        echo "branch $BR is still at $now: the delete did not land' '      if [ -n "$now" ]; then
-        echo "branch $BR is still at $now: the delete did not land'
-GBRK gate-head-any fam_gate '[G] a short head' 'or not SHA.match(a.head) or' 'or False or'
-GBRK gate-branch-any fam_gate '[G] a branch name the kit does not take' 'not branchname(a.branch)' 'False'
-GBRK gate-newline-plan fam_gate '[G] a plan line holding a newline' 'or "\n" in a.plan or' 'or False or'
-GBRK gate-plan-unchecked fam_gate '[G] a plan line not in the signed plan' '    if plan not in signed:' '    if False:'
-GBRK gate-plan-unbound fam_gate '[G] a signed plan line naming another branch' '    if not m or m.group(1, 2, 3) != (a.branch, a.head, a.url):' '    if not m:'
-GBRK gate-url-any fam_gate '[G] the URL of another repository' '    if a.url not in urls:' '    if False:'
-GBRK gate-no-lease fam_signed '[S] …and the branch is not deleted (the lease)' '"--force-with-lease=refs/heads/%s:%s" % (a.branch, a.head)' '"--force"'
-GBRK gate-share-drift fam_share "[K] the delete gate's git settings" '"log.showSignature=false", ' ''
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

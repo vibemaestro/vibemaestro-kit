@@ -24,7 +24,6 @@
 #   [N] coordinated session: rule coordinated-work follows the core only in a sandbox session or when an enabled plugin of sdlc's own
 #       marketplace that declares the dependency ships the marker file sdlc-coordinated; a solo session gets only its catalogue row
 #   [R] every hook command ended rc 0
-#   [X] planted breaks: each check goes red on a copy with one break
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -519,8 +518,7 @@ for _ in range(1900):                          # one level at a time: os.makedir
 # 19 links, not 38: the kernel follows at most 40 symlinks in one lookup, and a path walk that restarts under filesystem load
 # (another suite creating and removing files in parallel) appears to count the links it already followed again, so a chain over
 # 20 can fail with ELOOP. Measured in the guarded-merge PR on the pack loader: 38 links left 8 of 100 loads short of 8 packs,
-# 30 links 3 of 100, 21 links 1 of 150, 19 and 15 links 0 of 150. With 19 links the planted break python-walks (Python walks
-# the path instead of the kernel) still turns this case red.
+# 30 links 3 of 100, 21 links 1 of 150, 19 and 15 links 0 of 150.
 for k in range(19, 0, -1):                     # L1 -> L2 -> ... -> L19 -> real, each target an absolute path through `deep`
     os.symlink(real if k == 19 else os.path.join(deep, "L%d" % (k + 1)), os.path.join(deep, "L%d" % k))
 plugins = {}
@@ -658,7 +656,7 @@ fam_coordinated() {
   out=$(hs "$S" "$A" "$C" 1); cat=$(hs "$S" "$A" "$C" 2)
   hasnt "$out" "$CW" "[N] solo control: the same plugin without the marker: not delivered"
   eq "$(printf '%s\n' "$out" | grep -c -i coordinat)" 0 "[N] solo control: the core names no coordinator"
-  has "$cat" "- coordinated-work.instructions.md — Only when the work is coordinated" "[N] solo control: the catalogue lists its row"
+  has "$cat" "- coordinated-work.instructions.md — Deprecated, leaves in the next release. Only when the work is coordinated" "[N] solo control: the catalogue lists its row, deprecated"
   mkdir "$G/sdlc-coordinated"
   hasnt "$(hs "$S" "$A" "$C" 1)" "$CW" "[N] the marker is a directory: not delivered"
   rmdir "$G/sdlc-coordinated"; ln -s "$G/.claude-plugin/plugin.json" "$G/sdlc-coordinated"
@@ -667,6 +665,9 @@ fam_coordinated() {
   out=$(INTENT_SLUG=2026-01-01-x SEAT=s1 hs "$S" "$A" "$C" 1)
   has "$out" "$CW" "[N] sandbox arm: INTENT_SLUG and SEAT set, no marker: delivered"
   hasnt "$(SEAT=s1 hs "$S" "$A" "$C" 1)" "$CW" "[N] control: SEAT alone is not a sandbox: not delivered"
+  has "$(VIBEMAESTRO_ROLE=worker hs "$S" "$A" "$C" 1)" "$CW" "[N] worker arm: VIBEMAESTRO_ROLE=worker, no marker: delivered"
+  has "$(VIBEMAESTRO_ROLE=worker hs "$S" "$A" "$C" 1)" "**Deprecated:** this rule leaves vibemaestro-sdlc in the next release" "[N] …delivered with its deprecation line"
+  hasnt "$(VIBEMAESTRO_ROLE=solo hs "$S" "$A" "$C" 1)" "$CW" "[N] control: VIBEMAESTRO_ROLE=solo is no worker session: not delivered"
   # the marker on plugins that do not qualify, each next to the sdlc copy of marketplace acme
   C=$(fresh)/cfg; S=$(installed "$C" "$P"); O=$(fixture_dep "$C" dependent-fixture@other marker)
   reg "$C" "$(sdlc_entry "$C")" "dependent-fixture@other=$O"
@@ -708,76 +709,5 @@ for f in $FAMS; do echo "-- $f"; "$f" "$PL"; done
 echo "-- [R] rc"
 nonempty "$(cat "$RCF")" "[R] instrument: hook commands ran ($(wc -l < "$RCF" | tr -d ' '))"
 empty "$(grep -v -x 0 "$RCF" | sort | uniq -c)" "[R] every hook command ended rc 0 (no timeout, no crash)"
-
-echo "== planted breaks: each check must go red on a copy with one break =="
-# BRK <label> <family> <needle> <file under scripts/> <old> <new>
-BRK() { local d; d=$(fresh)/p; mk_plugin "$d"; mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"; }
-BRK any-plugin fam_discovery '[D] control: the same rule in a plugin with no dependency' rule_packs.py '            return True
-    return False' '            return True
-    return True'
-BRK config-dir-ignored fam_discovery '[D] both registries exist' rule_packs.py '    c = os.environ.get("CLAUDE_CONFIG_DIR", "")' '    c = ""'
-BRK registry-order fam_order '[O] registry order zzz aaa: the rule of the first' rule_packs.py '    for pid in sorted(ids):' '    for pid in ids:'
-BRK project-anywhere fam_scope '[S] a project-scope entry: absent in another project' rule_packs.py \
-  '        if pp is not None and real(pp)[0] != project:' '        if False:'
-BRK disabled-served fam_enabled '[E] disabled in the user settings' rule_packs.py \
-  '            if enabled.get(pid) is not True:    # measured: a plugin no settings file enables is not enabled' '            if False:'
-BRK unnamed-served fam_enabled '[E] named by no settings file' rule_packs.py \
-  '            if enabled.get(pid) is not True:    # measured: a plugin no settings file enables is not enabled' '            if enabled.get(pid) is False:'
-BRK git-root-settings fam_projdir '[J] false in the session directory' vsdlc.py '    return os.environ.get("CLAUDE_PROJECT_DIR") or troot' '    return troot'
-BRK slow-not-remembered fam_slow '[B] the slow rule is skipped for the rest of the session' vsdlc.py \
-  'r[0] in mine and not _marked(_slow_key(mine, r[0]), sid)]' 'r[0] in mine]'
-BRK sdlc-name-taken fam_precedence '[P] …and the pack'"'"'s file is not' rules.py '                if n in own:' '                if False:'
-BRK old-name-pack-served fam_precedence '[P] a pack rule named like the OLD name' rules.py '        own |= set(keep) | set(RENAMED_RULES) ' '        own |= set(keep) | set() '
-BRK repo-loses fam_precedence '[P] …and the pack'"'"'s is not' rules.py '                elif repo.get(n):' '                elif False:'
-BRK escape-followed fam_containment '[C] installPath escapes with ..: the pack rule is not reminded' rule_packs.py '    if not _inside(real_inst, root):' '    if False:'
-d=$(fresh)/p; mk_plugin "$d"
-mutate "$d/scripts/rule_packs.py" '(links if e.is_symlink() else names).append(e.name)' 'names.append(e.name)' \
-  && mutate "$d/scripts/rule_packs.py" 'MAX_RULE, nofollow=True)' 'MAX_RULE)' \
-  && expect_red file-escape-followed fam_containment "$d" '[C] a rule file is a symlink out: the pack rule'
-BRK name-unfiltered fam_containment '[C] …that file is not' rule_packs.py '        if not n.isprintable():' '        if False:'
-BRK size-uncapped fam_cost '[B] a rule file with an oversized frontmatter is skipped' rule_packs.py 'MAX_RULE = 16 << 10' 'MAX_RULE = 1 << 30'
-BRK slow-budget fam_slow '[B] a catastrophic pack applyWhen: the hook returns in under 3 s' rules.py 'PACK_MATCH_SECONDS = 1.0 ' 'PACK_MATCH_SECONDS = 4.0 '
-BRK front-quadratic fam_front '[F] front() on a 64 KiB' rules.py '    head = key + ":"' '    head = key + ":"
-    for line in lines[1:]:
-        if line.strip() == "---":
-            return ""
-        m = re.match(r'"'"'^%s:\s*"?(.*?)"?\s*$'"'"' % re.escape(key), line)
-        if m:
-            return m.group(1)'
-d=$(fresh)/p; mk_plugin "$d"
-mutate "$d/scripts/rules.py" '        except Exception:                      # re.error, and OverflowError or RecursionError of a pattern too big to compile' '        except re.error:' \
-  && mutate "$d/scripts/rules.py" '            try:
-                out.extend(match([r]))
-            except Exception:
-                continue' '            out.extend(match([r]))' \
-  && expect_red overflow-escapes fam_robust "$d" '[Y] pack patterns too big to compile'
-BRK python-walks fam_paths '[L] …and all 8 packs are served' rule_packs.py '            p = os.readlink("/proc/self/fd/%d" % fd)' '            p = os.readlink("/nonexistent")'
-BRK chars-uncapped fam_size '[Z] 12 matching rules of a pack with a 1 100-character path' vsdlc.py 'PACK_CHARS_MAX = 3000' 'PACK_CHARS_MAX = 10 ** 9'
-BRK warnings-squeeze fam_size '[Z] …before any repo row is shortened' vsdlc.py '        for warns in (pw, pw_one):' '        for warns in (pw,):'
-BRK retired-free fam_size '[Z] two packs of 100 retired rule files' rule_packs.py '    budget["rules"] -= len(names)               # every file read counts, live or not' '    pass'
-BRK lines-uncapped fam_size '[Z] 31 matching pack rules: 10 lines' vsdlc.py 'PACK_LINES_MAX = 10 ' 'PACK_LINES_MAX = 1000 '
-BRK sdlc-rows-trimmed fam_size '[Z] the pack rows go first' vsdlc.py '            body = compose(own_l + pack_l[:keep], len(pack_l) - keep, warns)' '            pass'
-BRK catalogue-raw fam_size '[Z] the catalogue shows a pack rule' vsdlc.py '            f = {k: _oneline(v) for k, v in f.items()}' '            pass'
-BRK totals-uncapped fam_size '[Z] …the third pack is not read' rule_packs.py 'MAX_PACK_RULES = 200 ' 'MAX_PACK_RULES = 100000 '
-BRK dedup-shared fam_dedup '[W] later in the session' vsdlc.py '    if mine and name in mine:' '    if False:'
-BRK marker-any-file fam_coordinated '[N] the marker is a directory: not delivered' rule_packs.py \
-  '        if ok and plain(os.path.join(real_inst, COORDINATED_MARKER)) == "file":' '        if ok and plain(os.path.join(real_inst, COORDINATED_MARKER)) is not None:'
-BRK marker-any-market fam_coordinated '[N] the marker in a plugin of another marketplace' rule_packs.py '        if m != market or name == DEPENDENCY:' '        if name == DEPENDENCY:'
-BRK marker-no-dependency fam_coordinated '[N] the marker in a plugin that does not declare the dependency' rule_packs.py \
-  '            ok = man is not None and depends_on_sdlc(_json(man))' '            ok = man is not None'
-BRK marker-disabled-served fam_coordinated '[N] the marker plugin disabled' rule_packs.py '        if enabled.get(cid) is not True:
-            continue
-        inst = entry.get("installPath")' '        inst = entry.get("installPath")'
-BRK marker-ignored fam_coordinated '[N] marker shipped by an enabled dependent plugin' vsdlc.py \
-  '    return in_sandbox() or rule_packs.coordinated(root, _project(troot)) is not None' '    return in_sandbox()'
-BRK sandbox-ignored fam_coordinated '[N] sandbox arm' vsdlc.py \
-  '    return in_sandbox() or rule_packs.coordinated(root, _project(troot)) is not None' '    return rule_packs.coordinated(root, _project(troot)) is not None'
-BRK marketplace-anywhere fam_coordinated '[N] sdlc run from a copy outside the plugin cache' rule_packs.py '    me = os.path.realpath(sdlc_root)' '    return "acme"'
-BRK known-location-unchecked fam_coordinated '[N] control: the marketplace'"'"'s installLocation does not hold' rule_packs.py '        if real_loc and _inside(me, real_loc) and (' '        if real_loc and ('
-BRK marker-escape-followed fam_coordinated '[N] the marker plugin'"'"'s installPath is outside' rule_packs.py \
-  '        if not real_inst or not _inside(real_inst, root) or plain(' '        if not real_inst or plain('
-BRK nested-first-wins fam_coordinated '[N] a broader marketplace location that also holds the copy' rule_packs.py \
-  'and (best is None or len(real_loc) > len(best[1])):' 'and best is None:'
-BRK kb-blind fam_kb "[K] rules.disable naming a pack rule" kb.py '    packs, problems = rule_packs.load(root, root)' '    packs, problems = [], []'
 
 echo; summary

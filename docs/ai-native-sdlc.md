@@ -39,7 +39,7 @@ The kit has two plugins, for one person with one Claude seat on one machine:
 | Stage | Anthropic recommends | The kit | Status |
 |---|---|---|---|
 | Plan | Capture the intent in the requester's words as a committed file; a person accepts it [S1] | `intake` skill writes `kb/intent/<date>-<slug>.md` before the branch exists; `brainstorm` skill | shipped |
-| Specify | A spec written from the intent, reviewed by a person before code [S1], [S3] | `spec` skill: four sections, criteria are commands; approval asked before code | shipped (approval is discipline, not a gate) |
+| Specify | A spec written from the intent, reviewed by a person before code [S1], [S3] | `spec` skill: five sections, criteria are commands, a table of inputs and failure cases; approval asked before code | shipped (approval is discipline, not a gate) |
 | Build | Short CLAUDE.md, skills for policy, hooks for guarantees, worktrees and subagents [S1], [S5] | Rules delivered by hooks at the moment of action; one worktree per intent; per-job subagent models | shipped |
 | Review | Review in a fresh context; the agent that wrote the code cannot approve it [S1], [S3] | `before-ready` rule; review model from config; the author never merges its own PR; the person merges, or the main session of `local-parallel` through a guarded merge | shipped (review is discipline, not a gate) |
 | Test | Give the agent a check it can run; show evidence; evals for the agent's configuration [S1], [S3] | Spec criteria are commands; `open-pr.sh` refuses a PR without run evidence | shipped; evals are a gap |
@@ -100,9 +100,11 @@ The kit has two plugins, for one person with one Claude seat on one machine:
 
 ### What the kit does
 
-- The skill [`spec`](../plugins/vibemaestro-sdlc/skills/spec/SKILL.md) writes `kb/specs/<date>-<slug>.md` in four sections
-  (context, goal, out of scope, acceptance criteria). Each acceptance criterion is **one command and its expected result**. The
-  last criterion always asks for a run-evidence section in the pull request.
+- The skill [`spec`](../plugins/vibemaestro-sdlc/skills/spec/SKILL.md) writes `kb/specs/<date>-<slug>.md` in five sections
+  (context, goal, out of scope, inputs and failure cases, acceptance criteria). Each acceptance criterion is **one command and its
+  expected result**. The last criterion always asks for a run-evidence section in the pull request. `## Inputs and failure cases`
+  lists, by risk, the hostile, odd, empty, oversized, concurrent or half-failed inputs the change must survive, each with the test
+  that proves it.
 - `kb.py check spec` checks the shape: sections present and in order, no unfilled blank, a command in every criterion
   ([`kb.py`](../plugins/vibemaestro-sdlc/scripts/kb.py)).
 - The skill asks the person to approve the spec before any code is edited. A subagent of `local-parallel` ends its turn with
@@ -233,8 +235,9 @@ The kit has two plugins, for one person with one Claude seat on one machine:
 - The rule [`measurement-commands`](../plugins/vibemaestro-sdlc/rules/measurement-commands.instructions.md): before quoting a
   number, run a sure-positive control, because an empty result may come from a broken instrument.
 - The kit's own CI runs only the suites a change affects (`tests/run-all.sh --changed`, in `.github/workflows/test.yml`) and the
-  full suite twice a week (`.github/workflows/test-full.yml`). The kit's tests break a copy of the code on purpose and require
-  red ("planted breaks").
+  full suite twice a week (`.github/workflows/test-full.yml`). A test of the kit shows it works by being red on main before
+  the change and green after. Tests that break a copy of the code on purpose ("planted breaks") are being removed, and a check
+  refuses new ones.
 
 ### Where the kit differs
 
@@ -428,7 +431,7 @@ review.
 - **kb**: the `kb/` directory of a repository: intents, specs, plans, decisions and the current-state file.
 - **main session**: in `local-parallel`, the session the person talks to: it splits the work, briefs one subagent per task, relays spec approvals, post-checks and merges. It edits no file of a task.
 - **planted break**: a test that copies code, breaks the copy in one place on purpose, and requires the suite to go red.
-- **spec**: `kb/specs/<date>-<slug>.md`: four sections in order, with criteria that are commands, approved by a person before code.
+- **spec**: `kb/specs/<date>-<slug>.md`: five sections in order, with criteria that are commands, approved by a person before code.
 - **worker**: a subagent that builds one task against a brief, from intake to a draft pull request. Its result is a claim; the main session re-runs the acceptance command before believing it.
 
 ## Sources

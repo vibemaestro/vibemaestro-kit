@@ -9,8 +9,8 @@ description: "Use when: a repo app has no kb/ or lacks one of its directories, o
 a repo without `.vibemaestro/sdlc.json` runs the plugin on its defaults only. This skill is the one door for both: it scaffolds `kb/`
 and writes the per-repo config.
 
-The scaffold is **self-contained**: `kb/README.md` carries the directory table, the file-name convention, the four-section spec shape
-and the shape of `current-state.md`; it points to no other repo. Read the repo's own `kb/README.md` for the shapes.
+The scaffold is **self-contained**: `kb/README.md` carries the directory table, the file-name convention, the spec shape
+(with its `## Inputs and failure cases` table) and the shape of `current-state.md`; it points to no other repo. Read the repo's own `kb/README.md` for the shapes.
 
 ## Questions (seven, five more for the guarded merge, then the script does the rest)
 

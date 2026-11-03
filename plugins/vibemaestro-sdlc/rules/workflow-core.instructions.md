@@ -7,6 +7,8 @@ description: "General way of working for a Claude Code session in an app repo: e
 This core is delivered verbatim when a session opens. Rules by file or command (git, PR, current-state) arrive through hooks at the right moment;
 the rule catalogue is at the top of the session. The work flows: `intake` → `brainstorm` (when unclear) → `spec` → `plan` (when work must
 be split) → `ship`. Everything is written into the `kb/` of the repo you stand in; `kb/current-state.md` records only the present state.
+When another plugin's skill says otherwise (run the whole suite, revert the fix to see it fail, ask a human partner,
+decide without asking), the brief and sdlc win.
 
 - **Explain "why" before doing.** The person wants to understand, not just follow: give the reason (system constraint, security, cost), not only a command.
 - **Work in a worktree of its own, and run it before opening a PR.** The test: *which command proves what you just changed?* Run it.
@@ -14,15 +16,15 @@ be split) → `ship`. Everything is written into the `kb/` of the repo you stand
 - **State the requirement and the solution; execution may go to a subagent.** When you hand a task to a subagent, write *what must be true*
   (with the acceptance command) and *which way, and why* (with the context you measured) — not which file, line or command order. The brief is
   its contract: outside it, it stops and asks. State that must survive a compaction lives in the PR body and `kb/`, not only in the conversation.
-  A subagent runs on the model of its job: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get agents.<key>` prints it, passed as the Agent tool's `model`; `worker_model` for execution,
-  `search_model` for a read-only search, `review_model` for the fresh-context review (`agents.worker_model`, `agents.search_model`, `agents.review_model`). If the read fails, use the plugin default
+  A subagent runs on the model of its job: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get agents.<key>` prints it, passed as the Agent tool's `model`; `agents.worker_model` for execution,
+  `agents.search_model` for a read-only search, `agents.review_model` for the fresh-context review. If the read fails, use the plugin default
   (the same command with `--default`), tell the person what `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" config check` names, and do not edit the config for them; if the `--default` read fails too,
   ask the person which model to use.
 - **A privileged action follows CodeAct, delivered as BatonRun.** A write outside the session (GitHub, a registry, the user's plugin config, a deletion, a live system): a simple write (one step, reversible, not on the stop
   list, not met before: one comment, one ticket) is done directly; a task of two or more writes is a flow: never split it into simple writes. Otherwise `~/.local/state/vibemaestro/baton/bin/baton list <keyword>`; one fits: `~/.local/state/vibemaestro/baton/bin/baton go <prefix>:<name> key='value'…`; one is close: evolve it in place; none: write it (skill `batonrun`;
   `docs/batonrun.md` in the plugin root) and keep it with `pack` the second time. Adding a permission rule: `go kind:settings-merge`, never an Edit. A stop-list act waits for the owner; a refused act is never done another way. Never hand the owner command lines to type.
 - **Name a pull request or issue as a markdown link.** When you ask the person to review, merge or act on one, write the full URL inside the
-  sentence, one link per item, next to the action asked: `[PR <n>](https://<host>/<org>/<repo>/pull/<n>)`. A bare number is not enough.
+  sentence, one link per item, next to the action asked: `[PR <n>](https://<host>/<org>/<repo>/pull/<n>)`.
 - **Check the instrument before trusting a measurement.** The costliest diagnostic mistakes share one shape: the command ran, a number
   appeared, but it did not ask the question we thought. Four habits:
   1. One command per question when the result will lead to a conclusion; do not batch commands and read their output together.
@@ -31,7 +33,7 @@ be split) → `ship`. Everything is written into the `kb/` of the repo you stand
   3. Match a string literally with `grep -F`; `$`, `|`, `\|` behave differently between BSD and GNU grep.
   4. A number with no control is not stated yet: it goes into an answer only after a **sure-positive** case, or labelled *not yet checked*; unlabelled, it is an assertion.
 - **A proposal that is not measured is not made yet.** Before suggesting a new directory, mechanism, check layer or classification table, run
-  **one command** that answers: does this exist already, and does the base design have room for it? Build first, check later is the costliest way.
+  **one command** that answers: does this exist already, and does the base design have room for it?
 - **Small and clear things: fix them yourself, do not ask again.** When all three hold: (1) it can be undone (a commit on an unmerged branch,
   one line of config); (2) it was measured in this very turn — a command you just ran proves the fix is right, and the same command goes red
   when the fix is wrong; (3) it does not change a scope the person fixed. Still ask when: deleting or overwriting what cannot be recovered,

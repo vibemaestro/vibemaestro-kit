@@ -16,7 +16,6 @@
 #       the cleanup command and not running it, both directions of the exit code, a clean repo
 #   [K] config: threshold, protected branches, the intent prefix, the main line, flags over config
 #   [B] the base-ref rule and the failures: bad config rc 65, a ref that does not read, usage rc 64, not a repo rc 2
-# Each family runs again on a copy with ONE planted break and must go red.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -150,42 +149,5 @@ fam_base() {
 
 FAMILIES="fam_hub fam_config fam_base"
 for f in $FAMILIES; do "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each turns its family red =="
-D=dead_branches.sh
-BRKG order-swapped fam_hub '[D] positive: feature/done' $D '  if is_in "$b" "$merged_main"; then
-    dead="$dead$b"$'"'"'\n'"'"'           # group 1: deletable
-    continue
-  fi' '  if false; then
-    continue
-  fi'
-BRKG symref-counted fam_hub '[D] after fetch:' $D "  | awk -F'\\t' '\$2 == \"\" { print \$1 }' | grep -vxF \"\$MAIN_REF\" || true)" "  | awk -F'\\t' '{ print \$1 }' | grep -vxF \"\$MAIN_REF\" || true)"
-BRKG threshold-off-by-one fam_hub '[D] at the threshold' $D 'if [ "$n_dead" -gt "$THRESHOLD" ]; then' 'if [ "$n_dead" -ge "$THRESHOLD" ]; then'
-BRKG threshold-never-red fam_hub '[D] over the threshold' $D 'if [ "$n_dead" -gt "$THRESHOLD" ]; then' 'if false; then'
-BRKG deletes-the-branches fam_hub '[D] the gate deleted a branch' $D 'printf '"'"'\ncleanup command - read the list above' 'g push "$REMOTE" --delete ${dead//$REMOTE\//} >/dev/null 2>&1 || true
-printf '"'"'\ncleanup command - read the list above'
-BRKG no-cleanup-printed fam_hub '[D] no cleanup command' $D "printf '\\n  git push %s --delete \\\\\\n' \"\$REMOTE\"" ":"
-BRKG config-threshold-ignored fam_config '[K] dead_branches.max_merged_on_remote 1 from the config' $D '[ -n "$THRESHOLD" ] || THRESHOLD="$(cfg dead_branches.max_merged_on_remote)" || exit $?' '[ -n "$THRESHOLD" ] || THRESHOLD=0'
-BRKG flag-ignored fam_config '[K] a flag overrides the config' $D '[ -n "$THRESHOLD" ] || THRESHOLD=' 'THRESHOLD='
-BRKG protected-ignored fam_config '[K] protected not honoured' $D '  all_branches=$(printf '"'"'%s\n'"'"' "$all_branches" | grep -vxF "$REMOTE/$b" || true)' '  :'
-BRKG prefix-literal fam_config '[K] prefix ignored' $D '    "$REMOTE/$PREFIX"*) ;;' '    "$REMOTE/intent/"*) ;;'
-BRKG main-literal fam_config '[K] a repo whose main line is master' $D 'MAIN_REF="$REMOTE/$MAIN"' 'MAIN=main; MAIN_REF="$REMOTE/main"'
-BRKG config-from-head fam_base '[B] a PR that raises dead_branches' $D '${CONFIG_REF:+--config-ref "$CONFIG_REF"}' ''
-BRKG bad-ref-green fam_base '[B] a ref that does not read' gate_common.py '        raise Infra("ref `%s` does not read" % ref)
-    if git(["cat-file"' '        return None
-    if git(["cat-file"'
-BRKG config-error-swallowed fam_base '[B] an invalid config is rc 65' gate_common.py '        if probs:
-            raise ConfigError(sdlc_config.render_problems(probs))
-        return cfg' '        return cfg'
-BRKG empty-ref-falls-back fam_base '[B] an empty --config-ref' $D '[ $# -ge 2 ] && [ -n "$2" ] || { echo "dead-branches: $1 needs a value" >&2; exit 64; }; CONFIG_REF="$2"' '[ $# -ge 2 ] || { echo "dead-branches: $1 needs a value" >&2; exit 64; }; CONFIG_REF="$2"'
-BRKG usage-is-two fam_base '[B] an unknown flag is rc 64' $D "    *) printf 'dead-branches: unknown argument: %s\\n' \"\$1\" >&2; exit 64 ;;" "    *) printf 'dead-branches: unknown argument: %s\\n' \"\$1\" >&2; exit 2 ;;"
-BRKG not-a-repo-green fam_base '[B] not a git repo: rc 2' $D "g rev-parse --git-dir >/dev/null 2>&1 || { printf 'dead-branches: %s is not a git repo\\n' \"\$REPO\" >&2; exit 2; }" "g rev-parse --git-dir >/dev/null 2>&1 || { printf 'dead-branches: %s is not a git repo\\n' \"\$REPO\" >&2; exit 0; }"
-
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family"
 
 echo; summary

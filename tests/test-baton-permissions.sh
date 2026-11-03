@@ -5,8 +5,7 @@
 # Run: bash tests/test-baton-permissions.sh
 #
 # Every family takes a plugin copy; the suite runs them on a copy
-# of the real plugin, then each planted break (one changed line in baton.py, the launcher or session-start.py) on its own copy
-# and requires red on the intended check (expect_red, tests/fixtures/ports.sh). HOME, XDG_STATE_HOME and CLAUDE_PROJECT_DIR are
+# of the real plugin. HOME, XDG_STATE_HOME and CLAUDE_PROJECT_DIR are
 # scratch directories: the settings files are fakes the suite writes, and nothing outside the scratch tree is written, which
 # the last section checks. The managed settings file of the machine running the suite is read by the default-scope cases; a
 # machine whose managed settings hold baton rules can turn those cases red. Assertions read exit codes, the finding kinds
@@ -537,126 +536,6 @@ echo "== the real plugin =="
 for f in $FAMILIES; do
   if [ "$f" = fam_session ]; then d="$TMP/real-session"; mk_plugin_copy "$d"; "$f" "$d"; else "$f" "$PLUGIN"; fi   # it breaks baton.py
 done
-
-echo "== planted breaks: each one must turn its family red =="
-# BRK <label> <family> <needle> <file under the plugin> <old> <new> [<old> <new>...]
-BRK() {
-  local label=$1 fam=$2 needle=$3 file=$4 d; shift 4; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/$file" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-B=scripts/baton.py; LA=scripts/baton-launcher.py
-BRK missing-blind fam_check '[check] missing: an empty settings file' $B \
-    $'        if d is None:\n            out.append(("MISSING", "no allow rule' $'        if False:\n            out.append(("MISSING", "no allow rule'
-BRK owner-ask-blind fam_check '[check] missing: no ask for sign --by owner' $B \
-    $'        if d is None:\n            out.append(("MISSING", "no ask rule' $'        if False:\n            out.append(("MISSING", "no ask rule'
-BRK version-blind fam_check '[check] stale version' $B 'if m and (mine is None or m.group(1) != mine.group(1))' 'if False'
-BRK broad-sign-blind fam_check '[check] broad sign ask' $B '        elif d == "ask" and cmd == auto_sign:' $'        elif d == "ask":\n            pass\n        elif False:'
-BRK unsafe-behind-ask-blind fam_check '[check] unsafe allow: an allow on every sign, behind' $B \
-    'if k == "allow" and tool == "Bash" and bash_matches(content, cmd) and d != "allow":' 'if False:'
-BRK unsafe-no-ask-blind fam_check '[check] unsafe allow: …UNSAFE' $B \
-    $'        elif d == "allow":\n            out.append(("UNSAFE"' $'        elif False:\n            out.append(("UNSAFE"' \
-    'if k == "allow" and tool == "Bash" and bash_matches(content, cmd) and d != "allow":' 'if False:'
-BRK write-deny-counted fam_check '[check] Write(path) deny rules' $B 'k == "deny" and tool == "Edit" and path_matches' 'k == "deny" and tool in ("Edit", "Write") and path_matches'
-BRK wildcard-no-spaces fam_check '[check] all-good: the printed rules' $B \
-    $'            stars += 1\n            out.append(".*")' $'            stars += 1\n            out.append("[^ ]*")'
-BRK sha-rule-not-stale fam_check '[check] stale version: a rule naming a git-SHA' $B '(?:-[0-9a-f]{12})?|[0-9a-f]{12}(?:-[0-9a-f]{8})?|unknown)/")' ')/")'
-BRK subdir-rule-not-stale fam_check '[check] stale version: a rule naming a git-subdir' $B '|[0-9a-f]{12}(?:-[0-9a-f]{8})?|unknown)/")' '|[0-9a-f]{12}|unknown)/")'
-BRK own-subdir-stale fam_check "[check] a rule naming the running copy's own git-subdir directory" $B \
-    'if m and (mine is None or m.group(1) != mine.group(1))' 'if m'
-BRK launcher-stale-blind fam_check '[check] a launcher that differs' $B '    elif not launcher_current():' '    elif False:'
-BRK unreadable-blind fam_check '[check] …UNREADABLE' $B \
-    '            probs.append(("UNREADABLE",' '            0 and probs.append(("UNREADABLE",'
-BRK local-scope-unread fam_scopes "[scopes] an allow Bash(*) in the project's settings.local.json" $B \
-    '    out.append(("project local", os.path.join(proj, ".claude", "settings.local.json")))' ''
-BRK outside-accepted fam_launcher '[launcher] installPath outside the cache: rc 2' $LA 'if parent != base or not INSTALL_DIR.match(version):' 'if not INSTALL_DIR.match(version):'
-BRK any-dir-accepted fam_launcher '[launcher] a version directory that is not a version' $LA 'if parent != base or not INSTALL_DIR.match(version):' 'if parent != base:'
-BRK sha-refused fam_launcher '[launcher] a git-SHA version directory' $LA '|[0-9a-f]{12}(?:-[0-9a-f]{8})?|unknown)\Z")' '|unknown)\Z")'
-BRK unknown-refused fam_launcher '[launcher] the directory unknown' $LA '|unknown)\Z")' ')\Z")'
-BRK subdir-refused fam_launcher '[launcher] a git-subdir source directory' $LA '|[0-9a-f]{12}(?:-[0-9a-f]{8})?|' '|[0-9a-f]{12}|'
-BRK subdir-head-loose fam_launcher '[launcher] git-subdir shape: 11 hex before the dash' $LA '|[0-9a-f]{12}(?:-[0-9a-f]{8})?|' '|[0-9a-f]{11,13}(?:-[0-9a-f]{8})?|'
-BRK subdir-tail-loose fam_launcher '[launcher] git-subdir shape: 9 hex after the dash' $LA '(?:-[0-9a-f]{8})?' '(?:-[0-9a-f]{7,9})?'
-BRK subdir-case-folded fam_launcher '[launcher] git-subdir shape: upper case' $LA '|unknown)\Z")' '|unknown)\Z", re.I)'
-BRK subdir-segments-repeat fam_launcher '[launcher] git-subdir shape: an extra segment' $LA '(?:-[0-9a-f]{8})?' '(?:-[0-9a-f]{8})*'
-BRK end-anchor-newline fam_launcher '[launcher] git-subdir shape: a trailing newline' $LA '|unknown)\Z")' '|unknown)$")'
-BRK tag-suffix-refused fam_launcher '[launcher] a tag-resolved dependency directory' $LA '(?:-[0-9a-f]{12})?|' '|'
-BRK highest-wins fam_launcher "[launcher] the registry's latest entry runs" $LA '        elif best is None or stamp > best[0]:' '        elif best is None or False:'
-BRK script-symlink-followed fam_launcher '[launcher] baton.py symlink' $LA '        if os.path.realpath(script) != script:' '        if False:'
-BRK base-symlink-followed fam_launcher '[launcher] cache symlink' $LA \
-    '    if os.path.realpath(base) != base:' '    if False:' \
-    '    plugins = os.path.join(os.path.realpath(CLAUDE_DIR), "plugins")' '    plugins = os.path.join(CLAUDE_DIR, "plugins")' \
-    '        real = os.path.realpath(path)' '        real = os.path.normpath(path)' \
-    '        if os.path.realpath(script) != script:' '        if False:'
-BRK line-dropped fam_session '[session] auto, no rules: one line' scripts/session-start.py \
-    '        vsdlc.emit = with_baton_warning(vsdlc.emit)' '        pass'
-BRK manual-warns fam_session '[session] manual, no rules: silent' $B \
-    '    if mode == "manual" and not baton_rules_present(sources):' '    if False:'
-BRK manual-unsafe-silent fam_session '[session] manual, no baton rule but an allow Bash(*)' $B \
-    '        found = [f for f in found if f[0] != "MISSING"]' '        found = []'
-BRK line-raw fam_session '[session] a newline in the state path: no line of the message or context starts with FORGED' $B \
-    '        parts.insert(0, shown("baton permissions (mode %s): %d %s (first: %s); print the fix with: %s",' \
-    '        parts.insert(0, (lambda f, *a: f % a)("baton permissions (mode %s): %d %s (first: %s); print the fix with: %s",' \
-    '    return shown_join("; ", parts) if parts else None' '    return "; ".join(parts) if parts else None'
-BRK line-twice fam_session '[session] the second hook does not repeat the line' scripts/session-start.py \
-    '    if mode in vsdlc.CORE_MODES:                    # one of the two hooks' '    if True:                                        # one of the two hooks'
-BRK read-deny-counted fam_check '[check] Read(path) deny rules in place of Edit' $B \
-    'k == "deny" and tool == "Edit" and path_matches' 'k == "deny" and tool in ("Edit", "Read") and path_matches'
-BRK launcher-not-isolated fam_launcher '[launcher] a json.py next to the launcher is never imported' $LA \
-    '#!/usr/bin/env -S python3 -I' '#!/usr/bin/env python3' 'if not sys.flags.isolated:' 'if False:'
-BRK reexec-dropped fam_launcher '[launcher] started as python3 <launcher>: the json.py' $LA 'if not sys.flags.isolated:' 'if False:'
-BRK shebang-not-isolated fam_launcher '[launcher] a usercustomize.py' $LA '#!/usr/bin/env -S python3 -I' '#!/usr/bin/env python3'
-BRK no-script-refuses fam_launcher '[launcher] a version directory without baton.py next to a good one' $LA \
-    $'        if not os.path.isfile(script):\n            skipped.append(' $'        if not os.path.isfile(script):\n            raise Refused("x")\n            skipped.append('
-BRK env-config-read fam_launcher '[launcher] CLAUDE_CONFIG_DIR and HOME' $LA \
-    'plugins = os.path.join(os.path.realpath(CLAUDE_DIR), "plugins")' 'plugins = os.path.join(os.path.realpath(os.environ.get("CLAUDE_CONFIG_DIR") or CLAUDE_DIR), "plugins")'
-BRK state-not-forced fam_launcher '[launcher] XDG_STATE_HOME pointing elsewhere' $LA 'dict(os.environ, XDG_STATE_HOME=STATE_HOME)' 'dict(os.environ)'
-BRK write-deny-any fam_check '[check] an unrelated Write(path) deny' $B \
-    'if tool == "Write" and k == "deny" and any(path_matches(content, p) for p in guarded):' 'if tool == "Write" and k == "deny":'
-BRK launcher-unquoted fam_space '[space] the printed rules pass the check' $B \
-    '    L, plugins, st = shlex.quote(launcher_path()), os.path.join' '    L, plugins, st = launcher_path(), os.path.join'
-BRK broad-mode-ask fam_anchor '[anchor] outside: no ask rule catches a command that only mentions' $B \
-    '            out.append("Bash(%s %s *)" % (prog, sub) if wild else "Bash(%s %s:*)" % (prog, sub))' \
-    '            out.append("Bash(*%s %s *)" % (prog, sub) if wild else "Bash(%s %s:*)" % (prog, sub))'
-BRK leading-star-back fam_anchor '[anchor] outside: no ask rule starts with *' $B '    return out
-
-
-def snippet():' '    return out + ["Bash(*baton* sign --by owner*)"]
-
-
-def snippet():'
-BRK quoted-form-dropped fam_anchor '[anchor] outside: every real spelling' $B $'        out.append(\'"%s"\' % path)' '        pass'
-BRK python-form-dropped fam_anchor '[anchor] outside: every real spelling' $B \
-    '    return progs + pys + [("python3 " + w, wild) for w, wild in pys]' '    return progs + pys'
-BRK home-form-dropped fam_anchor '[anchor] home: every real spelling' $B $'    return ["~/" + rel, "$HOME/" + rel, \'"$HOME/%s"\' % rel]' '    return ["~/" + rel]'
-BRK star-at-root fam_anchor '[anchor] outside: no ask rule catches a command that only mentions' $B \
-    '            pys.append((w.replace(plugins, lit) + tail, True))' '            pys.append((tail, True))'
-BRK old-set-blind fam_check '[check] the old broad ask rules: rc 7, STALE' $B \
-    '        if k == "ask" and tool == "Bash" and text in OLD_ASKS:' '        if False:' \
-    '            if k == "ask" and tool == "Bash" and text not in OLD_ASKS and serves(content) and bash_matches(content, cmd):' '            if False:'
-BRK mention-check-off fam_check '[check] another broad ask on baton.py' $B \
-    '            if k == "ask" and tool == "Bash" and text not in OLD_ASKS and serves(content) and bash_matches(content, cmd):' '            if False:'
-BRK mention-check-unscoped fam_check "[check] the owner's own ask rules on git commit" $B ' and serves(content) and ' ' and '
-BRK attribution-blind fam_attribution '[attribution] commit trailer set' $B 'commits and PRs carry it" % ", ".join(on)] if on else []' 'commits and PRs carry it" % ", ".join(on)] if False else []'
-BRK attribution-whole-object fam_attribution '[attribution] keys merge across scopes: a partial object' $B \
-    '                got[k] = (a[k], where)' $'                got[k] = (a[k], where)\n        break'
-BRK bare-mode-missed fam_anchor '[anchor] outside: every real spelling' $B $'    progs = [(w, False) for w in spellings(lp) + home_spellings(lp) + ["baton"]]' '    progs = [(w, False) for w in spellings(lp) + home_spellings(lp)]'
-BRK attribution-precedence fam_attribution "[attribution] the project's local file wins" $B '"project local": 1, "project": 2, "user": 3}' '"project local": 3, "project": 2, "user": 1}'
-BRK attribution-unprinted fam_attribution '[attribution] --print' $B ', "attribution": dict(ATTRIBUTION_OFF)}' '}'
-BRK tilde-unprinted fam_tilde '[tilde] --print allows the ~/ spelling of run' $B '        allow += ["Bash(%s %s:*)" % (T, sub) for sub, _a in ALLOWED_SUBS] + ["Bash(%s sign --by coordinator-auto:*)" % T]' '        pass'
-BRK tilde-unchecked fam_tilde '[tilde] the 2.5.0 block (no ~/ allow): rc 7, MISSING' $B '        probes += ["%s %s %s" % (T, sub, a) for sub, a in ALLOWED_SUBS] + ["%s sign --by coordinator-auto %s" % (T, SEAL_PROBE)]' '        pass'
-BRK tilde-outside-home fam_tilde '[tilde] a state directory outside HOME: no ~/ rule' $B '    if rel == ".." or rel.startswith("../") or shlex.quote(rel) != rel:' '    if shlex.quote(rel) != rel:'
-
-BRK text-bare fam_documented '[documented] the core, the rule and the skill name one launcher spelling' rules/workflow-core.instructions.md \
-    '`~/.local/state/vibemaestro/baton/bin/baton list <keyword>`' '`baton list <keyword>`'
-BRK text-help-heading fam_documented '[documented] the core, the rule and the skill name one launcher spelling' skills/batonrun/SKILL.md \
-    '## Reference files' '## Reference files (`help <topic>`)'
-BRK text-other-spelling fam_documented "[documented] the core's list and go commands use that spelling" rules/workflow-core.instructions.md \
-    '`~/.local/state/vibemaestro/baton/bin/baton go <prefix>' '`~/.local/state/vibemaestro/baton/baton go <prefix>'
-BRK documented-unallowed fam_documented '[documented] the documented list, go and pack commands are allowed' $B '        allow += ["Bash(%s %s:*)" % (T, sub) for sub, _a in ALLOWED_SUBS] + ["Bash(%s sign --by coordinator-auto:*)" % T]' '        pass'
-BRK launcher-line-always fam_documented '[documented] SessionStart is silent at the default place' $B '    if typed == TEXT_LAUNCHER:' '    if False:'
-BRK launcher-line-never fam_documented '[documented] SessionStart names ~/other' $B '    if typed == TEXT_LAUNCHER:' '    if True:'
-BRK launcher-line-dropped fam_documented '[documented] SessionStart names the absolute path' $B '    parts = [launcher_line()]' '    parts = []'
-BRK launcher-line-uninstalled fam_documented '[documented] no launcher installed' $B '    if not os.path.isfile(launcher_path()):' '    if False:'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

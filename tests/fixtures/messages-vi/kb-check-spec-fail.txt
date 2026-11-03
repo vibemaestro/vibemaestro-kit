@@ -1,3 +1,4 @@
+WARNING kb/specs/2026-01-01-bad.md: section `## Inputs and failure cases` is missing: a table of input or failure / expected behaviour / test between `## Ngoài phạm vi` and `## Tiêu chí chấp nhận`, or one line `none, because <reason>` (required on a new spec only: no git base to read; the file name is dated 2026-01-01 (the section is required from 2026-11-02))
 kb: kb/specs/2026-01-01-bad.md does not pass the spec shape (4 problem(s)):
 - section `## Bối cảnh` is missing
 - section `## Mục tiêu` is missing

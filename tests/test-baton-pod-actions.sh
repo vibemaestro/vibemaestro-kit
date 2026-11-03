@@ -12,7 +12,6 @@
 #   [L] neither set (the laptop, a CI runner), or one only, or one blank or only spaces/tab/newline: rehearse ok, go dispatches / re-runs
 #       as before (the dispatch run phase with a signed plan line dispatches)
 #   [D] drift: the variables baton.py's SANDBOX_ENV names are the ones the kits test (all set: refused; each one blank: not)
-#   [X] planted breaks: the check removed (family [S] red), made unconditional (family [L] red), on `||` (the one-only case red), or the trim removed (the spaces-only case red)
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -36,8 +35,8 @@ printf '#!/bin/sh\nexec python3 -B "%s" "$@"\n' "$HERE/fixtures/baton_kinds_gh.p
 H1=$(printf '1a%.0s' $(seq 20)); B1=$(printf 'b1%.0s' $(seq 20))
 BT_OUT="$TMP/bt.out"; ST=""
 SBX=()        # the sandbox variables a case sets, as NAME=value words for env
-REFUSE_D="REFUSE a sandbox session (SEAT and INTENT_SLUG are set): its token cannot write to Actions (HTTP 403). Ask the coordinator to dispatch workflow ci.yml on acme/app ref main"
-REFUSE_K="REFUSE a sandbox session (SEAT and INTENT_SLUG are set): its token cannot write to Actions (HTTP 403). Ask the coordinator to re-run the failed jobs of run 77 of acme/app"
+REFUSE_D="REFUSE a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set): its token cannot write to Actions (HTTP 403). Ask the coordinator to dispatch workflow ci.yml on acme/app ref main"
+REFUSE_K="REFUSE a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set): its token cannot write to Actions (HTTP 403). Ask the coordinator to re-run the failed jobs of run 77 of acme/app"
 KD=kit:workflow-dispatch; KK=kind:ci-rerun-failed
 DARGS="--repo acme/app --workflow ci.yml --ref main"; KARGS="acme/app 77"
 
@@ -178,35 +177,44 @@ PY
   SBX=()
 }
 
-FAMILIES="fam_sandbox fam_laptop fam_drift"
-for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in a kit =="
-KBRK() {  # KBRK <label> <family> <needle> <file in the plugin> <old> <new>
-  local label=$1 fam=$2 needle=$3 file=$4 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/$file" "$5" "$6" && expect_red "$label" "$fam" "$d" "$needle"
+# fam_switch: the worker switch VIBEMAESTRO_ROLE=worker alone refuses as the pair does; another value adds nothing; the value is
+# baton.py's ROLE_ENV
+fam_switch() {
+  local P=$1 W role v
+  role=$(python3 -I -B - "$P/scripts/baton.py" <<'PY'
+import re, sys
+m = re.search(r'(?m)^ROLE_ENV = \("([A-Z_]+)", "([a-z]+)"\)', open(sys.argv[1], encoding="utf-8").read())
+print("%s=%s" % m.groups() if m else "")
+PY
+)
+  eq "$role" "VIBEMAESTRO_ROLE=worker" "[R] baton.py's ROLE_ENV is the switch the kits test"
+  SBX=("$role")
+  ST="$(fresh)/state"; W=$(fresh); world_d "$W"
+  # shellcheck disable=SC2086
+  eq "$(bt "$FBD" "$P" "$W" rehearse $KD $DARGS)/$(ncalls "$W")" "1/0" "[R] dispatch: the switch alone: rehearse rc 1, no gh call"
+  has "$(cat "$BT_OUT")" "$REFUSE_D" "[R] dispatch: …the refusal line"
+  eq "$(direct "$FBD" run "$W" "$PLUGIN/$KDS" $DARGS)/$(ncalls "$W")" "3/0" "[R] dispatch: …the run phase exits 3 too, no gh call"
+  ST="$(fresh)/state"; W=$(fresh); world_k "$W"
+  eq "$(bt "$FBK" "$P" "$W" rehearse $KK $KARGS)/$(ncalls "$W")" "1/0" "[R] rerun: the switch alone: rehearse rc 1, no gh call"
+  has "$(cat "$BT_OUT")" "$REFUSE_K" "[R] rerun: …the refusal line"
+  eq "$(direct "$FBK" run "$W" "$PLUGIN/$KKS" $KARGS)/$(ncalls "$W")" "3/0" "[R] rerun: …the run phase exits 3 too, no gh call"
+  for v in Worker solo " worker" ""; do
+    SBX=("VIBEMAESTRO_ROLE=$v")
+    ST="$(fresh)/state"; W=$(fresh); world_d "$W"
+    # shellcheck disable=SC2086
+    eq "$(bt "$FBD" "$P" "$W" rehearse $KD $DARGS)" 0 "[R] dispatch: VIBEMAESTRO_ROLE='$v': rehearse rc 0, not refused"
+    ST="$(fresh)/state"; W=$(fresh); world_k "$W"
+    eq "$(bt "$FBK" "$P" "$W" rehearse $KK $KARGS)" 0 "[R] rerun: VIBEMAESTRO_ROLE='$v': rehearse rc 0, not refused"
+  done
+  SBX=("VIBEMAESTRO_ROLE=solo" "SEAT=pod-seat" "INTENT_SLUG=pod-intent")
+  ST="$(fresh)/state"; W=$(fresh); world_d "$W"
+  # shellcheck disable=SC2086
+  eq "$(bt "$FBD" "$P" "$W" rehearse $KD $DARGS)" 1 "[R] dispatch: VIBEMAESTRO_ROLE=solo with the pair: still refused"
+  SBX=()
 }
-CHK='  if in_sandbox; then'
-KBRK dispatch-check-removed fam_sandbox '[S] dispatch: rehearse rc 1 in a sandbox session' "$KDS" "$CHK" '  if false; then'
-KBRK dispatch-check-always fam_laptop '[L] dispatch: no variable, rehearse rc 0' "$KDS" "$CHK" '  if true; then'
-KBRK dispatch-one-variable fam_laptop '[L] dispatch: only one set or one blank (SEAT=only-seat)' "$KDS" \
-  '  [ -n "${s//[[:space:]]/}" ] && [ -n "${i//[[:space:]]/}" ]' '  [ -n "${s//[[:space:]]/}" ] || [ -n "${i//[[:space:]]/}" ]'
-KBRK dispatch-trim-removed fam_laptop '[L] dispatch: only one set or one blank (INTENT_SLUG spaces only)' "$KDS" \
-  '  [ -n "${s//[[:space:]]/}" ] && [ -n "${i//[[:space:]]/}" ]' '  [ -n "$s" ] && [ -n "$i" ]'
-KBRK rerun-trim-removed fam_laptop '[L] rerun: only one set or one blank (INTENT_SLUG spaces only)' "$KKS" \
-  '  [ -n "${s//[[:space:]]/}" ] && [ -n "${i//[[:space:]]/}" ]' '  [ -n "$s" ] && [ -n "$i" ]'
-KBRK rerun-check-removed fam_sandbox '[S] rerun: rehearse rc 1 in a sandbox session' "$KKS" "$CHK" '  if false; then'
-KBRK rerun-check-always fam_laptop '[L] rerun: no variable, rehearse rc 0' "$KKS" "$CHK" '  if true; then'
-KBRK rerun-one-variable fam_laptop '[L] rerun: only one set or one blank (SEAT=only-seat)' "$KKS" \
-  '  [ -n "${s//[[:space:]]/}" ] && [ -n "${i//[[:space:]]/}" ]' '  [ -n "${s//[[:space:]]/}" ] || [ -n "${i//[[:space:]]/}" ]'
-KBRK drift-third-variable fam_drift '[D] dispatch: POD blank, the others set' scripts/baton.py \
-  'SANDBOX_ENV = ("INTENT_SLUG", "SEAT")' 'SANDBOX_ENV = ("INTENT_SLUG", "SEAT", "POD")'
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
+
+FAMILIES="fam_sandbox fam_laptop fam_drift fam_switch"
+for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

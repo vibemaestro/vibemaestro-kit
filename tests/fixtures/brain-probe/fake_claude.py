@@ -165,13 +165,26 @@ class Session(object):
 
     def run_hooks(self, event, **fields):
         inp = dict(fields, session_id=self.sid, transcript_path=self.path, cwd=self.cwd, hook_event_name=event)
-        contexts = []
-        for cmd, root in self.hook_commands(event):
+        contexts, procs = [], []
+        for cmd, root in self.hook_commands(event):        # started together, as Claude Code starts an event's commands
             env = dict(os.environ, CLAUDE_PROJECT_DIR=self.cwd)
             if root:
                 env["CLAUDE_PLUGIN_ROOT"] = root
-            p = subprocess.run(["sh", "-c", cmd], input=json.dumps(inp), capture_output=True, text=True, env=env, timeout=60)
-            out = p.stdout.strip()
+            procs.append(subprocess.Popen(["sh", "-c", cmd], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, text=True, env=env))
+        for p in procs:                                    # each input is far below a pipe's buffer: no write blocks
+            try:
+                p.stdin.write(json.dumps(inp))
+                p.stdin.close()
+            except BrokenPipeError:
+                pass
+            p.stdin = None                                 # closed here: communicate() below only reads
+        for p in procs:
+            try:
+                out = p.communicate(timeout=60)[0].strip()
+            except subprocess.TimeoutExpired:
+                p.kill()
+                out = p.communicate()[0].strip()
             if not out:
                 continue
             if event == "SessionStart":         # measured: the raw stdout is kept too, as a hook_success attachment

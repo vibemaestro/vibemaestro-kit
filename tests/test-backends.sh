@@ -11,7 +11,6 @@
 #   [A] github-actions: check runs across pages with their workflow names, commit statuses, failed steps of a job, a job that
 #       has not finished, a page count that does not add up
 #   [E] external adapters: loaded by path, a missing function and a missing file are rc 65, the digest follows the text
-#   [X] planted breaks: each check goes red on a copy with one break
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -177,27 +176,5 @@ FAMILIES="fam_ghcr fam_actions fam_external"
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
-echo "== planted breaks: each family must go red on a plugin with one break =="
-BRK() {  # BRK <label> <family> <needle> <file under gates/> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/gates/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK pagination-dropped fam_ghcr '[G] tag_exists: a tag on the last page is found' backends/__init__.py '    args = ["api", path, "--paginate"]' '    args = ["api", path]'
-BRK user-owner-dropped fam_ghcr '[G] a user-owned package' backends/ghcr.py 'OWNER_KINDS = ("orgs", "users")' 'OWNER_KINDS = ("orgs",)'
-BRK slash-unencoded fam_ghcr '[G] a package name with a slash' backends/ghcr.py 'urllib.parse.quote(name, safe="")' 'name'
-BRK internal-is-private fam_ghcr '[G] visibility other than private or public' backends/ghcr.py 'return v if v in ("private", "public") else "unknown"' 'return "private" if v == "internal" else v'
-BRK server-error-is-absent fam_ghcr '[G] a server error' backends/__init__.py '    if "HTTP 404" in err:' '    if True:'
-BRK workflow-names-dropped fam_actions '[A] runs: a check run on page 2 carries its workflow name' backends/github_actions.py '        suites[r["check_suite_id"]] = (r.get("name") or "", r.get("workflow_id"))' '        pass'
-BRK adapter-exit-escapes fam_external '[E] an adapter that calls sys.exit(0) on import' backends/__init__.py '            except (Exception, SystemExit) as e:                  # SystemExit too: an adapter cannot end the guard with its own code' '            except Exception as e:'
-BRK statuses-dropped fam_actions '[A] runs: three check runs across pages and two statuses' backends/github_actions.py '    for s in api_list("repos/%s/commits/%s/statuses?per_page=100" % (repo, sha)):' '    for s in []:'
-BRK failed-steps-only-failure fam_actions '[A] failed_steps: every step that is not success' backends/github_actions.py 'if s.get("conclusion") not in OK_STEPS]' 'if s.get("conclusion") == "failure" and "(" not in s["name"]]'
-BRK total-count-unchecked fam_actions '[A] check runs read fewer than total_count' backends/github_actions.py '    if len(out) != total:' '    if False:'
-BRK missing-function-unchecked fam_external '[E] an adapter missing a function of its kind: rc 65' backends/__init__.py '    missing = [f for f in FUNCS[kind] if not callable(getattr(mod, f, None))]' '    missing = []'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

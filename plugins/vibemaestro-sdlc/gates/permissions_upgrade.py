@@ -109,7 +109,7 @@ def write_atomic(path, data, mode):
 
 
 def rule_findings(found):
-    """The findings of `permissions --check` but the launcher's (an installed launcher is kit:coordinator-bootstrap's)."""
+    """The findings of `permissions --check` but the launcher's (an installed launcher is kit:bootstrap's)."""
     return [f for f in found if not f[1].startswith("the launcher ")]
 
 
@@ -168,7 +168,7 @@ def compute():
         shutil.rmtree(work, ignore_errors=True)
     if after:
         p.refusal = ("the swap cannot reach a clean permissions --check (it changes the ask rules only); the owner fixes these "
-                     "first, by hand or with kit:coordinator-bootstrap: %s" % "; ".join("%s %s" % f for f in after).replace(copy, user))
+                     "first, by hand or with kit:bootstrap: %s" % "; ".join("%s %s" % f for f in after).replace(copy, user))
         return p
     p.data, p.before = data, sha(raw)
     p.line = "%s%s (sha256 %s): ask -%d %s +%d %s, to sha256 %s" % (LINE, user, p.before, len(old), json.dumps(old), len(added),

@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rules as R  # noqa: E402
 import rule_packs  # noqa: E402
 import sdlc_config as C  # noqa: E402
-from hookout import (PLUGIN_NAME, config_short_note, config_short_warn, config_note_text, config_warn_text, emit, marker_name, once,  # noqa: E402,F401
-                     session_dir, short_warn, warn_text)
+from hookout import (PLUGIN_NAME, config_short_note, config_short_warn, config_note_text, config_warn_text, emit, forget_reminders,  # noqa: E402,F401
+                     marked, marker_name, once, scope_id, session_dir, session_key, short_warn, warn_text)
 
 # ── hằng số ────────────────────────────────────────────────────────────────────
 CORE_NAME = "workflow-core.instructions.md"   # lõi quy trình: giao nguyên văn lúc mở phiên
@@ -35,7 +35,11 @@ FLOW_ORDER = ("intake", "brainstorm", "spec", "plan", "ship")  # chuỗi lời n
 # (skill trùng việc của một plugin quy trình bên thứ ba → skill thay thế của ta): câu "không dùng X" chỉ có khi skill thay thế vừa kiểm là có mặt (A7)
 PROCESS_SWAP = (("brainstorming", "brainstorm"), ("writing-plans", "plan"),
                 ("finishing-a-development-branch", "ship"))
-SANDBOX_ENV = ("INTENT_SLUG", "SEAT")                  # cả hai cùng có = phiên trong sandbox (in_sandbox)
+SANDBOX_ENV = ("INTENT_SLUG", "SEAT")                  # cả hai cùng có = phiên worker (in_sandbox); deprecated, leaves in the next release
+ROLE_ENV = ("VIBEMAESTRO_ROLE", "worker")             # the worker switch: this variable holding exactly this value (in_sandbox)
+OLD_PAIR_NOTE = ("Deprecated: this session is a worker session because INTENT_SLUG and SEAT are both set; that signal leaves "
+                 "vibemaestro-sdlc in the next release. Whatever starts the session should set VIBEMAESTRO_ROLE=worker.")
+OLD_PAIR_SYS = "vibemaestro-sdlc: deprecated worker signal INTENT_SLUG + SEAT (leaves in the next release); set VIBEMAESTRO_ROLE=worker"
 
 # Trần nội dung MỖI chuỗi hook in ra là 10.000 ký tự (tài liệu hooks: "capped at 10,000 characters …
 # each string measured on its own"). Giữ dưới 9.000 để chừa biên; ký tự tiếng Việt có dấu đếm theo ký tự.
@@ -60,6 +64,12 @@ def git_out(cwd, *args):
     except Exception:
         return None
     return r.stdout.strip() if r.returncode == 0 else None
+
+
+def in_git_work_tree(cwd):
+    """`cwd` is inside a git work tree: `git rev-parse --is-inside-work-tree` prints `true`. Git missing, failing or timing out,
+    a bare repository and the inside of `.git` all count as outside: there is no repository flow to follow there."""
+    return git_out(cwd, "rev-parse", "--is-inside-work-tree") == "true"
 
 
 def read_payload(raw):
@@ -87,9 +97,15 @@ def plugin_problems(root):
 
 
 # ── gốc repo của phiên và trạng thái hook ──────────────────────────────────────
+def _path_str(v):
+    """A payload value that can be a path: a non-empty string with no NUL (os calls raise on one)."""
+    return isinstance(v, str) and bool(v) and "\x00" not in v
+
+
 def project_root(payload):
     """Gốc repo của PHIÊN: CLAUDE_PROJECT_DIR (Claude Code đặt), rồi cwd trong payload."""
-    d = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
+    cwd = payload.get("cwd")
+    d = os.environ.get("CLAUDE_PROJECT_DIR") or (cwd if _path_str(cwd) else "") or os.getcwd()
     d = os.path.realpath(d)
     top = git_out(d, "rev-parse", "--show-toplevel") if os.path.isdir(d) else None
     return os.path.realpath(top) if top else d
@@ -275,9 +291,9 @@ PACK_LINES_MAX = 10      # rule-pack lines in one reminder, and their characters
 PACK_CHARS_MAX = 3000
 
 
-def _marked(kind, sid):
-    """`once(kind, sid)` already said in this session (nothing is marked here)."""
-    return bool(sid) and os.path.exists(os.path.join(session_dir(sid), marker_name(kind)))
+def _marked(kind, sid, reminder=False):
+    """`once(kind, sid, reminder)` already said in this session (nothing is marked here)."""
+    return marked(kind, sid, reminder)
 
 
 def _slow_key(mine, name):
@@ -359,7 +375,7 @@ def _size_note(troot, cfg, rel, sid, path):
         with open(path, "rb") as f:
             raw = f.read()
         line = current_state.size_warning(raw, profile, name)
-        return line if line and once("size:%s:%d" % (os.path.realpath(path), len(raw)), sid) else None
+        return line if line and once("size:%s:%d" % (os.path.realpath(path), len(raw)), sid, reminder=True) else None
     except Exception:
         return None
 
@@ -394,17 +410,20 @@ def pretool_path(raw):
     payload = read_payload(raw)
     if not payload:
         return 0                                   # payload hỏng KHÔNG chặn tool
-    sid = payload.get("session_id")
+    # what this context has SEEN is per subagent (scope); what the machine COMPUTED (upstream cache, slow pack marks) per session
+    sid, scope = session_key(payload), scope_id(payload)
     root, troot = plugin_root(), project_root(payload)
-    cfg, silent, warn = hook_state(troot, sid)
+    cfg, silent, warn = hook_state(troot, scope)
     if silent:
         return 0                                   # `hooks: off`: im, TRƯỚC mọi việc khác
     bad = plugin_problems(root)
     if bad:
-        say_broken("pre-plugin-path", bad, sid, warn)
+        say_broken("pre-plugin-path", bad, scope, warn)
         return 0
-    ti = payload.get("tool_input") or {}
-    rel = R.rel_to_root(ti.get("file_path") or ti.get("notebook_path"), troot)
+    ti = payload.get("tool_input")
+    ti = ti if isinstance(ti, dict) else {}
+    target = ti.get("file_path") or ti.get("notebook_path")
+    rel = R.rel_to_root(target, troot) if _path_str(target) else None
     ctx = ""
     if rel:                                        # file ngoài repo đích (scratchpad…) không phải việc của ta
         up = repo_upstream(troot, cfg, sid)
@@ -414,13 +433,13 @@ def pretool_path(raw):
         # a page of the ledger gets the rules the index gets (its shape rule), on top of its own path's
         led = cfg["current_state"]["path"] if _is_page(cfg, rel) else None
         hits, slow = _match(rules, mine, lambda rs: _path_rules(rs, rel, led, dirs), sid, "edit")
-        fresh, extra = _cap_packs([n for n in hits if not _marked(_seen(n, up, stale, mine), sid)], mine,
+        fresh, extra = _cap_packs([n for n in hits if not _marked(_seen(n, up, stale, mine), scope, True)], mine,
                                   lambda n: len(_rule_line(root, n, paths, up, stale, troot)) + 3)
-        fresh = [n for n in fresh if once(_seen(n, up, stale, mine), sid)]
+        fresh = [n for n in fresh if once(_seen(n, up, stale, mine), scope, reminder=True)]
         decs = [(p, r, k) for p, r, k in R.decisions_for_path(troot, rel, dirs, up)
-                if once("dec:" + troot + ":" + p + ((":%s:%s" % (k, up["tip"])) if k else ""), sid)]
+                if once("dec:" + troot + ":" + p + ((":%s:%s" % (k, up["tip"])) if k else ""), scope, reminder=True)]
         parts = []
-        note = _size_note(troot, cfg, rel, sid, os.path.abspath(ti.get("file_path") or ti.get("notebook_path") or ""))
+        note = _size_note(troot, cfg, rel, scope, os.path.abspath(target))
         if note:
             parts.append(note)
         if fresh:
@@ -435,7 +454,7 @@ def pretool_path(raw):
             parts.append("This area already has a settled decision (with the alternatives that were dropped):\n%s\n"
                          "Read it so you do not break a choice that had a reason without knowing. You may change it, but bring a new "
                          "measurement — do not reopen it with an argument that was already rejected there." % "\n".join("- " + d for d in decs))
-        pages = [q for q in pages_for_path(troot, cfg, rel, dirs) if once("page:" + troot + ":" + q, sid)]
+        pages = [q for q in pages_for_path(troot, cfg, rel, dirs) if once("page:" + troot + ":" + q, scope, reminder=True)]
         if pages:
             parts.append("This area is described by a page of the ledger (%s and its pages):\n%s\n"
                          "Read it before you change the area; if your change makes a line of it untrue, correct that line in this PR "
@@ -696,19 +715,21 @@ def pretool_command(raw):
     payload = read_payload(raw)
     if not payload:
         return 0
-    sid = payload.get("session_id")
+    sid, scope = session_key(payload), scope_id(payload)   # seen: per subagent; computed: per session (pretool_path)
     root, troot = plugin_root(), project_root(payload)
-    cfg, silent, warn = hook_state(troot, sid)
+    cfg, silent, warn = hook_state(troot, scope)
     if silent:
         return 0
-    cmd = ((payload.get("tool_input") or {}).get("command") or "")
+    ti = payload.get("tool_input")
+    cmd = ti.get("command") if isinstance(ti, dict) else None
+    cmd = cmd if isinstance(cmd, str) else ""
     if not cmd:
         if warn:
             say("PreToolUse", "", warn)
         return 0
     bad = plugin_problems(root)
     if bad:
-        say_broken("pre-plugin-cmd", bad, sid, warn)
+        say_broken("pre-plugin-cmd", bad, scope, warn)
         return 0
     # only repo rules are read from the default ref, and decisions never match a command: no rules.dirs, no git process
     up = repo_upstream(troot, cfg, sid) if R.repo_dirs(cfg["rules"]) else None
@@ -735,8 +756,8 @@ def pretool_command(raw):
                                     "\nIf you still want to run it, put the prefix `RULES_GATE=off` RIGHT IN the command.")
         say("PreToolUse", slow, warn, extra={"permissionDecision": "deny", "permissionDecisionReason": reason})
         return 0
-    fresh, extra = _cap_packs([h for h in hits if not _marked(_seen(h[0], up, stale, mine), sid)], mine, size)
-    fresh = [h for h in fresh if once(_seen(h[0], up, stale, mine), sid)]
+    fresh, extra = _cap_packs([h for h in hits if not _marked(_seen(h[0], up, stale, mine), scope, True)], mine, size)
+    fresh = [h for h in fresh if once(_seen(h[0], up, stale, mine), scope, reminder=True)]
     trap = launcher_trap(cmd) if any(n == BATON_RULE for n, _t in rules) else ""     # every time: no once()
     ctx = "\n\n".join(x for x in (trap, lines(fresh, extra) if fresh else "", slow) if x)
     if ctx or warn:
@@ -766,7 +787,7 @@ def fit(body, limit):
 
 
 def coordinated_session(root, troot=""):
-    """This session is a coordinated one (rule coordinated-work): a sandbox session, or an enabled plugin of this copy's own
+    """This session is a coordinated one (rule coordinated-work): a worker session (in_sandbox), or an enabled plugin of this copy's own
     marketplace that depends on it ships the marker file (rule_packs.coordinated)."""
     return in_sandbox() or rule_packs.coordinated(root, _project(troot)) is not None
 
@@ -784,7 +805,7 @@ def session_core(root, coordinated=False):
         ctext = read_text(cpath)
         body += ("\n\n" + strip_front(ctext).strip() if ctext is not None
                  else "\n\nThis is a coordinated session, but the rule %s cannot be read: read it before you start" % cpath)
-    head = "The general way of working (read from the plugin at session start; it ships with the installed plugin, do not copy it into the repo): %s\n\n" % path
+    head = "The general way of working (read from the plugin at session start): %s\n\n" % path
     limit = BUDGET - len(head) - 900
     body, cut = fit(body, limit)
     ctx = head + body
@@ -1006,8 +1027,8 @@ def kb_reminder(troot, injected=False, rel="kb/current-state.md", lang="vi"):
         ref = scaffold_ref(troot)
         if ref:
             return SCAFFOLD_ON_BRANCH.get(lang, SCAFFOLD_ON_BRANCH["vi"]) % ref
-        # Repo chưa có kb/: chỉ chỉ đường tới skill dựng khung khi skill đó CÓ MẶT (A7).
-        if "init-kb" in plugin_skills():
+        # Repo chưa có kb/: chỉ chỉ đường tới skill dựng khung khi skill đó CÓ MẶT (A7), và chỉ trong cây git: ở thư mục trơn không có gì để dựng.
+        if "init-kb" in plugin_skills() and in_git_work_tree(troot):
             return ("This repo has no `kb/` yet: use the skill `%s:init-kb` to scaffold it — this repo's intent, plan and spec "
                     "need a place to be written." % PLUGIN_NAME)
         return ""
@@ -1026,8 +1047,8 @@ def kb_reminder(troot, injected=False, rel="kb/current-state.md", lang="vi"):
             "`outline <file>` (line range of each section, then Read that range with offset/limit)." % (first, kbpy))
 
 
-# Skill directories the "Skills of the plugin" line leaves out on purpose (empty: every user-facing skill is named).
-SKILLS_NOT_LISTED = ()
+# Skill directories the "Skills of the plugin" line leaves out on purpose (an old skill name that forwards to its new one for one release).
+SKILLS_NOT_LISTED = ("coordinator-bootstrap",)
 
 
 def all_skills():
@@ -1049,11 +1070,22 @@ def skills_reminder():
     return ["Skills of the plugin (just checked to be present): " + ", ".join("`%s:%s`" % (PLUGIN_NAME, s) for s in mine) + "."]
 
 
-def in_sandbox():
-    """Phiên này chạy trong sandbox? Nhận ra bằng HAI biến cùng có và khác rỗng: `INTENT_SLUG` và `SEAT`
-    (do hạ tầng dựng phiên đặt cho container của phiên). Một biến không đủ: máy cá nhân có thể tình cờ có
-    `SEAT` (hay `INTENT_SLUG`) trong shell — khi đó plugin vẫn phải làm việc như ngoài sandbox."""
+def old_pair():
+    """The deprecated worker signal: HAI biến cùng có và khác rỗng, `INTENT_SLUG` và `SEAT` (do hạ tầng dựng phiên đặt cho
+    container của phiên). Một biến không đủ: máy cá nhân có thể tình cờ có `SEAT` (hay `INTENT_SLUG`) trong shell — khi đó
+    plugin vẫn phải làm việc như ngoài sandbox."""
     return all(os.environ.get(v, "").strip() for v in SANDBOX_ENV)
+
+
+def in_sandbox():
+    """Phiên này là phiên worker? `VIBEMAESTRO_ROLE=worker` (exactly), or the deprecated pair (old_pair). A union: the switch
+    only adds, so no check a worker session gets is ever loosened by it, and any other value of it adds nothing."""
+    return os.environ.get(ROLE_ENV[0]) == ROLE_ENV[1] or old_pair()
+
+
+def old_pair_note():
+    """The deprecation line, when the old pair alone makes this a worker session; else empty."""
+    return OLD_PAIR_NOTE if old_pair() and os.environ.get(ROLE_ENV[0]) != ROLE_ENV[1] else ""
 
 
 def sandbox_first_steps():
@@ -1070,7 +1102,7 @@ def sandbox_first_steps():
                      "`intent/…` — skill `%s:intake`" % PLUGIN_NAME)
     if "spec" not in mine:
         return ("Sandbox session: " + "; ".join(steps) + ".") if steps else ""
-    steps.append("CREATE A SPEC from the intent in `kb/specs/<date>-<slug>.md` in the four-section shape — skill `%s:spec`" % PLUGIN_NAME)
+    steps.append("CREATE A SPEC from the intent in `kb/specs/<date>-<slug>.md` in the spec shape — skill `%s:spec`" % PLUGIN_NAME)
     if shutil.which("session-ask"):
         steps.append("ask the person to approve the spec with `session-ask \"<question>\"`, then end the turn")
     else:
@@ -1088,6 +1120,8 @@ def session_context(root, troot, cfg=None, sid=None, source=""):
     # once per session and tip; again after a compaction, which drops the earlier context but keeps the session id
     warn_now = up and (once("behind:%s:%s" % (troot, up["tip"]), sid) or source == "compact")
     behind, sysmsg = behind_warning(up, troot, notes, R.repo_dirs(cfg["rules"])) if warn_now else ("", "")
+    if old_pair_note():
+        sysmsg = sysmsg + "; " + OLD_PAIR_SYS if sysmsg else OLD_PAIR_SYS
     pw, npw = pack_warnings(notes, problems)
     if pw:
         line = "%s: rule packs: %d warning(s) in the session context" % (PLUGIN_NAME, npw)
@@ -1095,8 +1129,8 @@ def session_context(root, troot, cfg=None, sid=None, source=""):
     # when even the pack warnings do not fit, they become one line, before any row of this plugin or the repo is shortened
     pw_one = ["WARNING: rule packs: %d problem(s), not listed here (hook size cap); `python3 %s/scripts/kb.py config check` "
               "lists them" % (npw, root)] if npw else []
-    base_tail = [x for x in [kb_reminder(troot, index_injects(cfg, source), cfg["current_state"]["path"], cfg["language"]), sandbox_first_steps()] + skills_reminder() + notes_reminder(notes) if x]
-    flow = flow_reminder(troot)
+    base_tail = [x for x in [kb_reminder(troot, index_injects(cfg, source), cfg["current_state"]["path"], cfg["language"]), sandbox_first_steps(), old_pair_note()] + skills_reminder() + notes_reminder(notes) if x]
+    flow = flow_reminder(troot) if in_git_work_tree(troot) else ""     # the app-repo flow needs a repository; a plain folder gets the rules only
     head = ("The plugin's common rules are in %s/%s — a hook will remind you of the right rule when you edit a file (applyTo) or run a command "
             "(applyWhen); the catalogue below is only so you know they exist:" % (root, R.RULES_DIR))
     main = [r for r in rows if not r[1].get("pack")]
@@ -1350,8 +1384,12 @@ def session_start(mode):
     payload = read_payload(raw)
     if mode == "index":
         return session_index_start(payload)
+    if mode not in CORE_MODES and (payload.get("source") or "") == "compact":
+        # the compaction dropped the reminders said so far; the session id stays, so their marks would keep them unsaid. Only the
+        # `context` command forgets, and only reminder marks: the parallel `core` command's config warning keeps its mark
+        forget_reminders(session_key(payload))
     root, troot = plugin_root(), project_root(payload)
-    cfg, silent, warn = hook_state(troot, payload.get("session_id"))
+    cfg, silent, warn = hook_state(troot, session_key(payload))
     if silent:
         return 0                                   # `hooks: off`
     bad = plugin_problems(root)
@@ -1360,9 +1398,49 @@ def session_start(mode):
     elif mode in CORE_MODES:
         ctx, sysmsg = session_core(root, coordinated_session(root, troot))
     else:
-        ctx, sysmsg = session_context(root, troot, cfg, payload.get("session_id"), payload.get("source") or "")
+        ctx, sysmsg = session_context(root, troot, cfg, session_key(payload), payload.get("source") or "")
     ctx, sysmsg = with_warn(warn, ctx, sysmsg)    # lời cảnh báo config hỏng đứng trước, cùng một JSON
     emit("SessionStart", ctx, sysmsg)
+    return 0
+
+
+# ── SubagentStart ──────────────────────────────────────────────────────────────
+# A subagent gets no SessionStart context (measured): this hook gives it a short core. The hooks.json matcher skips these types,
+# which cannot edit the repo; the hook skips them too, so a matcher Claude Code reads differently costs nothing. Any other type,
+# or none, gets the core: a subagent that writes code without it is the costly side of a doubt.
+READ_ONLY_AGENTS = ("Explore", "Plan", "claude-code-guide", "statusline-setup")
+SUBAGENT_CORE = "templates/subagent-core.md"
+SUBAGENT_MAX = 3000                 # characters of the core a subagent gets: it is paid on every subagent the session starts
+
+
+def subagent_core(root):
+    """(context, system message) of the core for a subagent: `templates/subagent-core.md`, cut at SUBAGENT_MAX with a pointer to
+    the file; a one-line warning when it cannot be read."""
+    path = os.path.join(root, *SUBAGENT_CORE.split("/"))
+    text = read_text(path)
+    if text is None:
+        msg = "cannot read the subagent core %s: read %s before you change anything" % (path, os.path.join(root, R.RULES_DIR, CORE_NAME))
+        return warn_text([msg]), short_warn([msg])
+    tail = "\n\n[… cut at %d characters: read it all at %s]" % (SUBAGENT_MAX, path)
+    body, cut = fit(strip_front(text).strip(), SUBAGENT_MAX - len(tail))
+    return body + (tail if cut else ""), ""
+
+
+def subagent_start():
+    payload = read_payload(sys.stdin.read())
+    if not payload:
+        return 0                                   # no payload to read: nothing said, the subagent still starts
+    kind = payload.get("agent_type")
+    if isinstance(kind, str) and kind in READ_ONLY_AGENTS:
+        return 0
+    root, troot = plugin_root(), project_root(payload)
+    cfg, silent, warn = hook_state(troot, scope_id(payload))
+    if silent:
+        return 0                                   # `hooks: off`
+    bad = plugin_problems(root)
+    ctx, sysmsg = (warn_text(bad), short_warn(bad)) if bad else subagent_core(root)
+    ctx, sysmsg = with_warn(warn, ctx, sysmsg)
+    emit("SubagentStart", ctx, sysmsg)
     return 0
 
 
@@ -1376,7 +1454,7 @@ def run(fn, *args):
             return 0
         try:
             msg = "internal error in the hook (%s) — the plugin's rules may NOT be delivered in this session" % type(e).__name__
-            emit("SessionStart" if fn is session_start else "PreToolUse", warn_text([msg]), short_warn([msg]))
+            emit({session_start: "SessionStart", subagent_start: "SubagentStart"}.get(fn, "PreToolUse"), warn_text([msg]), short_warn([msg]))
         except BaseException:
             pass
         return 0

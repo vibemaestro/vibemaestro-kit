@@ -8,18 +8,19 @@ Phiên bản: xem `.claude-plugin/plugin.json`. Ghi chú phát hành: [CHANGELOG
 
 ## Plugin làm gì
 
-Trong phiên mở ở repo ứng dụng, plugin làm bốn việc.
+Trong phiên mở ở repo ứng dụng, plugin làm năm việc.
 
-1. **Lúc mở phiên**, plugin giao cho phiên lõi làm việc ([workflow-core](rules/workflow-core.instructions.md)), danh mục luật, lời nhắc về chuỗi skill và lời nhắc về `kb/` của chính repo đó. Việc này cần hai hook `SessionStart`, vì Claude Code giới hạn mỗi hook in ra tối đa 10.000 ký tự.
+1. **Lúc mở phiên**, plugin giao cho phiên lõi làm việc ([workflow-core](rules/workflow-core.instructions.md)), danh mục luật, lời nhắc về chuỗi skill và lời nhắc về `kb/` của chính repo đó. Trong một thư mục không phải cây làm việc git, phiên nhận lõi và danh mục luật, nhưng không nhận lời nhắc về luồng làm việc của repo app và không nhận lời khuyên dựng `kb/`. Việc này cần hai hook `SessionStart`, vì Claude Code giới hạn mỗi hook in ra tối đa 10.000 ký tự.
 2. **Trước khi sửa file** (`Edit`, `Write`, `NotebookEdit`), plugin nhắc mọi luật có `applyTo` khớp file đó, và mọi file `kb/decisions/*.md` của repo có `applyTo` khớp.
 3. **Trước khi chạy lệnh shell** (`Bash`), plugin nhắc mọi luật có `applyWhen` khớp lệnh. Luật có `level: block` thì chặn lệnh thay vì chỉ nhắc. Luật nào của plugin cũng không dùng `block`; luật của repo thì có thể.
-4. **Trong phiên worker** (cả hai biến môi trường `INTENT_SLUG` và `SEAT` cùng có giá trị, như một công cụ mở phiên thay bạn có thể đặt; phiên bạn tự mở không có biến nào trong hai biến đó), plugin thêm một lời nhắc: ghi intent nguyên văn, viết spec, xin người duyệt, rồi mới sửa code. Đây là lời nhắc, không phải cổng chặn.
+4. **Trong phiên worker** (biến môi trường `VIBEMAESTRO_ROLE` mang giá trị `worker`, như một công cụ mở phiên thay bạn có thể đặt; phiên bạn tự mở không có. Cả hai biến `INTENT_SLUG` và `SEAT` cùng có giá trị vẫn đánh dấu phiên worker, kèm một dòng báo ngừng hỗ trợ: tín hiệu đó bị bỏ ở bản phát hành kế tiếp), plugin thêm một lời nhắc: ghi intent nguyên văn, viết spec, xin người duyệt, rồi mới sửa code. Đây là lời nhắc, không phải cổng chặn.
+5. **Khi một subagent bắt đầu** (`SubagentStart`), plugin giao cho subagent một lõi ngắn tối đa 3.000 ký tự ([subagent-core](templates/subagent-core.md)): brief là hợp đồng, bằng chứng, tìm nguyên nhân gốc trước khi sửa, quét cùng loại lỗi, và các luật về test. Subagent không nhận chữ nào của lúc mở phiên. Các agent dựng sẵn chỉ đọc (`Explore`, `Plan`, `claude-code-guide`, `statusline-setup`) được bỏ qua.
 
 Tính chất của hook:
 
 - Hook không bao giờ làm công cụ lỗi cứng. Mọi lệnh hook thoát với mã 0, kể cả khi đầu vào không phải JSON.
 - Plugin hỏng (thiếu `rules/`, thiếu lõi) thì cảnh báo to ở đầu phiên. Plugin không giả vờ đã giao luật.
-- Luật khớp được hiện một lần mỗi phiên. Một lệnh bị chặn bởi `level: block` thì bị chặn mỗi lần.
+- Luật khớp được hiện một lần mỗi phiên, hiện lại sau một lần nén ngữ cảnh (nén làm mất nó khỏi ngữ cảnh), và một lần trong mỗi subagent, vì subagent giữ một bộ dấu riêng. Một lệnh bị chặn bởi `level: block` thì bị chặn mỗi lần.
 - Hook còn cảnh báo khi bản checkout tụt sau nhánh upstream, thêm ghi chú về kích thước và về trang sổ khi bạn sửa file sổ, và thêm một dòng lúc mở phiên khi phép kiểm quyền BatonRun thấy thiếu gì đó.
 - Hook im khi `.vibemaestro/sdlc.json` đặt `"hooks": "off"`. Repo có hook tra luật riêng trong `.claude/settings.json` phải đặt `"hooks": "off"` hoặc gỡ chúng đi: hai bộ hook cộng dồn, không tự loại trùng.
 - Luật của plugin khác đã cài và khai phụ thuộc vào plugin này được chính các hook này giao.
@@ -99,13 +100,13 @@ Skill được gọi theo tên, `vibemaestro-sdlc:<tên>`. Chúng ghi vào `kb/`
 | `init-kb` | Dựng `kb/` tự đủ và config của repo (`.vibemaestro/sdlc.json`, một thư mục luật). Chạy lại an toàn; `--adopt` cho repo đã có file quy trình. | repo chưa có `kb/`, thiếu một thư mục của nó, hoặc vừa dùng plugin |
 | `intake` | Ghi yêu cầu bằng lời của người dùng thành `kb/intent/<ngày>-<slug>.md`, tạo branch `intent/<ngày>-<slug>` và issue theo dõi. | người dùng giao một việc mới |
 | `brainstorm` | Làm rõ yêu cầu mơ hồ và ghi mục `Brainstorm result` vào file intent. Không tạo file spec riêng. | yêu cầu còn mơ hồ hoặc cần chọn hướng |
-| `spec` | Viết `kb/specs/<ngày>-<slug>.md` theo khuôn bốn mục (bối cảnh, mục tiêu, ngoài phạm vi, tiêu chí chấp nhận) và xin người dùng duyệt trước khi có code. | intent đã ghi và chưa có spec nào được duyệt |
+| `spec` | Viết `kb/specs/<ngày>-<slug>.md` theo năm mục (bối cảnh, mục tiêu, ngoài phạm vi, đầu vào và tình huống hỏng, tiêu chí chấp nhận) và xin người dùng duyệt trước khi có code. | intent đã ghi và chưa có spec nào được duyệt |
 | `plan` | Viết `kb/plans/<ngày>-<slug>.md`, mỗi PR một hàng kèm lệnh nghiệm thu; nối intent vào hàng; đọc trạng thái sống bằng `kb.py plan status`. | một chủ đề cần hai PR trở lên, hoặc có người hỏi trạng thái của nó |
 | `ship` | Viết đè `kb/current-state.md`, chạy các lệnh nghiệm thu, ghi bằng chứng, rồi mở PR draft bằng `scripts/open-pr.sh`. | việc của một intent đã xong |
 | `release` | Cắt PR release hoặc PR hotfix của một repo marketplace plugin bằng `scripts/release.py`; công bố bản release đã merge là bước riêng của repo. | hàng release của plan đến hạn, hoặc plugin đã cài cần hotfix |
 | `install-gates` | Cài sáu cổng quy trình thành workflow GitHub kèm script. Hỏi cổng nào và runner nào. Không bao giờ ghi đè. | repo muốn có các cổng đứng sau luật |
 | `batonrun` | Chạy một hành động ghi ra ngoài phiên thành một baton script: kiểm, diễn tập, ký, chạy, kiểm sau, ghi log. | merge, đẩy registry, xóa, force-push, đổi cấu hình plugin của người dùng |
-| `coordinator-bootstrap` | Dựng một máy cho BatonRun trong một run do chủ ký: launcher và khối quyền. | một máy mới, hoặc kiểm quyền lúc mở phiên báo lỗi |
+| `bootstrap` | Dựng một máy cho BatonRun trong một run do chủ ký: launcher và khối quyền. `coordinator-bootstrap` là tên cũ của nó, bị bỏ ở bản phát hành kế tiếp. | một máy mới, hoặc kiểm quyền lúc mở phiên báo lỗi |
 | `local-parallel` | Chạy nhiều việc cùng lúc trên một máy: mỗi việc một subagent (worktree riêng, `intake` đến PR nháp, model `agents.worker_model`); phiên chính giữ hàng đợi, chuyển lời duyệt spec, hậu kiểm từng PR và merge bằng `kit:merge-pr`. | người dùng muốn làm nhiều việc song song |
 | `owner-sign` | Chỉ chủ gọi (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): liệt kê các run baton mà một phiên đã xếp hàng chờ chữ ký của chủ (`go --queue`) và mở một hộp thoại của chủ cho mỗi mục được chọn, trong phiên của chính chủ. | có run đang chờ chủ ký trong hàng chờ |
 
@@ -139,7 +140,7 @@ Hai kiểm tra nữa chạy bên trong các script bạn vốn đã gọi, khôn
 - `scripts/open-pr.sh` chạy giới hạn của `pr-body` và cổng sổ hiện trạng (`current_state.gate`) trước khi mở PR.
 - `kb.py check current-state` kiểm khuôn của `kb/current-state.md`: không dấu hiệu lịch sử, và trần kích thước ở `current_state.limits`.
 
-Cổng merge có bảo vệ (`gates/merge_guard.py`), bộ chạy ghi GitHub (`gates/gh_write.py`) và động cơ dựng máy (`gates/coordinator_bootstrap.py`) không được cài vào repo. Chúng là động cơ của các kit baton `kit:merge-pr`, `kit:gh-write` và `kit:coordinator-bootstrap`, do một phiên chạy qua BatonRun. Cổng merge chỉ merge một PR khi mọi điều kiện đều đúng (check xanh, head là SHA đã báo, không có đường dẫn bị cấm, không tụt sau base) và đọc luật của nó ở `merge.*`.
+Cổng merge có bảo vệ (`gates/merge_guard.py`), bộ chạy ghi GitHub (`gates/gh_write.py`) và động cơ dựng máy (`gates/bootstrap.py`) không được cài vào repo. Chúng là động cơ của các kit baton `kit:merge-pr`, `kit:gh-write` và `kit:bootstrap`, do một phiên chạy qua BatonRun. Cổng merge chỉ merge một PR khi mọi điều kiện đều đúng (check xanh, head là SHA đã báo, không có đường dẫn bị cấm, không tụt sau base) và đọc luật của nó ở `merge.*`.
 
 ## Luật và cách hook giao luật
 
@@ -148,13 +149,14 @@ Luật là một file Markdown trong `rules/` có front matter nói khi nào áp
 | File luật | Tới tay khi |
 |---|---|
 | `workflow-core.instructions.md` | mở phiên |
-| `coordinated-work.instructions.md` | mở phiên, chỉ trong phiên có điều phối: phiên sandbox, hoặc phiên có một plugin đang bật cùng marketplace, phụ thuộc plugin này và mang file `sdlc-coordinated` ở gốc; ngoài ra chỉ là một dòng danh mục |
+| `coordinated-work.instructions.md` | ngừng hỗ trợ, bị bỏ ở bản phát hành kế tiếp. Mở phiên, chỉ trong phiên có điều phối: phiên worker, hoặc phiên có một plugin đang bật cùng marketplace, phụ thuộc plugin này và mang file `sdlc-coordinated` ở gốc; ngoài ra chỉ là một dòng danh mục |
 | `git-process.instructions.md` | `git worktree add`, `intent-branch.sh worker-branch`, `git rebase`, `git merge`, `git commit --amend`, `git push --force` |
 | `commit-unit.instructions.md` | `git commit`, `git rebase`, `git reset --soft`, `gh pr ready` |
 | `pr-body-shape.instructions.md` | `gh pr create`, `gh pr edit`, `gh pr comment`, `open-pr.sh` |
 | `pr-no-leaks.instructions.md` | `gh pr create/edit/comment/review/merge/close/reopen`, `gh issue create/edit/comment/close/reopen`, `gh api` ghi vào comments, pulls hoặc issues, `open-pr.sh`, `git commit` |
 | `before-ready.instructions.md` | `gh pr ready` |
 | `measurement-commands.instructions.md` | `gh pr/issue/run/release/workflow/label/repo list`, `grep -c`, `git log A..B` |
+| `test-quality.instructions.md` | sửa một file test của bất kỳ stack nào: dưới `tests/`, `test/`, `__tests__/` hoặc `spec/`, hoặc tên `test_*`, `*_test.*`, `*.test.*`, `*_spec.*`, `*.spec.*`, `*Test.*`, `*Tests.*` |
 | `document-precedence.instructions.md` | sửa file dưới `kb/`, `docs/` hoặc một thư mục luật đã cấu hình |
 | `public-tree.instructions.md` | sửa một file ngoài `kb/` và `public.private`, ở repo có đặt `public.private` |
 | `current-state-shape.instructions.md` | sửa `kb/current-state.md` |
@@ -168,12 +170,13 @@ Mỗi luật nói gì, một dòng:
 - `commit-unit`: một commit là một task hoặc một vòng sửa, không phải một buổi gõ phím; gộp các vòng sửa trước khi ready.
 - `pr-body-shape`: thân PR là trạng thái hiện hành, viết đè mỗi vòng, và ngắn; lịch sử các vòng đi vào comment.
 - `pr-no-leaks`: không secret, IP công khai, account ID, e-mail hay đường dẫn cá nhân trong thân PR, comment hoặc commit message.
-- `before-ready`: trước khi ready cần bằng chứng chạy trên bản cuối, hiện trạng đúng, một review bằng context mới, và không tự merge.
+- `before-ready`: trước khi ready cần bằng chứng chạy trên bản cuối, hiện trạng đúng, một review bằng context mới (giao việc theo [`skills/ship/reviewer-brief.md`](skills/ship/reviewer-brief.md)), review lại mỗi vòng sửa với hàm đã đổi được đọc trọn, quét cùng loại lỗi cho mỗi lỗi đã sửa, dừng vá sau lần sửa thứ hai cùng một loại, và không tự merge.
 - `measurement-commands`: chạy một ca chắc chắn dương làm đối chứng trước khi trích một con số đếm.
+- `test-quality`: mỗi test nêu chỗ hỏng nó bắt, giá trị mong đợi viết thẳng và một ca từ chối cho mỗi luật; đỏ trên main và xanh sau thay đổi; không test chỉ đọc chữ trong mã nguồn hay chỉ kiểm mock; không bao giờ hoàn tác bản sửa để thấy đỏ; tìm nguyên nhân gốc trước khi sửa.
 - `document-precedence`: khi hai tài liệu mâu thuẫn, supersession tường minh thắng, rồi tới mức ràng buộc, rồi tới ngày.
 - `public-tree`: ở repo công bố cây của mình, mọi file ngoài `kb/` và `public.private` là public: không gì riêng tư, không trỏ vào `kb/`, không số issue riêng, và test chạy được chỉ từ cây đó.
 - `current-state-shape`: file chỉ ghi trạng thái hiện hành, viết đè, có trần kích thước.
-- `coordinated-work`: chỉ khi một phiên điều phối giao việc cho một phiên thực thi mỗi pull request: các vai, brief là hợp đồng, bước hậu kiểm của phiên điều phối.
+- `coordinated-work` (ngừng hỗ trợ, bị bỏ ở bản phát hành kế tiếp): chỉ khi một phiên điều phối giao việc cho một phiên thực thi mỗi pull request: các vai, brief là hợp đồng, bước hậu kiểm của phiên điều phối.
 - `docs-final`: README và `docs/` là bản mô tả công khai cuối cùng của những gì đang có: không ngày tháng, lịch sử, quyết định, con trỏ vào `kb/` hay tên riêng tư; `kb/` giữ những thứ đó.
 - `version-policy`: xem [Chính sách phiên bản](#chính-sách-phiên-bản).
 - `batonrun`: xem [BatonRun](#batonrun).
@@ -301,7 +304,7 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | `tokens.spec.context` | `"Bối cảnh"` (`"Context"`) | Tiêu đề mục spec thứ nhất. |
 | `tokens.spec.goal` | `"Mục tiêu"` (`"Goal"`) | Tiêu đề mục spec thứ hai. |
 | `tokens.spec.out_of_scope` | `"Ngoài phạm vi"` (`"Out of scope"`) | Tiêu đề mục spec thứ ba. |
-| `tokens.spec.criteria` | `"Tiêu chí chấp nhận"` (`"Acceptance criteria"`) | Tiêu đề mục spec thứ tư. |
+| `tokens.spec.criteria` | `"Tiêu chí chấp nhận"` (`"Acceptance criteria"`) | Tiêu đề mục tiêu chí chấp nhận, mục bắt buộc cuối cùng. |
 | `tokens.spec.design` | `"Thiết kế"` (`"Design"`) | Tiêu đề mục thiết kế tùy chọn. |
 | `tokens.spec.evidence` | `"Bằng chứng chạy"` (`"Run evidence"`) | Tiêu đề mà tiêu chí cuối của spec phải nêu tên. |
 | `tokens.spec.placeholder` | `"<ĐIỀN"` (`"<FILL"`) | Dấu của chỗ trống còn lại trong khung; `kb.py check spec` từ chối spec còn dấu này. |

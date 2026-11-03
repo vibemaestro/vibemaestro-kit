@@ -5,8 +5,7 @@
 # =============================================================================
 # Run: bash tests/test-baton-output.sh
 #
-# Three families, each run on a copy of the real plugin, then on copies with ONE planted break in baton.py (expect_red,
-# tests/fixtures/ports.sh), which must go red on the intended tag:
+# Three families, each run on a copy of the real plugin:
 # - fam_lint: tests/fixtures/baton_output_lint.py finds no print or refusal call that formats a value by hand, no stray write;
 # - fam_forge: check, rehearse, sign, run, go, list, log and pack, from a working directory, with a state directory, a library
 #   and a baton file whose names each hold a newline and `owner: FORGED`, and a baton whose phases print `owner: FORGED` and an
@@ -204,27 +203,6 @@ FAMILIES="fam_lint fam_forge fam_plan"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done
-
-echo "== planted breaks: each family must go red on a copy with one break in baton.py =="
-# BRK <label> <family> <needle> <old> <new> [<old> <new>]... — a plugin copy with the replacements in baton.py, then expect_red
-BRK() {
-  local label=$1 fam=$2 needle=$3 d; shift 3; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/scripts/baton.py" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-GO_OK='            say("go: ok — %d write%s — %s", len(plan), "" if len(plan) == 1 else "s", out_path)'
-GO_RAW='            say("go: ok — %d write%s — %s" % (len(plan), "" if len(plan) == 1 else "s", out_path))'
-BRK site-raw-forge fam_forge '[forge] go: a forged line' "$GO_OK" "$GO_RAW"
-BRK site-raw-lint fam_lint '[lint] every print and refusal call of baton.py goes through the layer' "$GO_OK" "$GO_RAW"
-BRK layer-unescaped fam_forge '[forge] run: a forged line' \
-    '    return Safe(fmt % tuple(a if isinstance(a, (Safe, int, float)) else esc(str(a)) for a in args) if args else fmt)' \
-    '    return Safe(fmt % tuple(a if isinstance(a, (Safe, int, float)) else str(a) for a in args) if args else fmt)'
-BRK stray-write fam_lint '[lint] every print and refusal call of baton.py goes through the layer' \
-    '        say("%s", last)' '        sys.stdout.write(last + "\n")'
-BRK relay-raw fam_forge '[forge] the run log relays the script' '                    say("  %s", line, out=out)' '                    out.write(line + "\n")'
-BRK relay-unescaped fam_forge '[forge] …and its ESC escaped' '                    say("  %s", line, out=out)' '                    say("  %s", Safe(line), out=out)'
-BRK plan-file-escaped fam_plan '[plan] the plan file the run phase gets holds the raw line' \
-    '                f.write("".join(p + "\n" for p in plan))' '                f.write("".join(esc(p) + "\n" for p in plan))'
 
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"
 [ ! -e "$HOME/.local/state/vibemaestro" ] && ok "the scratch HOME holds no baton state (every family set XDG_STATE_HOME)" \

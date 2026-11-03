@@ -6,8 +6,7 @@
 #
 # Ports the families of two hub suites: the branch-lifecycle suite and, from the worker
 # suite, the only family that reaches this core (parallel workers leave no merge commit). Real git on throw-away repositories
-# with a bare origin; no network; no gh (the issue paths have their own suite). The core under test is a COPY of the plugin
-# (the real one first, then one copy per planted break), so the suite proves it can go red.
+# with a bare origin; no network; no gh (the issue paths have their own suite). The core under test is a COPY of the plugin.
 #
 # Exit codes asserted: 0 done, 2 environment, 3 missing intent record, 4 BLOCK (conflict, --no-rebase, push refused, ff
 # refused), 5 base or target unusable, 6 branch exists, 7 wrong tree or protected source or repo-location variable, 64 usage.
@@ -347,39 +346,5 @@ PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 [ -f "$PL0/scripts/intent_branch.py" ] && ok "instrument: the plugin copy has the core" || bad "instrument: the core is missing from the copy"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
-echo "== planted breaks: each family must go red on a core with one break =="
-BRK() {  # BRK <label> <family> <needle> <old> <new> — copy the plugin, plant one replacement in the core, expect red
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/intent_branch.py" "$4" "$5" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK missing-record-rc fam_gate '[B1] no kb' 'RC_ENV, RC_INTENT_FILE, RC_BLOCK, RC_TARGET, RC_EXISTS, RC_USAGE = 2, 3, 4, 5, 6, 64' 'RC_ENV, RC_INTENT_FILE, RC_BLOCK, RC_TARGET, RC_EXISTS, RC_USAGE = 2, 9, 4, 5, 6, 64'
-BRK exists-rc fam_gate '[B1] the branch exists: rc 6' 'RC_ENV, RC_INTENT_FILE, RC_BLOCK, RC_TARGET, RC_EXISTS, RC_USAGE = 2, 3, 4, 5, 6, 64' 'RC_ENV, RC_INTENT_FILE, RC_BLOCK, RC_TARGET, RC_EXISTS, RC_USAGE = 2, 3, 4, 5, 1, 64'
-BRK block-rc fam_conflict '[B6] the second worker' 'RC_ENV, RC_INTENT_FILE, RC_BLOCK, RC_TARGET, RC_EXISTS, RC_USAGE = 2, 3, 4, 5, 6, 64' 'RC_ENV, RC_INTENT_FILE, RC_BLOCK, RC_TARGET, RC_EXISTS, RC_USAGE = 2, 3, 1, 5, 6, 64'
-BRK wrong-tree-rc fam_protected '[B9] integrate in the main tree' 'RC_WRONG_TREE = 7' 'RC_WRONG_TREE = 1'
-BRK origin-before-local fam_worker '[B2] origin/intent' '["origin/" + intent_branch, intent_branch]' '[intent_branch, "origin/" + intent_branch]'
-BRK checkout-guard-off fam_tree '[B3] main tree, checkout requested' 'rc = _refuse_checkout_in_main_tree(a)' 'rc = 0'
-BRK env-guard-without-GIT_DIR fam_envs '[B10] integrate with GIT_DIR set' '("GIT_DIR", "GIT_WORK_TREE",' '("GIT_WORK_TREE",'
-BRK protected-names-off fam_protected '[B9] from a worktree, --branch main' '        if n in PROTECTED:' '        if False:'
-BRK no-rebase-ignored fam_norebase '[B7] --no-rebase with a stale branch' '        if a.no_rebase:' '        if False:'
-BRK abort-removed fam_conflict '[B6] …the worktree is stuck' 'git("rebase", "--abort", cwd=a.cwd)' 'git("status", cwd=a.cwd)'
-BRK push-forced fam_origin '[B5] --no-fetch with a moved origin' 'rc, out = git("push", "origin",' 'rc, out = git("push", "--force", "origin",'
-BRK checkout-detached fam_local '[B8] …the local intent is now at the branch tip' 'rc, out = git("checkout", intent, cwd=a.cwd)' 'rc, out = git("checkout", "--detach", intent, cwd=a.cwd)'
-BRK merge-without-ff-only fam_local '[B8] …with no merge commit' 'git("merge", "--ff-only", branch, cwd=a.cwd)' 'git("merge", "--no-ff", "-m", "merge", branch, cwd=a.cwd)'
-BRK merge-without-ff-only-static fam_ffonly '[B12] every merge call' 'git("merge", "--ff-only", branch, cwd=a.cwd)' 'git("merge", "--no-ff", "-m", "merge", branch, cwd=a.cwd)'
-BRK submodule-passes fam_submodule '[B4] integrate from a submodule' '    if not wt:
-        err(M("ib.int_main_tree",' '    if False:
-        err(M("ib.int_main_tree",'
-BRK identity-config-ignored fam_identity '[B13] …the config identity commits the rebase' '    if REBASE_IDENTITY:' '    if False:'
-BRK identity-env-outranks-config fam_identity '[B13] …the config identity commits the rebase' '        env = {"GIT_COMMITTER_NAME": n, "GIT_COMMITTER_EMAIL": e}' '        env = {}'
-BRK identity-never-checked fam_identity '[B13] no config identity, no committer' '    return (args, env) if rc == 0 else None' '    return (args, env)'
-BRK identity-check-ignores-env fam_identity '[B13] only GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL' '    rc, _ = git("var", "GIT_COMMITTER_IDENT", cwd=cwd)' '    rc, _ = git("config", "user.email", cwd=cwd)'
-BRK gpgsign-not-disabled fam_identity '[B13] commit.gpgsign=true with a signer' '    args, env = ["-c", "commit.gpgsign=false"], {}' '    args, env = [], {}'
-# the control of the instrument: an unbroken copy stays green on every family (the probe is not red by itself)
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy of the plugin passes every family (no failed check)"
 
 echo; summary

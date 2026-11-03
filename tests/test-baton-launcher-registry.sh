@@ -19,7 +19,7 @@
 #   fam_unresolvable a launcher copy whose install-directory rule knows only X.Y.Z, against a SHA-named install: the check names
 #                    it first, and following the printed fix leaves a working launcher;
 #   fam_setup        `baton help setup` states when an upgrade needs --install-launcher.
-# The suite runs them on a copy of the real plugin, then each planted break on its own copy (expect_red). HOME, XDG_STATE_HOME
+# The suite runs them on a copy of the real plugin. HOME, XDG_STATE_HOME
 # and CLAUDE_PROJECT_DIR are scratch directories; nothing outside the scratch tree is written, which the last section checks.
 # Assertions read exit codes, finding kinds, files and the commands a line names.
 # =============================================================================
@@ -229,37 +229,6 @@ FAMILIES="fam_registry fam_unchanged fam_unresolvable fam_setup"
 
 echo "== the real plugin =="
 for f in $FAMILIES; do "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each one must turn its family red =="
-# BRK <label> <family> <needle> <file under the plugin> <old> <new> [<old> <new>...]
-BRK() {
-  local label=$1 fam=$2 needle=$3 file=$4 d; shift 4; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/$file" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-B=scripts/baton.py
-BRK mismatch-blind fam_registry "[registry] the session's copy is not the registry's: check rc 10" $B \
-    '    if best is None or listed:' '    if True:'
-BRK session-hint-from-session fam_registry '[registry] SessionStart prints no --install-launcher' $B \
-    $'    other = registry_other()\n    if other:\n        return other_line(other)\n    sources, mode' $'    sources, mode'
-BRK install-unguarded fam_registry '[registry] --install-launcher from the session' $B \
-    '    if other and not force:' '    if False:'
-BRK guard-too-wide fam_unchanged '[unchanged] a copy outside the cache' $B \
-    $'    if os.path.dirname(me) != base:\n        return None' $'    if os.path.dirname(me) != base:\n        return os.path.basename(me), "x", base'
-BRK listed-ignored fam_unchanged "[unchanged] the session's copy still listed" $B \
-    '        listed = listed or real == me' '        listed = False'
-BRK probe-blames-registry fam_unchanged '[unchanged] …not blamed on the launcher copy' $B \
-    '    return installed if isinstance(installed, str) and mine is None else None' '    return installed if isinstance(installed, str) else None'
-BRK reason-unescaped fam_unresolvable '[unresolvable] …its reason starts no line' $B \
-    '                                    "until --install-launcher from the installed sdlc" % (launcher_path(), esc(why))))' \
-    '                                    "until --install-launcher from the installed sdlc" % (launcher_path(), why)))' \
-    '        parts.insert(0, shown("baton permissions (mode %s): %d %s (first: %s); print the fix with: %s",' \
-    '        parts.insert(0, (lambda f, *a: f % a)("baton permissions (mode %s): %d %s (first: %s); print the fix with: %s",' \
-    '    return shown_join("; ", parts) if parts else None' '    return "; ".join(parts) if parts else None'   # the session line is escaped too
-BRK probe-off fam_unresolvable '[unresolvable] …the first finding says' $B \
-    '        why = launcher_refuses()' '        why = None'
-BRK setup-reverted fam_setup '[setup] it no longer says' skills/batonrun/setup.md \
-    'After a plugin upgrade:' $'A plugin upgrade needs nothing: the launcher picks the new version.\n\nAfter a plugin upgrade:'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

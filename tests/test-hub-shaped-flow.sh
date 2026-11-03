@@ -111,11 +111,12 @@ BRAINSTORM='## Kết quả brainstorm
 write_intent() {
   printf -- '---\ndescription: "Example service limits under systems/"\n---\n\n# Example service limits\n\n*Recorded in the requester'"'"'s words.*\n\nRaise the example service limits and keep the ledger current.\n\n%s\n' "$BRAINSTORM" > "$1"
 }
-write_spec() {  # write_spec <file> <fault>: the four sections; the `spec` fault drops one
+write_spec() {  # write_spec <file> <fault>: the spec's sections; the `spec` fault drops the out-of-scope one
   {
     printf -- '---\ndescription: "Example service limits under systems/"\n---\n\n# Example service limits\n\nIntent: kb/intent/%s.md\n\n' "$SLUG"
     printf '## Bối cảnh\n\nThe example service runs with the default limits.\n\n## Mục tiêu\n\nThe limits live in `systems/example/limits.yaml` and the ledger says the batch runs.\n\n'
     [ "$2" = spec ] || printf '## Ngoài phạm vi\n\nOther services.\n\n'
+    printf '## Inputs and failure cases\n\n| Input or failure | Expected | Test |\n|---|---|---|\n| a limit of 0 | refused | `cat systems/example/limits.yaml` |\n\n'
     printf '## Tiêu chí chấp nhận\n\n1. `cat systems/example/limits.yaml` shows the new limits.\n2. PR có mục `## Bằng chứng chạy` ghi output thật của lệnh trên.\n'
   } > "$1"
 }

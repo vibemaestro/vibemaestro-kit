@@ -26,9 +26,10 @@ Check: `kb.py check [--strict]`.
 **Finding things without reading them:** `kb.py find <words>` (superseded/done hidden unless `--all`), `kb.py list
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
-**Khuôn spec của một intent:** bốn mục `## ` đúng thứ tự — `## Bối cảnh`, `## Mục tiêu`, `## Ngoài phạm vi`,
-`## Tiêu chí chấp nhận`; `## Thiết kế` (tuỳ chọn) đứng sau. Tiêu chí là **lệnh** + kết quả mong đợi; tiêu chí cuối luôn là:
-PR có mục `## Bằng chứng chạy`. Kiểm hình dạng: `kb.py check spec <ngày>-<slug>`.
+**Khuôn spec của một intent:** năm mục `## ` đúng thứ tự — `## Bối cảnh`, `## Mục tiêu`, `## Ngoài phạm vi`,
+`## Inputs and failure cases`, `## Tiêu chí chấp nhận`; `## Thiết kế` (tuỳ chọn) đứng sau. `Inputs and failure cases` là bảng
+đầu vào hay sự cố / hành vi mong đợi / test chứng minh (hoặc một dòng `không có, vì <lý do>`); spec có từ trước chỉ bị cảnh báo.
+Tiêu chí là **lệnh** + kết quả mong đợi; tiêu chí cuối luôn là: PR có mục `## Bằng chứng chạy`. Kiểm hình dạng: `kb.py check spec <ngày>-<slug>`.
 
 **Khuôn `current-state.md`:** chỉ trạng thái hiện hành, viết đè không nối thêm; không lịch sử (ngày đo, số PR, "trước
 đây…"), không cách làm hay số liệu thí nghiệm — chi tiết nằm ở `specs/` và `decisions/`, file này chỉ trỏ tới. Có trần

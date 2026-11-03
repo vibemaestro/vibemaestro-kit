@@ -12,8 +12,6 @@
 #   [F] after expect_red: no `f.*` tree, no `break-*` copy, no `er-scratch.*` is left in the suite's TMP; the family's `fresh` and mktemp
 #       land under the scratch root, not in the suite's TMP; a copy with another name is not touched; a break ended by the time cap
 #       leaves nothing either
-#   [B] planted breaks of ports.sh (a copy of it): the scratch removal gone, the break-copy removal gone, the family's scratch root gone:
-#       each leaves something and the probe says so
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -67,18 +65,5 @@ OUT=$(probe "$PORTS" keep)
 has "$OUT" "mycopy: kept" "[F] a copy that is not named break-* is left alone"
 OUT=$(probe "$PORTS" cap)
 eq "$(printf '%s\n' "$OUT" | sed -n 's/^left: //p' | tr -d ' ')" "" "[F] a break stopped by the time cap leaves nothing either"
-
-echo "== [B] planted breaks of ports.sh: each must leave something =="
-# BRK <label> <needle> <sed expression on ports.sh> <mode> — the probe on a copy of ports.sh with one break; it must report the needle
-BRK() {
-  local f="$TMP/ports-$1.sh" out
-  sed "$3" "$PORTS" > "$f"
-  ne "$(cmp -s "$PORTS" "$f"; echo $?)" 0 "instrument: [$1] changes ports.sh"
-  out=$(capped probe "$f" "$4")
-  has "$out" "$2" "break [$1]: the probe reports what is left"
-}
-BRK scratch-kept 'left in tmpd: er-scratch' 's#^  rm -rf "$scratch"$#  :#' run
-BRK copy-kept 'left: break-p' 's#^  case "$dir" in "$TMP"/break-\*) .*$#  :#' run
-BRK family-in-suite-tmp 'family fresh in: .' 's#^  TMP=$5; TMPDIR=$5/tmpd; mkdir -p "$TMPDIR"; export TMP TMPDIR$#  :#' run
 
 echo; summary

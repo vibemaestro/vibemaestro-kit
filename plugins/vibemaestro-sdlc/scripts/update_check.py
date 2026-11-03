@@ -24,8 +24,8 @@ the repository's root. A session that has a line to show or a read to start deci
 the read until it ends; one older than STALE is taken over); a session that cannot take it prints and writes nothing. A proxy in
 the environment is used as urllib uses it, except for the tests' loopback server.
 
-Silent, with no read: a manifest without a version or a valid repository (a private install); a sandbox pod (INTENT_SLUG and
-SEAT); VIBEMAESTRO_NO_UPDATE_CHECK or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set (not empty, not 0); `update_check: false` or
+Silent, with no read: a manifest without a version or a valid repository (a private install); a worker session
+(VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and SEAT, deprecated); VIBEMAESTRO_NO_UPDATE_CHECK or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set (not empty, not 0); `update_check: false` or
 `hooks: "off"` in the project's `.vibemaestro/sdlc.json`; no CLAUDE_PLUGIN_DATA.
 
 VIBEMAESTRO_UPDATE_CHECK_API replaces https://api.github.com only when it is http://127.0.0.1:<port> (the tests' fake server).
@@ -122,7 +122,7 @@ def config_off():
 
 
 def silent():
-    if os.environ.get("INTENT_SLUG") and os.environ.get("SEAT"):
+    if os.environ.get("VIBEMAESTRO_ROLE") == "worker" or all(os.environ.get(v, "").strip() for v in ("INTENT_SLUG", "SEAT")):
         return True
     if optout("VIBEMAESTRO_NO_UPDATE_CHECK") or optout("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"):
         return True

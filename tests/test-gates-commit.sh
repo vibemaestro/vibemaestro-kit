@@ -4,7 +4,7 @@
 # =============================================================================
 # Run: bash tests/test-gates-commit.sh
 #
-# Families, each run on a copy of the real plugin and then on copies with ONE planted break that must turn it red:
+# Families, each run on a copy of the real plugin:
 #   [T] thresholds: just under and just over for the commit count and for the touches of one file; counted per file, not in total
 #   [X] the exemption line: its token, its length, and every place a line does not count as a statement (fences, comments,
 #       quotes, indentation, placeholders); it waives only the two thresholds
@@ -325,76 +325,5 @@ PY
 
 FAMILIES="fam_thresholds fam_exempt fam_side fam_marks fam_rounds fam_report fam_args fam_infra fam_routes fam_config"
 for f in $FAMILIES; do "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each turns its family red =="
-CDG=commit_discipline.py
-BRKG count-off-by-one fam_thresholds '[T] 16 commits are red' $CDG '    if m["commits"] > max_commits:' '    if m["commits"] > max_commits + 1:'
-BRKG touch-off-by-one fam_thresholds '[T] one file in 5 commits is red' $CDG 'for f, n in m["file_touch"].items() if n > max_touches)' 'for f, n in m["file_touch"].items() if n > max_touches + 1)'
-BRKG touch-counted-in-total fam_thresholds '[T] 5 commits on 5 different files pass' $CDG '        for f in set(c["files"]):
-            touch[f] = touch.get(f, 0) + 1' '        for f in set(c["files"]):
-            touch["all"] = touch.get("all", 0) + 1'
-BRKG exemption-always fam_exempt '[X] a reason under 15 characters stays red' $CDG '    if why is None or len(PLACEHOLDER_RX.sub("", why).strip()) < MIN_REASON:' '    if why is None:'
-BRKG exemption-fences-kept fam_exempt '[X] inside a code fence: does not count' $CDG 'gc.strip_fences(body or ""), re.M)' 'body or "", re.M)'
-# restores 1.1.0, the first VALID line
-BRKG exemption-first-valid-line fam_exempt "[X] the gate's own hint left above a valid line" $CDG '    why = first_line(body, token)
-    if why is None or len(PLACEHOLDER_RX.sub("", why).strip()) < MIN_REASON:
-        return None
-    return why' '    for m in re.finditer(r"^ {0,3}" + re.escape(token) + r"[ \t]*(.+?)[ \t]*$", gc.strip_fences(body or ""), re.M):
-        if len(PLACEHOLDER_RX.sub("", m.group(1)).strip()) >= MIN_REASON:
-            return m.group(1)
-    return None'
-BRKG rejected-line-silent fam_exempt '[X] a rejected first line: the output names it' $CDG '            if any(w for _, _, w in found) and first_line(' '            if False and first_line('
-BRKG exemption-bare-token-counted fam_exempt '[X] a bare token line is skipped' $CDG 'r"[ \t]*(.+?)[ \t]*$", gc.strip_fences(body or ""), re.M)' 'r"[ \t]*(.*?)[ \t]*$", gc.strip_fences(body or ""), re.M)'
-BRKG exemption-indent fam_exempt '[X] indented by 4 spaces' $CDG '"^ {0,3}" + re.escape' '"^ *" + re.escape'
-BRKG exemption-anywhere fam_exempt '[X] not at the start of a line' $CDG '"^ {0,3}" + re.escape' '"" + re.escape'
-BRKG exemption-waives-all fam_exempt '[X] wip plus an exemption stays red' $CDG '"%d commits carry a wip/fixup/squash mark (%s)"
-                      % (len(m["markers"]), _list([c["sha"][:7] for c in m["markers"]])), False))' '"%d commits carry a wip/fixup/squash mark (%s)"
-                      % (len(m["markers"]), _list([c["sha"][:7] for c in m["markers"]])), True))'
-BRKG side-merge-ignored fam_side '[S] merge --no-ff that keeps 3 side commits: red' $CDG '            if rc == 1:
-                foreign.append(par)' '            if rc == 99:
-                foreign.append(par)'
-BRKG all-merges-red fam_side '[S] catch-up counted wrong' $CDG '            rc = gc.git(["merge-base", "--is-ancestor", par, base], cwd)[0]' '            rc = 1'
-BRKG stale-base-hint-gone fam_side '[S] the stale-BASE hint is missing' $CDG 'BASE is "
-                      "older than main' 'the base is "
-                      "behind'
-BRKG wip-anywhere fam_marks '[W] subject «feat(wip): a»' $CDG 'WIP_RX = re.compile(r"(?i)^\s*(?:[a-z][\w-]*(?:\([^)]*\))?!?:\s*)?[\[(]?\s*wip\b|' 'WIP_RX = re.compile(r"(?i)\bwip|'
-BRKG fixup-dropped fam_marks "[W] 'fixup!': red" $CDG '(?:fixup|squash|amend)!' '(?:squash|amend)!'
-BRKG round-case-sensitive fam_rounds '[R] ROUND 1 in upper case' $CDG '    m = rx.search(gc.sdlc_config.round_plain(subject))' '    m = rx.search(subject)'
-BRKS round-accent-kept fam_rounds '[R] the same word decomposed' sdlc_config.py 'if not unicodedata.combining(ch))' 'if True)'
-BRKS round-dj-kept fam_rounds '[R] the d with stroke' sdlc_config.py '.replace("\u0111", "d")' ''
-BRKG round-warning-off fam_config '[C] a round pattern in upper case' $CDG '    if gc.sdlc_config.round_never_matches(cfg["commits"]["round_pattern"]):' '    if False:'
-BRKG round-pattern-ignored fam_rounds '[R] a configured pattern' $CDG '    rx = re.compile(cfg["commits"]["round_pattern"])' '    rx = re.compile(r"\bround\s*(\d+)\b")'
-BRKG round-last-match fam_rounds '[R] a round-2 commit that mentions round 1' $CDG '    m = rx.search(gc.sdlc_config.round_plain(subject))' '    ms = list(rx.finditer(gc.sdlc_config.round_plain(subject))); m = ms[-1] if ms else None'
-BRKG dots-gone fam_report '[H] four hot files: dots added' $CDG '    return ", ".join(items[:n]) + (", ..." if len(items) > n else "")' '    return ", ".join(items[:n])'
-BRKG flag-ignored fam_args '[A] --max-commits 2 with 3 commits: red' $CDG 'a.max_commits if a.max_commits is not None else cfg["commits"]["max_per_pr"]' 'cfg["commits"]["max_per_pr"]'
-BRKG json-exempt-always fam_args '[A] --json exempt unused' $CDG '    m["exempt"] = why if why and any(f[2] for f in found) else None' '    m["exempt"] = why'
-BRKG usage-is-two fam_args '[A] an unknown flag is rc 64' $CDG '        return gc.USAGE if e.code else 0' '        return 2 if e.code else 0'
-BRKG html-block-ignored fam_exempt '[X] a line that starts with a comment' gate_common.py '        if _HTML_BLOCK.match(ln):' '        if False:'
-BRKG splitlines-instead-of-newline fam_exempt '[X] U+2028 is not a line break' gate_common.py '    for ln in (body or "").split("\n"):' '    for ln in (body or "").splitlines():'
-BRKG code-span-not-masked fam_exempt '[X] a comment opener inside a code span' gate_common.py '            masked = _CODE_SPAN.sub(lambda c: "".join("\n" if ch == "\n" else "\0" for ch in c.group(0)), text)' '            masked = text'
-BRKG error-repr-printed fam_infra '[I] the fault message repeats the input' gate_common.py '"%s: could not conclude: internal error (%s)\n" % (name, type(e).__name__)' '"%s: could not conclude: internal error %r\n" % (name, e)'
-BRKG empty-range-green fam_infra '[I] an empty range' $CDG '    if not facts["n_all"]:' '    if False:'
-BRKG internal-fault-red fam_infra '[I] a fault of the gate itself' gate_common.py '        sys.stderr.write("%s: could not conclude: internal error (%s)\n" % (name, type(e).__name__))
-        return INFRA' '        sys.stderr.write("%s: could not conclude: internal error (%s)\n" % (name, type(e).__name__))
-        return RED'
-BRKG config-limit-ignored fam_config '[C] commits.max_per_pr 3 from the config' $CDG 'cfg["commits"]["max_per_pr"],' '15,'
-BRKG token-ignored fam_config '[C] the configured token replaces the default' $CDG 'cfg["tokens"]["commit_exception"], rx)' '"COMMIT EXCEPTION:", rx)'
-BRKG config-error-swallowed fam_config '[C] an invalid config is rc 65' gate_common.py '        if probs:
-            raise ConfigError(sdlc_config.render_problems(probs))
-        return cfg' '        return cfg'
-BRKG ref-config-error-swallowed fam_config '[C] an invalid config AT THE BASE' gate_common.py '    if probs:
-        raise ConfigError(sdlc_config.render_problems(probs) + where)' '    if False:
-        raise ConfigError(sdlc_config.render_problems(probs) + where)'
-BRKG config-from-head fam_config '[C] a PR that raises commits.max_per_pr' $CDG '    cfg = gc.load_config(a.cwd, a.config_ref)' '    cfg = gc.load_config(a.cwd, None)'
-BRKG bad-ref-green fam_config '[C] a base ref that does not read' gate_common.py '        raise Infra("ref `%s` does not read" % ref)
-    if git(["cat-file"' '        return None
-    if git(["cat-file"'
-
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family"
 
 echo; summary

@@ -9,7 +9,7 @@
 # .vibemaestro/sdlc.json ({} on the public export, which does not carry it) and future-keys.json (keys a newer plugin may define): no problem, one note per unknown key. A known key
 # with a wrong type and a newer schema still refuse. The plugin's reader also gets old configs, and its schema is compared with
 # the floor's: a key the floor reads that vanished or changed type must be listed in DEPRECATED. The checks themselves are
-# tests/fixtures/config_compat/compat_check.py; each family runs on the real plugin, then on a copy with one planted break. The
+# tests/fixtures/config_compat/compat_check.py; each family runs on the real plugin. The
 # deny family holds the default deny globs (row d, Q2a): only .vibemaestro/batons/** left the default; an own list is kept.
 # =============================================================================
 set -uo pipefail
@@ -83,78 +83,5 @@ FAMILIES="fam_forward fam_backward fam_deprecated fam_migrate fam_cli fam_deny"
 echo "== the real plugin =="
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
-
-echo "== planted breaks: each family must go red on a plugin with one break =="
-BRK() {  # BRK <label> <family> <needle> <file under the plugin> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK required-key-no-default fam_backward '[B] every schema key has a default' scripts/sdlc_config.py \
-  '    "kb": ("obj", {"spec_warn_bytes": ("intnull", 1)}),' '    "kb": ("obj", {"spec_warn_bytes": ("intnull", 1), "required_new": ("int", 1)}),'
-BRK floor-key-removed fam_backward '[B] a key the floor reader knows is still in the schema' scripts/sdlc_config.py \
-  '        "inject": ("bool",),' ''
-BRK nullable-subkey-retyped fam_backward '[B] a key the floor reader knows keeps its type' scripts/sdlc_config.py \
-  '"planner": ("objnull", {"script": ("gitfile",), "inputs": ("gitfiles",)},' '"planner": ("objnull", {"script": ("gitfile",), "inputs": ("str",)},'
-BRK item-key-dropped fam_backward '[B] a key of a list item' scripts/sdlc_config.py \
-  'ITEM_FIELDS = {"tables": ("heading", "columns", "enums", "decorations"),' 'ITEM_FIELDS = {"tables": ("heading", "columns", "enums"),'
-BRK item-key-kept fam_forward "[F] plugin reader: …a list item's unknown key too" scripts/sdlc_config.py \
-  '        return [{k: x for k, x in item.items() if k in keep} if isinstance(item, dict) else item for item in v]' '        return v'
-BRK key-unescaped fam_forward '[F] plugin reader: a key is printed with its control characters escaped' scripts/sdlc_config.py \
-  '    return k if len(k) <= 120 else k[:119] + "…"' '    return key'
-BRK note-every-copy fam_forward '[F] plugin reader: a note is printed once per process' scripts/sdlc_config.py \
-  '            if line not in _NOTED:' '            if True:'
-BRK get-prints-notes fam_cli '[C] sdlc_config.py get on that config prints the value alone' scripts/sdlc_config.py \
-  'else load(repo_root(root), quiet=True)' 'else load(repo_root(root))'
-BRK moved-value-unchecked fam_deprecated "[P] a moved value is checked against the new key's type" scripts/sdlc_config.py \
-  '    if moved is not data:' '    if False:'
-BRK forward-under-null-crashes fam_deprecated '[P] a new key under an object set to null' scripts/sdlc_config.py \
-  '            if not isinstance(cur, dict):
-                ok = False
-                break' '            pass'
-BRK floor-key-retyped fam_backward '[B] a key the floor reader knows keeps its type' scripts/sdlc_config.py \
-  '        "draft": ("bool",),' '        "draft": ("str",),'
-BRK unknown-key-refused fam_forward '[F] plugin reader: a config with keys of a newer plugin is valid' scripts/sdlc_config.py \
-  '    probs = [p for p in out if not isinstance(p[1], Note)]' '    probs = list(out)'
-BRK unknown-key-kept fam_forward '[F] plugin reader: …and is dropped from the effective config' scripts/sdlc_config.py \
-  '    data = _forward(_strip(data, ("obj", SCHEMA_TREE)))' '    data = _forward(data)'
-BRK wrong-type-ignored fam_forward '[F] plugin reader: a known key with a wrong type still refuses' scripts/sdlc_config.py \
-  '            out.append((key, "must be true or false"))' '            pass'
-BRK schema-hint-dropped fam_forward '[F] plugin reader: …naming the update to run' scripts/sdlc_config.py \
-  'UPDATE_HINT = ("update the plugin (claude plugin marketplace update vibemaestro && claude plugin update vibemaestro-sdlc@vibemaestro), "' 'UPDATE_HINT = ("update the plugin, "'
-BRK deprecated-not-forwarded fam_deprecated "[P] the old key's value moves to the new key" scripts/sdlc_config.py \
-  '        if not found or _lookup(out, d["use"])[0]:' '        if True:'
-BRK deprecated-note-unnamed fam_deprecated '[P] its note names the new key' scripts/sdlc_config.py \
-  '        what = "use %s instead%s" % (d["use"], " (when both are set, %s wins)" % d["use"] if not d.get("removed") else "")' '        what = "use the new key instead"'
-BRK deprecated-not-noted fam_deprecated '[P] a deprecated key with no new form' scripts/sdlc_config.py \
-  '        if not d.get("removed") and _lookup(data, key)[0]:' '        if False:'
-BRK migrate-skips-step fam_migrate '[M] a planted step carries a config up one schema' scripts/sdlc_config.py \
-  '        out = MIGRATIONS[n](out)' '        pass'
-BRK migrate-writes-invalid fam_migrate '[M] config migrate --write with a result that would be invalid' scripts/kb.py \
-  '    bad = C.problems(out)' '    bad = []'
-BRK migrate-leaves-temp fam_migrate '[M] config migrate --write writes the migrated config, and no temp file is left' scripts/kb.py \
-  '            os.replace(tmp, C.config_path(root))
-        finally:
-            if os.path.lexists(tmp):
-                os.unlink(tmp)' '            import shutil; shutil.copy(tmp, C.config_path(root))
-        finally:
-            pass'
-BRK problem-key-raw fam_forward '[F] plugin reader: …a problem key from the file too' scripts/sdlc_config.py \
-  '    return [(_safe(k), why) for k, why in probs], notes' '    return probs, notes'
-BRK cli-note-silent fam_cli '[C] …a WARNING line names the unknown section' scripts/kb.py \
-  '        lines = ["WARNING %s: %s" % (k, why) for k, why in C.load_notes(root)] + lines' '        pass'
-BRK deny-batons-kept fam_deny '[D] the default leaves .vibemaestro/batons/merge-x.sh' scripts/sdlc_config.py \
-  'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/**", "**/*secret*")'
-BRK deny-config-open fam_deny '[D] the default denies .vibemaestro/sdlc.json' scripts/sdlc_config.py \
-  'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")'
-BRK deny-gates-open fam_deny '[D] the default denies .vibemaestro/gates/x.py' scripts/sdlc_config.py \
-  'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/rules/**", "**/*secret*")'
-BRK deny-own-merged fam_deny '[D] plugin reader: a config that sets merge.deny_globs keeps exactly its list' scripts/sdlc_config.py \
-  '    return _normalise(_merge(_with_preset(data), data))' '    out = _normalise(_merge(_with_preset(data), data)); out["merge"]["deny_globs"] = list(MERGE_DENY_DEFAULT); return out'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

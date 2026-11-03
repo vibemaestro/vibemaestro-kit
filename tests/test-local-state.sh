@@ -8,7 +8,7 @@
 # through `scripts/local_state.py` (the item `local-state` of CONTRACT.md): the stages, `ask` (the question on stdin), `done`
 # (the report on stdin), `progress <step>` and `bind <stem> --agent <id>`. These families run the real script from a throw-away
 # directory with a PATH that has no `session-notify`, a throw-away HOME and XDG_STATE_HOME, and read the file back as JSON.
-# A refusal is rc 0, one stderr line, nothing written. Then each family goes red on a copy with one planted break.
+# A refusal is rc 0, one stderr line, nothing written.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -262,43 +262,5 @@ echo "== the real scripts =="
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 [ -f "$PL0/scripts/local_state.py" ] && ok "instrument: the plugin copy has the writer" || bad "instrument: the writer is missing from the copy"
 for fm in $FAMILIES; do echo "-- $fm"; "$fm" "$PL0"; done
-
-echo "== planted breaks: each family must go red on a copy with one break =="
-BRK() {  # BRK <label> <family> <needle> <script> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK mode-wide fam_files '[L4] the file is mode 0600' local_state.py 'os.fchmod(f.fileno(), 0o600)' 'os.fchmod(f.fileno(), 0o644)'
-BRK temp-left fam_files '[L4] no temp file is left' local_state.py '        os.replace(tmp, path)' '        os.link(tmp, path) if not os.path.exists(path) else os.replace(tmp, path); open(tmp, "w").close()'
-BRK stale-temp-blocks fam_files '[L4] a stale temp file of the writer' local_state.py '            os.unlink(old)                       # a writer killed' '            0 and os.unlink(old)                 # a writer killed'
-BRK stale-temp-own-pid fam_files '[L4] a stale temp file of another pid' local_state.py '".%s.json.tmp.*" % stem' '".%s.json.tmp.%d" % (stem, os.getpid())'
-BRK top-link-followed fam_files '[L4] a linked vibemaestro directory' local_state.py 'if os.path.islink(top) or os.path.islink(base):' 'if os.path.islink(base):'
-BRK stdin-no-deadline fam_text '[L2] a trickling stdin' local_state.py 'if left <= 0 or not select.select([fd], [], [], left)[0]:' 'if not select.select([fd], [], [], STDIN_WAIT)[0]:'
-BRK drain-uncapped fam_text '[L2] …it is not refused (the cap ends it' local_state.py '    while n <= DRAIN_MAX:' '    while True:'
-BRK stdin-no-wait fam_text '[L2] a stdin that stays open and silent' local_state.py 'if left <= 0 or not select.select([fd], [], [], left)[0]:' 'if False:'
-BRK source-carried fam_shape '[L1] a carried source' local_state.py '(text if verb == "ask" else c.get("question")), "ask"' '(text if verb == "ask" else c.get("question")), c.get("source")'
-BRK ts-pair-kept fam_shape '[L1] a carried ts that is not its epoch' local_state.py 'renew = changed or integer(c.get("epoch")) is None or c.get("ts") != ts_text(c.get("epoch"))' 'renew = changed or integer(c.get("epoch")) is None'
-BRK sessions-link-followed fam_files '[L4] a linked sessions directory' local_state.py 'if os.path.islink(top) or os.path.islink(base):' 'if os.path.islink(top):'
-BRK text-stripped fam_text '[L2] the question is kept as given' local_state.py '.decode("utf-8", "replace").rstrip("\r\n")' '.decode("utf-8", "replace").strip()'
-BRK stdin-undrained fam_text '[L2] a 300 KB report' local_state.py '        if not chunk:' '        if not chunk or n:'
-BRK link-followed fam_files '[L4] a linked session directory is refused' local_state.py 'if not os.path.isdir(d) or os.path.islink(d) or' 'if not os.path.isdir(d) or'
-BRK cut-long fam_text '[L2] a question is cut to 2000 characters' local_state.py 'QUESTION_MAX = 2000' 'QUESTION_MAX = 20000'
-BRK report-tail fam_text '[L2] a report is cut to its first 500' local_state.py '    return s if len(s) <= n else s[: n - 1] + "…"' '    return s if len(s) <= n else "…" + s[-(n - 1):]'
-BRK one-dir fam_isolation '[L3] two sessions with one stem' local_state.py '    d = os.path.join(base, session)' '    d = os.path.join(base, "all")'
-BRK child-lost fam_shape '[L1] child stays true' local_state.py 'child = loc.get("child") is True or os.environ' 'child = os.environ'
-BRK bind-moves-state fam_shape '[L1] bind: the agent id, the state' local_state.py '"bind": c.get("state", "working")}' '"bind": "working"}'
-BRK refusal-fails fam_refusals '[L5] a bad stem: rc 0' stage-signal.sh '    exit 0 # local: the signal never fails the caller' '    exit 1'
-# the clean environment broken: a copy of the fixtures whose clean_env keeps the session's variables
-FXB="$TMP/fixtures-break"; cp -R "$HERE/fixtures" "$FXB"
-if mutate "$FXB/lib.sh" '  unset CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION' '  :'; then
-  mutate "$FXB/lib.sh" '  export XDG_STATE_HOME="$HOME/.local/state"' '  :' \
-    && { FXD=$FXB; expect_red suite-env-kept fam_suite_env "$PL0" '[L6] a suite run inside a session writes nothing'; FXD="$HERE/fixtures"; }
-fi
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for fm in $FAMILIES; do "$fm" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

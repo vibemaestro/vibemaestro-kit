@@ -13,16 +13,18 @@ Mọi việc đều ghi/đọc `kb/` của repo ở cwd. Không đọc hay ghi r
       `--lang vi|en`: the scaffold's language (also the answer `language`); without it, the `language` of the config (absent: vi).
   kb.py new <intent|plan|spec> <slug> [--date YYYY-MM-DD]
       tạo kb/<loại>/<ngày>-<slug>.md từ khuôn có dấu placeholder (`tokens.spec.placeholder`). Không đè file đã có. Khuôn `spec` là
-      khuôn bốn mục (`tokens.spec`: Bối cảnh, Mục tiêu, Ngoài phạm vi, Tiêu chí chấp nhận), in the prose of `language`.
+      khuôn năm mục (`tokens.spec`: Bối cảnh, Mục tiêu, Ngoài phạm vi; `## Inputs and failure cases`, một tên cho mọi ngôn ngữ;
+      Tiêu chí chấp nhận), in the prose of `language`.
   kb.py base --default <ref>
       prints the ref `intake` must cut its worktree from: `<ref>` (the default branch, e.g. origin/main) when it already
       has `kb/intent/`; otherwise `origin/chore/kb-init` (or its old name `origin/chore/kb-khoi-tao`) when the init-kb branch is pushed and
       has kb/ (the intent PR then carries the scaffold commit). Neither: rc 2, pointing at init-kb.
   kb.py check spec <<ngày>-<slug> | đường-dẫn>
-      máy kiểm HÌNH DẠNG của một spec: đủ bốn mục đúng thứ tự (`## Thiết kế` tuỳ chọn, sau bốn mục), không rỗng, không
+      máy kiểm HÌNH DẠNG của một spec: đủ năm mục đúng thứ tự (`## Thiết kế` tuỳ chọn, sau chúng), không rỗng, không
       còn dấu placeholder, mỗi tiêu chí có lệnh trong `…`, tiêu chí cuối nhắc `## Bằng chứng chạy`. Tên mục, tiêu đề bằng chứng
       và dấu placeholder lấy từ `tokens.spec` (preset `language: en`: Context, Goal, Out of scope, Acceptance criteria, Design,
-      Run evidence, `<FILL`). KHÔNG kiểm lệnh có đúng/chạy
+      Run evidence, `<FILL`). `## Inputs and failure cases` (một bảng ba cột, hoặc một dòng `none, because <lý do>`) bắt buộc ở
+      spec mới (không có trên merge base của `check links`); spec đã có chỉ bị một dòng WARNING. KHÔNG kiểm lệnh có đúng/chạy
       được, và KHÔNG kiểm người đã duyệt — duyệt là lời của người, máy không có dấu "đã duyệt".
   kb.py check current-state [đường-dẫn]
       máy kiểm khuôn `kb/current-state.md` theo profile `current_state` của repo (không có config: preset `ledger`, chỉ trạng
@@ -68,6 +70,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -117,9 +120,10 @@ Check: `kb.py check [--strict]`.
 **Finding things without reading them:** `kb.py find <words>` (superseded/done hidden unless `--all`), `kb.py list
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
-**Khuôn spec của một intent:** bốn mục `## ` đúng thứ tự — `## {context}`, `## {goal}`, `## {out_of_scope}`,
-`## {criteria}`; `## {design}` (tuỳ chọn) đứng sau. Tiêu chí là **lệnh** + kết quả mong đợi; tiêu chí cuối luôn là:
-PR có mục `## {evidence}`. Kiểm hình dạng: `kb.py check spec <ngày>-<slug>`.
+**Khuôn spec của một intent:** năm mục `## ` đúng thứ tự — `## {context}`, `## {goal}`, `## {out_of_scope}`,
+`## Inputs and failure cases`, `## {criteria}`; `## {design}` (tuỳ chọn) đứng sau. `Inputs and failure cases` là bảng
+đầu vào hay sự cố / hành vi mong đợi / test chứng minh (hoặc một dòng `không có, vì <lý do>`); spec có từ trước chỉ bị cảnh báo.
+Tiêu chí là **lệnh** + kết quả mong đợi; tiêu chí cuối luôn là: PR có mục `## {evidence}`. Kiểm hình dạng: `kb.py check spec <ngày>-<slug>`.
 
 **Khuôn `current-state.md`:** chỉ trạng thái hiện hành, viết đè không nối thêm; không lịch sử (ngày đo, số PR, "trước
 đây…"), không cách làm hay số liệu thí nghiệm — chi tiết nằm ở `specs/` và `decisions/`, file này chỉ trỏ tới. Có trần
@@ -155,9 +159,11 @@ Check: `kb.py check [--strict]`.
 **Finding things without reading them:** `kb.py find <words>` (superseded/done hidden unless `--all`), `kb.py list
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
-**Shape of the spec of an intent:** four `## ` sections in this order: `## {context}`, `## {goal}`, `## {out_of_scope}`,
-`## {criteria}`; `## {design}` (optional) comes after them. A criterion is a **command** + the expected result; the last
-criterion is always: the PR has a `## {evidence}` section. Shape check: `kb.py check spec <date>-<slug>`.
+**Shape of the spec of an intent:** five `## ` sections in this order: `## {context}`, `## {goal}`, `## {out_of_scope}`,
+`## Inputs and failure cases`, `## {criteria}`; `## {design}` (optional) comes after them. `Inputs and failure cases` is a table
+of input or failure / expected behaviour / test that proves it (or one line `none, because <reason>`); a spec that already
+existed only warns. A criterion is a **command** + the expected result; the last criterion is always: the PR has a
+`## {evidence}` section. Shape check: `kb.py check spec <date>-<slug>`.
 
 **Shape of `current-state.md`:** only the current state, overwritten, never appended to; no history (dates of measurements, PR
 numbers, "used to…"), no how-to or experiment figures: details live in `specs/` and `decisions/`, this file only points to them.
@@ -252,6 +258,12 @@ Intent: {intent}
 
 {fill}: điều không làm. Ghi "không có" nếu thật sự không có.>
 
+## Inputs and failure cases
+
+| Đầu vào hay sự cố | Hành vi mong đợi | Test chứng minh |
+|---|---|---|
+| {fill}: đầu vào xấu, lạ, rỗng, quá cỡ, đồng thời, hỏng giữa chừng — chọn theo rủi ro, tối đa khoảng 10 hàng; không có thì thay cả bảng bằng một dòng `không có, vì <lý do>`> | {fill}: kết quả> | `{fill}: test, chạy trong tiêu chí chấp nhận>` |
+
 ## {criteria}
 
 1. `{fill}: lệnh chứng minh>` → {fill}: kết quả mong đợi>
@@ -313,6 +325,12 @@ ideas of the agent.>
 
 {fill}: what is not done. Write "none" if there really is nothing.>
 
+## Inputs and failure cases
+
+| Input or failure | Expected behaviour | Test that proves it |
+|---|---|---|
+| {fill}: a hostile, odd, empty, oversized, concurrent or partly failing input, chosen by risk, about 10 rows at most; with none, replace the whole table with one line `none, because <reason>`> | {fill}: result> | `{fill}: test, run by an acceptance criterion>` |
+
 ## {criteria}
 
 1. `{fill}: command that proves it>` → {fill}: expected result>
@@ -323,10 +341,18 @@ INTENT_BLANK = {"vi": "{fill}: đường dẫn kb/intent/…>", "en": "{fill}: p
 
 
 SPEC_REQUIRED = ("context", "goal", "out_of_scope", "criteria")   # keys of `tokens.spec`, in the order the sections must come
-H2_RX = re.compile(r"^## +(.*?)\s*$")
+H2_RX = re.compile(r"^## +(.*?)(?:\s+#+)?\s*$")     # the optional closing hashes are not part of the name (as GitHub reads it)
 FENCE_RX = re.compile(r"^\s*(```|~~~)")
 ITEM_RX = re.compile(r"^ {0,3}(?:\d+[.)]|[-*+])\s+")
 CODE_RX = re.compile(r"`[^`\n]+`")
+# The section every new spec carries between the out-of-scope section and the criteria: one exact heading in every language (an
+# outside playbook writes it), not a `tokens.spec` key. Its body is a table of three columns, or one `none, because` line with a reason.
+INPUTS = "Inputs and failure cases"
+INPUTS_NONE_RX = re.compile(r"^(?:none\s*,?\s*because|không có\s*,?\s*vì)\b\s*(.*)$", re.IGNORECASE)
+INPUTS_FROM = "2026-11-02"      # with no git base to read, a spec whose file name is dated on or after this needs the section
+SEP_CELL_RX = re.compile(r"^:?-+:?$")
+LINE_WRAP_RX = re.compile(r"^(?: {0,3}(?:\d+[.)]|[-*+])\s+)?(?P<mark>`+|\*{1,2}|_{1,2})?(?P<body>.*?)(?P=mark)?$")
+SPEC_DATE_RX = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
 
 
 def placeholder_marks(sp):
@@ -465,31 +491,152 @@ def has_command(item):
     return bool(CODE_RX.search(item)) or "```" in item
 
 
-def spec_problems(text, sp=None):
-    """Danh sách lý do spec chưa đạt khuôn bốn mục; rỗng = đạt HÌNH DẠNG (không kiểm nội dung đúng). `sp` = `tokens.spec` (tên mục,
-    tiêu đề bằng chứng, dấu placeholder); mặc định của plugin khi không truyền."""
+def table_cells(line):
+    """The cells of a table row as GitHub renders it: split on every `|` that is not escaped (`\\|`), inside a code span too,
+    the outer pipes dropped."""
+    cells = [c.replace("\\|", "|").strip() for c in re.split(r"(?<!\\)\|", line.strip())]
+    return cells[1 if line.strip().startswith("|") else 0:len(cells) - 1 if re.search(r"(?<!\\)\|$", line.strip()) else None]
+
+
+def _plain_line(ln):
+    """A line of the section as a reader means it: NFC, without a list marker in front and without one wrapping code span or
+    emphasis (`` `none, because …` `` and `- none, because …` are the line `none, because …`)."""
+    m = LINE_WRAP_RX.match(unicodedata.normalize("NFC", ln.strip()))
+    return m.group("body").strip() if m else ln.strip()
+
+
+def _is_row(ln):
+    """A table row as GitHub reads one: a line with a `|` that is not escaped (the outer pipes are optional)."""
+    return bool(re.search(r"(?<!\\)\|", ln))
+
+
+def _is_sep(ln):
+    cells = table_cells(ln)
+    return _is_row(ln) and bool(cells) and all(SEP_CELL_RX.match(c) for c in cells)
+
+
+def _header_at(lines, i):
+    """`lines[i]` is a delimiter row with a header line right above it (a `|` line, not itself a delimiter, not indented 4+)."""
+    h = lines[i - 1] if i > 0 else ""
+    return _is_sep(lines[i]) and _is_row(h) and not _is_sep(h) and not h.startswith(("    ", "\t"))
+
+
+def inputs_problems(body):
+    """Why the body of `## Inputs and failure cases` is not ONE table of three filled columns or one `none, because <reason>`
+    line. The table is read without rendering: the header line, the delimiter row under it, then the consecutive lines that
+    hold a `|`, up to a blank line or a line without one. Lines around the table are not judged (spec skill: what passes)."""
+    lines, fenced = [], False
+    for ln in body:                     # a fence line and a fenced line stay as a blank line: they end a table, never glue one
+        if FENCE_RX.match(ln):
+            fenced = not fenced
+            lines.append("")
+        else:
+            lines.append("" if fenced else ln.rstrip())
+    if not "".join(body).strip():
+        return ["section `## %s` is empty: a table of input or failure / expected behaviour / test, or one line "
+                "`none, because <reason>`" % INPUTS]
+    seps = [i for i in range(len(lines)) if _header_at(lines, i)]
+    if not seps:
+        nones = [m for m in (INPUTS_NONE_RX.match(_plain_line(ln)) for ln in lines if ln.strip()) if m]
+        if nones:
+            if not re.search(r"\w", nones[0].group(1)):
+                return ["section `## %s` says none with no reason: write `none, because <reason>`" % INPUTS]
+            return []
+        return ["section `## %s` has no table (a header row, a `|---|` row, then one row per input) and no `none, because` line"
+                % INPUTS]
+    def run_end(d):                     # the index after the last row of the table whose delimiter is at `d`
+        e = d + 1
+        while e < len(lines) and lines[e].strip() and _is_row(lines[e]):
+            e += 1
+        return e
+    starts, end = [], -1
+    for i in seps:                      # a table is a run; a header+delimiter pair inside an earlier run is rows of it
+        if i > end:
+            starts.append(i)
+            end = run_end(i)
+    if len(starts) > 1:
+        return ["section `## %s` holds %d tables: keep one, with one row per input or failure" % (INPUTS, len(starts))]
+    d = starts[0]
+    rows = lines[d + 1:run_end(d)]
+    out = []
+    for what, ln in (("header", lines[d - 1]), ("delimiter row", lines[d])):
+        n = len(table_cells(ln))
+        if n != 3:
+            out.append("section `## %s`: the table's %s has %d column(s), it needs 3 (input or failure | expected behaviour | test)"
+                       % (INPUTS, what, n))
+    if not rows:
+        out.append("section `## %s` has a header but no row: one row per input or failure, or one line `none, because <reason>`"
+                   % INPUTS)
+    for i, r in enumerate(rows, 1):
+        cells = table_cells(r)
+        if len(cells) != 3 or not all(cells):
+            out.append("section `## %s`, row %d: needs three filled cells (input or failure | expected behaviour | test), has %d "
+                       "filled of %d (a `|` inside a cell, code included, is written `\\|`)"
+                       % (INPUTS, i, sum(1 for x in cells if x), len(cells)))
+    return out
+
+
+def spec_is_new(path):
+    """(True | False | None, why): the spec is new in this change, i.e. absent from the merge base `kb.py check links` judges by
+    (kb_plan.merge_base); with no git or no base, its file-name date against INPUTS_FROM; None when neither can say."""
+    d = os.path.dirname(os.path.abspath(path))
+    top = vsdlc.git_out(d, "rev-parse", "--show-toplevel")
+    if top:
+        mb, ref = plans.merge_base(top)
+        if mb:
+            rel = _repo_rel(path, top)
+            listed = vsdlc.git_out(top, "ls-tree", "--name-only", mb, "--", rel)
+            if listed is not None:
+                return (not listed), "%s %s on the merge base of %s (%s)" % (rel, "is not" if not listed else "is", ref, mb[:7])
+    m = SPEC_DATE_RX.match(os.path.basename(path))
+    if m:
+        return m.group(1) >= INPUTS_FROM, "no git base to read; the file name is dated %s (the section is required from %s)" % (
+            m.group(1), INPUTS_FROM)
+    return None, "no git base to read and no date in the file name"
+
+
+def spec_problems(text, sp=None, warn=None):
+    """Danh sách lý do spec chưa đạt khuôn; rỗng = đạt HÌNH DẠNG (không kiểm nội dung đúng). `sp` = `tokens.spec` (tên mục,
+    tiêu đề bằng chứng, dấu placeholder); mặc định của plugin khi không truyền. With a list `warn`, the problems of
+    `## Inputs and failure cases` (missing, empty, malformed, misplaced) go there instead: a spec that already existed only warns."""
     sp = sp or C.defaults()["tokens"]["spec"]
     req, opt, crit, evidence = [sp[k] for k in SPEC_REQUIRED], sp["design"], sp["criteria"], sp["evidence"]
     secs = spec_sections(text)
     names = [n for n, _ in secs]
-    out = []
+    out, inp = [], (warn if warn is not None else [])
     for n in req:
         if n not in names:
             out.append("section `## %s` is missing" % n)
         elif names.count(n) > 1:
             out.append("section `## %s` appears %d times" % (n, names.count(n)))
+    near = [n for n in names if n != INPUTS and " ".join(n.rstrip(":. ").split()).casefold() == INPUTS.casefold()]
+    for n in near:
+        inp.append("section `## %s` must be written exactly `## %s` (one heading in every language)" % (n, INPUTS))
+    if INPUTS not in names and not near:
+        inp.append("section `## %s` is missing: a table of input or failure / expected behaviour / test between `## %s` and "
+                   "`## %s`, or one line `none, because <reason>`" % (INPUTS, sp["out_of_scope"], crit))
+    elif names.count(INPUTS) > 1:
+        inp.append("section `## %s` appears %d times" % (INPUTS, names.count(INPUTS)))
     for n in names:
-        if n not in req and n != opt:
-            out.append("unknown section `## %s`: only the four sections and `## %s` are accepted; a minor point goes in as `###` inside `## %s`"
+        if n not in req and n != opt and n != INPUTS and n not in near:
+            out.append("unknown section `## %s`: only the five sections and `## %s` are accepted; a minor point goes in as `###` inside `## %s`"
                        % (n, opt, opt))
     known = [n for n in names if n in req or n == opt]
     want = [n for n in req if n in names] + ([opt] if opt in names else [])
     if not out and known != want:
-        out.append("sections out of order: found `%s`, need `%s` (`## %s`, when present, comes AFTER the four sections)"
+        out.append("sections out of order: found `%s`, need `%s` (`## %s`, when present, comes AFTER the others)"
                    % (" > ".join(known), " > ".join(want), opt))
+    if not out and names.count(INPUTS) == 1:
+        i = names.index(INPUTS)
+        if not (sp["out_of_scope"] in names[:i] and crit in names[i + 1:]):
+            inp.append("section `## %s` is out of place: it comes after `## %s` and before `## %s`" % (INPUTS, sp["out_of_scope"], crit))
     for n, body in secs:
         if (n in req or n == opt) and not "".join(body).strip():
             out.append("section `## %s` is empty" % n)
+    if names.count(INPUTS) == 1:
+        inp.extend(inputs_problems(next(b for n, b in secs if n == INPUTS)))
+    if warn is None:
+        out.extend(inp)
     for mark in placeholder_marks(sp):
         left = text.count(mark)
         if left:
@@ -521,13 +668,18 @@ def cmd_check(root, what, target, cfg=None):
             text = f.read()
     except OSError:
         return die("cannot read %s" % path, 66)
-    probs = spec_problems(text, (cfg or C.defaults())["tokens"]["spec"])
+    new, why = spec_is_new(path)
+    warns = None if new else []
+    probs = spec_problems(text, (cfg or C.defaults())["tokens"]["spec"], warns)
     rel = os.path.relpath(path, root)
+    for w in warns or ():
+        sys.stdout.write("WARNING %s: %s (required on a new spec only: %s)\n" % (rel, w, why))
+    sys.stdout.flush()                  # before the refusal on stderr: one order, buffered or not
     if probs:
         sys.stderr.write("kb: %s does not pass the spec shape (%d problem(s)):\n%s\n"
                          % (rel, len(probs), "\n".join("- " + p for p in probs)))
         return 65
-    sys.stdout.write("%s passes the four-section spec shape. The machine checks only presence, order and a command per criterion: "
+    sys.stdout.write("%s passes the spec shape. The machine checks only presence, order and a command per criterion: "
                      "not whether a command is right or runs, and no mark shows a person approved it.\n" % rel)
     return 0
 

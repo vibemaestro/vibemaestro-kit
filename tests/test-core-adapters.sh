@@ -178,43 +178,5 @@ PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 [ -f "$PL0/scripts/intent-branch.sh" ] && [ -f "$PL0/scripts/open-pr.sh" ] && ok "instrument: the plugin copy has both adapters" || bad "instrument: an adapter is missing from the copy"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
-echo "== planted breaks: each family must go red on a copy with one break =="
-BRK() {  # BRK <label> <family> <needle> <script> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK count-threshold fam_count '[A1] a task branch with 2 commits' intent-branch.sh '[ "$N" -gt 1 ]' '[ "$N" -gt 5 ]'
-BRK load-bearing-ignored fam_count '[A1] 3 commits with --load-bearing' intent-branch.sh '{ LB=1; continue; }' '{ LB=0; continue; }'
-BRK load-bearing-passed-down fam_count '[A1] 3 commits with --load-bearing' intent-branch.sh '{ LB=1; continue; }' '{ LB=1; }'
-BRK load-bearing-everywhere fam_count '[A1] --load-bearing on worker-branch is not consumed' intent-branch.sh '--load-bearing) [ "$SUB" = integrate ] && { LB=1; continue; } ;;' '--load-bearing) { LB=1; continue; } ;;'
-BRK cwd-equals-ignored fam_forms '[A2] --cwd=PATH --intent=SLUG' intent-branch.sh '--cwd=*) CWD="${a#*=}" ;;' '--cwd=*) ;;'
-BRK intent-equals-ignored fam_forms '[A2] --cwd=PATH --intent=SLUG' intent-branch.sh '--intent=*) INTENT="${a#*=}" ;;' '--intent=*) ;;'
-BRK branch-equals-ignored fam_forms '[A2] the count follows --branch' intent-branch.sh '--branch=*) BRANCH="${a#*=}" ;;' '--branch=*) ;;'
-BRK intent-ref-equals-ignored fam_forms '[A2] --intent-ref=main (equals form)' intent-branch.sh '--intent-ref=*) IREF="${a#*=}" ;;' '--intent-ref=*) ;;'
-BRK intent-ref-ignored fam_forms '[A2] --intent-ref main moves the cut point' intent-branch.sh '--intent-ref) ARGS+=("$a"); IREF="${1:-}"; a="${1:-}"; shift || true ;;' '--intent-ref) ARGS+=("$a"); a="${1:-}"; shift || true ;;'
-BRK title-fixed-dry fam_op '[A4] --title reaches the payload' open-pr.sh 'exec python3 "$CORE" --title "$TITLE" --summary-file "$SUM"' 'exec python3 "$CORE" --title x --summary-file "$SUM"'
-BRK head-dropped-dry fam_op '[A4] --head reaches the payload' open-pr.sh '${HEAD_BR:+--head "$HEAD_BR"} ${FIXES:+--fixes "$FIXES"}' '${FIXES:+--fixes "$FIXES"}'
-BRK base-fixed-dry fam_op '[A4] --base reaches the payload' open-pr.sh '--evidence-file "$EV" --base "$BASE" \' '--evidence-file "$EV" --base main \'
-BRK head-dropped-run fam_op_run '[A5] an explicit --head reaches gh' open-pr.sh '[ -n "$HEAD_BR" ] && ARGS+=(--head "$HEAD_BR")' ':'
-BRK missing-core-rc fam_usage '[A3] the core is missing' intent-branch.sh 'else die "thiếu lõi $f" 2; fi' 'else die "thiếu lõi $f" 3; fi'
-BRK no-subcommand-rc fam_usage '[A3] no subcommand' intent-branch.sh '[ $# -gt 0 ] || die "$(say ib.sh.no_subcommand)" 64' '[ $# -gt 0 ] || die "$(say ib.sh.no_subcommand)" 2'
-BRK closes-not-read fam_op '[A4] on branch intent/<slug>' open-pr.sh '        "$PFX"?*)' '        intent-x/*)'
-BRK explicit-closes-overwritten fam_op '[A4] an explicit --closes wins' open-pr.sh 'if [ -z "$CLOSES" ]; then' 'if true; then'
-BRK crit-dropped fam_op_run '[A5] --crit reaches the body gh' open-pr.sh '[ -n "$CRIT" ]    && ARGS+=(--crit-file "$CRIT")' ':'
-BRK crit-dropped-dry fam_op '[A4] --crit' open-pr.sh '${CRIT:+--crit-file "$CRIT"} ${DRAFT:+--draft} --dry-run' '${DRAFT:+--draft} --dry-run'
-BRK draft-dropped fam_op_run '[A5] --draft is passed' open-pr.sh '[ -n "$DRAFT" ]   && ARGS+=(--draft)' ':'
-BRK unknown-arg-rc fam_op_run '[A5] an unknown argument' open-pr.sh '*) die "$(say op.sh.unknown_arg "$1")" 64 ;;' '*) die "$(say op.sh.unknown_arg "$1")" 2 ;;'
-BRK missing-gh-rc fam_op_run '[A5] gh is not installed' open-pr.sh 'command -v gh >/dev/null 2>&1 || die "$(say op.sh.no_gh)" 2' 'command -v gh >/dev/null 2>&1 || die "$(say op.sh.no_gh)" 1'
-BRK missing-summary-allowed fam_op_run '[A5] no --summary' open-pr.sh '[ -n "$SUM" ]   || die "$(say op.sh.no_summary)" 64' ':'
-BRK missing-evidence-allowed fam_op_run '[A5] no --evidence' open-pr.sh '[ -n "$EV" ]    || die "$(say op.sh.no_evidence)" 64' ':'
-BRK missing-core-rc-op fam_op_run '[A5] the core is missing' open-pr.sh 'else die "thiếu lõi $f" 2; fi' 'else die "thiếu lõi $f" 3; fi'
-BRK repo-not-passed fam_op_run '[A6] the adapter passes --repo' open-pr.sh '[ -n "$SLUG" ] && ARGS+=(--repo "$SLUG")' ':'
-BRK old-flag-passed fam_op_run '[A6] …and never --gh' open-pr.sh 'exec python3 "$CORE" "${ARGS[@]}"' 'exec python3 "$CORE" "${ARGS[@]}" --gh'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

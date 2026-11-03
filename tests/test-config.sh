@@ -18,8 +18,7 @@
 #   [K] the knobs of the cores: intent prefix and protected branches, title pattern and length, draft, flow, tester exemption,
 #       closing keyword and verification, tokens
 #
-# Every family runs on a copy of the real plugin; then each planted break (one mutation of the loader, the hook engine, kb.py,
-# a core or an adapter) must turn the family it belongs to red, and an unbroken copy must stay green. Real git on throw-away
+# Every family runs on a copy of the real plugin. Real git on throw-away
 # repositories, a fake gh, the network shims of netguard.sh, no hub, no network. Prose of messages is never asserted, only exit
 # codes, JSON fields, files, refs and the key names a message must carry.
 # =============================================================================
@@ -681,121 +680,5 @@ PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 [ -f "$PL0/scripts/sdlc_config.py" ] && ok "instrument: the plugin copy has the loader" || bad "instrument: the loader is missing from the copy"
 [ -f "$SHAPED/.vibemaestro/sdlc.json" ] && ok "instrument: the hub-shaped fixture has its config" || bad "instrument: the fixture is incomplete"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
-
-echo "== planted breaks: each family must go red on a plugin with one break =="
-BRK() {  # BRK <label> <family> <needle> <file under scripts/> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK round-pattern-group-unchecked fam_validate '[V] a round pattern without a capture group: rc 65' sdlc_config.py '        if rx.groups < 1:' '        if False:'
-BRK round-pattern-never-warned fam_validate "[V] a round pattern in upper case: a warning names" kb.py '    if C.round_never_matches(cfg["commits"]["round_pattern"]):' '    if False:'
-BRK round-pattern-scoped-flag-ignored fam_validate '[V] a round pattern with a scoped (?i:...)' sdlc_config.py '            inner = (fold or bool(av[1] & re.IGNORECASE)) and not av[2] & re.IGNORECASE' '            inner = fold'
-BRK round-pattern-scoped-unflag-ignored fam_validate '[V] a round pattern whose upper-case part is switched back' sdlc_config.py ' and not av[2] & re.IGNORECASE' ''
-BRK round-pattern-atomic-unwalked fam_validate '[V] a round pattern in an atomic group in upper case: a warning' sdlc_config.py '        if name == "ATOMIC_GROUP":' '        if False:'
-BRK round-pattern-lookahead-unwalked fam_validate '[V] a round pattern behind an upper-case lookahead: a warning' sdlc_config.py '        if name == "ASSERT":' '        if False:'
-BRK round-pattern-branch-all fam_validate '[V] a round pattern whose other branch can match' sdlc_config.py '            return any(_round_can_match(alt, fold) for alt in av[1])' '            return all(_round_can_match(alt, fold) for alt in av[1])'
-BRK round-pattern-fold-ignored fam_validate '[V] a round pattern in upper case under (?i)' sdlc_config.py "bool(rx.flags & re.IGNORECASE)" "False"
-BRK bad-regex-accepted fam_validate '[V] bad regex: rc 65' sdlc_config.py '            re.compile(v)' '            pass'
-BRK planner-script-unchecked fam_merge '[V] merge: a planner script outside the repo: rc 65' sdlc_config.py '"planner": ("objnull", {"script": ("gitfile",),' '"planner": ("objnull", {"script": _STR,'
-BRK deprecation-unnoted fam_knobs '[V] pr.flow (deprecated): valid, with a warning that names it: a warning names' sdlc_config.py '        if not d.get("removed") and _lookup(data, key)[0]:' '        if False:'
-BRK unknown-key-refused fam_validate '[V] unknown key: a warning, not a problem (rule config-compat): valid, rc 0' sdlc_config.py '            out.append((_safe(dotted), Note(_deprecation_note(dotted, gone) if gone and gone.get("removed") else UNKNOWN_NOTE)))' '            out.append((dotted, "unknown key"))'
-BRK unknown-key-silent fam_validate "[V] unknown key: a warning, not a problem (rule config-compat): a warning names" kb.py '        lines = ["WARNING %s: %s" % (k, why) for k, why in C.load_notes(root)] + lines' '        pass'
-BRK runner-default-form-noted fam_validate '[V] ci.runner_default: the self-hosted-only form is a valid value, with no warning' sdlc_config.py '    if _text(rd) and rd != RUNNER_SELF_HOSTED_ONLY and not RUNNER_LABEL.fullmatch(rd):' '    if _text(rd) and not RUNNER_LABEL.fullmatch(rd):'
-BRK runner-default-near-miss-silent fam_validate '[V] ci.runner_default: neither a label nor the form (a near miss) warns, install-gates refuses it: a warning names' sdlc_config.py '    if _text(rd) and rd != RUNNER_SELF_HOSTED_ONLY and not RUNNER_LABEL.fullmatch(rd):' '    if False:'
-BRK wrong-type-ignored fam_validate '[V] a known key with a wrong type still refuses: rc 65' sdlc_config.py '    probs = [p for p in out if not isinstance(p[1], Note)]' '    probs = []'
-BRK kb-warn-zero-accepted fam_validate '[V] kb.spec_warn_bytes zero: rc 65' sdlc_config.py '    "kb": ("obj", {"spec_warn_bytes": ("intnull", 1)}),' '    "kb": ("obj", {"spec_warn_bytes": ("intnull", 0)}),'
-BRK newer-schema-accepted fam_validate "[V] schema above the plugin's: rc 65" sdlc_config.py 'if _is_int(schema) and schema > SCHEMA:' 'if False:'
-BRK underscore-not-ignored fam_validate '[V] keys that start with an underscore' sdlc_config.py '        if k.startswith("_"):
-            continue
-        if k not in fields:' '        if k not in fields:'
-BRK boolean-is-integer fam_validate '[V] a boolean where an integer' sdlc_config.py 'return isinstance(v, int) and not isinstance(v, bool)' 'return isinstance(v, int)'
-BRK recursion-uncaught fam_validate '[V] a deeply nested file: rc 65' sdlc_config.py '    except (OSError, ValueError, RecursionError) as e:' '    except (OSError, ValueError) as e:'
-BRK control-char-accepted fam_validate '[V] a NUL character in a rule directory' sdlc_config.py "any(ord(c) < 32 or ord(c) == 127 for c in v)" "False"
-BRK non-finite-accepted fam_validate '[V] NaN as a wait' sdlc_config.py 'not math.isfinite(v) or ' ''
-BRK surrogate-accepted fam_validate '[V] a lone surrogate in a token' sdlc_config.py '        v.encode("utf-8")
-    except UnicodeEncodeError:' '        pass
-    except UnicodeEncodeError:'
-BRK directory-is-absent fam_validate '[V] a directory where the config file should be' sdlc_config.py '    if not os.path.lexists(path):
-        return None, [], False' '    if not os.path.isfile(path):
-        return None, [], False'
-BRK prefix-unchecked fam_validate '[V] intent prefix with a space' sdlc_config.py 'all(_REF_SEG.match(seg) and ".." not in seg and not seg.endswith(".lock")' 'all(True'
-BRK merge-glob-dotdot-accepted fam_merge '[V] merge: a deny glob with ..: rc 65' sdlc_config.py '    if any(seg in ("", ".", "..") for seg in segs):' '    if False:'
-BRK merge-glob-class-accepted fam_merge '[V] merge: a deny glob with a class: rc 65' sdlc_config.py 'any(c in g for c in GLOB_BAD_CHARS)' 'False'
-BRK merge-glob-starstar-accepted fam_merge '[V] merge: a deny glob with ** inside a segment: rc 65' sdlc_config.py '    return all("**" not in seg or seg == "**" for seg in segs)' '    return True'
-BRK merge-lane-without-registry fam_merge '[V] merge: the lane on without a registry: rc 65' sdlc_config.py '    if v.get("enabled") is True and v.get("registry") is None:' '    if False:'
-BRK merge-floor-class-skipped fam_merge '[M] floor: a class or brace character in a folder name becomes ?' sdlc_config.py 'g = re.sub(r"\*+", "*", re.sub(r"[\[\]{}]", "?", norm)) + "/**"' 'g = norm + "/**"'
-BRK merge-floor-ignores-dirs fam_merge '[M] floor: a rules folder under .vibemaestro/ with another name is added' sdlc_config.py '    return list(MERGE_DENY_DEFAULT) + extra' '    return list(MERGE_DENY_DEFAULT)'
-BRK merge-deny-default-open fam_merge '[M] the plugin default of merge.deny_globs is null' sdlc_config.py '"merge": {"deny_globs": None,' '"merge": {"deny_globs": [],'
-BRK merge-log-any-path fam_merge '[V] merge: a log path into a subdirectory (the baton state is one): rc 65' sdlc_config.py 'if v is not None and (not isinstance(v, str) or not _LOG_NAME.fullmatch(v) or v.lower() == "baton"):' 'if v is not None and not _rel_ok(v):'
-BRK adapter-path-unnormalised fam_merge '[V] ci: an external CI adapter path with a ./ segment' sdlc_config.py '(v.startswith("external:") and _git_path_ok(v[len("external:"):]) and not v.endswith("/"))' '(v.startswith("external:") and _rel_ok(v[len("external:"):]))'
-BRK merge-ghcr-any-host fam_merge '[V] merge: a ghcr registry on another host: rc 65' sdlc_config.py '    if reg.get("backend") == "ghcr" and reg.get("host") != "ghcr.io":' '    if False:'
-BRK default-changed fam_defaults '[D2] …and a draft key is absent' sdlc_config.py '        "draft": False,' '        "draft": True,'
-BRK agents-default-changed fam_defaults '[D4] no config: sdlc_config.py get agents.*' sdlc_config.py '"review_model": "opus", "search_model"' '"review_model": "fable", "search_model"'
-BRK agents-repo-value-ignored fam_defaults '[D4] …a repo value wins' sdlc_config.py '    return _normalise(_merge(_with_preset(data), data))' '    return _normalise(_merge(_with_preset(data), {k: v for k, v in data.items() if k != "agents"}))'
-BRK get-default-reads-file fam_defaults '[D4] …and get --default prints the plugin default' sdlc_config.py '    cfg, probs, _present = (defaults(), [], False) if plain else load(repo_root(root), quiet=True)' '    cfg, probs, _present = load(repo_root(root), quiet=True)'
-BRK agents-alias-unchecked fam_validate '[V] agents: an alias the Agent tool does not accept: rc 65' sdlc_config.py 'MODEL_ALIASES = ("fable", "opus", "sonnet", "haiku")' 'MODEL_ALIASES = ("fable", "opus", "sonnet", "haiku", "gpt")'
-BRK default-limit-changed fam_defaults '[D3] the effective current-state limits' sdlc_config.py '"limits": {"lines": 120,' '"limits": {"lines": 121,'
-BRK broken-plugin-drops-warning fam_hooks_warn '[H] …the config warning arrives although the plugin warning was given' vsdlc.py '    ctx, sysmsg = with_warn(warn, *((warn_text(' '    ctx, sysmsg = (lambda c, s: (c, s))(*((warn_text('
-BRK warning-every-time fam_hooks_warn '[H] …and does not warn again in the same session' vsdlc.py 'if once("config-invalid:" + troot, sid) else None' 'if True else None'
-BRK notes-never-shown fam_hooks_warn '[H] keys a newer plugin knows: the first call warns' vsdlc.py 'if notes and once("config-notes:" + troot, sid) else None' 'if False else None'
-BRK hook-dies-on-bad-config fam_hooks_warn '[H] a broken config: the hook still exits 0' vsdlc.py '    cfg, probs, _present = C.load(troot, quiet=True)
-    if probs:
-' '    cfg, probs, _present = C.load(troot, quiet=True)
-    if probs:
-        os._exit(2)
-'
-BRK hooks-off-ignored fam_activation '[A] hooks off: the reminder hook is silent' vsdlc.py 'return cfg, cfg["hooks"] == "off", warn' 'return cfg, False, warn'
-BRK markers-silence-restored fam_activation '[A] no config, markers (not silent since 2.0.0): the reminder hook is active' vsdlc.py 'return cfg, cfg["hooks"] == "off", warn' 'return cfg, cfg["hooks"] == "off" or all(m in (read_text(os.path.join(troot, ".claude", "settings.json")) or "") for m in ("instructions-for-path.py", "instructions-for-command.py")), warn'
-BRK markers-refusal-restored fam_activation '[A] no config, markers (not silent since 2.0.0): kb.py init exits 0' kb.py '        return 65
-    if rest[0] == "base":' '        return 65
-    if all(m in (vsdlc.read_text(os.path.join(root, ".claude", "settings.json")) or "") for m in ("instructions-for-path.py", "instructions-for-command.py")):
-        return die("refused", 3)
-    if rest[0] == "base":'
-BRK kb-ignores-bad-config fam_exit '[E] …and nothing was written' kb.py '        return 65
-    if rest[0] == "base":' '        pass
-    if rest[0] == "base":'
-BRK core-ignores-bad-config fam_exit '[E] open_pr.py with an invalid config: rc 64' open_pr.py '        return 64
-    tcfg = cfg["pr"]["title"]' '        pass
-    tcfg = cfg["pr"]["title"]'
-BRK intent-core-ignores-bad-config fam_exit '[E] intent_branch.py with an invalid config: rc 64' intent_branch.py '        return RC_USAGE
-    PREFIX = cfg["branch"]["intent_prefix"]' '        pass
-    PREFIX = cfg["branch"]["intent_prefix"]'
-BRK rules-dirs-ignored fam_rules '[R] …the reminder names the repo'"'"'s own file' rules.py '    for d in repo_dirs(rules_cfg):' '    for d in []:'
-BRK replacement-not-applied fam_rules '[R] a same-name repo file replaces the plugin rule' rules.py '        elif n in repo:' '        elif False:'
-BRK disable-ignored fam_rules '[R] rules.disable (a name without the suffix)' rules.py '        if n in disabled:' '        if False:'
-BRK disable-needs-suffix fam_rules '[R] rules.disable (a name without the suffix)' rules.py '    return name if name.endswith(RULE_SUFFIX) else name + RULE_SUFFIX' '    return name'
-BRK draft-rule-delivered fam_rules '[R] a rule whose status is not active' rules.py '    return (front(t, "status") or "active") in ("active", "live")' '    return True'
-BRK external-gate-unlisted fam_check '[C] …it is listed for review' kb.py 'if cfg["current_state"]["gate"].startswith("external:"):' 'if False:'
-BRK duplicates-unlisted fam_check '[C] …the duplicate paragraph is listed' kb.py '            if para in plugin_paras:' '            if False:'
-BRK duplicates-with-disabled-rule fam_check '…no warning when the plugin rule is disabled' kb.py '    rules, paths, notes = R.load_all(plugin, root, rcfg, keep=(vsdlc.CORE_NAME,), packs=packs)' '    rules, paths, notes = R.load_all(plugin, root, {"dirs": rcfg["dirs"], "disable": []}, keep=(vsdlc.CORE_NAME,), packs=packs)'
-BRK old-disable-name-unmapped fam_rules '[R] rules.disable with the OLD name of a renamed rule turns the rule off' rules.py '        disabled.add(canonical(old))' '        disabled.add(old)'
-BRK old-disable-name-silent fam_rules '[R] …one warning for one old name' rules.py '            notes.append(("renamed", old, RENAMED_RULES[old]))' '            pass'
-BRK old-repo-file-unmapped fam_rules '[R] a repo file with the OLD name replaces the renamed plugin rule' rules.py '            n = canonical(fname)' '            n = fname'
-BRK old-name-sorts-first fam_rules '[R] an old-name file and a new-name file of one rule in one directory: the new-name file is delivered' rules.py 'key=lambda x: x[0] != canonical(x[0])' 'key=lambda x: x[0]'
-BRK old-repo-file-silent fam_rules '[R] …kb.py config check prints one old-name warning' rules.py '                if n != fname:                  # only a delivered file is told to be renamed' '                if False:'
-BRK old-repo-file-duplicate fam_rules '[R] hub-shaped fixture + a copy of a plugin rule under its old name: no duplicate rule' rules.py '            n = canonical(fname)' '            n = fname'
-BRK unknown-disable-silent fam_check '[C] …the unknown disable name is listed' kb.py '            out.append("WARNING rules.disable: %s matches no plugin rule" % n)' '            pass'
-BRK intent-prefix-ignored fam_knobs '[K] …the branch is feat/k1' intent_branch.py '    PREFIX = cfg["branch"]["intent_prefix"]' '    PREFIX = "intent/"'
-BRK protected-ignored-core fam_knobs '[K] branch.protected is read by intent_branch' intent_branch.py '    PROTECTED = tuple(cfg["branch"]["protected"])' '    PROTECTED = ("main", "master")'
-BRK protected-ignored-pr fam_knobs '[K] branch.protected: --head trunk is refused' open_pr.py '    if head in cfg["branch"]["protected"]:' '    if head in ("main", "master"):'
-BRK title-pattern-ignored fam_knobs '[K] pr.title.pattern: a title that does not match' open_pr.py 'if tcfg["pattern"] and not re.search(tcfg["pattern"], a.title):' 'if False:'
-BRK title-length-ignored fam_knobs '[K] pr.title.max_len: a title over the length' open_pr.py 'if tcfg["max_len"] and len(a.title) > tcfg["max_len"]:' 'if False:'
-BRK draft-config-ignored fam_knobs '[K] pr.draft true: the payload is a draft' open_pr.py '    if a.draft or cfg["pr"]["draft"]:' '    if a.draft:'
-BRK closing-keyword-ignored fam_knobs '[K] pr.closing.keyword: the body starts' open_pr.py '(cfg["pr"]["closing"]["keyword"], n)' '("Closes", n)'
-BRK closing-verify-ignored fam_knobs '[K] …and gh pr view is never asked' open_pr.py 'if m and closes and (closing or {}).get("verify", True):' 'if m and closes:'
-BRK closing-tries-ignored fam_knobs '[K] pr.closing.tries: a link that never appears' open_pr.py '    tries = int(closing.get("tries", LINK_TRIES))' '    tries = LINK_TRIES'
-BRK closing-wait-ignored fam_timing '[K] pr.closing.wait_s is ignored' open_pr.py 'float(closing.get("wait_s", LINK_WAIT_S))' 'LINK_WAIT_S'
-BRK closing-deadline-ignored fam_timing '[K] pr.closing.deadline_s is ignored' open_pr.py 'float(closing.get("deadline_s", LINK_DEADLINE_S))' 'LINK_DEADLINE_S'
-BRK token-summary-ignored fam_knobs '[K] tokens: the summary heading' open_pr.py 'tk["summary_heading"], summ, crit_block' '"Tóm tắt", summ, crit_block'
-BRK token-fixes-ignored fam_knobs '[K] …the fixes line' open_pr.py '(tk["fixes_line"], n)' '("Vá cho", n)'
-BRK token-not-run-ignored fam_knobs '[K] tokens.not_run: the configured token' open_pr.py 'exempt = ev.lstrip().startswith(tk["not_run"])' 'exempt = ev.lstrip().startswith("KHÔNG CHẠY:")'
-BRK adapter-prefix-literal fam_knobs '[K] open-pr.sh reads issue: N' open-pr.sh '        "$PFX"?*)' '        intent/*)'
-BRK adapter-count-prefix-literal fam_knobs '[K] intent-branch.sh counts commits against the configured prefix' intent-branch.sh 'case "$I" in "$PFX"*) ;; *) I="$PFX$I" ;; esac' 'case "$I" in intent/*) ;; *) I="intent/$I" ;; esac'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

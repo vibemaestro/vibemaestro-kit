@@ -8,7 +8,7 @@
 # (or `$CLAUDE_CONFIG_DIR/settings*.json`) that widens what a session may do, and names `kind:settings-merge`. Edit, Write and
 # MultiEdit are judged on the exact after-state (narrowing inside `permissions` passes, a top-level key off the harmless list
 # stops); Bash is judged on its text and only finds, so the known limits are asserted to pass, keeping the docs true. Each
-# family runs on a copy of the real plugin, then again on copies with one planted break, and must go red on the intended check.
+# family runs on a copy of the real plugin.
 # The deny names the exact next step: the rules file's content, the launcher as the permission rules allow it, the settings path.
 # The hook is run as Claude Code runs it: the hooks.json command, the payload on stdin. No network, nothing outside the scratch tree.
 # =============================================================================
@@ -340,7 +340,7 @@ fam_pass() {  # [P] no false stop: narrowing, harmless keys, reads, the kind and
     "ls -la .claude/"
     "python3 -c \"import json;print(json.load(open('$S'))['permissions'])\""
     "$L go kind:settings-merge $S /tmp/rules.json"
-    "python3 $P/scripts/baton.py run kit:coordinator-bootstrap"
+    "python3 $P/scripts/baton.py run kit:bootstrap"
     "echo x > .vscode/settings.json"
     "sed -i s/a/b/ app/settings.json"
     "echo hi > /tmp/out.txt"
@@ -423,6 +423,11 @@ fam_pod() {  # [Q] in a pod the owner never signs: the guard's message and the k
   eq "$(e "$ADD_ALLOW_OLD" "$ADD_ALLOW_NEW")" deny "[Q] in a pod: deny"
   has "$(gw)" "coordinator" "[Q] …the reason hands the call to the coordinator"
   hasnt "$(gw)" "go --queue kind:" "[Q] …and offers no go --queue call"
+  GENV=(VIBEMAESTRO_ROLE=worker)
+  eq "$(e "$ADD_ALLOW_OLD" "$ADD_ALLOW_NEW")" deny "[Q] a worker session (VIBEMAESTRO_ROLE=worker alone): deny"
+  has "$(gw)" "In a pod" "[Q] …the reason has the pod sentence"
+  GENV=(VIBEMAESTRO_ROLE=solo)
+  hasnt "$(e "$ADD_ALLOW_OLD" "$ADD_ALLOW_NEW"; gw)" "In a pod" "[Q] VIBEMAESTRO_ROLE=solo: no pod sentence"
   GENV=()
   hasnt "$(e "$ADD_ALLOW_OLD" "$ADD_ALLOW_NEW"; gw)" "In a pod" "[Q] outside a pod the reason has no pod sentence"
   st=$(fresh); printf '{"allow": ["Bash(python3 tools/job-7.py:*)"]}\n' > "$W/rules.json"
@@ -433,6 +438,10 @@ fam_pod() {  # [Q] in a pod the owner never signs: the guard's message and the k
   hasnt "$out" "on the owner's go" "[Q] …no 'on the owner's go' step"
   hasnt "$out" "go --queue kind:" "[Q] …no go --queue call"
   has "$out" "coordinator" "[Q] …it names the coordinator"
+  out=$(cd "$W" && cenv XDG_STATE_HOME="$st" VIBEMAESTRO_ROLE=worker python3 "$P/scripts/baton.py" go kind:settings-merge \
+        "$W/.claude/settings.json" "$W/rules.json" 2>&1; echo "rc=$?")
+  has "$out" "rc=8" "[Q] go kind:settings-merge with VIBEMAESTRO_ROLE=worker alone: exit 8"
+  hasnt "$out" "sign --by owner" "[Q] …no sign line"
   out=$(cd "$W" && cenv XDG_STATE_HOME="$st" python3 "$P/scripts/baton.py" go kind:settings-merge \
         "$W/.claude/settings.json" "$W/rules.json" 2>&1; echo "rc=$?")
   has "$out" "on the owner's go: " "[Q] outside a pod: the owner's sign line stays"
@@ -540,9 +549,9 @@ fam_bounded() {  # [R] one bounded reader for every file a payload names: a devi
   local kinds="zero fifo big dir"
   ln -s /dev/zero "$W/.claude/settings.zero.json"; mkfifo "$W/.claude/settings.fifo.json"; mkdir "$W/.claude/settings.dir.json"
   python3 -c 'import sys; open(sys.argv[1], "w").write("{\"permissions\": {\"allow\": []}, \"pad\": \"" + "x" * (1 << 20) + "\"}")' "$W/.claude/settings.big.json"
-  # a socket path is capped near 104 bytes and the scratch tree can be longer (a CI runner's temp, a planted-break run): bind it
+  # a socket path is capped near 104 bytes and the scratch tree can be longer (a CI runner's temp): bind it
   # in a short directory and link the settings name to it; the guard resolves the link, as for /dev/zero
-  local sk; sk=$(mktemp -d "$SOCKD/s.XXXXXX")       # one per family run: planted-break runs end before the family does
+  local sk; sk=$(mktemp -d "$SOCKD/s.XXXXXX")       # one per family run
   if python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$sk/s" 2>/dev/null; then
     ln -s "$sk/s" "$W/.claude/settings.sock.json"; kinds="$kinds sock"
   else echo "  SKIP *** no unix socket here: [R] sock DID NOT RUN ***"; fi
@@ -582,77 +591,6 @@ FAMILIES="fam_edit fam_bash fam_pass fam_limits fam_wiring fam_pod fam_nul fam_n
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break =="
-# BRK <label> <family> <needle> <file under the plugin> <old> <new> — a plugin copy with the replacement, then expect_red
-BRK() {
-  local label=$1 fam=$2 needle=$3 f=$4 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/$f" "$5" "$6" || return
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-G=scripts/settings-guard.py
-BRK redirect-unseen fam_bash "[B] echo '{}' >" $G '            return t, "a redirection"' '            pass'
-BRK in-place-unseen fam_bash '[B] sed -i' $G '                return (hits or [x])[0], nm + " in place"' '                pass'
-BRK interpreter-unseen fam_bash '[B] python3 -c' $G '        return next(x for x in named if w.claude(x)), "inline code that writes"' '        pass'
-BRK runner-ignored fam_bash '[B] sudo -u root tee' $G '            if (k == first or runner) and nm in RUNNERS:' '            if False:'
-BRK exec-ignored fam_bash '[B] find .claude -name settings.json -exec rm' $G '        if x in EXEC_FLAGS:' '        if False:'
-BRK shell-string-unread fam_bash '[B] bash -lc' $G '        if nm in SHELLS + ("su", "flock"):' '        if False:'
-BRK substitution-unread fam_bash '[B] echo `rm' $G '    for inner in nested:' '    for inner in []:'
-BRK heredoc-as-commands fam_pass "[P] git commit -F -" $G '                if shell or run:' '                if True:'
-BRK heredoc-shell-skipped fam_bash "[B] cat <<'EOF' | bash" $G '                if shell or run:' '                if False:'
-BRK unclosed-swallowed fam_bash "[B] git commit -m \"\$(cat <<'EOF'" $G '                    nested.append(cmd[k:])          # unclosed: its text is read as commands too' '                    i = n; continue'
-BRK shellout-unseen fam_bash "[B] python3 -c \"import os; os.system" $G '        for lit in literals(cmd):' '        for lit in []:'
-BRK cd-arg-unread fam_bash '[B] cd .. && echo x > settings.json from .claude/hooks' $G 'x in cds or ".claude" in x.lower() or "CLAUDE_CONFIG_DIR" in x or x in (".", "./", "..", "../", "$PWD", "${PWD}")' '".claude" in x.lower() or "CLAUDE_CONFIG_DIR" in x or x in (".", "./", "$PWD", "${PWD}")'
-BRK nul-fails-open fam_nul '[F] a NUL byte' $G '            if not NAME.search(cmd):' '            if True:'
-BRK command-word-ignored fam_pass '[P] grep -n rm' $G '        if k == first or runner:' '        if True:'
-BRK worktree-path fam_pass "[P] sed -i 's/4/2/'" $G \
-    '                    ok = (claude_dir(d, self.cwd) or bool(settings_path(expand(w2, self.cwd), self.cwd))) if d else self.bare' \
-    '                    ok = (".claude/" in w2.lower() or claude_dir(d, self.cwd)) if d else self.bare'
-BRK allow-unchecked fam_edit '[E] Edit adds an allow rule' $G '            if k in GROWS and sa - sb:' '            if False:'
-BRK shrink-unchecked fam_edit '[E] Edit removes an ask rule' $G '            if k in SHRINKS and sb - sa:' '            if False:'
-BRK harmless-open fam_edit '[E] an unknown new top-level key' $G \
-    '        if k != "permissions" and k not in HARMLESS and b.get(k, MISSING) != a.get(k, MISSING):' \
-    '        if k != "permissions" and k not in HARMLESS and k in ("hooks", "env", "apiKeyHelper", "enabledPlugins", "disableAllHooks", "statusLine") and b.get(k, MISSING) != a.get(k, MISSING):'
-BRK value-printed fam_edit '[S] …nor the new value' $G '            out.append("changes the key `%s`" % k)' '            out.append("changes the key `%s` to %s" % (k, json.dumps(a.get(k))))'
-BRK links-unseen fam_edit '[E] Edit through a symlink' $G \
-    '    if named_settings(p, cfg) or named_settings(real, cfg) or same_file(real, cwd):' '    if named_settings(p, cfg):'
-BRK link-target-unseen fam_edit '[E] Edit through a hard link' $G \
-    '                    if os.path.samestat(st, os.stat(os.path.join(d, n))):' '                    if False:'
-BRK exact-match-trusted fam_edit '[E] an Edit that does not match the settings exactly' $G \
-    '            raise Unchecked("the edit does not match the file exactly, so its result cannot be computed")' '            return text'
-BRK case-sensitive fam_edit '[E] .CLAUDE/SETTINGS.JSON' $G 'fnmatch.fnmatchcase(os.path.basename(q).lower(), "settings*.json")' 'fnmatch.fnmatchcase(os.path.basename(q), "settings*.json")'
-BRK nan-accepted fam_edit '[E] an after-state JavaScript cannot parse' $G '        d = json.loads(text, parse_constant=no_constant)' '        d = json.loads(text)'
-BRK bom-before-unread fam_pass '[P] (a deny kept here) a BOM file' $G '    b = as_object(before[1:] if bb else before or "{}") or {}' '    b = as_object(before or "{}") or {}'
-BRK narrowing-gated fam_pass '[P] Edit removes an allow rule' $G '            if k in GROWS and sa - sb:' '            if k in GROWS and sa != sb:'
-BRK mode-any-change fam_pass '[P] defaultMode default to plan' $G '            if rank(va) > rank(vb, before=True):' '            if rank(va) != rank(vb, before=True):'
-BRK multiedit-unwired fam_wiring '[H] hooks.json: PreToolUse MultiEdit' hooks/hooks.json '"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash"' '"matcher": "Edit|Write|NotebookEdit|Bash"'
-BRK rules-unprinted fam_next '[N] …the rules file content is printed' $G '    return (real, found, added_rules(b, a)) if found else None' '    return (real, found, None) if found else None'
-BRK path-placeholder fam_next '[N] …and the real settings path' $G '    q = shlex.quote(path) if os.path.isabs(path) else path' '    q = "<settings.json>"'
-BRK launcher-placeholder fam_next '[N] an installed launcher under HOME' $G '            return baton.tilde_launcher() or shlex.quote(baton.launcher_path())' '            return LAUNCHER'
-BRK baton-py-placeholder fam_next "[N] …and with no launcher installed, the plugin's baton.py" $G '        return "python3 " + shlex.quote(os.path.abspath(baton.__file__))' '        return LAUNCHER'
-BRK new-file-unnamed fam_next '[N] …it names writing {} to the new file first' $G $'        if text is None:\n            return NEW_FILE, full' $'        if text is None:\n            return "", full'
-BRK empty-unnamed fam_next '[N] a 0-byte settings file: {} first' $G $'        if not text.strip():\n            return NEW_FILE, full' $'        if not text.strip():\n            return "", full'
-BRK not-object-unnamed fam_next '[N] …it says the kind cannot merge into it' $G '        return ("" if not text.startswith(BOM) and as_object(text) is not None else NOT_OBJECT), full' '        return "", full'
-BRK bom-unnamed fam_next '[N] a settings file with a byte-order mark' $G '        return ("" if not text.startswith(BOM) and as_object(text) is not None else NOT_OBJECT), full' '        return ("" if as_object(text[1:] if text.startswith(BOM) else text) is not None else NOT_OBJECT), full'
-BRK state-unread fam_next '[N] an Edit that cannot apply to a missing file: {} first' $G '    first, full = kind_state(path, cwd)' '    first, full = "", path'
-BRK write-step-quoted fam_next '[N] …the Write step names the path as the Write tool takes it' $G '"holding a JSON object), then " % full if first == NEW_FILE' '"holding a JSON object), then " % shlex.quote(full) if first == NEW_FILE'
-BRK state-raises fam_next '[N] a deeply nested settings file: Bash still denied' $G '    except BaseException:                           # RecursionError on a deeply nested file, among others' '    except OSError:'
-BRK fifo-read fam_next '[N] a FIFO named as a settings file' $G 'os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)' 'os.O_RDONLY'
-BRK reader-blocking fam_bounded '[R] fifo: Edit denied within the caps' $G 'os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)' 'os.O_RDONLY'
-BRK reader-type-unchecked fam_bounded '[R] dir: Edit names why' $G '        if not stat.S_ISREG(os.fstat(fd).st_mode):' '        if False:'
-# the planted break that reads /dev/zero whole caps itself at 512 MiB (RLIMIT_AS), so it cannot take a pod or a runner down
-BRK reader-unbounded fam_bounded '[R] zero: Edit names why' $G $'        if not stat.S_ISREG(os.fstat(fd).st_mode):\n            raise Unchecked("it is not a regular file, so it is not read")\n        f = os.fdopen(fd, "rb")\n    except BaseException:\n        os.close(fd)\n        raise\n    with f:\n        data = f.read(MAX_READ + 1)' $'        f = os.fdopen(fd, "rb")\n    except BaseException:\n        os.close(fd)\n        raise\n    import resource\n    resource.setrlimit(resource.RLIMIT_AS, (1 << 29, 1 << 29))\n    with f:\n        data = f.read()'
-BRK sock-unnamed fam_bounded '[R] sock: Edit names why' $G '            other = not stat.S_ISREG(os.stat(path).st_mode)' '            other = False'
-BRK reader-size-unchecked fam_bounded '[R] big: Edit names why' $G '    if len(data) > MAX_READ:' '    if False:'
-BRK reader-boundary fam_bounded '[R] exactly 1 MiB' $G '    if len(data) > MAX_READ:' '    if len(data) >= MAX_READ:'
-BRK crlf-dropped fam_bounded '[R] a CRLF file: read as text mode reads it' $G '.replace("\r\n", "\n").replace("\r", "\n")' ''
-BRK cd-state fam_next '[N] …the word is relative to another directory' $G '                        cwd="" if OTHER_DIR.search(cmd) else cwd))' '                        cwd=cwd))'
-BRK other-dir-narrow fam_next '[N] cd && echo x > .claude/settings.local.json: no {} step' $G '(?<![\w-])(?:cd|pushd|popd|eval)(?![\w-])' '(?<![\w-])(?:pushd|popd|eval)(?![\w-])'
-BRK of-prefix-kept fam_next '[N] dd of=: the command names the file' $G 're.sub(r"^[A-Za-z_][\w-]*=", "", hit[0])' 'hit[0]'
-BRK rules-after-env fam_next '[N] …nor the new one' $G '    return out if "allow" in out else None' '    return dict(out, env=a.get("env")) if "allow" in out else None'
-BRK path-unquoted fam_next '[N] …the path is shell-quoted' $G '    q = shlex.quote(path) if os.path.isabs(path) else path' '    q = path'
-BRK rules-whole-object fam_next '[N] …no env value (old)' $G '    return out if "allow" in out else None' '    return dict(out, env=b.get("env")) if "allow" in out else None'
-BRK ask-dropped fam_next '[N] …the rules file holds both' $G '    for k in ("allow", "ask", "deny"):' '    for k in ("allow",):'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

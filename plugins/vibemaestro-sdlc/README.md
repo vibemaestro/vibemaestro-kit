@@ -8,18 +8,19 @@ Version: see `.claude-plugin/plugin.json`. Release notes: [CHANGELOG.md](CHANGEL
 
 ## What it does
 
-In a session opened in an application repository the plugin does four things.
+In a session opened in an application repository the plugin does five things.
 
-1. **At session start** it hands the session the working core ([workflow-core](rules/workflow-core.instructions.md)), the catalogue of rules, a reminder of the skill chain, and a reminder of the repository's own `kb/`. This takes two `SessionStart` hooks, because Claude Code caps the text of each hook at 10,000 characters.
+1. **At session start** it hands the session the working core ([workflow-core](rules/workflow-core.instructions.md)), the catalogue of rules, a reminder of the skill chain, and a reminder of the repository's own `kb/`. In a folder that is not a git work tree the session gets the core and the catalogue, but not the reminder of the app-repo flow and not the advice to scaffold `kb/`. This takes two `SessionStart` hooks, because Claude Code caps the text of each hook at 10,000 characters.
 2. **Before a file edit** (`Edit`, `Write`, `NotebookEdit`) it reminds the session of every rule whose `applyTo` matches the file, and of every `kb/decisions/*.md` file of the repository whose `applyTo` matches.
 3. **Before a shell command** (`Bash`) it reminds the session of every rule whose `applyWhen` matches the command. A rule with `level: block` denies the command instead. None of the plugin's own rules uses `block`; a repository rule may.
-4. **In a worker session** (both environment variables `INTENT_SLUG` and `SEAT` set and not empty, as a tool that starts sessions for you may set them; a session you open yourself has neither) it adds one more reminder: record the intent word for word, write the spec, ask the person to approve, and only then edit code. This is a reminder, not a gate.
+4. **In a worker session** (the environment variable `VIBEMAESTRO_ROLE` set to `worker`, as a tool that starts sessions for you may set it; a session you open yourself has none. Both `INTENT_SLUG` and `SEAT` set and not empty still mark a worker session too, with a deprecation line: that signal leaves in the next release) it adds one more reminder: record the intent word for word, write the spec, ask the person to approve, and only then edit code. This is a reminder, not a gate.
+5. **When a subagent starts** (`SubagentStart`) it gives the subagent a short core of at most 3,000 characters ([subagent-core](templates/subagent-core.md)): the brief as the contract, evidence, root cause before a fix, the class sweep, and the test rules. A subagent gets none of the session-start text. The read-only built-in agents (`Explore`, `Plan`, `claude-code-guide`, `statusline-setup`) are skipped.
 
 Properties of the hooks:
 
 - A hook never fails the tool. Every hook command exits 0, also on input that is not JSON.
 - A broken plugin (missing `rules/`, missing core) warns loudly at the top of the session. It does not pretend that rules were delivered.
-- A matching rule is shown once per session. A `level: block` denial is raised every time.
+- A matching rule is shown once per session, again after a compaction (which drops it from the context), and once inside each subagent, which keeps a set of its own. A `level: block` denial is raised every time.
 - The hooks also warn when the checkout is behind its upstream branch, add size and ledger-page notes when you edit a ledger file, and add one line at session start when the BatonRun permission check finds something missing.
 - The hooks are silent when `.vibemaestro/sdlc.json` sets `"hooks": "off"`. A repository that keeps its own rule hooks in `.claude/settings.json` must set `"hooks": "off"` or remove them: the two sets add up and are not de-duplicated.
 - Rules of other installed plugins that declare a dependency on this one are served by the same hooks.
@@ -99,13 +100,13 @@ Skills are called by name, `vibemaestro-sdlc:<name>`. They write into the `kb/` 
 | `init-kb` | Scaffolds a self-contained `kb/` and the per-repo config (`.vibemaestro/sdlc.json`, a rules directory). Safe to re-run; `--adopt` for a repository that already has process files. | the repository has no `kb/`, lacks one of its directories, or adopts the plugin |
 | `intake` | Records the request in the person's own words as `kb/intent/<date>-<slug>.md`, creates the branch `intent/<date>-<slug>` and the tracking issue. | the person gives a new piece of work |
 | `brainstorm` | Clarifies a vague request and writes a `Brainstorm result` section into the intent file. No separate spec file. | the request is vague or needs a direction chosen |
-| `spec` | Writes `kb/specs/<date>-<slug>.md` in the four-section shape (context, goal, out of scope, acceptance criteria) and asks the person to approve before any code. | the intent is recorded and no spec is approved yet |
+| `spec` | Writes `kb/specs/<date>-<slug>.md` in five sections (context, goal, out of scope, inputs and failure cases, acceptance criteria) and asks the person to approve before any code. | the intent is recorded and no spec is approved yet |
 | `plan` | Writes `kb/plans/<date>-<slug>.md`, one row per PR with its acceptance command; links intents to rows; reads the live state with `kb.py plan status`. | a topic needs two or more PRs, or someone asks for its state |
 | `ship` | Overwrites `kb/current-state.md`, runs the acceptance commands, records the evidence, and opens a draft PR with `scripts/open-pr.sh`. | the work of an intent is done |
 | `release` | Cuts a release PR or a hotfix PR of a plugin marketplace repository with `scripts/release.py`; publishing the merged release is the repository's own step. | a plan's release row is due, or an installed plugin needs a hotfix |
 | `install-gates` | Installs the six process gates as GitHub workflows plus their scripts. Asks which gates and which runner. Never overwrites. | a repository wants the gates behind the rules |
 | `batonrun` | Runs an action that writes outside the session as one baton script: checked, rehearsed, signed, run, post-checked, logged. | a merge, a registry push, a deletion, a force-push, a change to the user's plugin config |
-| `coordinator-bootstrap` | Sets up a machine for BatonRun in one owner-signed run: the launcher and the permission block. | a new machine, or the session-start permission check fails |
+| `bootstrap` | Sets up a machine for BatonRun in one owner-signed run: the launcher and the permission block. `coordinator-bootstrap` is its old name, which leaves in the next release. | a new machine, or the session-start permission check fails |
 | `local-parallel` | Runs several tasks at once on one machine: one subagent per task (its own worktree, `intake` to a draft PR, model `agents.worker_model`); the main session keeps the queue, relays spec approvals, post-checks each PR and merges it with `kit:merge-pr`. | the person wants several tasks done in parallel |
 | `owner-sign` | For the owner only (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): lists the baton runs a session queued for the owner's signature (`go --queue`) and opens one owner dialog per item picked, in the owner's own session. | runs wait in the queue for the owner |
 
@@ -139,7 +140,7 @@ Two more checks run inside the scripts you already call, not as workflows:
 - `scripts/open-pr.sh` runs the `pr-body` limits and the current-state gate (`current_state.gate`) before it opens a PR.
 - `kb.py check current-state` checks the shape of `kb/current-state.md`: no history signs, and the size caps in `current_state.limits`.
 
-The merge guard (`gates/merge_guard.py`), the GitHub write runner (`gates/gh_write.py`) and the machine-setup engine (`gates/coordinator_bootstrap.py`) are not installed into a repository. They are the engines of the kit batons `kit:merge-pr`, `kit:gh-write` and `kit:coordinator-bootstrap`, which a session runs through BatonRun. The guard merges one PR only when every condition holds (green checks, head is the reported SHA, no denied path, not behind the base) and reads its rules from `merge.*`.
+The merge guard (`gates/merge_guard.py`), the GitHub write runner (`gates/gh_write.py`) and the machine-setup engine (`gates/bootstrap.py`) are not installed into a repository. They are the engines of the kit batons `kit:merge-pr`, `kit:gh-write` and `kit:bootstrap`, which a session runs through BatonRun. The guard merges one PR only when every condition holds (green checks, head is the reported SHA, no denied path, not behind the base) and reads its rules from `merge.*`.
 
 ## Rules and how hooks deliver them
 
@@ -148,13 +149,14 @@ A rule is a Markdown file in `rules/` with a front matter that says when it appl
 | Rule file | Arrives when |
 |---|---|
 | `workflow-core.instructions.md` | the session opens |
-| `coordinated-work.instructions.md` | the session opens, only in a coordinated session: a sandbox session, or one where an enabled plugin of the same marketplace that depends on this one ships the file `sdlc-coordinated` at its root; elsewhere it is only a catalogue row |
+| `coordinated-work.instructions.md` | deprecated, leaves in the next release. The session opens, only in a coordinated session: a worker session, or one where an enabled plugin of the same marketplace that depends on this one ships the file `sdlc-coordinated` at its root; elsewhere it is only a catalogue row |
 | `git-process.instructions.md` | `git worktree add`, `intent-branch.sh worker-branch`, `git rebase`, `git merge`, `git commit --amend`, `git push --force` |
 | `commit-unit.instructions.md` | `git commit`, `git rebase`, `git reset --soft`, `gh pr ready` |
 | `pr-body-shape.instructions.md` | `gh pr create`, `gh pr edit`, `gh pr comment`, `open-pr.sh` |
 | `pr-no-leaks.instructions.md` | `gh pr create/edit/comment/review/merge/close/reopen`, `gh issue create/edit/comment/close/reopen`, `gh api` writes to comments, pulls or issues, `open-pr.sh`, `git commit` |
 | `before-ready.instructions.md` | `gh pr ready` |
 | `measurement-commands.instructions.md` | `gh pr/issue/run/release/workflow/label/repo list`, `grep -c`, `git log A..B` |
+| `test-quality.instructions.md` | editing a test file of any stack: under `tests/`, `test/`, `__tests__/` or `spec/`, or named `test_*`, `*_test.*`, `*.test.*`, `*_spec.*`, `*.spec.*`, `*Test.*`, `*Tests.*` |
 | `document-precedence.instructions.md` | editing a file under `kb/`, `docs/` or a configured rules directory |
 | `public-tree.instructions.md` | editing a file outside `kb/` and `public.private`, in a repository that sets `public.private` |
 | `current-state-shape.instructions.md` | editing `kb/current-state.md` |
@@ -168,12 +170,13 @@ What each rule says in one line:
 - `commit-unit`: a commit is one task or one fix round, not one typing session; fold fix rounds before ready.
 - `pr-body-shape`: the body is the current state, overwritten each round, and short; round history goes in comments.
 - `pr-no-leaks`: no secret, public IP, account ID, e-mail or personal path in a PR body, comment or commit message.
-- `before-ready`: before ready, evidence run on the final version, a correct current state, a fresh-context review, and no self-merge.
+- `before-ready`: before ready, evidence run on the final version, a correct current state, a fresh-context review (briefed with [`skills/ship/reviewer-brief.md`](skills/ship/reviewer-brief.md)), a re-review of every fix round with the changed functions read whole, a class sweep for each defect fixed, a stop after the second fix of one class, and no self-merge.
 - `measurement-commands`: run a sure-positive control before you quote a count.
+- `test-quality`: each test names the break it catches, with literal expected values and a refusal case per rule; red on main and green after; no source-text or mock-only assertion; never revert the fix to see red; root cause before a fix.
 - `document-precedence`: when two documents disagree, an explicit supersession wins, then the binding level, then the date.
 - `public-tree`: in a repository that publishes its tree, every file outside `kb/` and `public.private` is public: nothing private, no pointer into `kb/`, no private issue number, and tests that run from that tree alone.
 - `current-state-shape`: the file holds only the present state, overwritten, with a size cap.
-- `coordinated-work`: only when a coordinating session briefs one execution session per pull request: the roles, the brief as the contract, the coordinator's post-check.
+- `coordinated-work` (deprecated, leaves in the next release): only when a coordinating session briefs one execution session per pull request: the roles, the brief as the contract, the coordinator's post-check.
 - `docs-final`: READMEs and `docs/` are the final public description of what exists now: no dates, history, decisions, `kb/` pointers or private names; `kb/` keeps those.
 - `version-policy`: see [Version policy](#version-policy).
 - `batonrun`: see [BatonRun](#batonrun).
@@ -301,7 +304,7 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | `tokens.spec.context` | `"Bối cảnh"` (`"Context"`) | Heading of the first spec section. |
 | `tokens.spec.goal` | `"Mục tiêu"` (`"Goal"`) | Heading of the second spec section. |
 | `tokens.spec.out_of_scope` | `"Ngoài phạm vi"` (`"Out of scope"`) | Heading of the third spec section. |
-| `tokens.spec.criteria` | `"Tiêu chí chấp nhận"` (`"Acceptance criteria"`) | Heading of the fourth spec section. |
+| `tokens.spec.criteria` | `"Tiêu chí chấp nhận"` (`"Acceptance criteria"`) | Heading of the acceptance-criteria section, the last required one. |
 | `tokens.spec.design` | `"Thiết kế"` (`"Design"`) | Heading of the optional design section. |
 | `tokens.spec.evidence` | `"Bằng chứng chạy"` (`"Run evidence"`) | Heading the last criterion of a spec must name. |
 | `tokens.spec.placeholder` | `"<ĐIỀN"` (`"<FILL"`) | Mark of a blank left in a skeleton; `kb.py check spec` rejects a spec that still has one. |

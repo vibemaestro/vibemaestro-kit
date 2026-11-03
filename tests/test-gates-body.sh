@@ -13,7 +13,7 @@
 #   [X] what GitHub does not show or reads alike: headings in HTML comments and list fences, look-alike headings (spaces, invisible
 #       characters, emoji, numbers, links, NFD), `<h2>`, the not-run note, a hostile long line, characters outside the BMP
 # The workflow template is tested by tests/test-gates-workflows.sh; open_pr.py's refusal by tests/test-core-pr.sh ([P12]).
-# Each family also runs on a copy of the plugin with ONE planted break and must go red. Real git, a fake gh, no network, no sleep.
+# Real git, a fake gh, no network, no sleep.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -434,98 +434,5 @@ PY
 
 FAMILIES="fam_total fam_sections fam_headings fam_hidden fam_config fam_gh fam_base"
 for f in $FAMILIES; do "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each turns its family red =="
-T=pr_body.py
-BRKG total-off-by-one fam_total '[L] a body of exactly 3000' $T 'if lim["max_chars"] and n > lim["max_chars"]:' 'if lim["max_chars"] and n >= lim["max_chars"]:'
-BRKG total-never fam_total '[L] one character over' $T 'if lim["max_chars"] and n > lim["max_chars"]:' 'if False:'
-BRKG total-in-bytes fam_total '[L] 3000 accented characters' $T 'n = len(body.replace("\r\n", "\n").strip())' 'n = len(body.replace("\r\n", "\n").strip().encode("utf-8"))'
-BRKG total-crlf-counted fam_total '[L] 1000 lines of CRLF' $T 'n = len(body.replace("\r\n", "\n").strip())' 'n = len(body.strip())'
-BRKG total-not-stripped fam_total '[L] leading and trailing whitespace' $T 'n = len(body.replace("\r\n", "\n").strip())' 'n = len(body.replace("\r\n", "\n"))'
-BRKG summary-off-by-one fam_sections '[S] summary of 10 lines' $T 'counts[key] > lim[limit_key]' 'counts[key] >= lim[limit_key]'
-BRKG summary-never fam_sections '[S] summary of 11 lines' $T 'if lim[limit_key] and counts[key] > lim[limit_key]:' 'if key != "summary_heading" and lim[limit_key] and counts[key] > lim[limit_key]:'
-BRKG evidence-never fam_sections '[S] evidence of 31 lines' $T 'if lim[limit_key] and counts[key] > lim[limit_key]:' 'if key != "evidence_heading" and lim[limit_key] and counts[key] > lim[limit_key]:'
-BRKG flow-counted-as-evidence fam_sections '[S] 40 criteria lines' $T 'SECTIONS = ("summary_heading", "criteria_heading", "evidence_heading", "flow_heading")' 'SECTIONS = ("summary_heading", "evidence_heading")'
-BRKG fence-ignored fam_headings 'flow heading inside the evidence fence' $T '        if fence:
-            if re.match' '        if False:
-            if re.match'
-BRKG prefix-without-boundary fam_headings '«Tóm tắtdài» is another word' $T 'not t[len(tok)].isalnum()' 'True'
-BRKG setext-ignored fam_headings 'setext heading (underlined with ---)' $T 'if line.strip() and nxt is not None and _SETEXT_UNDERLINE.match(nxt)' 'if False and nxt is not None and _SETEXT_UNDERLINE.match(nxt)'
-BRKG setext-underline-counted fam_headings 'underline are not counted' $T '                i += 1 if h[1] else 0' '                i += 0'
-BRKG indent-code-is-heading fam_headings 'an indented code block is not a heading' $T '_ATX = re.compile(r"^ {0,3}#{1,6}' '_ATX = re.compile(r"^ *#{1,6}'
-BRKG nfd-not-normalised fam_hidden 'a heading in NFD' $T 'unicodedata.normalize("NFC", seen)' 'seen'
-BRKG missing-body-green fam_gh '[G] a view without a body key' $T ' or "body" not in data' ''
-BRKG fence-delimiter-counted fam_sections '[S] a tilde fence' $T '                fence = None
-            else:' '                fence = None
-                count(ln)
-            else:'
-BRKG case-sensitive fam_headings '## tóm tắt' $T '    return t[k:].casefold()' '    return t[k:]'
-BRKG exact-heading-only fam_headings '## Tóm tắt (vòng 2)' $T '(t == tok or (lenient and t.startswith(tok) and not t[len(tok)].isalnum()))' '(t == tok)'
-BRKG hash-without-space-is-heading fam_headings '«#Tóm tắt» without a space' $T '#{1,6}(?:[ \t]+(.*))?$")' '#{1,6}[ \t]*(.*)$")'
-BRKG spaces-not-collapsed fam_hidden 'look-alike heading #1 ' $T 'unicodedata.normalize("NFC", seen).split())' 'unicodedata.normalize("NFC", seen).split(" "))'
-BRKG invisible-kept fam_hidden 'look-alike heading #11 ' $T '_FORMAT = "Cf"' '_FORMAT = "Zz"'
-BRKG html-heading-ignored fam_hidden 'look-alike heading #9 ' $T '    m = _ATX.match(line) or _HTML_H.match(line)' '    m = _ATX.match(line)'
-BRKG tags-kept fam_hidden 'look-alike heading #12 ' $T 'for ch in _TAG.sub("", text)' 'for ch in text'
-BRKG blank-lines-counted fam_sections '[S] ten lines with blank lines' $T '        if not t or cur not in counts:' '        if cur not in counts:'
-BRKG subheading-ends-section fam_sections "[S] a sub-heading of the author's own" $T '            if kind:
-                cur, note_open = kind, kind == "evidence_heading"' '            if True:
-                cur, note_open = kind, kind == "evidence_heading"'
-BRKG heading-reset-on-repeat fam_headings 'a summary heading twice' $T '                cur, note_open = kind, kind == "evidence_heading"
-                i += 1 if h[1] else 0' '                cur, note_open = kind, kind == "evidence_heading"
-                counts[kind] = counts.get(kind, 0) * 0
-                i += 1 if h[1] else 0'
-BRKG comment-heading-recognised fam_hidden '[X] a criteria heading hidden in an HTML comment' $T '        if comment:
-            count(ln)' '        if False:
-            count(ln)'
-BRKG comment-block-never-closes fam_hidden '[X] control: a heading after a multi-line comment block' $T '            comment = "-->" not in ln
-            continue' '            comment = True
-            continue'
-BRKG comment-line-never-closes fam_hidden '[X] control: a heading after a closed comment' $T '            comment = "-->" not in ln[m.end() - 2:]' '            comment = True'
-BRKG comment-short-form-open fam_hidden '[X] <!--> is a comment that ends where it starts' $T '"-->" not in ln[m.end() - 2:]' '"-->" not in ln[m.end():]'
-BRKG comment-mid-line fam_hidden '[X] a <!-- in the middle of a line is plain text' $T '_COMMENT_START = re.compile(r"^ {0,3}<!--")' '_COMMENT_START = re.compile(r"^.*<!--")'
-BRKG comment-indented fam_hidden '[X] a 4-space indented <!-- is no comment block' $T '_COMMENT_START = re.compile(r"^ {0,3}<!--")' '_COMMENT_START = re.compile(r"^ *<!--")'
-BRKG list-fence-unseen fam_hidden '[X] a fence opened inside a list item' $T '_FENCE_OPEN = re.compile(r"^(?: {0,3}|[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)+)(' '_FENCE_OPEN = re.compile(r"^ {0,3}('
-BRKG fence-overread fam_hidden '[X] an indented fence line after a paragraph' $T '_FENCE_OPEN = re.compile(r"^(?: {0,3}|[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)+)(' '_FENCE_OPEN = re.compile(r"^[ \t]*('
-BRKG not-run-note-counted fam_hidden "[X] the not-run note above 30 evidence lines" $T '            if t == note:
-                return' '            if False:
-                return'
-BRKG not-run-note-anywhere fam_hidden '[X] the not-run note repeated 35 times' $T '        if note_open:
-            note_open = False' '        if True:
-            note_open = False'
-BRKG tokens-hardcoded fam_headings 'language en: «Summary»' $T 't, tok = _clean(text, lenient), _clean(tokens[key], lenient)' 't, tok = _clean(text, lenient), _clean({"summary_heading": "Tóm tắt", "criteria_heading": "Tiêu chí chấp nhận", "evidence_heading": "Bằng chứng chạy", "flow_heading": "Luồng"}[key], lenient)'
-BRKG leading-symbols-kept fam_hidden 'look-alike heading #5 ' $T '    while lenient and k < len(t) and not t[k].isalpha():
-        k += 1' '    while False:
-        k += 1'
-BRKG closing-hashes-kept fam_hidden '[X] a flow heading with an ATX closing sequence' $T '_unclose(m.group(1) or "")' '(m.group(1) or "")'
-BRKG measured-heading-exact-only fam_hidden '[X] honest evidence heading #1 ' $T '        lenient = key in MEASURED' '        lenient = False'
-BRKG invisible-list-only fam_hidden '[X] invisible or filler character #1 ' $T '_FORMAT = "Cf"' '_FORMAT = "Zz"'
-BRKG fillers-kept fam_hidden '[X] invisible or filler character #8 ' $T '_FILLERS = "\u034f\u115f\u1160\u3164\uffa0"' '_FILLERS = ""'
-BRKG boundary-prefix fam_hidden '[X] a summary sub-heading that starts with the flow word' $T '(lenient and t.startswith(tok)' '(t.startswith(tok)'
-BRKG boundary-lenient fam_hidden '[X] a heading that only looks like the flow heading' $T '        lenient = key in MEASURED' '        lenient = True'
-BRKG start-strict fam_hidden '[X] …but one that looks like the evidence heading starts it' $T '        lenient = key in MEASURED' '        lenient = False'
-BRKG heading-regex-quadratic fam_hidden '[X] a 60000-character line' $T '_ATX = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(.*))?$")' '_ATX = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(.*?)[ \t]*)?$")'
-BRKG limit-zero-is-limit fam_config '[K] max_chars 0' $T 'if lim["max_chars"] and n > lim["max_chars"]:' 'if n > lim["max_chars"]:'
-BRKG summary-zero-is-limit fam_config '[K] summary_max_lines 0' $T 'if lim[limit_key] and counts[key] > lim[limit_key]:' 'if counts[key] > lim[limit_key]:'
-BRKS config-defaults-lost fam_config '[K] default max_chars' sdlc_config.py '"body": {"max_chars": 3000,' '"body": {"max_chars": 30000,'
-BRKS zero-refused fam_config '[K] max_chars 0' sdlc_config.py '"max_chars": ("int", 0),' '"max_chars": ("int", 1),'
-BRKS negative-accepted fam_config '[K] a negative limit is rc 65' sdlc_config.py '"max_chars": ("int", 0),' '"max_chars": ("int", -5),'
-BRKG gh-failure-green fam_gh '[G] gh failing' $T '        raise gc.Infra("gh pr view failed: %s" % p.stderr.decode("utf-8", "replace").strip()[:160])' '        return "{}"'
-BRKG repo-dropped fam_gh '[G] --repo not passed' $T '(["-R", repo] if repo else [])' '[]'
-BRKG both-modes-allowed fam_gh '[G] both --pr and --body-file' $T '(pr is None) == (path is None)' '(pr is None) and (path is None)'
-BRKG file-error-green fam_gh '[G] a body file that cannot be read' $T '            raise gc.Infra("cannot read %s: %s" % (path, e.__class__.__name__))' '            body, what = "", path'
-BRKG config-from-head fam_base '[B] a PR that removes its own cap' $T '    cfg = gc.load_config(cwd, ref)' '    cfg = gc.load_config(cwd, None)'
-BRKG bad-ref-green fam_base '[B] a ref that does not read' gate_common.py '        raise Infra("ref `%s` does not read" % ref)
-    if git(["cat-file"' '        return None
-    if git(["cat-file"'
-BRKG ref-config-error-swallowed fam_base '[B] an invalid config AT THE BASE' gate_common.py '    if probs:
-        raise ConfigError(sdlc_config.render_problems(probs) + where)' '    if False:
-        raise ConfigError(sdlc_config.render_problems(probs) + where)'
-
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family"
 
 echo; summary

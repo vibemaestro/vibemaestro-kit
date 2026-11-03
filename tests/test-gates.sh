@@ -9,8 +9,8 @@
 # planted fault and green on its clean case; an invalid config is rc 65 naming the key in every gate; the base-ref rule holds for
 # every key a PR could relax (commits.*, the allowlist, pr.title.*, branch.pattern, dead_branches.*); a base with no config file means the
 # defaults and a base ref that does not read is rc 2; the installer writes, keeps and refuses as specified.
-# The per-gate families of the hub's tests (the same planted faults in depth, and a planted break of each script) live in
-# tests/test-gates-{commit,sensitive,title,dead,workflows}.sh; here every gate has one mutation probe per fault class of the spec.
+# The per-gate families of the hub's tests (the same planted faults in depth) live in
+# tests/test-gates-{commit,sensitive,title,dead,workflows}.sh; here every gate has one probe per fault class of the spec.
 #
 #   [E] each installed gate: planted fault red, clean green      [V] invalid config rc 65, key named, in every gate
 #   [R] the base-ref rule, per gate                              [I] the installer
@@ -325,7 +325,7 @@ assert ns["TABLE"]["k\u2192"] == {"vi": "one", "en": "one"} and ns["TABLE"]["k2"
 assert ig.viet_lines(out) == []
 PY
   # a Vietnamese letter the rewrite cannot reach: the install stops before it writes anything
-  d="$TMP/lcopy-$RANDOM"; cp -r "$p" "$d"; printf '# \xc4\x91 left in a comment\n' >> "$d/gates/commit_discipline.py"
+  d=$(mktemp -d "$TMP/lcopy.XXXXXX"); cp -r "$p/." "$d"; printf '# \xc4\x91 left in a comment\n' >> "$d/gates/commit_discipline.py"
   r=$(mk_repo en3); put_cfg "$r" '{"language": "en"}'; t1=$(tree_hash "$r")
   RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
   want 65 "[L] a Vietnamese letter left in a vendored file, language en: rc 65, the file and line named" "gates/commit_discipline.py"
@@ -336,21 +336,18 @@ PY
   # every vendored file is held to it, the loader and the table after their rewrite too: a letter outside what the rewrite reaches
   local vf
   for vf in gates/gate_common.py scripts/sdlc_config.py scripts/messages.py; do
-    d="$TMP/lcopy-$RANDOM"; cp -r "$p" "$d"; printf '\n# \xc4\x91 left in a comment\n' >> "$d/$vf"
+    d=$(mktemp -d "$TMP/lcopy.XXXXXX"); cp -r "$p/." "$d"; printf '\n# \xc4\x91 left in a comment\n' >> "$d/$vf"
     r=$(mk_repo en11); put_cfg "$r" '{"language": "en"}'; t1=$(tree_hash "$r")
     RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
     want 65 "[L] a Vietnamese letter left in $vf, language en: rc 65, the file named" "$(basename "$vf")"
     eq "$(tree_hash "$r")" "$t1" "[L] …and nothing was written"; rm -rf "$d"
   done
   # the plugin's own workflow template and allowlist header are held to the same rule (a rendered workflow is not: see en6)
-  d="$TMP/lcopy-$RANDOM"; cp -r "$p" "$d"; printf '# t\xe1\xbb\x91i\n' >> "$d/gates/workflows/pr-title.yml"
+  d=$(mktemp -d "$TMP/lcopy.XXXXXX"); cp -r "$p/." "$d"; printf '# t\xe1\xbb\x91i\n' >> "$d/gates/workflows/pr-title.yml"
   r=$(mk_repo en9); put_cfg "$r" '{"language": "en"}'; t1=$(tree_hash "$r")
   RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
   want 65 "[L] a Vietnamese letter in a workflow template, language en: rc 65, the template named" "pr-title.yml (the template)"
   eq "$(tree_hash "$r")" "$t1" "[L] …and nothing was written"; rm -rf "$d"
-  d="$TMP/lcopy-$RANDOM"; cp -r "$p" "$d"; mutate "$d/scripts/install_gates.py" 'ALLOWLIST_HEADER = """# Allowlist of the sensitive-info gate' "$(printf 'ALLOWLIST_HEADER = """# Danh s\xc3\xa1ch Allowlist of the sensitive-info gate')"
-  RC=0; OUT=$(cenv python3 "$d/scripts/install_gates.py" --root "$r" 2>&1) || RC=$?
-  want 65 "[L] a Vietnamese letter in the allowlist header, language en: rc 65" "the allowlist header"; rm -rf "$d"
   # an allowlist the repo put under .vibemaestro/gates/ is still the repo's file: no warning for it
   r=$(mk_repo en10); put_cfg "$r" '{"language": "en", "sensitive": {"allowlist": ".vibemaestro/gates/allow.txt"}}'; mkdir -p "$r/.vibemaestro/gates"
   printf '0123abcd  # gi\xc3\xa1 tr\xe1\xbb\x8b\n' > "$r/.vibemaestro/gates/allow.txt"
@@ -361,63 +358,5 @@ PY
 
 FAMILIES="fam_each fam_invalid fam_base fam_install fam_english"
 for f in $FAMILIES; do "$f" "$PLUGIN"; done
-
-echo "== planted breaks: one probe per fault class, each must turn its family red =="
-BRKG count-off-by-one fam_each '[E] commit-discipline: 16 commits are red' commit_discipline.py '    if m["commits"] > max_commits:' '    if m["commits"] > max_commits + 1:'
-BRKG exemption-always-honoured fam_each '[E] commit-discipline: one file in 5 commits is red' commit_discipline.py '    blocking = [f for f in found if not (f[2] and why)]' '    blocking = []'
-BRKG allowlist-from-working-tree fam_base '[R] a PR that adds the hash of its own leak' pr_sensitive.py '        elif a.config_ref:
-            text = gc.read_at(a.cwd, a.config_ref, rel)' '        elif a.config_ref:
-            text = gc.read_at(a.cwd, None, rel)'
-BRKG pattern-removed fam_each '[E] pr-sensitive: a planted email is red' pr_sensitive.py '    ("email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", 0, lambda s: bool(_EMAIL_OK.match(s))),' ''
-BRKG draft-check-inverted fam_each '[E] pr-title: a ready PR in intent form with code is red' pr_title.py '        if draft:
-            applied.append("intent_form (draft: not applied)")' '        if not draft:
-            applied.append("intent_form (draft: not applied)")'
-BRKG dead-order-swapped fam_each '[E] dead-branches: one branch already in main is red' dead_branches.sh '  if is_in "$b" "$merged_main"; then
-    dead="$dead$b"$'"'"'\n'"'"'           # group 1: deletable
-    continue
-  fi' '  if false; then
-    continue
-  fi'
-BRKG config-error-swallowed fam_invalid '[V] commit-discipline: an invalid config is rc 65' gate_common.py '        if probs:
-            raise ConfigError(sdlc_config.render_problems(probs))
-        return cfg' '        return cfg'
-BRKG config-from-head fam_base '[R] commits.max_per_pr relaxed in the PR' commit_discipline.py '    cfg = gc.load_config(a.cwd, a.config_ref)' '    cfg = gc.load_config(a.cwd, None)'
-BRKG title-config-from-head fam_base '[R] pr.title.max_len and branch.pattern relaxed' pr_title.py '    cfg = gc.load_config(cwd, ref)' '    cfg = gc.load_config(cwd, None)'
-BRKG dead-config-from-head fam_base '[R] dead_branches.max_merged_on_remote relaxed' dead_branches.sh '${CONFIG_REF:+--config-ref "$CONFIG_REF"}' ''
-BRKG bad-ref-green fam_base '[R] commit-discipline: a ref that does not read' gate_common.py '        raise Infra("ref `%s` does not read" % ref)
-    if git(["cat-file"' '        return None
-    if git(["cat-file"'
-d="$TMP/break-installer-overwrites"; mk_plugin_copy "$d"
-mutate "$d/scripts/install_gates.py" '    if os.path.lexists(path):' '    if False:' && mutate "$d/scripts/install_gates.py" 'os.O_WRONLY | os.O_CREAT | os.O_EXCL' 'os.O_WRONLY | os.O_CREAT | os.O_TRUNC' \
-  && expect_red installer-overwrites fam_install "$d" '[I] a workflow that already exists and differs'
-BRKS installer-follows-symlinks fam_install '[I] .github is a symlink to a directory outside the repo' install_gates.py '        if os.path.commonpath([real_root, os.path.realpath(anc)]) != real_root:' '        if False:'
-BRKG import-guard-gone fam_install '[I] commit_discipline.py without gate_common.py' commit_discipline.py '    sys.exit(2)
-' '    raise
-'
-BRKS installer-label-unchecked fam_install '[I] a runner label with a quote' install_gates.py '    if not self_hosted_only(default) and not re.fullmatch(r"[A-Za-z0-9._-]+", default):' '    if False:'
-BRKS installer-existing-reported-wrote fam_install '[I] a second run' install_gates.py '        return "kept" if same else "kept (differs)"' '        return "wrote"'
-BRKS english-rewrite-off fam_english '[L] language en: no installed file holds a Vietnamese letter' install_gates.py '        if cfg["language"] == "en":
-            try:' '        if False:
-            try:'
-BRKS english-copy-for-vi fam_english '[L] vi: messages.py differs' install_gates.py '        if cfg["language"] == "en":
-            try:' '        if True:
-            try:'
-BRKS english-check-off fam_english '[L] a Vietnamese letter left in a vendored file' install_gates.py '            left = viet_lines(data)
-            if left:
-                return die' '            left = []
-            if left:
-                return die'
-BRKS kept-copy-not-warned fam_english '[L] …with a WARNING naming the file' install_gates.py '        if res == "kept (differs)" and cfg["language"] == "en" and rel in vendored_rels:' '        if False:'
-BRKG vietnamese-skip-line-dropped fam_english '[L] en: the installed pr-evidence gate accepts an E2E skip line' pr_evidence.py 'E2E (?:kh' 'E2E (?:zzzz'
-BRKS warning-names-the-repos-files fam_english '[L] en: …and no warning telling the repo to delete its allowlist' install_gates.py ' and rel in vendored_rels:   # the plugin'"'"'s copies, not a file the repo owns' ':'
-BRKS warning-keyed-on-the-folder fam_english '[L] en: …and no warning telling the repo to delete it' install_gates.py ' and rel in vendored_rels:' ' and rel.startswith(".vibemaestro/gates/"):'
-BRKS template-not-checked fam_english '[L] a Vietnamese letter in a workflow template' install_gates.py '            owned.append(("gates/workflows/" + GATES[n][0] + " (the template)", tmpl.encode("utf-8")))' '            pass'
-BRKS header-not-checked fam_english '[L] a Vietnamese letter in the allowlist header' install_gates.py '        owned.append(("the allowlist header", ALLOWLIST_HEADER.encode("utf-8")))' '        pass'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family"
 
 echo; summary

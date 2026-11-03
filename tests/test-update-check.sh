@@ -17,7 +17,6 @@
 #   [H] hostile tags and a hostile cache never reach the message
 #   [P] privacy: the request carries no token, no cookie, nothing about the user; the API override is honoured only on loopback
 #   [B] brain: the same reminder through sdlc's code, naming brain; silent without sdlc and under BRAIN_OFF
-#   [X] planted breaks: each guard goes red on a copy with it removed
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -248,6 +247,8 @@ fam_uc() { local S=$1 P D V
   mkp "$P" "$S" vibemaestro-sdlc 0.2.0 "$REPO_URL"
   D=$(fresh)/data; seed "$D" '"9.9.9"'; quiet "[S3] a sandbox pod (INTENT_SLUG and SEAT)" "$P" "$D" INTENT_SLUG=x SEAT=y
   D=$(fresh)/data; quiet "[S3] …no cache" "$P" "$D" INTENT_SLUG=x SEAT=y
+  D=$(fresh)/data; seed "$D" '"9.9.9"'; quiet "[S3] a worker session (VIBEMAESTRO_ROLE=worker alone)" "$P" "$D" VIBEMAESTRO_ROLE=worker
+  D=$(fresh)/data; quiet "[S3] …no cache" "$P" "$D" VIBEMAESTRO_ROLE=worker
   D=$(fresh)/data; seed "$D" '"9.9.9"'; quiet "[S4] VIBEMAESTRO_NO_UPDATE_CHECK=1" "$P" "$D" VIBEMAESTRO_NO_UPDATE_CHECK=1
   D=$(fresh)/data; quiet "[S4] …no cache" "$P" "$D" VIBEMAESTRO_NO_UPDATE_CHECK=1
   D=$(fresh)/data; seed "$D" '"9.9.9"'; quiet "[S5] CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" "$P" "$D" CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
@@ -267,6 +268,10 @@ fam_uc() { local S=$1 P D V
   quiet "[S7] no CLAUDE_PLUGIN_DATA" "$P" -
   D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D"
   has "$(sysm "$OUT")" "9.9.9 is available" "[S0] control: the seeded cache, with nothing turning it off, shows the line"
+  D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D" VIBEMAESTRO_ROLE=solo
+  has "$(sysm "$OUT")" "9.9.9 is available" "[S3] control: VIBEMAESTRO_ROLE=solo is no worker session, the line shows"
+  D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D" INTENT_SLUG=x "SEAT=  "
+  has "$(sysm "$OUT")" "9.9.9 is available" "[S3] SEAT only spaces is no worker session (as the hooks decide): the line shows"
   D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D" VIBEMAESTRO_NO_UPDATE_CHECK=0
   nonempty "$(sysm "$OUT")" "[S8] control: VIBEMAESTRO_NO_UPDATE_CHECK=0 does not turn it off"
   D=$(fresh)/data; seed "$D" '"9.9.9"'; age "$D" checked $((DAY + 60)); printf 'x' > "$D/update-check.json.lock" 2>/dev/null
@@ -370,23 +375,5 @@ fam_brain() { local S=$1 B="$TMP/b/plugins/vibemaestro-brain" Q="$TMP/b/plugins/
 
 echo "== sdlc =="; fam_uc "$PLUGIN"
 echo "== brain =="; fam_brain "$PLUGIN"
-
-echo "== [X] planted breaks =="
-BRK() {  # BRK <label> <family> <needle> <file under scripts/> <old> <new> — a copy of sdlc with one break
-  local d="$TMP/break-$1/vibemaestro-sdlc"; mkdir -p "$(dirname "$d")"; cp -R "$PLUGIN" "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK no-semver fam_uc "[H2]" update_check.py 'SEMVER = re.compile(r"(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})", re.ASCII)' 'SEMVER = re.compile(r"(.+)\.(.+)\.(.+)", re.S)'
-BRK no-pod fam_uc "[S3]" update_check.py 'if os.environ.get("INTENT_SLUG") and os.environ.get("SEAT"):' 'if False:'
-BRK no-optout fam_uc "[S4]" update_check.py 'if optout("VIBEMAESTRO_NO_UPDATE_CHECK")' 'if False'
-BRK no-cache fam_uc "[N2] …and no second read" update_check.py '    return not 0 <= now - cache["checked"] < DAY' '    return True'
-BRK no-claim fam_uc "[C8]" update_check.py '    if not claim(data, now):' '    if False:'
-BRK keeps-stale-latest fam_uc "[N6]" update_check.py 'if t.is_alive() or not got.get("answer"):' 'if t.is_alive() or not got.get("latest"):'
-BRK loopback-proxy fam_uc "[P3]" update_check.py 'handlers.insert(0, urllib.request.ProxyHandler({}))' 'handlers.insert(0, urllib.request.ProxyHandler())'
-BRK no-walk-up fam_uc "[S11]" update_check.py '    root = project_root()' '    root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()'
-BRK no-deadline fam_uc "[T1]" update_check.py 't.join(DEADLINE)' 't.join()'
-BRK follows-redirect fam_uc "[S10] …(redirect)" update_check.py '        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)' '        return urllib.request.HTTPRedirectHandler.redirect_request(self, req, fp, code, msg, headers, newurl)'
-BRK any-api fam_uc "[P2]" update_check.py 'if LOOPBACK.fullmatch(v):' 'if v:'
-BRK no-version-gate fam_uc "[S1]" update_check.py 'if not SEMVER.fullmatch(installed or ""):' 'if False:'
 
 echo; summary

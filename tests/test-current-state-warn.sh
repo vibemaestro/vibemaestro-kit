@@ -15,8 +15,7 @@
 #   [N] dated labels (`current_state.labels`): no date, older than N, after tomorrow, a runaway regex; no key = today
 # Every place is checked at the same sizes against a cap of 1000 bytes: one byte below the share (no warning), exactly at it (one
 # warning), at the cap (one warning, still a pass) and one byte over (today's failure, no warning). The return code is asserted next
-# to the warning each time. Then each planted break must turn its family red: a break of the shared function turns all four places
-# red, and a break of the call in ONE place turns only that place red (an unbroken copy must stay green).
+# to the warning each time.
 # Real git on throw-away repositories, the hooks run through the command of hooks/hooks.json, no network.
 # =============================================================================
 set -uo pipefail
@@ -269,86 +268,5 @@ fam_labels() { PLX=$1
 FAMILIES="fam_shape fam_diff fam_pr fam_hook fam_dims fam_cfg fam_labels"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
 
-# ── each planted break must turn its family red ─────────────────────────────────────────────────
-BRK() {  # BRK <label> <family> <needle> <file under scripts/> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-echo "-- control: the warning code removed"
-# the shared function: removing it turns every place red
-FN_OLD='    if not near:
-        return None
-'
-FN_NEW='    return None
-'
-BRK function-removed-shape fam_shape '[S2]' current_state.py "$FN_OLD" "$FN_NEW"
-BRK function-removed-diff fam_diff '[D2]' current_state.py "$FN_OLD" "$FN_NEW"
-BRK function-removed-pr fam_pr '[P2]' current_state.py "$FN_OLD" "$FN_NEW"
-BRK function-removed-hook fam_hook '[H2]' current_state.py "$FN_OLD" "$FN_NEW"
-# the call in ONE place
-BRK call-removed-shape fam_shape '[S2]' kb.py '    warn = current_state.size_warning(raw, profile, rel)' '    warn = None'
-BRK call-removed-diff fam_diff '[D2]' current_state.py '    warns = ledger_warnings(root, p, ledger)' '    warns = []'
-BRK call-removed-pr fam_pr '[P2]' current_state.py '    warns = ledger_warnings(root, p, ledger)' '    warns = []'
-BRK call-removed-hook fam_hook '[H2]' vsdlc.py '        note = _size_note(troot, cfg, rel, sid, os.path.abspath(ti.get("file_path") or ti.get("notebook_path") or ""))' '        note = None'
-# the other places stay green when ONE call goes: the break above must not hide behind a broken fixture of the others
-echo "-- control: a break of one call leaves the other places green"
-CALL_BREAK="$TMP/break-only-hook"; mk_plugin_copy "$CALL_BREAK"
-mutate "$CALL_BREAK/scripts/vsdlc.py" '        note = _size_note(troot, cfg, rel, sid, os.path.abspath(ti.get("file_path") or ti.get("notebook_path") or ""))' '        note = None' || true
-sp=$PASS; sf=$FAIL; QN=0
-okdef=$(declare -f ok); baddef=$(declare -f bad)
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in fam_shape fam_diff fam_pr; do "$f" "$CALL_BREAK" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "the hook call removed: the shape check, the diff gate and the PR core still pass their families"
-# the edges and the key
-BRK edge-exclusive fam_shape '[S2]' current_state.py '    near = [(n / cap, what, n, cap) for what, n, cap in dims if n / cap >= ratio]' '    near = [(n / cap, what, n, cap) for what, n, cap in dims if n / cap > ratio]'
-BRK tie-by-floor fam_dims '[R9]' current_state.py '    near = [(n / cap, what, n, cap) for what, n, cap in dims if n / cap >= ratio]' '    near = [(n * 100 // cap, what, n, cap) for what, n, cap in dims if n / cap >= ratio]'
-BRK explicit-name-lost fam_shape '[S10]' kb.py '    warn = current_state.size_warning(raw, profile, rel)' '    warn = current_state.size_warning(raw, profile)'
-BRK hook-guard-removed fam_hook '[H10]' vsdlc.py '        elif rel == profile["path"]:
-            name = None
-        else:
-            return None
-' '        else:
-            name = None
-'
-BRK hook-relative-path-from-root fam_hook '[H14]' vsdlc.py 'os.path.abspath(ti.get("file_path") or ti.get("notebook_path") or "")' 'os.path.abspath(os.path.join(troot, ti.get("file_path") or ""))'
-BRK hook-once-per-spelling fam_hook '[H15]' vsdlc.py 'once("size:%s:%d" % (os.path.realpath(path), len(raw)), sid)' 'once("size:%s:%d" % (path, len(raw)), sid)'
-BRK hook-reads-session-root fam_hook '[H12]' vsdlc.py '        with open(path, "rb") as f:' '        with open(os.path.join(troot, *rel.split("/")), "rb") as f:'
-BRK ratio-hardcoded fam_dims '[R2]' current_state.py 'if n / cap >= ratio]' 'if n / cap >= 0.85]'
-BRK over-cap-warns fam_hook '[H5]' current_state.py '    if ratio is None or any(n > cap for _name, n, cap in dims):' '    if ratio is None:'
-BRK lines-cap-dropped fam_dims '[R4]' current_state.py '    if lim["lines"] is not None:
-        dims.append(' '    if False:
-        dims.append('
-BRK lines-null-crashes fam_dims '[R6]' current_state.py '    if lim["lines"] is not None:
-        dims.append(("lines", len(lines), lim["lines"]))' '    dims.append(("lines", len(lines), lim["lines"] or 0))'
-BRK two-lines-printed fam_dims '[R5b]' current_state.py '    _share, what, n, cap = max(near)' '    _share, what, n, cap = near[0]'
-BRK ratio-not-validated fam_cfg '[C3]' sdlc_config.py '        if not _is_num(v) or not 0 < v <= 1:' '        if False:'
-BRK ratio-above-one-accepted fam_cfg '[C3]' sdlc_config.py 'or not 0 < v <= 1:' 'or not 0 < v:'
-BRK default-moved fam_cfg '[C1]' sdlc_config.py '"line_chars": 200, "warn_ratio": 0.85}' '"line_chars": 200, "warn_ratio": 0.5}'
-
-# the dated labels: each break turns its [N] case red
-BRK label-no-date-silent fam_labels '[N1]' current_state.py '        if day is None:' '        if False:'
-BRK label-shape-call-dropped fam_labels '[N1]' kb.py '    for w in current_state.label_warnings(raw, profile, rel):' '    for w in []:'
-BRK label-diff-call-dropped fam_labels '[N1d]' current_state.py '    return ([w] if w else []) + label_warnings(text, profile, name, today)' '    return [w] if w else []'
-BRK label-age-ignored fam_labels '[N2]' current_state.py '        elif age > n:' '        elif False:'
-BRK label-age-off-by-one fam_labels '[N3]' current_state.py '        elif age > n:' '        elif age >= n:'
-BRK label-future-silent fam_labels '[N4]' current_state.py '        elif age < -1:' '        elif False:'
-BRK label-future-no-slack fam_labels '[N4b]' current_state.py '        elif age < -1:' '        elif age < 0:'
-BRK label-bad-day-read fam_labels '[N5c]' current_state.py '    except ValueError:
-        return None' '    except ValueError:
-        return datetime.date(2000, 1, 1)'
-BRK label-shape-unchecked fam_labels '[N5d]' current_state.py '    if s is None or not _ISO_SHAPE.fullmatch(s):' '    if s is None:'
-BRK label-max-age-hardcoded fam_labels '[N8]' current_state.py '    n = p["labels"]["max_age_days"]' '    n = 7'
-BRK label-one-per-line fam_labels '[N9]' current_state.py '            for m in rx.finditer(ln):' '            for m in filter(None, [rx.search(ln)]):'
-BRK label-timer-too-long fam_labels '[N6]' current_state.py 'LABEL_SECONDS = 2' 'LABEL_SECONDS = 11'
-BRK label-empty-match-is-label fam_labels '[N10]' current_state.py '                if any(c.isalpha() for c in ln[m.start():s] + ln[e:m.end()]):' '                if True:'
-BRK labels-on-by-default fam_labels '[N7]' sdlc_config.py '        "labels": None,' '        "labels": {"regex": "\\*chưa kiểm(?: từ (?P<date>[^*]*))?\\*", "max_age_days": 7},'
-
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

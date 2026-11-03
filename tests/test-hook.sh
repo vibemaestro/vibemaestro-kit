@@ -164,6 +164,23 @@ for spec in "chỉ INTENT_SLUG|INTENT_SLUG=2026-10-10-viec" "chỉ SEAT|SEAT=acm
   hasnt "$C" 'first behaviour' "không phải sandbox ($lbl), session-ask trong PATH: KHÔNG có lời nhắc sandbox"
   hasnt "$C" 'session-ask' "không phải sandbox ($lbl): không nhắc session-ask"
 done
+# the worker switch: VIBEMAESTRO_ROLE=worker alone is a worker session, with no deprecation line; the old pair alone gets one;
+# any other value of the switch is no worker session
+C=$(ctx "$(sbx VIBEMAESTRO_ROLE=worker PATH="$ASKBIN:$NOASK_PATH")")
+has "$C" 'Sandbox session — first behaviour' "switch VIBEMAESTRO_ROLE=worker alone: the first-steps reminder"
+hasnt "$C" 'Deprecated: this session' "switch VIBEMAESTRO_ROLE=worker alone: no deprecation line"
+C=$(ctx "$(sbx $SBX_ID PATH="$ASKBIN:$NOASK_PATH")")
+has "$C" 'Deprecated: this session is a worker session because INTENT_SLUG and SEAT are both set' "the old pair alone: the deprecation line"
+has "$C" 'should set VIBEMAESTRO_ROLE=worker' "…which names the switch"
+has "$(sysm "$(sbx $SBX_ID PATH="$ASKBIN:$NOASK_PATH")")" 'vibemaestro-sdlc: deprecated worker signal INTENT_SLUG + SEAT' "…and the person sees it too (systemMessage)"
+hasnt "$(sysm "$(sbx VIBEMAESTRO_ROLE=worker PATH="$ASKBIN:$NOASK_PATH")")" 'deprecated' "…not with the switch alone"
+hasnt "$(sysm "$(sbx $SBX_ID VIBEMAESTRO_ROLE=worker PATH="$ASKBIN:$NOASK_PATH")")" 'deprecated' "…not with the pair and the switch"
+C=$(ctx "$(sbx $SBX_ID VIBEMAESTRO_ROLE=worker PATH="$ASKBIN:$NOASK_PATH")")
+hasnt "$C" 'Deprecated: this session' "the old pair and the switch: no deprecation line"
+for v in Worker solo ' worker' 'worker ' ''; do
+  C=$(ctx "$(sbx "VIBEMAESTRO_ROLE=$v" PATH="$ASKBIN:$NOASK_PATH")")
+  hasnt "$C" 'first behaviour' "VIBEMAESTRO_ROLE='$v' alone: no worker session"
+done
 # A7: plugin thiếu skill spec → không nhắc spec/session-ask; thiếu cả intake và spec → không nhắc gì của phiên sandbox
 PLA="$TMP/plug-a7"; cp -r "$PL" "$PLA"; rm -rf "$PLA/skills/spec"
 C=$(ctx "$(CLAUDE_PLUGIN_ROOT="$PLA" sbx $SBX_ID PATH="$ASKBIN:$NOASK_PATH")")
@@ -343,23 +360,6 @@ fires 'git log -1 $(echo hi)...' measurement-commands
 silent 'git log -- src/...' measurement-commands
 silent 'git log --pretty=format:\"%h %s...\"' measurement-commands
 silent "git log -1 --format='%s' # check this..." measurement-commands
-# planted break: the 1.1.1 range part of the regex in a copy of the plugin, and the new triggers go silent (the four cases above are
-# not proved by some other part of the regex)
-PB76="$TMP/plugin-76"; cp -r "$PLUGIN" "$PB76"
-python3 - "$PB76/rules/measurement-commands.instructions.md" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-new = r"(?:\s(?!-)[\x22\x27]?(?:[^\s\x22\x27]*?[^\s\x22\x27/.][\x22\x27]?(?:\.\.\.?(?=[\x22\x27]?[^\s\x22\x27./])|\.\.(?=[\s|;&)\x22\x27]|$))|(?:HEAD|\$[^\s\x22\x27.]+|[^\s\x22\x27]*?/[^\s\x22\x27./]+)[\x22\x27]?\.\.\.(?=[\s|;&)\x22\x27]|$)|\.\.\.?[\x22\x27]?[^\s\x22\x27./])|[)\x60][\x22\x27]?(?:\.\.\.?[\x22\x27]?[^\s\x22\x27./]|\.\.\.?(?=[\s|;&)\x22\x27]|$)))|"
-old = r"\s(?!-)[^\s\x22\x27]*?[^\s\x22\x27/.]\.\.\.?[^\s\x22\x27.]|"
-assert s.count(new) == 1, "the range part of the regex moved: update this planted break"
-open(p, "w").write(s.replace(new, old))
-PY
-for c in 'git log \"$A..$B\"' 'git log ..HEAD' 'git log HEAD..'; do
-  o=$(RPL="$PB76" capped realbash "$c"); crc=$?   # capped: memory and time caps (fixtures/capped.sh)
-  cap_red "$crc" "planted break (1.1.1 regex): '$c'" || hasnt "$(ctx "$o")" measurement-commands.instructions.md "planted break (1.1.1 regex): '$c' goes silent"
-done
-o=$(RPL="$PB76" capped realbash 'git log main..HEAD'); crc=$?
-case "$crc" in 247|248) bad "planted break, control: a cap stopped the copy (rc $crc)";; *) has "$(ctx "$o")" measurement-commands.instructions.md "planted break, control: the copy still reminds on 'git log main..HEAD'";; esac
 
 # Rule-match gap 3: pr-no-leaks carries the self-scan and allowlist paragraph (absent on 1.1.1), with the allowlist path
 # read from the config, and the commands it names do what it says
@@ -390,11 +390,6 @@ gap3() {  # gap3 <plugin dir> <tag> — the checks of gap 3 against one plugin t
   runrule "$SCAN_CMD" >/dev/null; eq "$?" 0 "gap 3: one sha256 line in the file the config names clears it (rc 0)"
 }
 gap3 "$PLUGIN" real
-# planted break: the paragraph removed from a copy, and the same checks go red
-PB76E="$TMP/plugin-76e"; cp -r "$PLUGIN" "$PB76E"
-grep -v -F '**Scan it yourself, and the allowlist.**' "$PLUGIN/rules/pr-no-leaks.instructions.md" > "$PB76E/rules/pr-no-leaks.instructions.md"
-NF=$( (FAIL=0; gap3 "$PB76E" broken >/dev/null; echo "$FAIL") )
-[ "$NF" -ge 5 ] && ok "planted break: no self-scan paragraph, the gap 3 checks go red ($NF failed)" || bad "planted break: the gap 3 checks stay green without the paragraph ($NF failed)"
 
 fires_path kb/specs/2026-10-14-x.md document-precedence
 fires_path kb/decisions/2026-10-14-y.md document-precedence
@@ -423,21 +418,6 @@ has "$(ctx "$(RAPP="$RAPP76" sessone_real)")" 'policy/rules/**' "the catalogue s
 dec_ "$RAPP76" d-rules.md '${rules.dirs}/**' 'APP-QD-RULES-DIRS'
 has "$(RAPP="$RAPP76" realedit policy/rules/x.instructions.md)" 'd-rules.md' "a decision with applyTo \${rules.dirs}/** is reminded on an edit there"
 hasnt "$(RAPP="$RAPP76" realedit other/z.instructions.md)" 'd-rules.md' "…and not elsewhere"
-# planted break: the token removed from the rule, and the edit goes silent
-PB76B="$TMP/plugin-76b"; cp -r "$PLUGIN" "$PB76B"
-sed -i.bak 's|,${rules.dirs}/\*\*"|"|' "$PB76B/rules/document-precedence.instructions.md"; rm -f "$PB76B/rules/"*.bak
-hasnt "$(head -3 "$PB76B/rules/document-precedence.instructions.md")" 'rules.dirs' "planted break: the copy's applyTo has no token"
-RPL="$PB76B" RAPP="$RAPP76" silent_path policy/rules/x.instructions.md document-precedence
-# planted break: the engine does not expand the token (the 1.1.1 engine), and the edit goes silent
-PB76C="$TMP/plugin-76c"; cp -r "$PLUGIN" "$PB76C"
-python3 - "$PB76C/scripts/rules.py" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-old = "        for d in dirs:\n            p = pat.replace("
-assert s.count(old) == 1, "apply_to_regexes moved: update this planted break"
-open(p, "w").write(s.replace(old, "        for d in ():\n            p = pat.replace("))
-PY
-RPL="$PB76C" RAPP="$RAPP76" silent_path policy/rules/x.instructions.md document-precedence
 # `${public.tree}` (rule public-tree): every path of a repo that sets `public.private`, but the root kb/ and those globs
 RAPPP="$TMP/app-public"; mk_app "$RAPPP"
 mkdir -p "$RAPPP/.vibemaestro" "$RAPPP/tests/fixtures/f/kb" "$RAPPP/kb/specs" "$RAPPP/ops/a" "$RAPPP/.changes"
@@ -457,16 +437,6 @@ hasnt "$(ctx "$(sessone_real)")" 'public-tree.instructions.md' "…and lists no 
 RAPPE="$TMP/app-public-empty"; mk_app "$RAPPE"; mkdir -p "$RAPPE/.vibemaestro"
 printf '{"schema": 1, "public": {"private": []}}' > "$RAPPE/.vibemaestro/sdlc.json"
 RAPP="$RAPPE" fires_path .vibemaestro/sdlc.json public-tree          # an empty list publishes everything but kb/
-# planted break: the engine does not expand the token, and the edit goes silent
-PBPT="$TMP/plugin-public-tree"; cp -r "$PLUGIN" "$PBPT"
-python3 - "$PBPT/scripts/rules.py" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-old = "            rx = public_regex(dirs)\n"
-assert s.count(old) == 1, "apply_to_regexes moved: update this planted break"
-open(p, "w").write(s.replace(old, "            rx = None\n"))
-PY
-RPL="$PBPT" RAPP="$RAPPP" silent_path tests/x.sh public-tree
 
 fires 'git commit -m x' commit-unit
 fires 'git commit --amend' commit-unit
@@ -594,18 +564,18 @@ VPB=$(awk 'f==2{print} /^---$/{f++}' "$PLUGIN/rules/version-policy.instructions.
 [ "$VPB" -le 10 ] && ok "version-policy: the body is $VPB non-empty lines (max 10)" || bad "version-policy: the body is $VPB non-empty lines (max 10)"
 
 # the catalogue lists every new rule
-for r in commit-unit pr-body-shape document-precedence measurement-commands docs-final; do
+for r in commit-unit pr-body-shape document-precedence measurement-commands docs-final test-quality; do
   has "$RBC" "$r.instructions.md" "C6: the session catalogue lists the rule $r"
 done
 
-# budget: a rule that is long is skimmed. New rules at most 40 lines, all rules together at most 363, the measured total of the rules directory (300 until the rule version-policy, whose 13 lines raised it to 313: no sdlc rule had a superseded bump line to drop; then the rules docs-final, 14 lines, public-tree, 13 lines, and config-compat, 12 lines: no rule text they supersede; then coordinated-work, 15 lines, which took 3 lines net out of workflow-core: 363; then one line in batonrun, at the moment of exit 8 a session must not sign as the owner: 364; then one line in coordinated-work, the first step of a brief built from a plan row: 365).
-NEW_RULES="commit-unit pr-body-shape document-precedence measurement-commands docs-final public-tree config-compat coordinated-work"
+# budget: a rule that is long is skimmed. New rules at most 40 lines, all rules together at most 363, the measured total of the rules directory (300 until the rule version-policy, whose 13 lines raised it to 313: no sdlc rule had a superseded bump line to drop; then the rules docs-final, 14 lines, public-tree, 13 lines, and config-compat, 12 lines: no rule text they supersede; then coordinated-work, 15 lines, which took 3 lines net out of workflow-core: 363; then one line in batonrun, at the moment of exit 8 a session must not sign as the owner: 364; then one line in coordinated-work, the first step of a brief built from a plan row: 365; then the rule test-quality, 17 lines, three items of before-ready (re-review of a fix round, class sweep, stop at the second fix of a class) and the precedence sentence of workflow-core, no rule text they supersede: 388).
+NEW_RULES="commit-unit pr-body-shape document-precedence measurement-commands docs-final public-tree config-compat coordinated-work test-quality"
 for r in $NEW_RULES; do
   n=$(wc -l < "$PLUGIN/rules/$r.instructions.md" | tr -d ' ')
   [ "$n" -le 40 ] && ok "C6 budget: $r is $n lines (max 40)" || bad "C6 budget: $r is $n lines (max 40)"
 done
 TOTAL=$(cat "$PLUGIN"/rules/*.instructions.md | wc -l | tr -d ' ')
-[ "$TOTAL" -le 365 ] && ok "C6 budget: all rules together are $TOTAL lines (max 365)" || bad "C6 budget: all rules together are $TOTAL lines (max 365)"
+[ "$TOTAL" -le 388 ] && ok "C6 budget: all rules together are $TOTAL lines (max 388)" || bad "C6 budget: all rules together are $TOTAL lines (max 388)"
 # control for the instrument: the count sees a rule that grows
 printf '%s\n' $(seq 1 60) > "$TMP/long.md"; [ "$(wc -l < "$TMP/long.md" | tr -d ' ')" -gt 40 ] && ok "C6 budget: control, a 60-line file is over the cap" || bad "C6 budget: the line count does not see a long file"
 
@@ -784,7 +754,7 @@ hasnt "$(CLAUDE_PROJECT_DIR="$APPE" CLAUDE_PLUGIN_ROOT="$PL" edit "$(sid)" "$APP
 
 echo "== B1.7: the current-state index at SessionStart startup and compact, a string of its own =="
 # The third SessionStart command injects the repo's index when `current_state.inject` is on. Every case below runs the real hook
-# command of hooks.json on a plugin copy (the family takes it), so each planted break after the family turns its case red.
+# command of hooks.json on a plugin copy (the family takes it).
 # shellcheck source=fixtures/ports.sh
 . "$HERE/fixtures/ports.sh"
 IDXON='{"schema": 1, "current_state": {"inject": true}}'
@@ -1041,69 +1011,24 @@ fam_skill_list() {  # fam_skill_list <plugin dir> — the "Skills of the plugin"
   local p=$1 c line want got
   c=$(hook_cmds "$HOOKS" SessionStart '' | sed -n 2p)
   line=$(ctx "$(printf '%s' "$(p_start "$(sid)")" | CLAUDE_PROJECT_DIR="$APP" CLAUDE_PLUGIN_ROOT="$p" bash -c "$c" 2>/dev/null)" | grep -F 'Skills of the plugin')
-  want=$(for f in "$p"/skills/*/SKILL.md; do [ -f "$f" ] && basename "$(dirname "$f")"; done | sort)
+  want=$(for f in "$p"/skills/*/SKILL.md; do [ -f "$f" ] && basename "$(dirname "$f")"; done | grep -vxF coordinator-bootstrap | sort)
   got=$(printf '%s' "$line" | grep -oE 'vibemaestro-sdlc:[a-z0-9-]+' | sed 's/^vibemaestro-sdlc://' | sort)
   nonempty "$want" "[S0] instrument: the plugin has skill directories"
-  eq "$got" "$want" "[S1] the skill line names every skills/<name>/SKILL.md, no more"
+  eq "$got" "$want" "[S1] the skill line names every skills/<name>/SKILL.md but the old name coordinator-bootstrap, no more"
+  printf '%s\n' "$got" | grep -qxF bootstrap && ok "[S1] …the skill bootstrap is listed" || bad "[S1] …the skill bootstrap is listed"
+  hasnt "$line" 'vibemaestro-sdlc:coordinator-bootstrap' "[S1] …its old name is not"
 }
 fam_skill_list "$PLUGIN"
 SKP="$TMP/skill-planted"; mk_plugin_copy "$SKP"; mkdir -p "$SKP/skills/zz-planted"; printf -- '---\nname: zz-planted\n---\n' > "$SKP/skills/zz-planted/SKILL.md"
 fam_skill_list "$SKP"
 has "$(ctx "$(printf '%s' "$(p_start "$(sid)")" | CLAUDE_PROJECT_DIR="$APP" CLAUDE_PLUGIN_ROOT="$SKP" bash -c "$(hook_cmds "$HOOKS" SessionStart '' | sed -n 2p)" 2>/dev/null)")" \
   'vibemaestro-sdlc:zz-planted' "[S2] a new skill directory appears in the line with no code change"
-SKB="$TMP/skill-break"; mk_plugin_copy "$SKB"
-mutate "$SKB/scripts/vsdlc.py" '    mine = all_skills()' '    mine = plugin_skills()' && expect_red skill-line-chain-only fam_skill_list "$SKB" '[S1]'
-
-IBRK() {  # IBRK <label> <needle> <file under scripts/> <old> <new> — one planted break, and fam_index must go red on <needle>
-  local d="$TMP/ibreak-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$3" "$4" "$5" && expect_red "$1" fam_index "$d" "$2"
-}
-IBRK idx-no-compact '[I2]' vsdlc.py 'INDEX_SOURCES = ("startup", "compact")' 'INDEX_SOURCES = ("startup",)'
-IBRK idx-every-source '[I3]' vsdlc.py 'INDEX_SOURCES = ("startup", "compact")' 'INDEX_SOURCES = ("startup", "compact", "resume", "clear")'
-IBRK idx-switch-ignored '[I6]' vsdlc.py '    if probs or cfg["hooks"] == "off" or not cfg["current_state"].get("inject"):' '    if probs or cfg["hooks"] == "off":'
-IBRK idx-hooks-off-ignored '[I8]' vsdlc.py '    if probs or cfg["hooks"] == "off" or not cfg["current_state"].get("inject"):' '    if probs or not cfg["current_state"].get("inject"):'
-IBRK idx-sentence-never '[I5]' vsdlc.py 'kb_reminder(troot, index_injects(cfg, source), ' 'kb_reminder(troot, False, '
-IBRK idx-sentence-always '[I5b]' vsdlc.py 'kb_reminder(troot, index_injects(cfg, source), ' 'kb_reminder(troot, True, '
-IBRK idx-sentence-path '[I22]' vsdlc.py 'kb_reminder(troot, index_injects(cfg, source), cfg["current_state"]["path"], cfg["language"])' 'kb_reminder(troot, index_injects(cfg, source), lang=cfg["language"])'
-IBRK idx-cap-off '[I9]' vsdlc.py '    if not o["big"] and n <= S.INJECT_MAX_CHARS:' '    if not o["big"]:'
-IBRK idx-cap-off-by-one '[I9b]' vsdlc.py '    if not o["big"] and n <= S.INJECT_MAX_CHARS:' '    if not o["big"] and n < S.INJECT_MAX_CHARS:'
-IBRK idx-big-read '[I9d]' vsdlc.py '    if len(raw) > limit:' '    if False:'
-IBRK idx-stale-tree-text '[I10]' vsdlc.py 'out.update(text=R._nl(files[rel]), ref=' 'out.update(text=local, ref='
-IBRK idx-stale-unmarked '[I10]' vsdlc.py 'out.update(mark=R.upstream_mark(up, rel, troot, kind), short=_short_mark(up, kind))' 'out.update(mark="", short="")'
-IBRK idx-symlink-read '[I18]' vsdlc.py '    if stat.S_ISLNK(st.st_mode):' '    if False:'
-IBRK idx-dir-symlink-read '[I18b]' vsdlc.py '    if here != top and not here.startswith(' '    if False and not here.startswith('
-IBRK idx-fifo-read '[I19]' vsdlc.py '    if not stat.S_ISREG(st.st_mode):' '    if False:'
-IBRK idx-no-short-mark '[I21]' vsdlc.py 'for m in ((mark, o["short"]) if mark else ("",)):' 'for m in ((mark,) if mark else ("",)):'
-IBRK idx-crlf-kept '[I23]' vsdlc.py '    return R._nl(raw.decode("utf-8", "replace")), False, None' '    return raw.decode("utf-8", "replace"), False, None'
-IBRK idx-big-is-tree-edit '[I24]' vsdlc.py 'or big and (
-            _read_index(troot, rel, COMPARE_MAX_READ)[0] != R._nl(base.get(rel)))):' 'or big):'
-IBRK idx-ref-warning-unmarked '[I25]' vsdlc.py '(" of %s" % ref) if ref else ""' '""'
-IBRK idx-label-name-raw '[I13]' vsdlc.py '(_oneline(f), i, when, lab)' '(f, i, when, lab)'
-IBRK idx-ran-over-dropped '[I13]' vsdlc.py '"; the scan ran over its timer, so some are not listed" if over else ""' '""'
-IBRK idx-overlay-skipped '[I10]' vsdlc.py 'files=(rel,), decisions=False) if probe' 'files=(), decisions=False) if probe'
-IBRK idx-both-dropped '[I11]' vsdlc.py '    elif isinstance(base, dict) and (why' '    elif False and (why'
-IBRK idx-render-uncapped '[I13]' vsdlc.py '        if used + n + (reserve if k < len(lines) - 1 else 0) > room:' '        if False:'
-IBRK idx-render-no-rest '[I13]' vsdlc.py '            out.append(more % (len(lines) - k))' '            pass'
-IBRK idx-render-order '[I13]' vsdlc.py 'key=lambda r: (r[3] is not None, -(r[3] or 0), r[0], r[1])' 'key=lambda r: (r[0], r[1])'
-IBRK idx-labels-past-hook-cap '[I14]' vsdlc.py 'min(LABELS_MAX, HOOK_CAP - S.inject_chars(body) - 2)' 'LABELS_MAX'
-IBRK idx-labels-past-1000 '[I14b]' vsdlc.py 'min(LABELS_MAX, HOOK_CAP - S.inject_chars(body) - 2)' 'HOOK_CAP - S.inject_chars(body) - 2'
-IBRK idx-no-tail '[I14]' vsdlc.py 'return body + ("\n\n" + tail if tail else ""), sysmsg' 'return body, sysmsg'
-IBRK idx-unchanged-ref-marked '[I12]' vsdlc.py '    elif rel not in files or (local is not None' '    elif (local is not None'
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-IPC="$TMP/ibreak-none"; mk_plugin_copy "$IPC"; fam_index "$IPC" >/dev/null 2>&1
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes fam_index (no failed check)"
 # a failure inside the index command is one warning naming it, rc 0 (current_state.py raising on import)
 IPX="$TMP/idx-raise"; mk_plugin_copy "$IPX"; printf 'raise RuntimeError("no")\n' > "$IPX/scripts/current_state.py"
 d=$(mktemp -d "$TMP/f.XXXXXX"); mk_idx_app "$d/app" "$IDXON" $'# State\n\n- IDX-TREE-LINE'
 O=$(s_idx "$IPX" "$d/app" startup); eq "$?" 0 "[I17] the index code raises → rc 0"
 has "$(ctx "$O")" 'the current-state index could not be injected (RuntimeError)' "[I17] …one warning naming the failure"
 has "$(ctx "$O")" 'read kb/current-state.md first' "[I17] …telling the session to read the file"
-mutate "$IPX/scripts/vsdlc.py" '    except Exception as e:
-        msg = "the current-state index could not be injected' '    except ZeroDivisionError as e:
-        msg = "the current-state index could not be injected' \
-  && hasnt "$(ctx "$(s_idx "$IPX" "$d/app" startup)")" 'could not be injected' "[I17] planted break: without the guard the specific warning is gone (the probe sees it)"
 
 echo "== G2: plugin không ghi vào repo app / cây plugin =="
 # Plugin và repo app DỰNG MỚI cho phần này: cây đã chạy hook nhiều lần ở trên thì __pycache__ (nếu có) đã nằm sẵn

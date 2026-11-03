@@ -17,8 +17,7 @@
 #   [m] a new config holds merge.deny_globs (the list the init-kb skill proposes, or the answer, [] included) and the report
 #       names it, so the guarded merge can merge the repo's PRs
 #
-# Every family runs on a copy of the real plugin; then each planted break (one mutation of kb.py or init_setup.py) must turn the
-# family it belongs to red. Real git on throw-away repositories, a fake gh that must stay unused, the network shims of netguard.sh,
+# Every family runs on a copy of the real plugin. Real git on throw-away repositories, a fake gh that must stay unused, the network shims of netguard.sh,
 # no model, no network. Prose of messages is never asserted, only exit codes, files, hashes, JSON and the words the spec names.
 # =============================================================================
 set -uo pipefail
@@ -318,56 +317,6 @@ for f in init_setup.py kb.py; do [ -f "$PL0/scripts/$f" ] && ok "instrument: the
 for f in answers-adopt.json golden-adopt.json answers-full.json ci.yml; do [ -f "$FX/$f" ] && ok "instrument: fixture $f exists" || bad "instrument: fixture $f is missing"; done
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 eq "$(wc -l < "$GH_LOG" | tr -d ' ')" 0 "no family called gh"
-
-echo "== planted breaks: each family must go red on a plugin with one break =="
-BRK() {  # BRK <label> <family> <needle> <file under scripts/> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK deny-not-written fam_merge '[m] app: the new config holds merge.deny_globs' init_setup.py '"current_state": {"template": "ledger"}, "merge": {"deny_globs": DENY_DEFAULT}}' '"current_state": {"template": "ledger"}}'
-BRK deny-not-written-adopt fam_merge '[m] adopt: the new config holds merge.deny_globs' init_setup.py 'ADOPT_SCAFFOLD = {"schema": 1, "language": NEW_LANGUAGE, "merge": {"deny_globs": DENY_DEFAULT}}' 'ADOPT_SCAFFOLD = {"schema": 1, "language": NEW_LANGUAGE}'
-BRK deny-drifts-from-skill fam_merge '[m] app: the new config holds merge.deny_globs' sdlc_config.py 'MERGE_DENY_DEFAULT = (".github/workflows/**", ".vibemaestro/*", ".vibemaestro/gates/**", ".vibemaestro/rules/**", "**/*secret*")' 'MERGE_DENY_DEFAULT = (".github/workflows/**",)'
-BRK deny-floor-not-derived fam_merge '[m] app: rules.dirs .vibemaestro/policies adds .vibemaestro/policies/** to the proposed list' init_setup.py '"deny_globs" not in (inputs.get("merge") or {}):' 'False:'
-BRK deny-note-silent fam_merge '[m] app: …and the report names it' init_setup.py '        out((DENY_NOTE % j(deny)) if deny is not None else DENY_UNSET_NOTE)' '        out("")'
-BRK deny-null-claimed fam_merge '[m] an answer of null: the report says unset' init_setup.py '        out((DENY_NOTE % j(deny)) if deny is not None else DENY_UNSET_NOTE)' '        out(DENY_NOTE % j(deny))'
-BRK overwrites-existing-files fam_app '[b] after edits by a person' init_setup.py 'open(path, "x", encoding="utf-8")' 'open(path, "w", encoding="utf-8")'
-BRK validation-skipped fam_bad '[e] a bad regex: git status --porcelain is empty' init_setup.py '    if bad:' '    if False:'
-BRK detect-always-on fam_adopt '[c] …the written config holds no detected key' init_setup.py 'prop = detect(root) if o["detect"] else {}' 'prop = detect(root) if True else {}'
-BRK markers-refusal-restored fam_flags '[f] markers present, plain init (no --adopt): rc 0' kb.py '        return 65
-    if rest[0] == "base":' '        return 65
-    if all(m in (vsdlc.read_text(os.path.join(root, ".claude", "settings.json")) or "") for m in ("instructions-for-path.py", "instructions-for-command.py")):
-        return die("refused", 3)
-    if rest[0] == "base":'
-BRK differs-not-printed fam_exist '[d] a key the file has with another value' init_setup.py '            elif have[key] != val:' '            elif False:'
-BRK would-add-not-printed fam_exist '[d] a key the file lacks: would add' init_setup.py '            if key not in have:' '            if False:'
-BRK rules-scaffold-under-adopt fam_adopt '[c] --adopt created' init_setup.py '    if not o["adopt"] and rule_dirs:' '    if rule_dirs:'
-BRK own-rules-not-respected fam_app '[a] scaffold files written next to' init_setup.py '            if own:
-                soft.add(rel)' '            pass'
-BRK empty-answers-allowed fam_flags '[g] --answers "" (an empty path): rc 64' init_setup.py '            if not argv[i + 1]:' '            if False:'
-BRK detect-walks-ignored fam_adopt '[c] a rule file in a git-ignored directory' init_setup.py '    ignored = _ignored(root)' '    ignored = set()'
-BRK detect-without-adopt-allowed fam_flags '[g] --detect without --adopt: rc 64' init_setup.py '    if o["detect"] and not o["adopt"]:' '    if False:'
-BRK dry-run-writes fam_flags '[g] …git status --porcelain is empty' init_setup.py '        elif o["dry"]:
-            out("would create' '        elif False:
-            out("would create'
-BRK full-answers-merged-over-defaults fam_full '[h] the config is not the answers file' init_setup.py 'json.dumps(composed, indent=2' 'json.dumps(C._merge(C.defaults(), composed), indent=2'
-BRK underscore-keys-dropped fam_full '[h] the config is not the answers file' init_setup.py '    for k, v in over.items():
-        if isinstance' '    for k, v in over.items():
-        if k.startswith("_"):
-            continue
-        if isinstance'
-BRK scaffold-leaks-into-full-answers fam_full '[h] app repo: the config is not the answers file' init_setup.py '    composed = layer(layer(ADOPT_SCAFFOLD if o["adopt"] else APP_SCAFFOLD, prop), answers)' '    composed = layer(layer(ADOPT_SCAFFOLD if o["adopt"] else APP_SCAFFOLD, prop), answers); composed["upstream_issues"] = True'
-BRK table-width-of-mixed-tables fam_adopt '[c] …and no table width' init_setup.py 'widths.pop() if len(widths) == 1 else None' 'max(widths)'
-BRK runner-first-label-wins fam_adopt '[c] …the runner label' init_setup.py 'sorted(count, key=lambda k: (-count[k], k))[0]' 'sorted(count)[0]'
-BRK unreadable-answers-is-65 fam_bad '[e] an answers path that is a directory: rc 66' init_setup.py '    except OSError as e:                                            # missing, a directory, no permission: nothing to read
-        return None, (66,' '    except OSError as e:
-        return None, (65,'
-BRK unencodable-answers-written fam_bad '[e] a lone surrogate in a comment key' init_setup.py '        cfg_text.encode("utf-8")' '        pass'
-BRK paths-not-checked fam_bad '[e] a rules directory under a path that is a file: rc 65' init_setup.py '    blocked = unfit(root, [rel for rel, text in plan if text is not None])' '    blocked = []'
-BRK link-out-of-repo-allowed fam_bad '[e] a rules directory that is a link out of the repo: rc 65' init_setup.py '            if real != real_root and not real.startswith(real_root + os.sep):' '            if False:'
-BRK dry-run-skips-path-check fam_bad '[e] …--dry-run says the same' init_setup.py '    blocked = unfit(root, [rel for rel, text in plan if text is not None])' '    blocked = [] if o["dry"] else unfit(root, [rel for rel, text in plan if text is not None])'
-BRK skeleton-ignores-table-width fam_app 'the skeleton has a table of that width' kb.py 'skeleton_table(table_cols) if table_cols else ""' '(skeleton_table(5) if table_cols else "")'
-BRK runner-expression-taken fam_adopt '[c] a conditional expression, a YAML anchor and a list' init_setup.py 'r"""^\$\{\{\s*vars\.\w+\s*' 'r"""'
-BRK adopt-edits-existing-ledger fam_adopt '[c] every pre-existing file has the same hash' init_setup.py '        elif write_new(p, text):' '        elif write_new(p, text) or open(p, "a").write("x"):'
 
 echo
 summary

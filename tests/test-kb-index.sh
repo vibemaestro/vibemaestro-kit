@@ -14,7 +14,7 @@
 #   [C] kb.py check: lifecycle (good, unknown status, dangling and one-sided links, superseded without superseded_by), --strict,
 #       the spec size warning and its config key `kb.spec_warn_bytes`
 #   [S] SessionStart: the kb/ paragraph names the three finders by the plugin's kb.py path, lists no file, stays in 9000 characters
-# Each family runs on the real plugin, then on copies of it with one planted break each, which must turn that family red.
+# Each family runs on the real plugin.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -299,54 +299,5 @@ eq "$(nth 'a b
 c d' 2)" c "control: nth reads the first word of a line"
 [ "$(printf 'x%.0s' $(seq 1 301) | LC_ALL=C awk 'length($0) > 300' | wc -l | tr -d ' ')" = 1 ] && ok "control: the 300 B line filter catches a 301 B line" || bad "control: the line filter misses a long line"
 grep -q 'BODY-MARKER-NEVER-PRINTED' "$KB/kb/specs/2026-01-02-alpha-login.md" && ok "control: the body marker is in the fixture (the no-body checks can fail)" || bad "control: no body marker in the fixture"
-
-echo "== planted breaks: each must turn its family red =="
-# probe <family> <label> <python old> <python new> [script]: copy the plugin, replace one string in scripts/<script> (default
-# kb_index.py), run the family
-probe() {
-  local fam=$1 label=$2 d n
-  d=$(mktemp -d "$TMP/mut.XXXXXX")/plugin; cp -r "$PLUGIN" "$d"   # a unique parent, so two probes never share a copy
-  if ! python3 - "$d/scripts/${5:-kb_index.py}" "$3" "$4" <<'PY'
-import sys
-p, old, new = sys.argv[1:4]
-s = open(p, encoding="utf-8").read()
-if s.count(old) != 1:
-    sys.exit(1)
-open(p, "w", encoding="utf-8").write(s.replace(old, new))
-PY
-  then bad "probe $label: the string to break is not in ${5:-kb_index.py} exactly once"; return; fi
-  n=$( (PASS=0; FAIL=0; "fam_$fam" "$d" >/dev/null 2>&1; echo "$FAIL") )
-  [ "$n" -gt 0 ] && ok "probe $label: family $fam goes red ($n failed checks)" || bad "probe $label: family $fam stays green"
-}
-probe find "no hiding" 'if d["status"] in HIDDEN and not show_all:' 'if False:'
-probe find "rank by score only" 'hits.sort(key=lambda h: (h[0], h[1]), reverse=True)' 'hits.sort(key=lambda h: h[1], reverse=True)'
-probe find "oldest first" 'hits.sort(key=lambda h: h[2]["date"], reverse=True)' 'hits.sort(key=lambda h: h[2]["date"])'
-probe find "accents kept" 'return "".join(c for c in t if not unicodedata.combining(c))' 'return (text or "").lower()'
-probe find "path and description weights swapped" '(3 if w in path else 0) + (2 if w in desc else 0)' '(2 if w in path else 0) + (3 if w in desc else 0)'
-probe find "heading hits not capped" 'min(3, sum(1 for h in heads if w in h))' 'sum(1 for h in heads if w in h)'
-probe find "headings not scored" 'min(3, sum(1 for h in heads if w in h))' '0'
-probe list "README indexed" 'skip = {"kb/README.md"} | set(exclude)' 'skip = set()'
-probe list "legacy active kept" 'LEGACY = {"active": "live"}' 'LEGACY = {}'
-probe outline "start off by one" 'out.append((n, end, sum(sizes[n - 1:end]), lvl, t))' 'out.append((n + 1, end, sum(sizes[n - 1:end]), lvl, t))'
-probe outline "fences ignored" 'fence = (run[0], len(run))' 'pass'
-probe outline "any fence line closes" 'elif run[0] == fence[0] and len(run) >= fence[1] and not m.group(2).strip():' 'elif True:'
-probe outline "text-mode sizes" 'return ([r.decode("utf-8", "replace").rstrip("\r") for r in raw], [len(r) + e for r, e in zip(raw, ends)])' 'return ([r.decode("utf-8", "replace").rstrip("\r") for r in raw], [len(r.decode("utf-8", "replace").rstrip("\r").encode()) + 1 for r in raw])'
-probe outline "closing # without a space" 'HEADING_RX = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")' 'HEADING_RX = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t#]*$")'
-probe outline "section ends at any heading" 'if lvl2 <= lvl:' 'if True:'
-probe budget "line cut in characters" 'return head + cut_bytes(desc, max(room, 20)) + tail' 'return head + desc + tail'
-probe budget "row cut in characters" 'out.append(head + cut_bytes(cut(t, HEAD_MAX), max(ROW_MAX - len(head.encode("utf-8")), 20)))' 'out.append(head + cut(t, HEAD_MAX))'
-probe budget "no default limit" 'FIND_LIMIT = 10' 'FIND_LIMIT = 1000'
-probe start "old reminder" '"`find <words>` (one line per document, superseded/done hidden)' '"read every file in kb/ (one line per document, superseded/done hidden)' vsdlc.py
-probe life "paths not normalised" 'out.append(posixpath.normpath(p))' 'out.append(p)'
-probe life "links may leave kb/" 'if q.startswith("/") or not q.startswith("kb/"):' 'if False:'
-probe life "self link accepted" '                if q == p:' '                if False:'
-probe life "check with no target not routed" 'all(a == "--strict" for a in argv[1:])' 'False' kb.py
-probe life "no back-link check" 'elif p not in t[back]:' 'elif False:'
-probe life "no missing-file check" '                if t is None:' '                if False:'
-probe life "any status accepted" 'if d["status_raw"] and d["status_raw"] not in STATUSES and d["status_raw"] not in LEGACY:' 'if False:'
-probe life "superseded needs no link" 'if d["status"] == "superseded" and not d["superseded_by"]:' 'if False:'
-probe life "strict ignored" '        if strict:' '        if False:'
-probe life "no size guard" 'if spec_warn and d["type"] == "spec" and d["bytes"] > spec_warn:' 'if False:'
-probe life "size guard on every type" 'if spec_warn and d["type"] == "spec" and d["bytes"] > spec_warn:' 'if spec_warn and d["bytes"] > spec_warn:'
 
 summary

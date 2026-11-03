@@ -142,7 +142,7 @@ clean_env() {
   export TMPDIR="$t/tmpd"; mkdir -p "$TMPDIR"
   unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES   # a suite's git must not be sent elsewhere
   # CLAUDE_CONFIG_DIR too: the hooks read the plugin registry under it (rule packs), and a suite must not see the real one
-  unset VIBEMAESTRO_HUB CLAUDE_PLUGIN_OPTION_HUB_PATH INSTRUCTIONS_TARGET_ROOT INTENT_SLUG SEAT \
+  unset VIBEMAESTRO_HUB CLAUDE_PLUGIN_OPTION_HUB_PATH INSTRUCTIONS_TARGET_ROOT INTENT_SLUG SEAT VIBEMAESTRO_ROLE \
         CLAUDE_PLUGIN_ROOT CLAUDE_PROJECT_DIR CLAUDE_ENV_FILE CLAUDE_CONFIG_DIR KUBECONFIG PYTHONDONTWRITEBYTECODE
   # The state directory and the session: a suite run from inside a Claude Code session must not write the session's real local
   # state file (stage-signal.sh, outside a sandbox), which a dashboard would show as real work. XDG_STATE_HOME is the default

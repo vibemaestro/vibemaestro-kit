@@ -26,9 +26,9 @@
 # Every suite gets RUN_ALL_MODE, always set here (an inherited value is overwritten): `plan` under --changed (test.yml on a PR, a
 # worker's local run; also when the planner falls back to the full suite), `full` otherwise (the scheduled
 # test-full.yml, `bash tests/run-all.sh`).
-# A suite may leave its slow mutation-style checks (planted breaks) to the full run; only the exact value `plan` may skip them, so a
-# suite run alone, with no RUN_ALL_MODE, runs everything.
-# rc 0 = mọi suite xanh. Mỗi suite in dòng tổng kết "N ok, M fail".
+# rc 0 = mọi suite xanh. Mỗi suite in dòng tổng kết "N ok, M fail"; run-all adds the suite's wall time to it (`N ok, M fail · T s`;
+# with --jobs 1 the output streams, so the time is a line of its own after the block), and before `resources: …` one line names the
+# five slowest suites of the run (`slowest: …`), which is what SLOW_FIRST below is set from.
 #
 # Song song: mỗi suite chạy trong tiến trình riêng, đầu ra đệm vào một file và được in NGUYÊN KHỐI khi suite xong
 # (không xen kẽ). Suite độc lập vì mỗi suite có cây mktemp, HOME, TMPDIR và GIT_CONFIG_GLOBAL riêng (lib.sh clean_env);
@@ -143,7 +143,13 @@ cleanup() { rm -rf "$SUITE_RESULTS_DIR" "$OUTDIR" ${RUNNER_TMP_OWN:+"$RUNNER_TMP
 trap cleanup EXIT
 PIDS=()
 # On INT/TERM the running suites are stopped too (not only run-all): a CI timeout must not leave orphans writing into a removed tree.
-stop() { local p; for p in ${PIDS[@]+"${PIDS[@]}"}; do kill -TERM "$p" 2>/dev/null; done; for p in ${PIDS[@]+"${PIDS[@]}"}; do wait "$p" 2>/dev/null; done; guard_check; resources; exit "$1"; }
+# The suites still running are named with the time they had, and `slowest:` counts them: a CI timeout is when the times matter most.
+stop() {
+  local p i
+  for i in ${PIDS[@]+"${!PIDS[@]}"}; do DUR[$i]=$((SECONDS - T0[$i])); echo "stopped: ${NAMES[$i]} after ${DUR[$i]} s"; done
+  for p in ${PIDS[@]+"${PIDS[@]}"}; do kill -TERM "$p" 2>/dev/null; done; for p in ${PIDS[@]+"${PIDS[@]}"}; do wait "$p" 2>/dev/null; done
+  guard_check; slowest; resources; exit "$1"
+}
 trap 'stop 130' INT
 trap 'stop 143' TERM
 
@@ -179,25 +185,46 @@ for f in "$SUITE_DIR"/test-*.sh; do
   NAMES+=("$n"); FILES+=("$f")
 done
 TOTAL=${#NAMES[@]}
-RCS=()
+RCS=(); T0=(); DUR=()
 
-show() {  # show <index> — print one finished suite's block
+show() {  # show <index> — print one finished suite's block, its wall time on its summary line (a line of its own if it has none)
   echo "################ ${NAMES[$1]}"
-  cat "$OUTDIR/$1.out"
+  if tail -n 1 "$OUTDIR/$1.out" | grep -qE '^[0-9]+ ok, [0-9]+ fail$'; then
+    sed '$s/$/ · '"${DUR[$1]}"' s/' "$OUTDIR/$1.out"
+    [ -z "$(tail -c 1 "$OUTDIR/$1.out")" ] || echo   # output with no final newline: the next header starts on its own line
+  else
+    cat "$OUTDIR/$1.out"; [ -z "$(tail -c 1 "$OUTDIR/$1.out")" ] || echo
+    echo "time: ${DUR[$1]} s (its last line is not a summary)"
+  fi
+}
+slowest() {  # one line: the five suites of this run that took longest, longest first
+  local i
+  for i in "${!DUR[@]}"; do printf '%s %s\n' "${DUR[$i]}" "${NAMES[$i]}"; done | sort -k1,1nr -k2,2 | head -n 5 |
+    awk 'BEGIN { s = "slowest:" } { s = s (NR > 1 ? "," : "") " " $2 " " $1 " s" } END { if (NR) print s }'
 }
 
 if [ "$TOTAL" -gt 0 ]; then
   if [ "$JOBS" -eq 1 ]; then
     for i in "${!NAMES[@]}"; do
       echo "################ ${NAMES[$i]}"
-      bash "${FILES[$i]}"; RCS[$i]=$?
+      # a job and `wait`, not the foreground: bash runs a signal's trap only once a foreground command returns, so the suite
+      # would run to its end; `0<&0` keeps the terminal's stdin, which a job would otherwise trade for /dev/null
+      T0[$i]=$SECONDS; bash "${FILES[$i]}" 0<&0 & PIDS[$i]=$!
+      wait "${PIDS[$i]}"; RCS[$i]=$?; unset "PIDS[$i]"; DUR[$i]=$((SECONDS - T0[$i]))
+      echo "time: ${DUR[$i]} s"
     done
   else
     # Order of launch: the known-slow suites first (longest first), then every other suite but `ledger` in alphabetical order, then
     # `ledger` once all the others are done. Why: the longest suite sets the wall time of the run only if it starts early; in
     # alphabetical order a 40-minute suite started after the first 50 and the run met its 45-minute timeout.
     # The list is a launch order only, never a filter: a name that is not in this run (a filter, a plan) is skipped.
-    SLOW_FIRST=(merge-guard plugin-version baton baton-gh-write config)
+    # Measured, longest first: the seven suites over 470 s in the last scheduled full run before this list (merge-guard 1169 s,
+    # baton-gh-write 966, brain-matrix 865, baton-plugin-update 806, baton 734, baton-workflow-dispatch 524, plugin-version 474;
+    # next brain-stale 393; config, on the old list, 243), each time rebuilt from the run's log (a suite starts when the block
+    # that freed its slot is printed), and brain-layers, newer than that run, which by its launch order ran about 37 minutes of a
+    # 39-minute planned run. Most of those times were planted breaks, now being removed: set the list again from the `slowest:`
+    # line and each block's `· T s` once they are gone.
+    SLOW_FIRST=(brain-layers merge-guard baton-gh-write brain-matrix baton-plugin-update baton baton-workflow-dispatch plugin-version)
     ORDER=(); LEDGER=-1
     for n in "${SLOW_FIRST[@]}"; do
       for i in "${!NAMES[@]}"; do [ "${NAMES[$i]}" = "$n" ] && ORDER+=("$i"); done
@@ -208,6 +235,7 @@ if [ "$TOTAL" -gt 0 ]; then
     done
     NEXT=0; RUNNING=(); DONE=0; LEDGER_STARTED=0
     start() { # start <index> — the suite itself is the background job, so its pid is the one a signal must reach
+      T0[$1]=$SECONDS
       bash "${FILES[$1]}" > "$OUTDIR/$1.out" 2>&1 < /dev/null &
       PIDS[$1]=$!
       RUNNING+=("$1")
@@ -218,7 +246,9 @@ if [ "$TOTAL" -gt 0 ]; then
       if [ ${#RUNNING[@]} -gt 0 ]; then
         for i in "${RUNNING[@]}"; do
           # bash reaps a finished job and keeps its status; `kill -0` then fails and `wait <pid>` returns that status
-          if kill -0 "${PIDS[$i]}" 2>/dev/null; then STILL+=("$i"); else wait "${PIDS[$i]}"; RCS[$i]=$?; unset "PIDS[$i]"; show "$i"; DONE=$((DONE+1)); fi
+          if kill -0 "${PIDS[$i]}" 2>/dev/null; then STILL+=("$i"); else
+            wait "${PIDS[$i]}"; RCS[$i]=$?; DUR[$i]=$((SECONDS - T0[$i])); unset "PIDS[$i]"; show "$i"; DONE=$((DONE+1))
+          fi
         done
       fi
       RUNNING=(); [ ${#STILL[@]} -eq 0 ] || RUNNING=("${STILL[@]}")
@@ -233,6 +263,7 @@ if [ "$TOTAL" -gt 0 ]; then
   fi
 fi
 
+slowest
 resources
 echo "################"
 if [ "$TOTAL" -eq 0 ]; then echo "FAIL: không suite nào được chạy"; exit 1; fi

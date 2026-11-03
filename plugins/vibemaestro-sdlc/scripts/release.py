@@ -9,7 +9,8 @@
                                                         edits the working tree into a release (or a hotfix, or a fold); rc 0,
                                                         1 refused
   release.py notes <plugin> <version> [--repo DIR]      the body of that version's public release on stdout: the lines of its
-                                                        CHANGELOG section, then an `### Updating` paragraph; rc 1 no such section
+                                                        CHANGELOG section, then `### Updating` (a paragraph per sibling whose
+                                                        floor moved, then how to update); rc 1 no such section
 
 Why: a plugin's version exists only in the public release. The private repo
 carries no plugin version: no manifest and no marketplace entry has a `version` key, so Claude Code keys an install by the
@@ -81,7 +82,10 @@ change is read from the base and the diff, in this order:
                word, in any case); the removed plugin needs no change file;
              - nothing under `plugins/` is a symlink or a submodule (their content would change without a path under `plugins/`).
 In every kind but bootstrap, a `version` key in a manifest here or anywhere in `.claude-plugin/marketplace.json` is red: the
-private repo carries none (Claude Code then takes the commit as the version).
+private repo carries none (Claude Code then takes the commit as the version). In every kind but bootstrap, a released
+`## X.Y.Z` section of the merge-base (one above any private-history heading) whose `Released together:` line changes (a second
+copy of it too), or that held one and is no longer a section here as git reads the file (split on LF), is red: the export reads
+a plugin's dependency floor from its released section, so the floor of a version that does not move would move.
 
 A change file may add one optional frontmatter line `upgrade: <one line>`: what an existing user must do or will notice on update.
 A cut writes those lines, in the change files' order, under `### Upgrade notes` after the version's `- <level>: <line>` lines;
@@ -90,8 +94,13 @@ add, change or remove that line (plugins, level and line stay as on the base).
 
 `plan` reads the change files in the working tree and prints, per plugin, `old -> new (level)` (`unreleased -> 0.1.0` for a
 plugin never released), and each `CONTRACT.md` whose surface differs from `origin/release`'s (the base's when there is no
-`release`) or whose plugin is released for the first time. `cut` does it: it writes the CHANGELOG sections, removes the change
-files and sets `Frozen at`; it writes no manifest and no kb page. It refuses a dirty working tree, a detached HEAD, the branch
+`release`) or whose plugin is released for the first time. When the marketplace has two or more plugins released once the cut is
+written, it also prints `released together: <name> <version>, …` (every marketplace entry released then, in marketplace order,
+raised or not) and, per raised plugin that depends on such a sibling, `needs <sibling> >=<its version>` (was: the floor of the
+plugin's current released section). `cut` does it: it writes the CHANGELOG sections, each beginning, in that case, with the line
+`Released together: <name> <version>, …`, removes the change files and sets `Frozen at`; it writes no manifest and no kb page.
+That line is the plugin's dependency floor: the export writes `>=` the sibling's version on it into the public manifest (0.1.0
+with no line), and `notes` tells the user to update a sibling whose floor moved. It refuses a dirty working tree, a detached HEAD, the branch
 `release` or the base's own branch, a HEAD that does not descend from the base (`origin/main`, or `origin/release` with --hotfix),
 a release whose HEAD lacks `origin/release`, nothing pending, and with --hotfix a level other than patch, a surface change, a
 plugin never released, or a base whose manifests still carry a `version` (a `release` cut before the reset: release from main).
@@ -131,6 +140,7 @@ FIRST_RELEASE = "0.1.0"
 PUBLIC_TAG = "%s--v%s"                   # a published version's tag in the public repository: <plugin>--v<version>
 OWNER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", re.ASCII)
 ENTRY_LINE = re.compile(r"- (patch|minor|major): ", re.ASCII)
+TOGETHER = "Released together: "         # a cut section's first line: every plugin of the marketplace released with it, at its version
 
 
 class Bad(Exception):
@@ -867,6 +877,97 @@ def upgrade_part(section):
     return section[section.index(UPGRADE_HEADING) + 1:] if UPGRADE_HEADING in section else []
 
 
+def market_names(repo):
+    """The marketplace's entry names, in its order ([] when there is none)."""
+    return list(marketplace_entries(json_or_none(text_here(repo, MARKETPLACE) or "")))
+
+
+def together_after(repo, plan):
+    """[(name, version)] of every marketplace entry released once a cut of `plan` is written, in marketplace order: the plugins
+    its `Released together:` line names; [] when fewer than two (a plugin alone is released with nothing)."""
+    out = []
+    for n in market_names(repo):
+        v = plan[n][1] if n in plan else released_here(repo, n)
+        if v:
+            out.append((n, v))
+    return out if len(out) >= 2 else []
+
+
+def together_in(section):
+    """{plugin: version} of the `Released together:` line of a version's section; {} when it has none, or when it is not one line
+    of `<name> X.Y.Z` items joined by `, ` (the export refuses such a line: scripts/export-public.sh together_of, the same rule)."""
+    found = [l.rstrip() for l in section or [] if l.startswith(TOGETHER.rstrip())]
+    if len(found) != 1 or not found[0].startswith(TOGETHER):
+        return {}
+    out = {}
+    for item in found[0][len(TOGETHER):].split(", "):
+        hit = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_.-]*) (\S+)", item, re.ASCII)
+        if not hit or not VERSION.fullmatch(hit.group(2)) or hit.group(1) in out:
+            return {}
+        out[hit.group(1)] = hit.group(2)
+    return out
+
+
+def together_lines(text, released_only):
+    """{version: [its `Released together:` lines]} of the `## X.Y.Z` sections of a CHANGELOG text, the first of a number only,
+    split on LF only as git and the export read it; with `released_only`, only those above its first other `## ` heading (a
+    private history below it is no release, whatever numbers it holds)."""
+    out, cur = {}, None
+    for l in (text or "").split("\n"):
+        l = l.rstrip()
+        if l.startswith("## "):
+            v = l[3:].strip()
+            if not VERSION.fullmatch(v):
+                if released_only:
+                    break
+                cur = None
+                continue
+            cur = v if v not in out else None
+            if cur:
+                out[cur] = []
+        elif cur and l.startswith(TOGETHER.rstrip()):
+            out[cur].append(l)
+    return out
+
+
+def together_frozen(repo, mb, bad):
+    """A released `## X.Y.Z` section of the merge-base keeps its `Released together:` line as it was, wherever the section sits
+    here (a heading put above it hides nothing), and a section that held one is still here while the CHANGELOG is (a lone CR
+    cannot hide it): the export reads a plugin's dependency floor from its released section, so an edit there would move the
+    floor of a version that does not move."""
+    for name in sorted(plugin_dirs(repo)):
+        rel = "plugins/%s/%s" % (name, CHANGELOG)
+        path = os.path.join(repo, rel)
+        raw = None if os.path.islink(path) or not os.path.isfile(path) else open(path, "rb").read().decode("utf-8", "replace")
+        if raw is None:
+            continue                                    # no CHANGELOG file here: the released-version rule names that
+        was, now = together_lines(text_at(repo, mb, rel), True), together_lines(raw, False)   # raw: a lone CR is no line break
+        for v in sorted(was):
+            if was[v] and v not in now:
+                bad.append("%s `## %s`: the section that holds its `Released together:` line is gone (as git and the export "
+                           "read it, split on LF); a released section stays" % (rel, v))
+            elif v in now and was[v] != now[v]:
+                bad.append("%s `## %s`: its `Released together:` line changed (%s -> %s); a section on the merge-base keeps it, "
+                           "since the export reads the plugin's dependency floor from it"
+                           % (rel, v, " | ".join(was[v]) or "none", " | ".join(now[v]) or "none"))
+
+
+def sibling_deps(repo, name):
+    """The marketplace siblings plugin `name`'s manifest depends on, as the export ranges them (a bare name, or an object with no
+    `version` and no `marketplace`), in its order; [] when the manifest cannot be read."""
+    try:
+        data = manifest_here(repo, name)[1]
+    except Bad:
+        return []
+    deps = data.get("dependencies") if isinstance(data, dict) else None
+    names, out = market_names(repo), []
+    for d in deps if isinstance(deps, list) else []:
+        n = d if isinstance(d, str) else d.get("name") if isinstance(d, dict) and "version" not in d and "marketplace" not in d else None
+        if isinstance(n, str) and n in names and n != name and n not in out:
+            out.append(n)
+    return out
+
+
 def same_but(old, new, pattern):
     """Whether two texts are equal once every match of `pattern` (a compiled regex) is blanked, line count included."""
     if old is None or new is None:
@@ -1216,6 +1317,7 @@ def check(repo, given, public=""):
                 judge_fold(repo, base_ref, base, mb, paths, public, bad)
             else:
                 judge_ordinary(repo, mb, paths, added, touched, bad)
+            together_frozen(repo, mb, bad)
         except Bad as e:
             bad.append(str(e))
         check_no_versions(repo, bad)
@@ -1330,6 +1432,20 @@ def fold_plan(repo, n, old, level, lines, notes, tags, public):
     return (old, old, level, lines, notes)
 
 
+def show_together(repo, plan, pairs):
+    """The `Released together:` line a cut writes, and each raised plugin's floor on a sibling it depends on (the export writes
+    `>=` that version), with the floor of its current released section."""
+    if not pairs:
+        return
+    print("released together: %s" % ", ".join("%s %s" % p for p in pairs))
+    after = dict(pairs)
+    for n, (old, new, level, lines, notes) in sorted(plan.items()):
+        was = together_in(changelog_section(repo, n, old)) if old else None
+        for s in sibling_deps(repo, n):
+            if s in after:
+                print("plugin %s: needs %s >=%s%s" % (n, s, after[s], "" if was is None else " (was >=%s)" % was.get(s, FIRST_RELEASE)))
+
+
 def show_plan(plan, files, frozen, fold=False):
     for p in files:
         print("consume %s" % p)
@@ -1361,14 +1477,17 @@ def do_plan(repo, hotfix, given, public=""):
         print("nothing pending: no change file in %s/" % CHANGES)
         return 0
     show_plan(plan, files, frozen, bool(public))
+    if not public:
+        show_together(repo, plan, together_after(repo, plan))
     print("plan only: nothing written (release.py cut%s does it)"
           % (" --hotfix" if hotfix else " --fold --public %s" % public if public else ""))
     return 0
 
 
-def write_changelog(repo, name, version, lines, notes):
+def write_changelog(repo, name, version, lines, notes, pairs):
     path = os.path.join(repo, "plugins", name, CHANGELOG)
-    block = "## %s\n\n%s\n\n" % (version, "\n".join(lines))
+    together = "%s%s\n\n" % (TOGETHER, ", ".join("%s %s" % p for p in pairs)) if pairs else ""
+    block = "## %s\n\n%s%s\n\n" % (version, together, "\n".join(lines))
     if notes:
         block += "%s\n\n%s\n\n" % (UPGRADE_HEADING, "\n".join(notes))
     if os.path.isfile(path):
@@ -1439,11 +1558,13 @@ def do_cut(repo, hotfix, given, public=""):
         print("cut refused: %s" % e)
         return 1
     show_plan(plan, files, frozen, bool(public))
+    pairs = [] if public else together_after(repo, plan)
+    show_together(repo, plan, pairs)
     for n, (old, new, level, lines, notes) in sorted(plan.items()):
         if public:
             write_fold(repo, n, new, lines, notes)
         else:
-            write_changelog(repo, n, new, lines, notes)
+            write_changelog(repo, n, new, lines, notes, pairs)
     for p in files:
         os.remove(os.path.join(repo, p))
     for rel, v in frozen.items():
@@ -1460,11 +1581,16 @@ def do_cut(repo, hotfix, given, public=""):
 UPDATING = ("In Claude Code, run `/plugin`, open Marketplaces and update `{market}` there (or turn on its auto-update), then run "
             "`/reload-plugins`. From a shell: `claude plugin marketplace update {market}`, then `claude plugin update {plugin}@{market}`, "
             "then open a new session.")
+NEEDS = ("This version needs {sibling} {version} or later. Update {sibling} too, before this plugin or with it: "
+         "`claude plugin update {sibling}@{market}`. Updated alone, this plugin fails to load, and `/plugin` names the version it "
+         "requires.")
 
 
 def release_notes(repo, name, version):
     """The body of the public release of plugin `name` at `version`: its CHANGELOG section (the heading is the release's title)
-    and the Updating paragraph with the marketplace's own name; None when the CHANGELOG has no such section."""
+    and the Updating paragraph with the marketplace's own name, after one paragraph per sibling dependency whose floor (its
+    version on the section's `Released together:` line) differs from the previous release's (0.1.0 when that section has no line;
+    a first release has no such paragraph); None when the CHANGELOG has no such section."""
     section = changelog_section(repo, name, version)
     if section is None:
         return None
@@ -1475,7 +1601,15 @@ def release_notes(repo, name, version):
     data = json_or_none(text_here(repo, MARKETPLACE) or "")
     market = data.get("name") if isinstance(data, dict) else None
     market = market if isinstance(market, str) and PLAIN_NAME.fullmatch(market) else "<marketplace>"
-    return "\n".join(section + ["", "### Updating", "", UPDATING.format(market=market, plugin=name)]) + "\n"
+    needs, now = [], together_in(section)
+    text = text_here(repo, "plugins/%s/%s" % (name, CHANGELOG))
+    prev = previous_of(text, version) if now else None
+    if prev:                                            # a first release updates nothing: no floor paragraph
+        before = together_in(section_of(text, prev))
+        for s in sibling_deps(repo, name):
+            if s in now and now[s] != before.get(s, FIRST_RELEASE):
+                needs += [NEEDS.format(sibling=s, version=now[s], market=market), ""]
+    return "\n".join(section + ["", "### Updating", ""] + needs + [UPDATING.format(market=market, plugin=name)]) + "\n"
 
 
 def do_notes(argv):

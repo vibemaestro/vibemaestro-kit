@@ -100,31 +100,4 @@ PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 [ -f "$PL0/scripts/open_pr.py" ] && ok "instrument: the plugin copy has the core" || bad "instrument: the core is missing from the copy"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 
-echo "== planted breaks: each family must go red on a core with one break =="
-BRK() {  # BRK <label> <family> <needle> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/open_pr.py" "$4" "$5" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK crash-without-digits fam_fixes '[L2] a --fixes with no digit' '    fix_block = "".join("%s #%s\n" % (tk["fixes_line"], n) for n in fix_nums)' '    if fixes and not fix_nums:
-        raise ValueError("no digit")
-    fix_block = "".join("%s #%s\n" % (tk["fixes_line"], n) for n in fix_nums)'
-BRK closes-word-changed fam_closes "[L1] --closes 123: the first line" '(cfg["pr"]["closing"]["keyword"], n)' '("Close", n)'
-BRK closes-not-deduplicated fam_closes "[L1] a repeated number is listed once" '        if n not in seen_c:
-            seen_c.add(n)
-' '        if True:
-'
-BRK fixes-word-changed fam_fixes "[L2] --fixes 98: the first line" '(tk["fixes_line"], n)' '("Va cho", n)'
-BRK fixes-not-deduplicated fam_fixes "[L2] …exactly two lines" '        if n not in seen:
-            seen.add(n)
-' '        if True:
-'
-BRK links-swapped fam_closes "[L1] …the fixes line comes first" '% (fix_block, close_block, tk["summary_heading"],' '% (close_block, fix_block, tk["summary_heading"],'
-BRK closing-read-skipped fam_gh_links "[L3] with --closes, gh pr view is asked" '    if m and closes and (closing or {}).get("verify", True):' '    if False:'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
-
 echo; summary

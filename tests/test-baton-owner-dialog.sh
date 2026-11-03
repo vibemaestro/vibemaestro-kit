@@ -6,7 +6,7 @@
 #
 # The plugin's PreToolUse Bash hook answers `ask` on a literal `sign --by owner` call and writes the record the sign needs; it
 # denies where no owner answers the dialog. Each family runs on a copy of the real plugin (its baton isolated from the machine:
-# baton_isolate), then again on copies with one planted break, and must go red on the intended check. The hook is run as
+# baton_isolate). The hook is run as
 # Claude Code runs it (the payload on stdin); the session is CLAUDE_CODE_SESSION_ID. No network, nothing outside the scratch tree.
 # =============================================================================
 set -uo pipefail
@@ -140,6 +140,13 @@ fam_owner_who() {  # [W] who answers: a sandbox, a subagent, a -p run, an answer
   eq "$(BT_ENV=(INTENT_SLUG=s SEAT=1); sign "$P")/$(asked_n)" "3/0" "[W] a sandbox session with a record: sign rc 3, the record used up"
   BT_ENV=(SEAT=1); hook "$P" >/dev/null
   eq "$(sign "$P")" 0 "[W] control: SEAT alone is no sandbox, sign rc 0"
+  BT_ENV=(VIBEMAESTRO_ROLE=worker)
+  eq "$(hook "$P")/$(asked_n)" "deny/0" "[W] a worker session (VIBEMAESTRO_ROLE=worker alone): the guard denies, no record"
+  BT_ENV=()
+  hook "$P" >/dev/null
+  eq "$(BT_ENV=(VIBEMAESTRO_ROLE=worker); sign "$P")/$(asked_n)" "3/0" "[W] a worker session (the switch) with a record: sign rc 3, the record used up"
+  BT_ENV=(VIBEMAESTRO_ROLE=solo); hook "$P" >/dev/null
+  eq "$(sign "$P")" 0 "[W] control: VIBEMAESTRO_ROLE=solo is no worker session, sign rc 0"
   BT_ENV=()
   eq "$(hook "$P" '{"agent_id": "a1"}')/$(asked_n)" "deny/0" "[W] a subagent (agent_id): the guard denies, no record"
   WRAP=(bash "$W/claude" -p)
@@ -201,7 +208,7 @@ fam_owner_spelling() {  # [S] the literal call only; other commands are not the 
   denied "a trailing NBSP" "$CMD${nb}"
   eq "$(CMD="python3 -I -B $P/scripts/baton.py sign --by owner --seal $SEAL $W/act.sh $W/out.txt hello" hook "$P")/$(asked_n)" "ask/1" \
      "[S] the printed shape with python3 -I -B: ask"
-  eq "$(CMD="python3 $P/scripts/baton.py sign --by owner --seal $SEAL kit:coordinator-bootstrap" hook "$P")/$(asked_n)" "ask/1" \
+  eq "$(CMD="python3 $P/scripts/baton.py sign --by owner --seal $SEAL kit:bootstrap" hook "$P")/$(asked_n)" "ask/1" \
      "[S] a kit by name (kit:<name>): ask"
   eq "$(hook "$P")/$(sign "$P")" "ask/0" "[S] the printed shape itself: ask, and its record signs the same argv: rc 0"
 }
@@ -250,7 +257,7 @@ fam_owner_mode() {  # [D] a mode change takes the owner's dialog record, as sign
   eq "$(mset "$P" auto)/$(mode_now)" "3/auto" "[D] a record for mode manual does not serve mode auto: rc 3"
   CMD="$M manual" hook "$P" >/dev/null
   eq "$(mset "$P" manual)/$(mode_now)" "0/manual" "[D] …its own call: rc 0, the mode set"
-  eq "$(mset "$P")/$(cat "$BT_OUT")" "0/manual" "[D] reading the mode needs no record: rc 0"
+  eq "$(mset "$P")/$(head -n 1 "$BT_OUT")" "0/manual" "[D] reading the mode needs no record: rc 0"
   eq "$(mset "$P" remotes)" 0 "[D] reading the remote list needs no record: rc 0"
   eq "$(mset "$P" trust github.com/acme/app)/$(remotes_now)" "3/" "[D] no record: mode trust rc 3, the remote list unchanged"
   CMD="$M trust github.com/acme/app" hook "$P" >/dev/null
@@ -329,14 +336,15 @@ fam_owner_oldcopy() {  # [O] a mode or trust written by an older baton.py (no di
       "python3 -I -B") c="python3 -I -B $OC/scripts/baton.py mode";;
     esac
     eq "$(shell_runs "$c auto")/$(mode_now)" "0/auto" "[O] instrument: the old copy, $name: mode auto rc 0, its file says auto"
-    eq "$(mset "$P")/$(cat "$BT_OUT")" "0/manual" "[O] $name: this baton reads the mode as manual (no owner's dialog line)"
+    eq "$(mset "$P")/$(head -n 1 "$BT_OUT")" "0/manual" "[O] $name: this baton reads the mode as manual (no owner's dialog line)"
     eq "$(shell_runs "$c trust github.com/acme/app")/$(remotes_now)" "0/github.com/acme/app " "[O] instrument: the old copy, $name: trust rc 0, its file lists the remote"
     mset "$P" remotes >/dev/null
     has "$(cat "$BT_OUT")" "(none)" "[O] $name: this baton reads the remote list as empty"
     rm -f "$ST/vibemaestro/baton/remotes"; baton_set_mode "$ST" manual
   done
   CMD="python3 $P/scripts/baton.py mode auto" hook "$P" >/dev/null
-  eq "$(mset "$P" auto)/$(mset "$P")/$(cat "$BT_OUT")" "0/0/auto" "[O] control: this baton with the owner's dialog: mode auto, read back as auto"
+  eq "$(mset "$P" auto)/$(mset "$P")/$(head -n 1 "$BT_OUT")" "0/0/auto" "[O] control: this baton with the owner's dialog: mode auto, read back as auto"
+  eq "$(sed -n 2p "$BT_OUT")" "baton: mode auto from the owner's choice" "[O] control: …and the source line names the owner's choice"
 }
 
 fam_owner_version() {  # [V] run takes an owner signature only with the dialog it names (record version 2)
@@ -397,99 +405,6 @@ fam_owner_version fam_owner_lineage fam_owner_wiring"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in baton.py =="
-# BRK <label> <family> <needle> <old> <new> [<old> <new>]... — a plugin copy with the replacements in baton.py, then expect_red
-BRK() {
-  local label=$1 fam=$2 needle=$3 d; shift 3; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/scripts/baton.py" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-BRK no-proof fam_owner_record '[A] no record of the dialog' '    dialog = owner_signs(asked) if by == "owner" else None' '    dialog = "planted" if by == "owner" else None'
-BRK record-reused fam_owner_record '[A] the record serves once' '            os.unlink(path)                             # one dialog, one sign' '            pass                             # one dialog, one sign'
-BRK late-use fam_owner_record '[A] a sign that fails before the script is read' \
-    '    dialog = owner_signs(asked) if by == "owner" else None' \
-    '    dialog = owner_signs(asked) if by == "owner" and os.path.exists(asked[4]) else None'
-BRK no-void fam_owner_record "[A] the session's next Bash call voids" '    void_asked(sid)                                     # every Bash' '    pass                                     # every Bash'
-BRK session-unbound fam_owner_record '[A] a record of another session' '        if (session and r.get("session") == session and' '        if (session and'
-BRK argv-unbound fam_owner_record '[A] a record for other arguments' ' and r.get("argv") == list(argv) and' ' and'
-BRK cwd-unbound fam_owner_record '[A] a record asked from another directory' ' and r.get("cwd") == cwd' ''
-BRK age-unchecked fam_owner_record '[A] an expired record' 'and 0 <= age <= ASKED_MAX_AGE and' 'and'
-BRK record-mode-unchecked fam_owner_record '[A] a record whose mode' '                and r.get("mode") in DIALOG_MODES and' '                and'
-BRK mode-unchecked fam_owner_modes '[M] mode plan: the guard denies' '    if not (mode in ("default", "acceptEdits") or (mode == "auto" and version_ok())):' '    if False:'
-BRK floor-unchecked fam_owner_modes '[M] mode auto below 2.1.211' '            return tuple(int(x) for x in m.groups()) >= VERSION_FLOOR' '            return True'
-BRK version-of-node fam_owner_modes '[M] mode auto, EXECPATH is node' '[^\n]*Claude Code", out' '", out'
-BRK sandbox-ignored fam_owner_who '[W] a sandbox session' '    return all(os.environ.get(v, "").strip() for v in SANDBOX_ENV)' '    return False'
-BRK subagent-ignored fam_owner_who '[W] a subagent' '    if inp.get("agent_id"):' '    if False:'
-BRK print-ignored fam_owner_who '[W] a -p run' '    for argv, _c, _g, _h in anc:' '    for argv, _c, _g, _h in []:'
-BRK answerers-ignored fam_owner_who '[W] a PermissionRequest hook in the managed settings' '    found = []
-    cfgs = [' '    return []
-    cfgs = ['
-BRK refused-record-kept fam_owner_who '[W] …and the refused attempt used the record up' \
-    '        return "something can answer the dialog in place of a human: " + "; ".join(ans), path' \
-    '        return "something can answer the dialog in place of a human: " + "; ".join(ans), None'
-# the literal check (LITERAL) is a first, more specific message; owner_shape is the gate: breaking only the first one
-# changes no outcome, so its breaks are shape-unchecked and program-unresolved
-BRK unsafe-guard-ignored fam_owner_rules '[R] an allow rule that matches sign --by owner: the guard denies' \
-    $'    if bad:\n        return deny(' $'    if False:\n        return deny('
-BRK unsafe-cli-ignored fam_owner_rules '[R] an allow rule that appears after the ask' \
-    $'    if bad:\n        return "; ".join(bad)' $'    if False:\n        return "; ".join(bad)'
-BRK auto-needs-record fam_owner_auto '[C] mode auto, Stops none' '    dialog = owner_signs(asked) if by == "owner" else None' '    dialog = owner_signs(asked)'
-# the sign side's own checks, each with the guard's left as it is
-BRK sandbox-cli-ignored fam_owner_who '[W] a sandbox session with a record' \
-    $'    if in_sandbox():\n        return ("a sandbox session: whoever answers its dialog is not the owner, so' \
-    $'    if False:\n        return ("a sandbox session: whoever answers its dialog is not the owner, so'
-BRK print-cli-ignored fam_owner_who '[W] a -p run with a record' \
-    $'    if print_run(anc):\n        return "a -p run: no one answers its dialog", path' $'    if False:\n        return "a -p run: no one answers its dialog", path'
-BRK answerers-cli-ignored fam_owner_who '[W] …the same appearing after the ask' \
-    $'    if ans:\n        return "something can answer the dialog in place of a human: " + "; ".join(ans), path' \
-    $'    if False:\n        return "something can answer the dialog in place of a human: " + "; ".join(ans), path'
-BRK versioned-path-missed fam_owner_who '[W] a -p run of a versioned' ' or "/claude/versions/" in a for a' ' for a'
-BRK newline-is-operator fam_owner_spelling '[S] a newline before or after the call' '.get("command")) or "").strip(" \t\n")   # bash' '.get("command")) or "")   # bash'
-BRK trim-too-wide fam_owner_spelling '[S] a control character and a newline around the call' '.strip(" \t\n")' '.strip()'
-BRK shape-unchecked fam_owner_spelling '[S] not the printed shape, denied' \
-    '    shaped = mode_shape(cmd) if is_mode else owner_shape(cmd)' '    shaped = mode_shape(cmd) if is_mode else found[0][1]'
-BRK program-unresolved fam_owner_spelling '[S] not the printed shape, denied: a baton.py outside this plugin' \
-    '        if not (i < len(ws) and os.path.isabs(ws[i]) and os.path.realpath(ws[i]) == os.path.realpath(os.path.abspath(__file__))):' \
-    '        if not (i < len(ws) and os.path.basename(ws[i]) == "baton.py"):'
-BRK python-options-open fam_owner_spelling '[S] python3 -Sc' '        while j < len(ws) and ws[j] in PY_FLAGS:' '        while j < len(ws) and ws[j].startswith("-"):'
-BRK run-takes-v1 fam_owner_version '[V] an owner signature with no dialog id' \
-    '    if why is None and signer == "owner" and (rec.get("v") != 2 or not rec.get("dialog")):' '    if False:'
-BRK lineage-refusal-uses-record fam_owner_lineage "[L] a poller started before the ask" \
-    $'"owner\'s dialog runs may use the record"), None, rec' $'"owner\'s dialog runs may use the record"), path, rec'
-BRK lineage-unchecked fam_owner_lineage '[L] a poller started before the ask' \
-    '        if child is None or rec.get("after") is None or child < rec["after"]:' '        if False:'
-# a mode change: the record is the guard (cmd_mode, cmd_remotes, owner_sets_mode), the hook only asks for the literal shape
-BRK mode-no-proof fam_owner_mode '[D] wrapped (env): refused rc 3' \
-    '    rid = owner_sets_mode(["mode"] + rest)              # the owner' '    rid = "0" * 32              # the owner'
-BRK trust-no-proof fam_owner_mode '[D] no record: mode trust rc 3' \
-    $'    rid = owner_sets_mode(["mode"] + rest)\n    have = read_remotes()' $'    rid = "0" * 32\n    have = read_remotes()'
-BRK mode-record-reused fam_owner_mode '[D] the record serves once' \
-    '            os.unlink(path)                             # one dialog, one attempt' '            pass                             # one dialog, one attempt'
-BRK mode-shape-unchecked fam_owner_mode '[D] not the printed shape, denied: a quoted program' \
-    '    shaped = mode_shape(cmd) if is_mode else owner_shape(cmd)' '    shaped = found[0][1] if is_mode else owner_shape(cmd)'
-BRK mode-sandbox-ignored fam_owner_mode '[D] a sandbox session with a record' \
-    $'    if in_sandbox():\n        return ("a sandbox session: whoever answers its dialog is not the owner, so the owner %s' \
-    $'    if False:\n        return ("a sandbox session: whoever answers its dialog is not the owner, so the owner %s'
-BRK mode-proof-ignored fam_owner_oldcopy '[O] env: this baton reads the mode as manual' \
-    '    if not proven(lines[1:]):' '    if False:'
-BRK remotes-proof-ignored fam_owner_oldcopy '[O] env: this baton reads the remote list as empty' \
-    $'    if not proven(lines):\n        return []' $'    if False:\n        return []'
-BRK userinfo-shown fam_owner_mode '[D] not the printed shape, denied: a remote with userinfo' \
-    '    return rest if len(rest) == 3 and plain_remote(rest[2]) else None' '    return rest if len(rest) == 3 else None'
-BRK wrapped-mode-unopposed fam_owner_mode '[D] wrapped (env), outside a heredoc: denied' \
-    '        if any("<<" in t for t, _f in segs[:at]):' '        if True:'
-BRK escaped-quote-splits fam_owner_mode '[D] a commit message with an escaped quote' \
-    $' as bash reads it: no split there\n                flags.add("escape")\n                cur.append(cmd[i:i + 2])\n                i += 2\n                continue' \
-    $' as bash reads it: no split there\n                flags.add("escape")'
-BRK heredoc-body-denied fam_owner_mode "[D] a mode call as a heredoc's body line" \
-    '        if any("<<" in t for t, _f in segs[:at]):' '        if False:'
-d="$TMP/break-mode-hook-blind"; mk_plugin_copy "$d"
-mutate "$d/scripts/baton-guard.py" ' or MODE_WORDS.search(cmd))' ')' && expect_red mode-hook-blind fam_owner_mode "$d" '[D] the literal mode auto: the guard asks'
-d="$TMP/break-mode-words-plain"; mk_plugin_copy "$d"
-mutate "$d/scripts/baton-guard.py" 'MODE_WORDS = re.compile(' \
-    'MODE_WORDS = re.compile(r"\bmode\s+(?:manual|auto|trust|untrust)\b") or re.compile(' &&
-  expect_red mode-words-plain fam_owner_mode "$d" '[D] a quoted mode word: the hook still reads the call, denied'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

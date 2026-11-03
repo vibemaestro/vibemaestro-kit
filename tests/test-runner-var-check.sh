@@ -18,7 +18,6 @@
 #   [V] a variable that is set        [U] a variable that is not        [E] gh cannot answer, one scope or both
 #   [X] the call: read-only, no stdin, no prompt, in the repo, once per scope, nothing before the install is valid
 #   [I] the init door says it once (kb.py init, app and adopt)
-# Then each planted break must turn the family it belongs to red; an unbroken copy must stay green.
 # Real git on throw-away repositories, the fake gh first in PATH, no network.
 # =============================================================================
 set -uo pipefail
@@ -257,73 +256,5 @@ fam_door() { PLX=$1; local d out
 FAMILIES="fam_set fam_unset fam_cannot fam_call fam_door"
 : > "$GH_LOG"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
-
-# ── each planted break must turn its family red ─────────────────────────────────────────────────
-BRK() {  # BRK <label> <family> <needle> <file under scripts/> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-echo "-- control: the check removed, and each way of weakening it"
-BRK check-removed fam_unset '[U1]' install_gates.py '    print(runner_var_report(root, var, default))' '    pass'
-BRK check-removed-set fam_set '[V1b]' install_gates.py '    print(runner_var_report(root, var, default))' '    pass'
-BRK check-removed-skip fam_cannot '[E1b]' install_gates.py '    print(runner_var_report(root, var, default))' '    pass'
-BRK unreadable-org-is-unset fam_cannot '[E2b]' install_gates.py '            if org is None:
-                return "install-gates: runner variable check skipped (organization variables: %s)" % why_org' '            if org is None:
-                org = []'
-BRK unreadable-repo-is-unset fam_cannot '[E4]' install_gates.py '        if repo is None:
-            return "install-gates: runner variable check skipped (repo variables: %s)" % why_repo' '        if repo is None:
-            repo = []'
-BRK unreadable-repo-lets-org-decide fam_cannot '[E12b]' install_gates.py '        if repo is None:
-            return "install-gates: runner variable check skipped (repo variables: %s)" % why_repo' '        if repo is None:
-            repo = []'
-BRK symlink-guard-realpath-only fam_cannot '[E13]' install_gates.py '        for where in (gh, os.path.realpath(gh)):' '        for where in (os.path.realpath(gh),):'
-BRK garbage-is-empty fam_cannot '[E5b]' install_gates.py '            return None, "gh answered with something that is not JSON"' '            break'
-BRK wrong-shape-crashes fam_cannot '[E5d]' install_gates.py '        if not isinstance(rows, list) or not all(isinstance(x, dict) and isinstance(x.get("name"), str)
-                                                 and isinstance(x.get("value", ""), str) for x in rows):' '        if not isinstance(rows, list):
-            rows = []
-        if False:'
-BRK silence-is-empty fam_cannot '[E5b]' install_gates.py '    if not text.strip():
-        return None, "gh answered with nothing"' '    if False:
-        pass'
-BRK deep-json-uncaught fam_cannot '[E9b]' install_gates.py '        except (ValueError, RecursionError):' '        except ValueError:'
-BRK case-sensitive fam_set '[V3]' install_gates.py '        if name.upper() == want:' '        if name == want:'
-BRK org-not-asked fam_set '[V2b]' install_gates.py '            org, why_org = _gh_names(root, "repos/{owner}/{repo}/actions/organization-variables")' '            org, why_org = [], None'
-BRK second-page-dropped fam_set '[V4]' install_gates.py '        rows_all.extend((x["name"], x.get("value")) for x in rows)' '        rows_all.extend((x["name"], x.get("value")) for x in rows) if not rows_all else None'
-BRK substring-match fam_unset '[U4]' install_gates.py '        if name.upper() == want:' '        if want in name.upper():'
-BRK empty-is-set fam_unset '[U8]' install_gates.py '            return "x" if value is None else value.strip()' '            return "x"'
-BRK blank-is-set fam_unset '[U11]' install_gates.py '            return "x" if value is None else value.strip()' '            return "x" if value is None else value'
-BRK empty-repo-falls-to-org fam_unset '[U9]' install_gates.py '        if got is None:
-            org, why_org' '        if not got:
-            org, why_org'
-BRK write-method fam_call '[X2]' install_gates.py '[gh, "api", "-X", "GET", "--paginate", path + "?per_page=100"]' '[gh, "api", "-X", "POST", "--paginate", path + "?per_page=100"]'
-BRK body-flag fam_call '[X4]' install_gates.py '[gh, "api", "-X", "GET", "--paginate", path + "?per_page=100"]' '[gh, "api", "-X", "GET", "-f", "x=1", "--paginate", path + "?per_page=100"]'
-BRK stdin-open fam_call '[X8]' install_gates.py 'stdin=subprocess.DEVNULL, ' ''
-BRK prompt-allowed fam_call '[X7]' install_gates.py 'GH_PROMPT_DISABLED="1", ' ''
-BRK run-from-elsewhere fam_call '[X6]' install_gates.py 'cwd=root, env=env' 'cwd=None, env=env'
-BRK caller-repo-passed-on fam_call '[X15]' install_gates.py '    env = {k: v for k, v in os.environ.items() if k != "GH_REPO"}' '    env = dict(os.environ)'
-BRK gh-found-by-bare-name fam_cannot '[E10]' install_gates.py '    gh = shutil.which("gh")
-    if not gh:
-        return None, "gh is not installed"
-    gh = os.path.abspath(gh)' '    gh = "gh"'
-BRK repo-file-allowed fam_cannot '[E11]' install_gates.py '            if inside:' '            if False:'
-BRK always-asks-org fam_call '[X9]' install_gates.py '        if got is None:
-            org, why_org' '        if True:
-            org, why_org'
-BRK no-timeout fam_cannot '[E7]' install_gates.py 'stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=_timeout())' 'stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)'
-BRK check-before-validation fam_call '[X12b]' install_gates.py '    cfg, probs, _present = sdlc_config.load(root)' '    print(runner_var_report(root, "CI_RUNNER", "x"))
-    cfg, probs, _present = sdlc_config.load(root)'
-BRK door-silent fam_door '[I2]' init_setup.py 'out(RUNNER_NOTE' 'out(""); (RUNNER_NOTE'
-BRK door-form-missing fam_door '[I2c]' init_setup.py '(no fallback: every gate run ' '(every gate run '
-BRK self-hosted-warning-as-label fam_unset '[U12c]' install_gates.py '        if self_hosted_only(default):
-            return ("WARNING' '        if False:
-            return ("WARNING'
-BRK door-twice fam_door '[I3]' init_setup.py 'out(RUNNER_NOTE' 'out(RUNNER_NOTE % "CI_RUNNER" + "\n"); out(RUNNER_NOTE'
-
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

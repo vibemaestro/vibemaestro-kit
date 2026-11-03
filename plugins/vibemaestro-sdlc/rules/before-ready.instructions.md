@@ -21,9 +21,12 @@ A draft PR is only a place to review, not a review that has happened. CI does no
    `--default` read fails too, ask the person which model to use.
    A high-risk change (a gate, a core, security, data that cannot be recovered) may run its review on `fable`, the strongest
    tier; a repo whose changes are mostly high-risk sets `agents.review_model` to `fable` (a repo with installed gates refreshes
-   `.vibemaestro/gates/sdlc_config.py` no later than the PR that adds any `agents.*` key: see `install-gates`).
+   `.vibemaestro/gates/sdlc_config.py` no later than the PR that adds any `agents.*` key: see `install-gates`). Brief the reviewer with the template `skills/ship/reviewer-brief.md` of the plugin.
 6. Is the chain of commits no review has seen folded to one commit per task or round (rule `commit-unit`)?
 7. Do summary, risks and evidence describe the head, not an earlier round (rule `pr-body-shape`)?
 8. Does the PR carry files outside `kb/`? Then the title must say what the PR brings into main as `type(scope): what was done`, not describe the intent record.
+9. Did **every fix round** end with its own fresh-context re-review that read each changed function **whole**, with its callers and its tests, not only the fix diff? A round reviewed on its diff alone leaves the last fix with no reviewer. A small fix may be re-reviewed on the cheaper `agents.worker_model`; any other round on `agents.review_model`, as in item 5.
+10. For **each defect fixed**, did you list the other places in the change with the same class of defect (the same input unchecked, the same error path, the same type confusion) and fix or test them **in the same commit**? Name the sweep in the round's comment: the class, where you looked, what you found.
+11. Is this the **second fix of the same class**? Then stop patching: find the root cause in the shared code, or question the design (and say so to whoever briefed you) before another patch.
 
 A session does not merge the intent's PR itself: a person merges.

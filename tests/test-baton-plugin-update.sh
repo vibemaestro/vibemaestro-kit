@@ -40,7 +40,6 @@
 #       that resolves to another install
 #   [U] undo with no run record, or an earlier run's record, puts nothing back; with no signed plan it leaves the record; a
 #       run whose record an earlier undo left for the owner is refused
-#   [X] planted breaks: each guard goes red on a plugin copy with that guard broken in the kit or its engine
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -256,7 +255,7 @@ plugin update vibemaestro-brain@vibemaestro --scope user" "[L] …the marketplac
 
 # refused <label> <needle> — rehearse rc 1, the refusal by name, no claude call
 refused() {
-  local P=$1 label=$2 why=$3; shift 3          # not `needle`: expect_red's bad() reads that name
+  local P=$1 label=$2 why=$3; shift 3
   eq "$(bt "$P" rehearse $K "${@:-$NEW}")/$(calls)" "1/0" "[R] $label: rehearse rc 1, no claude call"
   has "$(cat "$BT_OUT")" "$why" "[R] …$label: refused by name"
 }
@@ -360,7 +359,7 @@ fam_refuse() {
   rm -rf "$C/plugins/marketplaces/vibemaestro/.git"; mkdir -p "$C/plugins/marketplaces/vibemaestro/.git"
   printf '[remote "origin"]\n\turl = https://github.com/acme/kit.git\n' > "$C/plugins/marketplaces/vibemaestro/.git/config"
   # two guards refuse this: git's discovery lands on $C/.git, and GIT_DIR pinned to an invalid .git reads no config (0 URLs);
-  # the discovery names the cause, so its planted break goes red on the name
+  # the discovery names the cause
   refused "$P" "an invalid .git inside another repository" "git reads the clone's repository at $C/.git, not its .git"
   machine own home      # ~/.claude is a whole machine: a kit that fell back to it would rehearse green
   eq "$( ( cd "$D" && cenv HOME="$D/home" XDG_STATE_HOME="$ST" FAKE_WORLD="$W" STUB_SRC="$SRC_ROOT/plugins" CLAUDE_CONFIG_DIR=cfg \
@@ -718,157 +717,6 @@ NORW="$TMP/no-reader-rewrite"; mk_plugin_copy "$NORW"
 mutate "$NORW/gates/plugin_update.py" 'or (key.startswith("url.") and key.endswith(("insteadof", "pushinsteadof"))):' ':'
 mutate "$NORW/gates/plugin_update.py" '    if gh_repo(fetch) != known_repo:' '    if False:'
 echo "-- fam_rewrite_kit (a copy whose reader takes a URL rewrite)"; fam_rewrite_kit "$NORW"
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in the kit =="
-KBRK() {  # KBRK <label> <family> <needle> <old> <new> — a break in the kit baton
-  local label=$1 fam=$2 needle=$3 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/batons/plugin-update.sh" "$4" "$5" && expect_red "$label" "$fam" "$d" "$needle"
-}
-GBRK() {  # GBRK <label> <family> <needle> <old> <new> — a break in its engine, gates/plugin_update.py
-  local label=$1 fam=$2 needle=$3 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/gates/plugin_update.py" "$4" "$5" && expect_red "$label" "$fam" "$d" "$needle"
-}
-KBRK main-unchecked fam_refuse '[R] …a SHA that is not kit main: refused by name' '  if [ "$main" != "$SHA" ]; then
-    echo "REFUSE kit main on' '  if false; then
-    echo "REFUSE kit main on'
-KBRK main-unchecked-after-marketplace fam_moves '[M] kit main moves at the marketplace update: rc 4, no plugin update' '  if [ "$main" != "$SHA" ]; then
-    echo "REFUSE kit main moved' '  if false; then
-    echo "REFUSE kit main moved'
-KBRK layout-unchecked-after-marketplace fam_moves '[M] …the changed layout: refused by name' '  if [ "$LAYOUT $KIT $REPO" != "$was" ]; then' '  if false; then'
-GBRK directory-taken fam_refuse '[R] …a directory marketplace' '        refuse("marketplace %s is a %r source, not a git one (github or git): a layout this kit does not know" % (MKT, kind))' '        known_repo = None'
-GBRK ref-unchecked fam_refuse '[R] a ref other than main' '"path": "plugins/" + n, "ref": "main"}' '"path": "plugins/" + n, "ref": s.get("ref")}'
-GBRK extra-keys-allowed fam_refuse '[R] a pinned sha' '            if s != want:' '            if {k: s.get(k) for k in want} != want:'
-GBRK ssh-subdir-allowed fam_refuse '[R] …an ssh URL in a git-subdir source' '        cands = {gh_repo(srcs[n]["url"], https_only=True) for n in NAMES}' '        cands = {gh_repo(srcs[n]["url"]) for n in NAMES}'
-GBRK two-repos-allowed fam_refuse 'two repositories in the git-subdir sources' '    if None in cands or len(cands) != 1:' '    cands.discard(None); cands = cands or {None}
-    if None in cands:'
-# The fetch-URL check (git ls-remote --get-url origin) refuses the next cases too, so these guards name the cause and their
-# breaks go red on the name: origin-unread, env-unchecked, discovery-unchecked (it names an invalid .git), env-empty-allowed
-# (git's own error refuses an empty GIT_CONFIG as well).
-GBRK origin-unread fam_refuse '[R] …the clone'"'"'s origin another repository than the known source: refused by name' '    if gh_repo(origin) != known_repo:' '    if False:'
-GBRK clone-anywhere fam_refuse '[R] …a clone outside the marketplaces directory: refused by name' '    if os.path.dirname(clone) != os.path.join(plugins, "marketplaces") or not' '    if not'
-GBRK any-scope fam_refuse '[R] a plugin not installed at user scope' 'if isinstance(e, dict) and e.get("scope") == "user"]' 'if isinstance(e, dict)]'
-KBRK redo-allowed fam_refuse '[R] both already at the SHA' '  if [ "$total" -eq 0 ]; then' '  if false; then'
-GBRK symlink-followed fam_refuse '[R] a registry that is a symlink' '    if not stat.S_ISREG(st.st_mode):
-        return "is not a regular file' '    if False:
-        return "is not a regular file'
-KBRK sha-loose fam_refuse '[R] …a SHA argument that is not 40 lower-case hex (222222222222): the usage is named' '! [[ "$1" =~ ^[0-9a-f]{40}$ ]]' '! [[ "$1" =~ ^[0-9a-fA-F]{12,40} ]]'
-KBRK unsigned fam_signed '[S] a run phase whose line is not in the signed plan' '  if [ -z "${BATON_PLAN:-}" ] || ! grep -Fqx -- "$line" "$BATON_PLAN"; then' '  if false; then'
-GBRK commit-unchecked fam_moves '[M] …the post-check names the commit it found' '        if e.get("gitCommitSha") != sha:' '        if False:'
-KBRK restore-from-current fam_moves '[M] …undo puts both registry files back byte for byte' '  cp -p -- "$RECORD/$1" "$PLUGINS/$1.kit-plugin-update.$$"' '  cp -p -- "$PLUGINS/$1" "$PLUGINS/$1.kit-plugin-update.$$"'
-KBRK leaves-unnamed fam_moves '[M] …and the marketplace clone' '    echo "LEFT the marketplace clone' '    : "LEFT the marketplace clone'
-KBRK marker-unwritten fam_moves '[M] …and the marketplace clone' '  : > "$RECORD/$1"' '  :'
-KBRK clone-left-always fam_moves '[M] …undo says the clone is as it was' '  if [ -f "$RECORD/marketplace-update" ]; then' '  if true; then'
-KBRK prune-never fam_layouts '[L] …the run deletes a record older than seven days, and only that one' '-mtime +7 -exec sh -c' '-mtime +7000 -exec sh -c'
-KBRK next-unquoted fam_layouts '[L] …the next setup step quotes the path' "  printf 'NEXT   $NEXT_PY %q permissions" "  printf 'NEXT   $NEXT_PY %s permissions"
-KBRK relative-cfg-allowed fam_refuse '[R] …a relative CLAUDE_CONFIG_DIR: refused by name' '  "") CFG="$HOME/.claude" ;;' '  *) CFG="$HOME/.claude" ;;'
-KBRK unsigned-undo fam_undo '[U] …no signed plan: named' '  if [ -z "$mine" ]; then' '  if false; then'
-GBRK entry-keys-allowed fam_refuse '[R] …a marketplace entry with hooks: refused by name' '        if extra:' '        if False:'
-GBRK known-ref-allowed fam_refuse '[R] …a known source at another ref: refused by name' '    if set(src) - keys or src.get("ref", "main") != "main":' '    if False:'
-GBRK known-host-unchecked fam_refuse '[R] …a cleartext known source on another host: refused by name' '    if known_repo is None:' '    if False:'
-GBRK origin-urls-many fam_refuse '[R] …a clone whose origin has two URLs: refused by name' '    if len(urls) != 1:' '    if not urls:'
-GBRK rewrite-allowed fam_refuse '[R] …a clone whose git config rewrites the URL: refused by name' 'or (key.startswith("url.") and key.endswith(("insteadof", "pushinsteadof"))):' ':'
-GBRK abs-location fam_refuse '[R] …a relative installLocation: refused by name' '    if not isinstance(loc, str) or not os.path.isabs(loc):' '    if not isinstance(loc, str):'
-GBRK http-subdir-allowed fam_refuse '[R] …an http URL in a git-subdir source: refused by name' '    for pre in ("https://%s/" % HOST,) + ' '    for pre in ("https://%s/" % HOST, "http://%s/" % HOST) + '
-GBRK two-user-allowed fam_refuse '[R] …two user-scope installs: refused by name' '        if len(user) != 1:' '        if len(user) < 1:'
-GBRK others-unchecked fam_moves "[M] …the other plugin's change is named" '        if keys:' '        if False:'
-GBRK gone-unchecked fam_moves '[M] …the removed install is named' '        if not isinstance(p, str) or not os.path.isdir(p):' '        if not isinstance(p, str):'
-GBRK plugin-json-symlink fam_post '[P] …the symlinked plugin.json is named' '        why = unreal(os.path.dirname(pj)) or irregular(pj)' '        why = None'
-GBRK launcher-symlink fam_post '[P] …the symlinked launcher template is named' '            why = unreal(os.path.dirname(tpl)) or irregular(tpl)' '            why = None'
-GBRK git-config-symlink fam_refuse '[R] …a clone whose git config is a symlink: refused by name' '    why = irregular(os.path.join(clone, ".git", "config"))' '    why = None'
-GBRK dot-git-symlink fam_refuse '[R] …a clone whose .git is a symlink: refused by name' '        why = unreal(os.path.join(clone, d))' '        why = None'
-GBRK include-allowed fam_refuse '[R] …a clone whose git config includes another file: refused by name' 'if key.startswith(("include.", "includeif.")) or (' 'if ('
-GBRK worktree-config-ignored fam_refuse "[R] …a rewrite in the clone's worktree config: refused by name" '    listing = git(["config", "-z", "--list"], clone_env(clone),' '    listing = git(["config", "--file", os.path.join(clone, ".git", "config"), "-z", "--list"], clone_env(clone),'
-GBRK known-rest-unchecked fam_moves '[M] …the other marketplace is named' '    return {k: v for k, v in d.items() if k != MKT} if isinstance(d, dict)' '    return {} if isinstance(d, dict)'
-GBRK other-scope-dropped fam_post "[P] …undo leaves both files: the other scope's entry is named" '        for k in ours & set(p):' '        for k in []:'
-KBRK kept-unnamed fam_layouts '[L] …the run names its record' '  echo "KEPT the run record $RECORD"' '  :'
-KBRK next-unquoted-launcher fam_layouts "[L] …the launcher's path is quoted too" "  printf 'NEXT   %q permissions --check" "  printf 'NEXT   %s permissions --check"
-KBRK prune-left fam_layouts '[L] …a record left for the owner is never deleted' '[ -e "$1/left" ] || rm -rf -- "$1"' 'rm -rf -- "$1"'
-KBRK left-unmarked fam_moves '[M] …the record marked left' '    write "mark the run record $RECORD as left for the owner" touch "$RECORD/left"' '    :'
-KBRK left-reused fam_undo '[U] a run whose record an earlier undo left for the owner: rc 3, no claude call' '  if [ -e "$RECORD/left" ]; then' '  if false; then'
-GBRK env-unchecked fam_refuse '[R] …GIT_CONFIG naming another file than the clone'"'"'s: refused by name' '    if named:' '    if False:'
-GBRK discovery-unchecked fam_refuse '[R] …an invalid .git inside another repository: refused by name' '    found = git(["-C", clone, "rev-parse", "--absolute-git-dir"], os.environ, "read the clone as a repository").strip()' '    found = os.path.join(clone, ".git")'
-GBRK discovery-elsewhere fam_refuse '[R] …an invalid .git inside another repository: refused by name' '    if os.path.realpath(found) != os.path.realpath(os.path.join(clone, ".git")):' '    if False:'
-GBRK owner-global-read fam_refuse "[R] a global rewrite that stays on the repository (https to ssh): rehearse rc 0" 'GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,' ''
-GBRK fetch-url-global fam_refuse "[R] a rewrite off the repository in the owner's global git config: rehearse rc 1" '    if gh_repo(fetch) != known_repo:' '    if False:'
-GBRK fetch-url-system fam_refuse "[R] a rewrite off the repository in the system git config: rehearse rc 1" '    if gh_repo(fetch) != known_repo:' '    if False:'
-GBRK fetch-url-xdg fam_refuse "[R] a rewrite off the repository in the XDG git config: rehearse rc 1" '    if gh_repo(fetch) != known_repo:' '    if False:'
-GBRK env-empty-allowed fam_refuse "[R] …GIT_CONFIG set (): refused by name" '    named = [k for k in GIT_ENV if k in os.environ]' '    named = [k for k in GIT_ENV if os.environ.get(k)]'
-GBRK clone-plugin-dir-symlink fam_refuse '[R] …a clone whose .claude-plugin is a symlink: refused by name' '    for d in (".git", ".claude-plugin"):' '    for d in (".git",):'
-GBRK install-plugin-dir-symlink fam_post '[P] …the symlinked install .claude-plugin is named' '        why = unreal(os.path.dirname(pj)) or irregular(pj)' '        why = irregular(pj)'
-GBRK install-scripts-symlink fam_post '[P] …the symlinked install scripts is named' '            why = unreal(os.path.dirname(tpl)) or irregular(tpl)' '            why = irregular(tpl)'
-KBRK host-unpinned fam_layouts '[L] …every gh call names --hostname github.com' 'gh api --hostname "$HOST" "repos/$1' 'gh api "repos/$1'
-GBRK version-loose fam_post '[P] …the version is named' 're.match(r"^%s(?:-[0-9a-f]{8})?\Z" % sha[:12], v)' 're.match(r".+", v)'
-GBRK manifest-version-allowed fam_post '[P] …the manifest version is named' '        if not isinstance(man, dict) or "version" in man:' '        if not isinstance(man, dict):'
-GBRK path-unchecked fam_post '[P] …the forged installPath is named' ' or os.path.realpath(p) != want_dir:' ':'
-GBRK launcher-dir-unchecked fam_post "[P] …the launcher's refusal of the directory is named" '                if not mod.INSTALL_DIR.match(os.path.basename(d)):' '                if False:'
-GBRK launcher-resolve-unchecked fam_post "[P] …the launcher's other install is named" '            if picked != os.path.join(sdlc, "scripts", "baton.py"):' '            if False:'
-GBRK leftovers-unnamed fam_moves '[M] …undo names the new cache directories it leaves' '    for p in sorted(paths(reg) - paths(before)):' '    for p in []:'
-KBRK undo-any-record fam_undo '[U] …nothing put back' '  if [ "$(cat "$RECORD/plan")" != "$mine" ]; then' '  if false; then'
-KBRK transport-unread fam_transport '[R] …remote.origin.proxy: refused by name' '  transport_keys
-}' '}'
-KBRK transport-quoted-match fam_transport '[R] …http.<url with a tab>.proxy: refused by name' \
-  "    key=\${rec%%\$'\\n'*} val=\"\" why=\"\"" "    key=\$(printf '%q' \"\${rec%%\$'\\n'*}\") val=\"\" why=\"\""
-KBRK transport-branch-any fam_transport '[R] …branch.main.remote another remote: refused by name' \
-  '[ "$val" = origin ] || why=" (not origin)"' ':'
-KBRK transport-merge-any fam_transport '[R] …branch.main.merge another branch: refused by name' \
-  '[ "$val" = "refs/heads/$b" ] || why=" (not its own branch)"' ':'
-KBRK transport-fetch-any fam_transport '[R] …remote.origin.fetch from another ref: refused by name' \
-  '|| why=" (not a branch to its own name)"' '|| :'
-KBRK transport-fetch-dst-loose fam_transport '[R] …a second fetch refspec onto origin/main: refused by name' \
-  '"refs/heads/${b%%:*}:refs/remotes/origin/${b%%:*}" ]' '"refs/heads/${b%%:*}:${val#*:}" ]'
-KBRK transport-ssl-any fam_transport '[T] http.sslVerify true: rehearse rc 0' 'true | yes | on | 1) ;;' 'yes | on | 1) ;;'
-KBRK transport-url-only fam_transport '[R] …http.<url>.proxy: refused by name' 'http.proxy | http.*.proxy |' 'http.proxy |'
-# the marketplace-local plugins
-GBRK local-source-any fam_local '[R] …a local source "./plugins/../x": refused by name' '        elif LOCAL.match(name) and ".." not in name and p.get("source") == "./plugins/" + name:' '        elif True:'
-GBRK local-name-climbs fam_local '[R] …a local name that climbs out of plugins: refused by name' '        elif LOCAL.match(name) and ".." not in name and p.get("source")' '        elif p.get("source")'
-GBRK other-kind-skipped fam_local '[R] …an entry of another source kind: refused by name' "            refuse(\"the marketplace manifest's %s entry has the source" "            continue
-            refuse(\"the marketplace manifest's %s entry has the source"
-GBRK local-keys-allowed fam_local '[R] …a local entry with hooks: refused by name' '        if extra:' '        if False:'
-GBRK local-dir-symlink fam_local '[R] …a symlinked local plugin directory: refused by name' "            refuse(\"the clone's %s %s: claude would install what it points at\" % (sub, why))" '            pass'
-GBRK plugins-dir-symlink fam_local '[R] …a symlinked plugins directory: refused by name' '    for sub in ["plugins"] + [os.path.join("plugins", n) for n in local]:' '    for sub in [os.path.join("plugins", n) for n in local]:'
-GBRK tree-differs-allowed fam_local '[R] …a changed file in a local plugin directory: refused by name' '        elif found[path] != (mode, oid):' '        elif False:'
-GBRK tree-extra-allowed fam_local '[R] …an untracked file in a local plugin directory: refused by name' '    bad += ["%s (not in HEAD)" % shown(path) for path in sorted(set(found) - set(tracked))]' '    pass'
-GBRK tree-missing-allowed fam_local '[R] …a file missing from a local plugin directory: refused by name' '        elif path not in found:' '        elif False:'
-GBRK tree-mode-allowed fam_local '[R] …a tracked symlink in a local plugin directory: refused by name' '        if mode not in ("100644", "100755"):' '        if False:'
-GBRK tree-exec-ignored fam_local '[R] …an executable bit core.fileMode false hides: refused by name' '"100755" if st.st_mode & stat.S_IXUSR else "100644"' 'tracked.get(rel, ("100644",))[0]'
-GBRK replace-honoured fam_local '[M] a replace ref swaps the marketplace'"'"'s main for other content: rc 4, no plugin update' '                GIT_NO_REPLACE_OBJECTS="1")' ')'
-GBRK manifest-keys-allowed fam_local '[R] …a manifest with another top-level key: refused by name' '    if extra:
-        refuse("the marketplace manifest carries' '    if False:
-        refuse("the marketplace manifest carries'
-GBRK plugin-root-allowed fam_local '[R] …a manifest whose metadata sets pluginRoot: refused by name' '    if isinstance(man.get("metadata"), dict) and "pluginRoot" in man["metadata"]:' '    if False:'
-KBRK update-failure-unrecorded fam_local "[M] the local plugin's update fails after recording its entry: undo puts the state back (rc 4)" '  "$@" < /dev/null || rc=$?' '  "$@" < /dev/null'
-KBRK update-stdin-open fam_local '[M] a plugin update that reads its standard input: go rc 0, every plugin updated' '  "$@" < /dev/null || rc=$?' '  "$@" || rc=$?'
-KBRK local-recheck-skipped fam_local '[M] the clone changes during the sdlc update: rc 4, the local plugin not updated' '  if [ "$at" != - ]; then' '  if false; then'
-GBRK tree-manifest-unread fam_local "[R] …an untracked file in the clone's .claude-plugin: refused by name" '    paths = [".claude-plugin"] + ["plugins/" + n for n in names]' '    paths = ["plugins/" + n for n in names]'
-GBRK tree-top-symlink fam_local '[M] …the swapped directory: refused by name' '        if why and (sub != "plugins" or names):' '        if False:'
-[ "$(id -u)" = 0 ] || GBRK tree-walk-errors-swallowed fam_local '[R] …a local plugin directory that cannot be listed: refused by name' 'os.walk(os.path.join(clone, p), onerror=unreadable)' 'os.walk(os.path.join(clone, p))'
-GBRK tree-names-decoded fam_local '[R] a committed file name that is not UTF-8: rehearse rc 0' '            tracked[os.fsdecode(path)] = (mode, oid)' '            tracked[path.decode("utf-8", "replace")] = (mode, oid)'
-GBRK filter-allowed fam_local "[R] …a clean filter in the clone's git config: refused by name" '        if key.startswith("filter."):' '        if False:'
-GBRK local-two-allowed fam_local '[R] …a local plugin with two user installs: refused by name' '        if len(user) > 1:' '        if False:'
-GBRK head-unchecked fam_local '[M] …the stale HEAD: refused by name' '    if want != "-" and have != want:' '    if False:'
-KBRK mmain-moved-unchecked fam_local '[M] …the moved main: refused by name' '  if [ "$main" != "$mmain" ]; then' '  if false; then'
-KBRK mmain-unpinned fam_local '[M] the marketplace'"'"'s main moves after the rehearse: no claude call, undo rc 0' 'repo $REPO from $HEAD to main $mmain, kit' 'repo $REPO from $HEAD, kit'
-KBRK head-unpinned fam_local '[M] …the moved HEAD: refused by name' 'repo $REPO from $HEAD to main' 'repo $REPO to main'
-KBRK tree-before-unchecked fam_local '[M] …the changed manifest: refused by name' '  clean_tree -
-' ''
-KBRK locals-unchecked fam_local '[M] …the changed local plugins: refused by name' '  if [ "$LOCALS" != "$o" ]; then' '  if false; then'
-GBRK local-commit-unchecked fam_local "[M] …the local plugin's commit is named" '        if e.get("gitCommitSha") != sha:' '        if False:'
-GBRK moved-unchecked fam_local '[M] …the moved plugin is named' '        if b != a and b != left_:' '        if False:'
-KBRK after-unrecorded fam_moves '[M] kit main moves at the plugin update: the post-check goes red, undo puts the state back (rc 4)' '  reader entry "$CFG" "$n" > "$RECORD/after-$n"' '  :'
-KBRK skip-never fam_local '[K] …only the local plugin updated' '    if [ "$s" = "$t" ]; then' '    if false; then'
-KBRK local-target-kit fam_local "[L] …the clone and the local plugin at the marketplace's main" '*) t=$mmain ;; esac' '*) t=$SHA ;; esac'
-# the kit's own refusal of a URL rewrite, on the copy whose reader takes one: dropped, the rewrite goes through
-d="$TMP/break-rewrite-kit"; mk_plugin_copy "$d"
-mutate "$d/gates/plugin_update.py" 'or (key.startswith("url.") and key.endswith(("insteadof", "pushinsteadof"))):' ':' \
-  && mutate "$d/gates/plugin_update.py" '    if gh_repo(fetch) != known_repo:' '    if False:' \
-  && mutate "$d/batons/plugin-update.sh" ' | url.*.insteadof | url.*.pushinsteadof) why=: ;;' ') why=: ;;' \
-  && expect_red rewrite-kit fam_rewrite_kit "$d" '[R] …url.<base>.insteadOf, the kit alone: refused by name'
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

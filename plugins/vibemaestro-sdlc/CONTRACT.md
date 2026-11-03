@@ -42,7 +42,18 @@ Keeping Dependent calls current: when a repository that pins this one starts cal
 output or variable of it that no row lists, it adds the row and its probe (`DEP_CALLS` in `tests/test-contract.sh`) in a pull
 request here, merged before its own pin moves. Where each call is used is recorded in this repository's private records.
 
-Frozen at: 0.3.0
+Deprecated: these parts still work in the release that says so and leave vibemaestro-sdlc in the next release.
+- the item `sandbox-env` (the variables `INTENT_SLUG` and `SEAT` as the worker signal): whatever starts a worker session sets
+  `VIBEMAESTRO_ROLE=worker` instead (the item `worker-role`); a session that is a worker by the pair alone gets a deprecation line
+  at session start;
+- the rule `coordinated-work`: a plugin that coordinates sessions ships it as its own rule (the `sdlc-coordinated` marker and the
+  rule packs of dependent plugins stay);
+- the sandbox branch of `scripts/stage-signal.sh` (`session-notify` on the PATH): a plugin that coordinates sessions sends that
+  signal itself; the local state branch (`local-state`) stays;
+- the baton kinds `kubectl-exec` and `remote-exec` of `templates/baton-kinds/`: a user keeps the script `baton new --from` wrote as
+  their own baton.
+
+Frozen at: 0.4.0
 
 <!-- surface:begin -->
 ## Items
@@ -52,7 +63,8 @@ Frozen at: 0.3.0
 | `marketplace` | the marketplace name and the plugin id | `bash tests/test-contract.sh marketplace` |
 | `layout` | the marketplace file at the repository root and the `source` form of the plugin | `bash tests/test-contract.sh layout` |
 | `fetch-action` | the composite action that copies this repository at a SHA, and its one input `dest` | `bash tests/test-contract.sh fetch-action` |
-| `sandbox-env` | a session is a sandbox session exactly when both variables are set and not empty | `bash tests/test-contract.sh sandbox-env` |
+| `sandbox-env` | a session is a worker session when both variables are set and not blank; one alone, or one empty or only whitespace, does not make it one. Deprecated: it leaves in the next release | `bash tests/test-contract.sh sandbox-env` |
+| `worker-role` | a session is a worker session when the variable holds exactly the value; another value adds nothing, and a session is a worker session when this or `sandbox-env` says so | `bash tests/test-contract.sh worker-role` |
 | `seedable` | the plugin directory, copied alone out of a cloned marketplace by its `source`, runs its hooks and every entry point | `bash tests/test-contract.sh seedable` |
 | `cli` | the entry points below and their exit codes | `bash tests/test-contract.sh cli` |
 | `config-schema` | config schema 1: its file, its number and its keys | `bash tests/test-contract.sh config-schema` |
@@ -75,6 +87,8 @@ Frozen at: 0.3.0
 | `fetch-action` | required inputs | `dest` |
 | `fetch-action` | copies | the repository tree without `.git` into `dest` |
 | `sandbox-env` | variables | `INTENT_SLUG SEAT` |
+| `worker-role` | variable | `VIBEMAESTRO_ROLE` |
+| `worker-role` | value | `worker` |
 | `seedable` | copied directory | the `source` of the plugin, alone |
 | `config-schema` | config file | `.vibemaestro/sdlc.json` |
 | `config-schema` | schema | `1` |

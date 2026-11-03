@@ -41,8 +41,8 @@ labelled throwaway and not committed.
 3. **Ask ONE question per turn.** Several questions in one turn and the person answers the easy one and skips the hard one. Prefer a question
    with answers to choose from (a/b/c). Order: *what for* → *constraints* (time, cost, technology, what must not be touched) → *success criteria*
    (what the person sees when it is done, which command proves it). Bounded usually takes 1–2 questions; Architectural asks until nothing unknown is left.
-   In a sandbox session (`INTENT_SLUG` and `SEAT` both set and not empty, checked by
-   `[ -n "${INTENT_SLUG:-}" ] && [ -n "${SEAT:-}" ]`; a `session-ask` on PATH does not make a session a sandbox) and the `session-ask` command is installed, ask with
+   In a sandbox session (`VIBEMAESTRO_ROLE=worker`, or, deprecated and leaving in the next release, `INTENT_SLUG` and `SEAT` both set and
+   not blank; checked by `[ "${VIBEMAESTRO_ROLE:-}" = worker ] || { [ -n "$(printf %s "${INTENT_SLUG:-}" | tr -d '[:space:]')" ] && [ -n "$(printf %s "${SEAT:-}" | tr -d '[:space:]')" ]; }`; a `session-ask` on PATH does not make a session a sandbox) and the `session-ask` command is installed, ask with
    `session-ask "<question>"` and then **end the turn** to wait for the answer; otherwise (a solo session, or a sandbox without the command) ask directly in the session.
 
 4. **Propose 2–3 options** — mark them clearly **"Option 1 / Option 2 — pick one"**, do not mix them into one sequential line. For each option: what to do,
@@ -80,8 +80,8 @@ labelled throwaway and not committed.
 ## Do not
 
 - **Do not create a separate spec file and do not write into the default output directory of the third-party process plugin (under `docs/`).** In an app repo the output is `kb/`; the spec is created by
-  `vibemaestro-sdlc:spec`, in the four-section shape.
-- **Do not add any `## ` section to the spec** from this result — the machine check `kb.py check spec` accepts only the four sections and `## Design`.
+  `vibemaestro-sdlc:spec`, in the spec shape.
+- **Do not add any `## ` section to the spec** from this result — the machine check `kb.py check spec` accepts only its own sections (`## Inputs and failure cases` among them) and `## Design`.
   What was settled, `spec` takes into `## Context` / `## Goal`; the option chosen/rejected goes into `## Design` if the spec is large.
   (The section names come from `tokens.spec`: with `"language": "en"` they are `## Context`, `## Goal` and `## Design`; a repo on the default `vi` language has the Vietnamese names, which `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get tokens.spec` prints.)
 - **Do not start coding while the person is reading**, and do not take "agreed with the design" as approval of the spec: approving the spec is a

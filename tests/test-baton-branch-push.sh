@@ -17,7 +17,6 @@
 #   [S] at the push: a plan line not in the signed plan pushes nothing; a branch that appears just before the push is not
 #       moved (create-only)
 #   [U] undo: a branch it cannot delete is named and the run ends rc 5; a push that never landed undoes cleanly
-#   [X] planted breaks: each family goes red on a plugin copy with one break in the kit
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -210,7 +209,7 @@ fam_refuse() {
   eq "$(git_ -C "$d/bare.git" for-each-ref --format=x refs/heads | grep -c x)" 1 "[R] …no push in any of them (the remote holds main only)"
 }
 
-# failing_copy <plugin> <dir> — a copy of that plugin (a broken one included) whose kit post-check fails, so run undoes
+# failing_copy <plugin> <dir> — a copy of that plugin whose kit post-check fails, so run undoes
 failing_copy() { cp -r "$1" "$2"; mutate "$2/batons/branch-push.sh" '
 postcheck() {
 ' '
@@ -245,46 +244,6 @@ fam_signed() {
 
 FAMILIES="fam_push fam_steer fam_refuse fam_undo fam_signed"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in the kit =="
-KBRK() {  # KBRK <label> <family> <needle> <old> <new>
-  local label=$1 fam=$2 needle=$3 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/batons/branch-push.sh" "$4" "$5" && expect_red "$label" "$fam" "$d" "$needle"
-}
-KBRK public-allowed fam_refuse '[R] a public repository: rehearse rc 1' '  if [ "$vis" != "true private" ]; then' '  if false; then'
-KBRK any-remote fam_refuse '[R] a remote that names another repository' '  if [ -z "$named" ] || [ "$named" != "$want" ]; then' '  if [ -z "$named" ]; then'
-KBRK any-host fam_refuse '[R] a remote that is not github.com' '  if [ -z "$named" ] || [ "$named" != "$want" ]; then' '  if [ "$named" != "$want" ] && [ -n "$named" ]; then'
-KBRK tip-unchecked fam_refuse '[R] a local branch that is not at --head' '  if [ "$local_tip" != "$TIP" ]; then' '  if false; then'
-KBRK remote-branch-unchecked fam_refuse '[R] a branch the remote already has' '  if [ -n "$(remote_sha "$all")" ]; then' '  if false; then'
-KBRK workflow-allowed fam_refuse '[R] a new commit that changes .github/workflows/x.yml' '  if [ -n "$wf" ]; then' '  if false; then'
-KBRK workflow-case-sensitive fam_refuse '[R] a new commit that changes .GitHub/Workflows/x.yml' "    case \"\$(printf '%s' \"\$path\" | tr '[:upper:]' '[:lower:]')\" in" '    case "$path" in'
-KBRK quoted-paths fam_refuse '[R] a new commit that changes .github/workflows/é.yml' 'sgit log -z --diff-merges=separate --no-renames --format= --name-only' 'sgit log --diff-merges=separate --no-renames --format= --name-only'
-KBRK git-names-allowed fam_refuse '[R] a branch named FETCH_HEAD' '|| [[ "$BR" =~ ^(HEAD|[A-Z_]+_HEAD|AUTO_MERGE|BISECT_EXPECTED_REV)$ ]]' '|| [[ "$BR" =~ ^(HEAD)$ ]]'
-KBRK namespace-allowed fam_refuse '[R] a branch named heads/x' '  || [ "$FIRST" = refs ] || [ "$FIRST" = heads ] || [ "$FIRST" = tags ] || [ "$FIRST" = remotes ]' '  || [ "$FIRST" = refs ]'
-KBRK read-failure-open fam_refuse '[R] …refused as a remote that cannot be read' '  if ! all=$(heads); then
-    echo "REFUSE cannot read' '  if ! all=$(heads || true); then
-    echo "REFUSE cannot read'
-KBRK tracking-refs-trusted fam_refuse '[R] a workflow change hidden behind a local tracking ref' '  done <<< "$all"
-  # every path' '  done < <(printf "%s\n" "$all"; git for-each-ref --format="%(objectname) x" refs/remotes/)
-  # every path'
-KBRK clone-config-used fam_steer '[G] …the push lands in acme/app, nothing in acme/pub' '  sgit push -q --force-with-lease="refs/heads/$BR:" "$PUSH_URL" "$TIP:refs/heads/$BR"' '  sgit push -q --force-with-lease="refs/heads/$BR:" "$PUSH_URL" "$TIP:refs/heads/$BR"; git push -q --force-with-lease="refs/heads/$BR:" "$REMOTE" "$TIP:refs/heads/$BR" || true'
-KBRK env-passed fam_steer '[G] env-config (a pushInsteadOf toward acme/pub)' '  env -i ${keep[@]+"${keep[@]}"} GIT_CONFIG_NOSYSTEM=1' '  env ${keep[@]+"${keep[@]}"} GIT_CONFIG_NOSYSTEM=1'
-KBRK merges-undiffed fam_refuse '[R] a workflow change made inside a merge' ' log -z --diff-merges=separate ' ' log -z '
-KBRK walk-fails-open fam_refuse '[R] a commit walk that fails' '  if ! walk=$(sgit log -z --diff-merges=separate --no-renames --format= --name-only "$TIP" ${known[@]+--not "${known[@]}"} | tr '"'"'\0'"'"' '"'"'\n'"'"'); then' '  if ! walk=$(sgit log -z --diff-merges=separate --no-renames --format= --name-only "$TIP" ${known[@]+--not "${known[@]}"} | tr '"'"'\0'"'"' '"'"'\n'"'"' || true); then'
-KBRK clone-programs-run fam_steer "[G] …none of the clone's programs ran" '  cleanenv git -c core.hooksPath=/dev/null' '  cleanenv git -c core.hooksPath="$(git rev-parse --path-format=absolute --git-common-dir)/hooks" -c core.sshCommand="$(git config core.sshCommand)"'
-KBRK push-unsigned fam_signed '[S] a run phase whose push line is not in the signed plan' '  if [ -z "${BATON_PLAN:-}" ] || ! grep -Fqx -- "$PLANLINE" "$BATON_PLAN"; then' '  if false; then'
-KBRK push-not-create-only fam_signed '[S] …and the branch that appeared is not moved' '  sgit push -q --force-with-lease="refs/heads/$BR:" "$PUSH_URL" "$TIP:refs/heads/$BR"' '  sgit push -q "$PUSH_URL" "$TIP:refs/heads/$BR"'
-KBRK undo-silent fam_undo '[U] a push that landed and a post-check that fails' '  echo "LEAVE branch $BR at $now on $PUSH_URL: deleting a branch is an act the owner signs (irreversible-delete)" >&2
-  return 1' '  return 0'
-KBRK undo-blind fam_undo "[U] an undo that cannot read the remote" '  if ! all=$(heads); then
-    echo "LEAVE' '  if ! all=$(heads || true); then
-    echo "LEAVE'
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

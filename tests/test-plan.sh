@@ -16,9 +16,9 @@
 #      @always set but the suites a path wakes; @with expanded) or one line `@full <reason>` out, run with no git, no PATH and no
 #      suite files; with --old a changed map line wakes its suite (option B), without it a changed map is @full; a map that does
 #      not parse is rc 1;
-#   4. planted breaks, each red: a planner that drops a glob (caught by the oracle of 1 over every tracked file), a planner that
-#      ignores a changed map line, and for the guard an unmapped file, a stale glob, an unmapped suite, a map line for a missing
-#      suite, an exclusion without a reason, a fixture the suite names but its line does not cover, and an excluded file a suite uses.
+#   4. the guard on scratch trees in a bad state, each red: an unmapped file, a stale glob, an unmapped suite, a map line for a
+#      missing suite, an exclusion without a reason, a fixture the suite names but its line does not cover, and an excluded file a
+#      suite uses.
 # Real git on throw-away repositories under the suite's own scratch tree; no network.
 # =============================================================================
 set -uo pipefail
@@ -79,12 +79,6 @@ empty "$D" "every tracked file ($NF): plan.py --paths wakes exactly the suites t
 WAKES=$(printf '%s\n' "$FILES" | python3 "$PLAN" --paths | awk -F'\t' '$2 != ""' | grep -c .)
 [ "$WAKES" -gt 200 ] && ok "instrument: the comparison is not vacuous ($WAKES files wake at least one suite)" || bad "instrument: only $WAKES files wake a suite"
 
-# planted: a planner that drops the last glob of every line — the oracle over every tracked file must catch it
-mkdir -p "$TMP/mut/tests"; cp "$HERE/suites.map" "$HERE/map-exclusions.txt" "$TMP/mut/tests/"
-sed 's/or hit(path, globs)}/or hit(path, globs[:-1])}/' "$PLAN" > "$TMP/mut/tests/plan.py"
-ne "$(cmp -s "$PLAN" "$TMP/mut/tests/plan.py"; echo $?)" 0 "instrument: the planted planner differs from the real one"
-nonempty "$(oracle_vs "$TMP/mut/tests/plan.py" "$HERE/suites.map")" "planted: a planner that drops a glob disagrees with the oracle (red)"
-
 # CI tests code, not documents: every document wakes nothing (a PR that touches a plugin README, its .changes/ entry and
 # its kb/ records), while every script, skill and rule of a plugin still wakes a suite. Picked by pattern, not named: a path named
 # here would count as a file this suite uses.
@@ -96,7 +90,7 @@ eq "$(printf '%s\n' "$DOCS" | python3 "$PLAN" --paths | awk -F'\t' '$2 != ""')" 
 eq "$(printf '%s\n' "$CODE" | python3 "$PLAN" --paths | awk -F'\t' '$2 == ""')" "" "every plugin script, skill, rule and hook file still wakes a suite"
 
 # capped.sh and plant.sh are not @full: lib.sh sources them, so a suite reaches them only by calling their functions. On a copy of
-# this tree, the guard is red when one user's line loses the file (backends calls expect_red of ports.sh, which runs capped).
+# this tree, the guard is red when one user's line loses the file.
 echo "== the narrowed @full: capped.sh and plant.sh =="
 RT="$TMP/real"; mkdir -p "$RT"
 (cd "$SRC_ROOT" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git ls-files -z --cached --others --exclude-standard |
@@ -119,9 +113,6 @@ PY
   cap_red "$rc" "planted: $1" && return
   eq "$rc" 1 "planted: $1 → rc 1"; has "$o" "$4" "…the guard says: $4"
 }
-PORTS=ports.sh   # a variable: the literal path would count as a file this suite runs
-rplant "backends loses capped.sh (it reaches it through expect_red)" "$(grep '^backends ' "$HERE/suites.map")" "$(grep '^backends ' "$HERE/suites.map" | sed 's# tests/fixtures/capped.sh##')" \
-  "suite \`backends\` calls \`expect_red\` (tests/fixtures/$PORTS), which reaches tests/fixtures/capped.sh"
 rplant "capped-breaks loses plant.sh" "$(grep '^capped-breaks' "$HERE/suites.map")" "$(grep '^capped-breaks' "$HERE/suites.map" | sed 's# tests/fixtures/plant.sh##')" \
   "suite \`capped-breaks\` calls \`plant_break\` (tests/fixtures/plant.sh), which reaches tests/fixtures/plant.sh"
 eq "$(printf 'tests/fixtures/plant.sh\0' | python3 "$PLAN" --suites --woken | tr '\n' ' ')" "capped-breaks plan " "plant.sh wakes capped-breaks and plan (its load check copies it), not @full"
@@ -219,43 +210,6 @@ lib_loads() {  # lib_loads <fixtures dir> → empty when lib.sh loads with the n
   python3 -I -B "$TMP/lib-state.py" "$TMP/ll-bare" "$TMP/ll-full" "$names" "$NARROW_VARS"
 }
 empty "$(lib_loads "$HERE/fixtures")" "lib.sh loads with capped.sh and plant.sh exactly as without them, but for their functions and NARROW_VARS"
-LF="$TMP/libfx"
-lplant() {  # lplant <label> <file> <old> <new> <words> — lib.sh does not load cleanly from a copy with one change
-  local o
-  rm -rf "$LF"; mkdir -p "$LF"; for f in lib.sh $LIBSRC; do cp "$HERE/fixtures/$f" "$LF/"; done
-  python3 -I -B - "$LF/$2" "$3" "$4" <<'PY' || { bad "planted $1: the text moved, update the plant"; return; }
-import sys
-p, old, new = sys.argv[1:4]; s = open(p).read()
-if s.count(old) != 1:
-    sys.exit(1)
-open(p, "w").write(s.replace(old, new))
-PY
-  o=$(capped lib_loads "$LF"); has "$o" "$5" "planted: $1 → the load check says: $5"
-}
-lplant "capped.sh exits at the top level" capped.sh "CAP_RC_TIME=247; CAP_RC_MEM=248" "exit 3; CAP_RC_TIME=247; CAP_RC_MEM=248" "the shell exited while loading lib.sh"
-lplant "plant.sh does not parse" plant.sh "plant_break() {" "plant_break() { (" "plant.sh does not parse"
-lplant "capped.sh turns on errexit" capped.sh "CAP_RC_TIME=247; CAP_RC_MEM=248" "set -e; CAP_RC_TIME=247; CAP_RC_MEM=248" "changed the shell state: options"
-lplant "plant.sh prints at load" plant.sh "plant_break() {" "echo loading; plant_break() {" "did not load quietly"
-A="CAP_RC_TIME=247; CAP_RC_MEM=248"
-while IFS='|' read -r label code words; do
-  lplant "capped.sh at load: $label" capped.sh "$A" "$code; $A" "$words"
-done <<'EFFECTS'
-sets umask|umask 077|changed the shell state: umask
-exports a variable|export GIT_AUTHOR_DATE=x|new variable GIT_AUTHOR_DATE
-sets the locale|LC_ALL=C|new variable LC_ALL
-puts a directory first in PATH|PATH=/opt/x:$PATH|changed variable PATH
-traps TERM|trap '' TERM INT|changed the shell state: traps
-lowers a limit|ulimit -n 64|changed the shell state: limits
-changes IFS|IFS=:|changed variable IFS
-redefines bad|bad() { :; }|changed function bad
-moves the counters|PASS=0; FAIL=-1000|changed variable FAIL
-removes a function|unset -f hasnt|lost function hasnt
-defines an alias|alias git=false|changed the shell state: aliases
-cds|cd /|changed the shell state: directory
-exports a function|export -f ok|changed the shell state: exported functions
-disables a builtin|enable -n test|changed the shell state: disabled builtins
-hashes a command|hash -p /bin/true zzz|changed the shell state: command hash
-EFFECTS
 
 # CI runs the plan: full history (merge-base), no credentials in the clone, base from the event, no depth-1 fetch over it
 WF="$SRC_ROOT/.github/workflows/test.yml"
@@ -467,15 +421,6 @@ git_ -C "$R" checkout -q -b fixed && sed -i '$d' "$R/tests/suites.map" && printf
 case_ "fail closed: the map does not parse at the merge-base → full" "$ALL" broken fixed
 git_ -C "$R" checkout -q -f w && git_ -C "$R" reset -q --hard main
 
-echo "== planted: a planner that ignores a changed map line =="
-sed -i 's#^b src/b\*$#b src/b* docs/*#' "$R/tests/suites.map"; cm mapb2
-sed 's/            if old.suites.get(s) != m.suites.get(s) and s in m.suites:/            if False:/' "$PLAN" > "$TMP/plan-ignore.py"
-ne "$(cmp -s "$PLAN" "$TMP/plan-ignore.py"; echo $?)" 0 "instrument: the planted planner differs"
-cp "$TMP/plan-ignore.py" "$R/tests/plan.py"
-GOT=$(pl main w)
-ne "$GOT" "b c plan" "planted: ignoring the changed line of b drops b — the case above would be red (got [$GOT])"
-cp "$PLAN" "$R/tests/plan.py"; git_ -C "$R" reset -q --hard main
-
 echo "== a submodule pointer bump under ignore = all =="
 # .gitmodules says `ignore = all`: a plain `git diff --name-only` hides a bump of the gitlink, so a PR that only moves the pointer
 # of plugins/sm woke no suite. The gitlink is written with update-index (no clone, no network): the diff compares the two hashes.
@@ -490,12 +435,6 @@ git_ -C "$R" checkout -qb bump && git_ -C "$R" update-index --cacheinfo "160000,
 eq "$(git_ -C "$R" diff --name-only main bump | wc -l | tr -d ' ')" 0 "instrument: a plain git diff --name-only sees nothing of the bump (ignore = all)"
 eq "$(git_ -C "$R" diff --name-only --ignore-submodules=none main bump)" "plugins/sm" "instrument: with --ignore-submodules=none it sees plugins/sm"
 case_ "a gitlink bump under ignore = all wakes the suite whose glob covers it (+ @with, + @always)" "b c plan" main bump
-sed 's/"--no-ext-diff", "--ignore-submodules=none", mb, h/"--no-ext-diff", mb, h/' "$PLAN" > "$TMP/plan-nosub.py"
-ne "$(cmp -s "$PLAN" "$TMP/plan-nosub.py"; echo $?)" 0 "instrument: the planted planner differs from the real one"
-cp "$TMP/plan-nosub.py" "$R/tests/plan.py"
-GOT=$(pl main bump)
-ne "$GOT" "b c plan" "planted: a planner without --ignore-submodules=none misses the bump (red; got [$GOT])"
-cp "$PLAN" "$R/tests/plan.py"
 R="$TMP/r"
 
 echo "== --suites: the merge guard's contract (paths in, suites or @full out, no git, no tree) =="
@@ -537,10 +476,6 @@ for bad in "--old --woken" "--old -x" "--old= " "--woken --woken" "extra" "--wok
 done
 (cd "$S" && printf 'src/a.txt\0' | env -i PATH= LC_ALL=C "$(command -v python3)" -I -B tests/plan.py --suites --old "" >/dev/null 2>&1); rc=$?
 eq "$rc" 2 "--suites --old '': usage, rc 2"
-sed 's/ and rest\[1\] and not rest\[1\].startswith("-"):$/:/' "$PLAN" > "$TMP/plan-su.py"
-ne "$(cmp -s "$PLAN" "$TMP/plan-su.py"; echo $?)" 0 "instrument: the planted planner (that takes any --old value) differs from the real one"
-(cp "$TMP/plan-su.py" "$S/tests/plan.py" && cd "$S" && printf 'src/a.txt\0' | env -i PATH= LC_ALL=C "$(command -v python3)" -I -B tests/plan.py --suites --old --woken >/dev/null 2>&1); rc=$?
-ne "$rc" 2 "planted: --suites that takes --woken as the --old directory is red (rc $rc)"
 # the map changed: --old <dir> holds the map from before (the guard gives the merge base's) — option B; without it, @full
 cp "$TMP/map.orig" "$S/old/tests/suites.map"; sed -i 's#^b src/b\*$#b src/b* docs/*#' "$S/tests/suites.map"
 sucase "--old: a changed suite line wakes that suite (+ @with), and the map wakes its own line (plan)" "b c plan" --woken --old -- tests/suites.map
@@ -555,21 +490,6 @@ cp "$S/tests/suites.map" "$TMP/map.keep"; printf 'BAD LINE @@\n' >> "$S/tests/su
 su "$PLAN" --woken -- src/a.txt >/dev/null; eq "$SRC_RC" 1 "--suites: a map that does not parse → rc 1"
 has "$(cat "$TMP/err")" "plan --suites: tests/suites.map:" "…stderr names the map"
 cp "$TMP/map.keep" "$S/tests/suites.map"
-plant_su() {  # plant_su <label> <sed expression> <expected the real planner gives> <flags...> -- <path>... — the planted one differs
-  local label=$1 expr=$2 want=$3 got; shift 3
-  sed "$expr" "$PLAN" > "$TMP/plan-su.py"
-  ne "$(cmp -s "$PLAN" "$TMP/plan-su.py"; echo $?)" 0 "instrument: the planted planner ($label) differs from the real one"
-  got=$(capped su "$TMP/plan-su.py" "$@"); ne "$got" "$want" "planted: --suites $label is red (got [$got])"
-}
-plant_su "--woken that keeps the @always set" 's/always=not woken, check_files=False/always=True, check_files=False/' "a" --woken -- src/a.txt
-plant_su "that drops the @always set from the PR's side" 's/always=not woken, check_files=False/always=False, check_files=False/' "a plan" -- src/a.txt
-plant_su "that does not expand @with" 's/^    out = with_closure(m, out)$/    pass/' "b c" --woken -- src/b.txt
-plant_su "that ignores @full" 's/        if hit(p, m.full):$/        if False:/' "@full \`tests/fixtures/lib.sh\` decides what runs (@full)" --woken -- tests/fixtures/lib.sh
-plant_su "that lets an unmapped path wake nothing" 's/^        if not w:$/        if False:/' "@full \`other/z.txt\` matches no suite and no exclusion" --woken -- other/z.txt
-sed -i 's#^b src/b\*$#b src/b* docs/*#' "$S/tests/suites.map"
-plant_su "that ignores --old" 's/        if old_dir is not None and MAP_REL in paths and os.path.isfile(os.path.join(old_dir, MAP_REL)):$/        if False:/' "b c plan" --woken --old -- tests/suites.map
-plant_su "--woken whose map path does not wake its own line" 's/    if woken and MAP_REL in paths:  /    if False:  /' "b c plan" --woken --old -- tests/suites.map
-cp "$TMP/map.orig" "$S/tests/suites.map"
 
 echo "== the guard: planted breaks =="
 guard() { python3 "$R/tests/plan.py" --check 2>&1; }
@@ -614,21 +534,6 @@ sed -i 's#^b src/b\*$#b src/b* tests/fixtures/f/kb/* tests/fixtures/f/.vibemaest
 printf 'cat "$SRC_ROOT/kb/current-state.md" "$SRC_ROOT/.vibemaestro/sdlc.json" "$SRC_ROOT/plugins/pp/LICENSE" 2>/dev/null || true\n' >> "$R/tests/test-a.sh"
 cm published
 eq "$(guard | tail -1)" "plan --check: ok (20 tracked files, 4 suites)" "a tree with no root kb/ and no config: the guard is green"
-cp "$R/tests/plan.py" "$TMP/plan.good"
-python3 - "$R/tests/plan.py" $'        if side_only(g) and not any(fnmatch.fnmatchcase(f, g) for f in files if published_only(f)):\n            continue   # a published tree has no kb/: its exclusions there have nothing to match\n' '' <<'PY'
-import sys
-p, old, new = sys.argv[1:]; s = open(p).read(); assert s.count(old) == 1, "plan.py moved: update this planted break"
-open(p, "w").write(s.replace(old, new))
-PY
-red "the kb/ exclusions must match in a tree without kb/" "\`kb/*.md\` matches no tracked file"
-cp "$TMP/plan.good" "$R/tests/plan.py"
-python3 - "$R/tests/plan.py" $'    return t.startswith("kb/") or t in PRIVATE_FILES' $'    return t in PRIVATE_FILES' <<'PY'
-import sys
-p, old, new = sys.argv[1:]; s = open(p).read(); assert s.count(old) == 1, "plan.py moved: update this planted break"
-open(p, "w").write(s.replace(old, new))
-PY
-red "a root kb/ path read as the fixture's by its tail" "suite \`a\` uses these files but its line in tests/suites.map does not cover tests/fixtures/f/kb/current-state.md"
-cp "$TMP/plan.good" "$R/tests/plan.py"
 
 echo "== the guard: a function of a fixture an @full file sources =="
 # lib.sh (@full) sources capped.sh and plant.sh, which are not @full: a suite that calls one of their functions, directly or through

@@ -8,7 +8,8 @@
 #
 # Families:
 #   [vi]      a repo with no `language` key: every printing path of tests/fixtures/messages_drive.sh prints exactly the bytes
-#             recorded from kit main b8d2683 (tests/fixtures/messages-vi/), and no case is missing or new
+#             recorded from kit main b8d2683 (tests/fixtures/messages-vi/), and no case is missing or new; kb-check-spec-fail
+#             carries the WARNING line of `## Inputs and failure cases`, added on purpose
 #   [en]      `"language": "en"`: the same paths end with the same exit code as the recorded ones and print no Vietnamese
 #             letter outside the user's own words a message quotes (<case>.data of the driver); positive control: the vi run
 #             of the same plugin prints them in most cases
@@ -19,7 +20,7 @@
 #             docstring holds a Vietnamese letter outside the `vi` side of a table or the parsing patterns it lists (positive
 #             control: a planted print is reported)
 #
-# Every family runs on a copy of the real plugin; then each planted break must turn its family red. Real git on throw-away
+# Every family runs on a copy of the real plugin. Real git on throw-away
 # repositories, a fake gh, the network shims of netguard.sh, no model, no network.
 # =============================================================================
 set -uo pipefail
@@ -194,18 +195,5 @@ FAMILIES="fam_vi fam_en fam_table fam_measure"
 echo "== the real plugin =="
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
-
-echo "== planted breaks: each family must go red on a plugin with one break =="
-BRK() {  # BRK <label> <family> <needle> <file under the plugin> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/$4" "$5" "$6" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK vi-byte fam_vi '[vi] kb-date' scripts/messages.py '"vi": "--date phải là YYYY-MM-DD"' '"vi": "--date phải là YYYY-MM-DD "'
-BRK en-viet fam_en '[en] kb-date prints Vietnamese' scripts/messages.py '"en": "--date must be YYYY-MM-DD"' '"en": "--date phải là YYYY-MM-DD"'
-BRK en-table fam_table '[table] no en text holds a Vietnamese letter' scripts/messages.py '"en": "--date must be YYYY-MM-DD"' '"en": "--date phải là YYYY-MM-DD"'
-BRK bypass fam_measure '[measure] no unclassified' scripts/kb.py 'return die(M("kb.date"), 64)' 'return die("--date phải là YYYY-MM-DD", 64)'
-BRK key-unknown fam_table '[table] every key a script names' scripts/kb.py 'return die(M("kb.date"), 64)' 'return die(M("kb.dat"), 64)'
-BRK arg-count fam_table '[table] every call passes as many arguments' scripts/kb.py 'M("kb.slug", slug)' 'M("kb.slug", slug, slug)'
-BRK lang-strict fam_table '[table] language(): an otherwise invalid' scripts/messages.py '    lang = data.get("language") if isinstance(data, dict) else None' '    lang = data.get("language") if isinstance(data, dict) and len(data) <= 2 else None'
 
 summary

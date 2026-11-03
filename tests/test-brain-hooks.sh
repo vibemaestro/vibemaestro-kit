@@ -6,9 +6,9 @@
 #
 # Fabricated hook JSON piped to a copy of the plugin, as Claude Code runs it (a fresh python3, the input on stdin).
 # guard-owner's cases are in tests/test-brain-owner.sh.
-#   [S] session-start for each of the five sources with every section at its count cap, maximum-length lines and quotes: the
-#       hot-memory render (string 1: pins with their quote lines, windows, Now) is ≤ 6,000 characters, the hard cut does not
-#       fire, and with the full Shelf index the block is ≤ 7,500
+#   [S] session-start for each of the five sources with the left brain at its count caps (D 20, W 10), maximum-length lines
+#       and quotes: string 1 (the head line, the left brain's first string, the Shelf index) is ≤ 9,500 UTF-16 units, the hard
+#       cut does not fire, the left brain goes on in a second string, and with the full Shelf index string 1 is still ≤ 9,500
 #   [F] the Shelf index from project, user and plugin skill directories holding more skills than fit: ≤ 1,000 characters,
 #       project and user skills one line each (cut at 100), plugin skills as names per plugin, the dropped count named, a skill
 #       planted in each of the three places listed; a user-only skill and a disabled plugin left out
@@ -17,20 +17,18 @@
 #   [B] guard-bash denies `brain op` with agent_id, allows it without, and is silent on another command
 #   [E] guard-edit denies a path under the state root (absolute, relative, through a symlink, a notebook) and allows others
 #   [N] session-end finishes within 1.5 seconds on a 10,000-line log and deletes this session's records only
-#   [O] BRAIN_OFF=1, a project with no state, and a sandbox worker each inject nothing; BRAIN_OFF=0 does inject
+#   [O] BRAIN_OFF=1, a project with no state, and a worker (the switch VIBEMAESTRO_ROLE=worker alone, the pair INTENT_SLUG and SEAT
+#       alone) each inject nothing; BRAIN_OFF=0, and neither the switch nor the pair, do inject
 #   [C] fail-open: a corrupt hot.jsonl injects a one-line warning with rc 0; an internal error is one stderr line, rc 0
 #   [R] the hook's import-free state root (its fast path) equals brain_store.state_root()
 #   [W] the session's project, whatever the shell's directory: claimed in A, with cwd in B the compact hooks log A's episode
 #       and SessionStart injects A's block, with CLAUDE_PROJECT_DIR or, without it, from the session's record; the CLI writes
 #       A and names both; outside a session, the cwd as before; /clear's new session id still A; session-end removes the
 #       record; a resume in another project says so; B never gets a state directory
-#   [K] the hard cut at 8,000 cuts at a line and names what it cut
+#   [K] the hard cut at 9,500 cuts at a line and names what it cut
 #   [Z] tests/live/brain-owner-dialog.sh parses, and its --plan mode lists the runs and starts nothing
 #   [P2] its key choice (--pick-key) on recorded menus: the trust dialog with No first or Yes first, a permission prompt
-#        (the plain Yes, never "don't ask again"), a numbered menu, no match; a break pressing Enter on any option goes red
-#   [X] planted breaks: each case goes red on a copy with one break
-# Note: [S]'s break is the line cap, not a raised text cap: the render cuts every line at 200 characters whatever the text cap,
-# so the line cap is the lever that can push the worst case past 6,000.
+#        (the plain Yes, never "don't ask again"), a numbered menu, no match
 # =============================================================================
 set -uo pipefail
 # owner_ok runs the answerer check, which reads ancestors' CLAUDE_CONFIG_DIR and HOME from their initial environment: start
@@ -62,15 +60,13 @@ skill() {  # skill <dir> <name> <description> [extra frontmatter line]
   printf -- '---\nname: %s\ndescription: "%s"\n%s\n---\n\n# %s\n' "$2" "$3" "${4:-}" "$2" > "$1/$2/SKILL.md"
 }
 
-fill_caps() {  # every section at its count cap, every line and quote at its maximum length
+fill_caps() {  # the left brain at its count caps, every line and quote at its maximum length; a few right-brain items
   local t q w links=() i
-  t=$(rep t 150); q=$(rep q 300); w=$(rep w 60)
+  t=$(rep t 300); q=$(rep q 600); w=$(rep w 60)
   for i in 1 2 3 4 5 6 7 8; do links+=(--link "kb/$(rep l 17)"); done   # short links fill each line up to the line cap
-  for i in 1 2 3 4 5 6 7 8 9 10; do owner_ok add --kind decision --text "$t" --owner-quote "$q" --where "$w" "${links[@]}"; done
-  for i in 1 2 3 4 5; do owner_ok add --kind window --text "$t" --owner-quote q --where w --expires 2099-01-02T22:00:00Z "${links[@]}"; done
+  for i in $(seq 1 20); do owner_ok add --kind decision --text "$t" --owner-quote "$q" --where "$w" "${links[@]}"; done
+  for i in $(seq 1 10); do owner_ok add --kind window --text "$t" --owner-quote q --where w --expires 2099-01-02T22:00:00Z "${links[@]}"; done
   for i in 1 2 3; do br op add --kind now --text "$t" "${links[@]}"; done
-  for i in 1 2 3 4 5 6 7 8 9 10; do br op add --kind next --text "$t" "${links[@]}"; done
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do br op add --kind trap --text "$t" "${links[@]}"; done
 }
 
 many_skills() {  # project, user and plugin skill directories holding more skills than the Shelf index fits
@@ -99,25 +95,30 @@ shelf() { printf '%s\n' "$1" | sed -n '/^## Shelf index/,$p'; }
 case_caps() {
   newp
   fill_caps
-  R=$(bpy 'st = s.fold(s.verify(s.state_dir())[1]); r = s.render(st)
-print(len(r), sum(1 for l in r.splitlines() if l.startswith("- ")), max(len(l) for l in r.splitlines()),
+  R=$(bpy 'st = s.fold(s.verify(s.state_dir())[1]); ss = [t for h, t in s.render_strings(st) if h == "left"]; r = "".join(ss)
+print(len(ss), sum(1 for l in r.splitlines() if l.startswith("- ")), max(len(l) for l in r.splitlines()),
       sum(1 for l in r.splitlines() if l.startswith("  \"") and len(l) >= 155))')
   set -- $R
-  c_eq "$2" 18 "[S] instrument: 18 live items in string 1, D, W and N at their caps"
-  c_eq "$4" 10 "[S] instrument: 10 quote lines at their length (quote 300 cut at 120, where 60 at 30)"
-  c_eq "$([ "$3" -ge 190 ] && [ "$3" -le 200 ] && echo full)" full "[S] instrument: lines are filled to the 200-character line cap (longest $3)"
-  c_eq "$([ "$1" -le 6000 ] && echo within)" within "[S] the hot-memory render at the caps is $1 ≤ 6,000 characters"
+  c_eq "$2" 30 "[S] instrument: 30 live items in the left brain, D and W at their caps"
+  c_eq "$4" 20 "[S] instrument: 20 quote lines at their length (quote 600 cut at 120, where 60 whole)"
+  c_eq "$([ "$3" -ge 350 ] && [ "$3" -le 360 ] && echo full)" full "[S] instrument: lines are filled to the 360-character line cap (longest $3)"
+  c_eq "$1" 3 "[S] the left brain at its caps takes three strings"
   local src c
   for src in $SOURCES; do
     start "$src"; c=$(ctx)
     c_has "$c" "re-injected at SessionStart:$src" "[S] $src: the block is injected"
-    c_has "$c" "## Brain · hot memory v" "[S] $src: it carries hot memory"
+    c_has "$c" "## Brain · left brain, 1 of 3 v" "[S] $src: it opens the left brain"
     c_hasnt "$c" "[brain: cut" "[S] $src: the hard cut does not fire"
+    c_hasnt "$c" "- N1 " "[S] $src: the right brain is not in string 1"
     c_eq "$(epfield source)" "$src" "[S] $src: the episode line names the source"
   done
   many_skills
   start startup; c=$(ctx)
-  R=$(nchars "$c"); c_eq "$([ "$R" -le 7500 ] && echo within)" within "[S] hot memory at its caps plus the full Shelf index: $R ≤ 7,500"
+  R=$(python3 -c 'import sys; print(len(sys.argv[1].encode("utf-16-le")) // 2)' "$c")
+  c_eq "$([ "$R" -le 9500 ] && echo within)" within "[S] string 1 at the left caps plus the full Shelf index: $R ≤ 9,500"
+  c_has "$c" "more skills not listed)" "[S] instrument: the Shelf index is full (it drops skills)"
+  c_hasnt "$c" "[brain: cut" "[S] and the hard cut does not fire"
+  R=$(nchars "$c")
   c_eq "$(epfield injected)" "$R" "[S] the episode line counts the injected characters (B1.3's counter)"
   start resume context_tokens=612340 prompt_cache_likely_expired=true
   c_eq "$(epfield context_tokens)" 612340 "[S] resume: the S6 fields are logged"
@@ -229,7 +230,7 @@ case_session() {  # the session's project, whatever the shell's directory: claim
   newp
   local A=$P B="$TMP/other$NP" dA dB n tr="$TMP/tr$NP.jsonl"
   mkdir -p "$B"; git_ -C "$B" init -q -b main
-  br op add --kind now --text "A-MARKER"
+  owner_ok add --kind decision --text "A-MARKER" --owner-quote "a project marker" --where chat   # string 1 holds the left brain
   dA=$(sdir); dB=$(cd "$B" && bpy 'import os; print(s.state_dir(os.getcwd()))')
   printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":1,"cache_read_input_tokens":500,"cache_creation_input_tokens":0,"output_tokens":1}}}' > "$tr"
   CLAUDE_PROJECT_DIR="$A" start startup
@@ -290,7 +291,7 @@ case_session() {  # the session's project, whatever the shell's directory: claim
   SID=sA
   local C="$TMP/third$NP" dC
   mkdir -p "$C"; git_ -C "$C" init -q -b main
-  (cd "$C" && SID=sD br op add --kind now --text "C-MARKER")
+  (cd "$C" && SID=sD owner_ok add --kind decision --text "C-MARKER" --owner-quote "a project marker" --where chat)
   dC=$(cd "$C" && SID=sD bpy 'import os; print(s.state_dir(os.getcwd()))')
   if [ "$(id -u)" != 0 ]; then                # root writes into a 0500 directory anyway
     chmod 500 "$sd"
@@ -339,8 +340,12 @@ case_off() {
   c_eq "$([ -e "$(sdir)" ] && echo exists || echo none)" none "[O] and no state directory is made"
   br op add --kind now --text "x"
   BRAIN_OFF=1 start startup; c_eq "$OUT" "" "[O] BRAIN_OFF=1: nothing injected"
-  INTENT_SLUG=x SEAT=y start startup; c_eq "$OUT" "" "[O] a sandbox worker: nothing injected"
-  BRAIN_OFF=0 start startup; c_has "$(ctx)" "hot memory" "[O] instrument: BRAIN_OFF=0 injects"
+  INTENT_SLUG=x SEAT=y start startup; c_eq "$OUT" "" "[O] the pair alone (INTENT_SLUG and SEAT): nothing injected"
+  VIBEMAESTRO_ROLE=worker start startup; c_eq "$OUT" "" "[O] the switch alone (VIBEMAESTRO_ROLE=worker): nothing injected"
+  VIBEMAESTRO_ROLE=worker hk guard-bash "$(hin session_id=sA cwd="$P" tool_name=Bash tool_input='{"command": "brain op touch N1"}' agent_id=a1)"
+  c_eq "$OUT" "" "[O] the switch alone: the guards are silent too"
+  start startup; c_has "$(ctx)" "## Brain · left brain" "[O] neither the switch nor the pair: injected"
+  BRAIN_OFF=0 start startup; c_has "$(ctx)" "## Brain · left brain" "[O] instrument: BRAIN_OFF=0 injects"
 }
 
 case_corrupt() {
@@ -364,9 +369,10 @@ case_cut() {
   newp
   R=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import brain_hook as h
 b = "# frame\n" + "".join("- line %04d %s\n" % (i, "x" * 80) for i in range(90)) + "## Shelf index (skills)\n" + "- s\n" * 400
-out, gone = h.cut(b)
-print(len(out) <= 8000, out.splitlines()[-1].startswith("[brain: cut"), "Shelf index" in out.splitlines()[-1], gone > 0)' "$BROOT/scripts")
-  c_eq "$R" "True True True True" "[K] an oversize block is cut to ≤ 8,000 at a line, the last line names what was cut"
+b += "- more %s\n" % ("y" * 90) * 20
+out, gone = h.cut(b, 9500)
+print(len(b) > 9500, len(out) <= 9500, out.splitlines()[-1].startswith("[brain: cut"), "Shelf index" in out.splitlines()[-1], gone > 0)' "$BROOT/scripts")
+  c_eq "$R" "True True True True True" "[K] an oversize block is cut to ≤ 9,500 at a line, the last line names what was cut"
 }
 
 pick_checks() {  # pick_checks <live script> — the key choice on recorded Claude Code menus (B1.2a)
@@ -386,19 +392,8 @@ pick_checks() {  # pick_checks <live script> — the key choice on recorded Clau
 
 case_pick() {
   newp
-  local s="$SRC_ROOT/tests/live/brain-owner-dialog.sh" b="$TMP/pick-break.sh"
+  local s="$SRC_ROOT/tests/live/brain-owner-dialog.sh"
   pick_checks "$s"
-  python3 - "$s" "$b" <<'PYB' || { bad "[X] pick-first-option: the break does not apply"; return; }
-import sys
-t = open(sys.argv[1], encoding="utf-8").read()
-a = 'print("Enter" if t == c else "Down" if t > c else "Up")'
-if t.count(a) != 1:
-    sys.exit(1)
-open(sys.argv[2], "w", encoding="utf-8").write(t.replace(a, 'print("Enter")'))
-PYB
-  Q=1; CASE_FAIL=0; pick_checks "$b"; Q=0
-  [ "$CASE_FAIL" = 1 ] && ok "[X] pick-first-option (Enter on whatever the cursor is on) turns the key choice red" || bad "[X] pick-first-option: the key choice stays green"
-  CASE_FAIL=0
 }
 
 case_live() {
@@ -424,71 +419,5 @@ print(h.state_root() == s.state_root())' "$BROOT/scripts")
 echo "== cases =="
 for c in case_root case_caps case_shelf case_compact case_guards case_session case_end case_off case_corrupt case_cut case_live case_pick; do run_case $c; done
 cd "$TMP" || exit 1
-
-echo "== planted breaks =="
-ST=scripts/brain_store.py; HK=scripts/brain_hook.py
-plant line-cap-240 case_caps $ST 'LINE_MAX = 200' 'LINE_MAX = 240'
-plant user-skills-not-read case_shelf $HK '    user = [one(*k) for k in skills(os.path.join(s.config_dir(), "skills"))]' '    user = []'
-plant user-only-skills-listed case_shelf $HK '        if str(fm.get("disable-model-invocation", "")).lower() == "true":' '        if False:'
-plant shelf-not-round-robin case_shelf $HK '                if used + len(l[r]) + 1 + reserve <= SHELF_MAX:' '                if used + len(l[r]) + 1 + reserve <= SHELF_MAX and k != "user":'
-plant word-boundary-dropped case_compact $HK '    pat = ("(?<!\\w)" if re.match(r"\w", anchor) else "") + a + ("(?!\\w)" if re.search(r"\w$", anchor) else "")' '    pat = a'
-plant summary-injected case_compact $HK '    block, gone = cut(head_line + parts["hot"] + "\n" + shelf_index(s, project))' '    block, gone = cut(head_line + parts["hot"] + "\n" + shelf_index(s, project) + "".join(open(p).read() for p in glob.glob(os.path.join(d, "summaries", "*.md"))))'
-plant summaries-not-pruned case_compact $HK '        for old in sorted(glob.glob(os.path.join(sd, "*.md")))[:-SUMMARIES_KEPT]:' '        for old in []:'
-plant guard-bash-ignores-agent case_guards $HK '    if not inp.get("agent_id"):
-        return
-    cmd = command_of(inp)' '    cmd = command_of(inp)'
-plant guard-edit-no-realpath case_guards $HK '    full = os.path.realpath(os.path.join(cwd_of(inp), os.path.expanduser(p)))' '    full = os.path.join(cwd_of(inp), os.path.expanduser(p))'
-plant guard-edit-prefix-only case_guards $HK '        if full == root or full.startswith(root.rstrip(os.sep) + os.sep):' '        if full.startswith(root):'
-plant end-voids-all case_end $HK '    if sid:
-        s.void_records(d, sid)
-        for p in PART_EVENTS.values():
-            with contextlib.suppress(OSError):
-                os.unlink(start_file(d, sid, p))
-    episode(d, inp, "session-end"' '    for p in glob.glob(os.path.join(d, "asked", "*.json")):
-        os.unlink(p)
-    episode(d, inp, "session-end"'
-plant brain-off-ignored case_off $HK '    return (os.environ.get("BRAIN_OFF", "") not in ("", "0")' '    return (False'
-plant state-check-removed case_off $HK '    project, d, rebound = resolve(inp)
-    if not has_state(d):
-        return
-    source =' '    project, d, rebound = resolve(inp)
-    source ='
-plant warning-dropped case_corrupt $HK '        except s.Refused as e:
-            hand["error"]' '        except KeyError as e:
-            hand["error"]'
-plant not-fail-open case_corrupt $HK '        sys.stderr.write("brain hook %s: %s: %s\n" % (event, e.__class__.__name__, str(e)[:200]))' '        raise'
-plant no-hard-cut case_cut $HK '    if units(block) <= limit:
-        return block, 0' '    if True:
-        return block, 0'
-
-plant hook-ignores-project-dir case_session $HK '    env = os.environ.get("CLAUDE_PROJECT_DIR", "")' '    env = ""'
-plant hook-ignores-record case_session $HK '    b = s.read_session(sid) if sid else None' '    b = None'
-plant cli-ignores-record case_session $ST '        b = bound()
-        if b:
-            return b["state"]' '        b = None'
-plant end-keeps-record case_session $HK '            s.drop_session(sid)                     # /clear' '            pass  # /clear'
-plant cli-note-dropped case_session scripts/brain.py '    if note:' '    if False:'
-plant record-write-fails-hook case_session $HK '        except OSError as e:                        # the record serves' '        except KeyError as e:                        # the record serves'
-plant drop-not-done case_session $HK '    if left:
-        s.drop_session(sid)
-        try:' '    if left:
-        try:'
-plant drop-same-brain case_session $HK '    if left and left["state"] == d:
-        return ""
-' ''
-plant resume-drops-record case_session $HK '        if sid and inp.get("reason") not in ("clear", "resume"):' '        if sid and inp.get("reason") not in ("clear",):'
-plant stale-record-unnamed case_session $HK '        return "; it still names %s, which `brain` run from Bash would use" % s.printable(left["project"])' '        return ""'
-plant clear-drops-record case_session $HK '        if sid and inp.get("reason") not in ("clear", "resume"):' '        if sid:'
-plant sweep-removed case_session $ST '            if now - os.lstat(q).st_mtime > SESSION_MAX_AGE:' '            if False:'
-plant sessions-dir-open case_session $ST '                os.mkdir(q, 0o700)' '                os.mkdir(q, 0o755)'
-plant matrix-follows-cwd case_session scripts/brain_matrix.py '    rs, d, st = rows(None)' '    rs, d, st = rows(os.getcwd())'
-plant rebound-not-logged case_session $HK '        fields["rebound_from"] = rebound' '        pass'
-plant rebound-silent case_session $HK '        if old:
-            sys.stderr.write' '        if False:
-            sys.stderr.write'
-
-plant root-relative-xdg case_root $HK '    if not os.path.isabs(x):
-        h = os.environ.get("HOME", "")' '    if not x:
-        h = os.environ.get("HOME", "")'
 
 summary

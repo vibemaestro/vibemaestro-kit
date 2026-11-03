@@ -3,7 +3,7 @@
 # LIVE (not in CI): does Claude Code show the brain's owner dialog, per permission mode, and does an approval write the item?
 # =============================================================================
 # Run, from this repository's checkout, on a machine where `claude` is logged in and `tmux` is installed:
-#     bash tests/live/brain-owner-dialog.sh            about 13 runs, under 15 minutes
+#     bash tests/live/brain-owner-dialog.sh            about 15 runs, under 16 minutes
 #     bash tests/live/brain-owner-dialog.sh --plan     list the runs and their expectations; starts nothing
 #     bash tests/live/brain-owner-dialog.sh --only default/no-allow
 #     bash tests/live/brain-owner-dialog.sh --rehearse-trust   answer the real folder-trust dialog in a scratch config (no login)
@@ -33,7 +33,11 @@ TAG=7f3a
 
 # name | mode | allow rule | environment | expectation (ask: dialog shown, line whole, written; deny: no dialog, not
 # written; print: not written; control: the brain's line never shows, not written; info: not written, dialog recorded)
+# [| kind: decision when left out, goal: a goal with every field, whose dialog line shows them before the text, or import: a
+# bundle of three decisions, whose one dialog lists every one of them, a line each]
 RUNS="default/no-allow|default|no||ask
+goal/default|default|no||ask|goal
+import/default|default|no||ask|import
 default/allow|default|yes||ask
 acceptEdits/no-allow|acceptEdits|no||ask
 acceptEdits/allow|acceptEdits|yes||ask
@@ -230,14 +234,49 @@ print("%s %s" % (last["decision"], last.get("mode")) if last else "none -")
 PY
 }
 
+make_bundle() {  # make_bundle <file> <text> — a bundle of a scratch brain holding three decisions, the second global, written
+                 # through the store library (no dialog: it is the bundle's source, not the run) and exported by the CLI
+  local src="$W/src-$N"
+  mkdir -p "$src" && git -C "$src" init -q || return 1
+  (cd "$src" && XDG_STATE_HOME="$W/src-state-$N" python3 - "$BRAIN/scripts" "$2" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import brain_store as s
+d, by = s.state_dir(), {"session": "live-source", "agent": None}
+with s.locked(d):
+    raw, _ = s.verify(d)
+    raw = s.append(d, raw, {"op": "claim", "t": s.now_iso(), "by": by, "takeover": False})
+    for i, (word, scope) in enumerate((("one", None), ("two", "global"), ("three", None)), 1):
+        item = {"id": "D%d" % i, "kind": "decision", "pinned": True, "text": "%s %s" % (sys.argv[2], word),
+                "source": {"type": "owner", "quote": "live test quote", "where": "live test"}, "expires": None, "links": [],
+                "anchors": [], "supersedes": None}
+        if scope:
+            item["scope"] = scope
+        raw = s.append(d, raw, {"op": "owner-add", "t": s.now_iso(), "by": by, "item": item})
+PY
+  ) && (cd "$src" && XDG_STATE_HOME="$W/src-state-$N" "$BRAIN/bin/brain" export --out "$1" >/dev/null)
+}
+
 N=0; FAILS=0; SKIPS=0; TABLE="| Run | Hook (mode seen) | Dialog shown | Line whole | Written | Verdict | Note |
 |---|---|---|---|---|---|---|"
-one() {  # one <name> <mode> <allow> <env> <expect>
-  local name=$1 mode=$2 allow=$3 envs=$4 expect=$5 st="$W/state-$N" text line cmd prompt seen dialog=no whole=- written note="" t
+one() {  # one <name> <mode> <allow> <env> <expect> [kind]
+  local name=$1 mode=$2 allow=$3 envs=$4 expect=$5 kind=${6:-decision} st="$W/state-$N" text line cmd prompt seen dialog=no whole=- written note="" t
   N=$((N+1))
   text="Live dialog check $name $TAG"
-  line="Pin owner decision D1, from \"live test\": \"$text\""
+  line="Pin owner decision D1 (a lasting direction, never done), from \"live test\": \"$text\""
   cmd="brain owner add --kind decision --text '$text' --owner-quote 'live test quote' --where 'live test'"
+  local shown="\": \"$text\"" lines=""
+  if [ "$kind" = goal ]; then
+    line="Pin owner goal G1 (review $REVIEW, scope project), from \"live test\", done when \"live done\", not doing \"live not doing\": \"$text\""
+    cmd="brain owner add --kind goal --text '$text' --owner-quote 'live test quote' --where 'live test' --done 'live done' --not-doing 'live not doing' --review $REVIEW --scope project"
+  elif [ "$kind" = import ]; then
+    make_bundle "$W/bundle-$N.json" "$text" || { printf '%-5s %-22s the bundle could not be built\n' FAIL "$name"; FAILS=$((FAILS+1)); return; }
+    shown="owner items from the brain of"
+    line="1. Pin owner decision D1 (a lasting direction, never done), from \"live test\": \"$text one\" [was D1]"
+    lines="2. Pin owner decision D2 (a lasting direction, never done) (scope global), from \"live test\": \"$text two\" [was D2]
+3. Pin owner decision D3 (a lasting direction, never done), from \"live test\": \"$text three\" [was D3]"
+    cmd="brain owner import '$W/bundle-$N.json'"
+  fi
   prompt="Run exactly this one Bash command, unchanged, and nothing else. Then stop. Command: $cmd"
   mkdir -p "$st"; rm -rf "$P/.claude"
   printf '%s' "$prompt" > "$W/prompt"
@@ -275,16 +314,19 @@ one() {  # one <name> <mode> <allow> <env> <expect>
       if [ $trusted = 0 ] && printf '%s' "$s" | grep -qiE "$TRUST_SCREEN"; then
         choose brain-live "$TRUST_RE" || note="the trust dialog had no Yes line this script understands"; trusted=1; continue
       fi
-      if [ "$dialog" = no ] && printf '%s' "$s" | grep -qF "\": \"$text\""; then
+      if [ "$dialog" = no ] && printf '%s' "$s" | grep -qF "$shown"; then
         dialog=yes
         printf '%s\n' "$s" | grep -qF -- "$line" && whole=yes || whole=no
+        while IFS= read -r l; do                    # an import's dialog: every item's line is on the screen
+          [ -n "$l" ] && ! printf '%s\n' "$s" | grep -qF -- "$l" && whole=no
+        done <<<"$lines"
         sleep 1; choose brain-live "$YES_RE" || note="no plain Yes in the brain dialog"; after=$((SECONDS + 20)); continue
       fi
       if [ "$dialog" = no ] && printf '%s' "$s" | grep -q 'Do you want to proceed'; then
         choose brain-live "$YES_RE" || note="no plain Yes in the permission prompt"; [ $after = 0 ] && after=$((SECONDS + 15)); continue
       fi
       if [ "$(store_written "$st")" = yes ]; then break; fi
-      case "$s" in *"pinned D1"*|*"brain: owner items"*|*"brain: write one"*) [ $after = 0 ] && after=$((SECONDS + 3)) ;; esac
+      case "$s" in *"pinned D1"*|*"pinned G1"*|*"imported from "*|*"brain: owner items"*|*"brain: write one"*) [ $after = 0 ] && after=$((SECONDS + 3)) ;; esac
       seen=$(hook_seen "$st")
       if [ "${seen%% *}" = deny ] && [ $after = 0 ]; then after=$((SECONDS + 8)); fi
       if [ $after -gt 0 ] && [ $SECONDS -ge $after ]; then break; fi
@@ -320,9 +362,10 @@ one() {  # one <name> <mode> <allow> <env> <expect>
 }
 
 echo "runs (each under ${RUN_SECS} s; watch with: tmux attach -r -t brain-live):"
-while IFS='|' read -r name mode allow envs expect; do
+REVIEW=$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=30))')
+while IFS='|' read -r name mode allow envs expect kind; do
   [ -n "$ONLY" ] && [ "$ONLY" != "$name" ] && continue
-  one "$name" "$mode" "$allow" "$envs" "$expect"
+  one "$name" "$mode" "$allow" "$envs" "$expect" "$kind"
 done <<<"$RUNS"
 [ "$N" -gt 0 ] || stop "no run named '$ONLY'"
 echo

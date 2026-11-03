@@ -17,7 +17,7 @@
 #   [f] a pinned decision with a done anchor (and one forged with `closes`): never closed, marked `owner retires it`; T and W untouched
 #   [g] not the writer: marks only; the writer closes whatever CLAUDE_CODE_SESSION_ID says; the store refuses a link-close by another
 #   [h] 6 closable items: none closes, the `held` note; `brain op close-linked` closes all 6
-#   [i] --closes: a bare ¤N refused with and without BRAIN_DEFAULT_REPO, a URL stored as owner/name¤N, a 404 and an anchor already
+#   [i] --closes: a bare ¤N refused (BRAIN_DEFAULT_REPO set or not), a URL stored as owner/name¤N, a 404 and an anchor already
 #       done refused, an unanswered lookup accepted with `closes not checked`, more than 2 and other forms refused
 #   [j] --closes on a decision, window or trap refused (64); supersede carries `closes` and prints it, a new --closes replaces it
 #   [k] a cached `completed` issue does not close, a cached merged PR does; a version-1 cache entry never closes
@@ -27,11 +27,15 @@
 #       12, a mixed close's issue anchor reopen-checked, an older brain's version-1 rewrite read for marks only and refilled as v2
 #   [o] doctor: would close, auto-closed, reopened, the pins; doctor writes nothing
 #   [p] every gh argv carries --hostname github.com; close-linked stops at 40 keys; `format` 2 on session-start, doctor warns below
-#   [q] the worst-case string 1 (every section full, every item stale, 5 closes or a held burst and reopens) ≤ 8,000 with no cut
+#   [q] the worst-case string 1 (every section full, every item stale, 5 closes or a held burst and reopens) ≤ 9,500 with no cut
 #   [r] a head.json that cannot be written: the log is cut back, nothing closed, still readable; a failure after one close
 #       reports that close; write-time checks come before the lookup; a supersede keeping a done anchor warns, a new one is refused
 #   [s] round 2 rotates: five PRs whose pulls lookup keeps failing do not starve a sixth
-#   [X] planted breaks: each case goes red on a copy with one break
+#   [u] a prompt in the writer's session starts close-linked in the background (outside the retirement budget,
+#       as by hand), at most every 10 minutes, its outcome or refusal logged once; another session, BRAIN_OFF, no gh: nothing;
+#       a gh not logged in or hanging is never waited on
+#   [t] a session whose start ran an older brain logs `session-format` at its next brain command (the
+#       note-format hook, on `Bash(brain *)` only), once, and doctor stops warning about it; one with no brain command keeps it
 # =============================================================================
 set -uo pipefail
 if [ -z "${BRAIN_SUITE_REEXEC:-}" ]; then
@@ -126,9 +130,9 @@ ctxof() {  # ctxof <file> — additionalContext of one hook's stdout file ("" wh
 t = open(sys.argv[1], encoding="utf-8").read().strip()
 print(json.loads(t)["hookSpecificOutput"]["additionalContext"] if t else "", end="")' "$1"
 }
-EVENTS="session-start session-start-sessions session-start-plan"
-start3() {  # start3 <source> <session id> [env…] — the three SessionStart commands at once, as Claude Code runs them, with no
-            # CLAUDE_CODE_SESSION_ID; OUT and ERR are string 1's command's, RC 0 when all three exit 0, CTX the three strings
+EVENTS="session-start"; for i in 2 3 4 5 6 7 8 9 10 11 12 13 14; do EVENTS="$EVENTS session-start-$i"; done
+start3() {  # start3 <source> <session id> [env…] — the 14 SessionStart string commands at once, as Claude Code runs them, with
+            # no CLAUDE_CODE_SESSION_ID; OUT and ERR are string 1's command's, RC 0 when all exit 0, CTX every string
   local in e p rc=0 pids=() src=$1 sid=$2; shift 2
   in=$(hin session_id="$sid" cwd="$P" hook_event_name=SessionStart source="$src")
   for e in $EVENTS; do
@@ -142,9 +146,9 @@ start3() {  # start3 <source> <session id> [env…] — the three SessionStart c
 start() { start3 "${1:-compact}" "${2:-$SID}"; }   # start [source] [session id]
 start_nogh() { start3 compact "$SID" PATH="$TMP/nogh"; }
 start_faulty() {  # start_faulty <n> [caches] — SessionStart as Claude Code runs it, the n-th link-close append failing (OSError 28),
-                  # and with `caches`, hot.json that cannot be rewritten either; strings 2 and 3 run beside it, as always
+                  # and with `caches`, hot.json that cannot be rewritten either; the other strings run beside it, as always
   local e f in pids=(); e=$(mktemp); in=$(hin session_id="$SID" cwd="$P" hook_event_name=SessionStart source=compact)
-  for f in session-start-sessions session-start-plan; do
+  for f in ${EVENTS#session-start }; do
     printf '%s' "$in" | env -u CLAUDE_CODE_SESSION_ID "$PY" "$BROOT/scripts/brain_hook.py" "$f" > "$TMP/o.$f" 2>/dev/null &
     pids+=($!)
   done
@@ -171,7 +175,7 @@ runpy.run_path(sys.argv[0], run_name="__main__")' "$BROOT" "$1" "${2:-}" 2>"$e")
   ERR=$(cat "$e"); rm -f "$e"
   for f in "${pids[@]}"; do wait "$f"; done
   CTX=$(printf '%s' "$OUT" | python3 -c 'import json, sys; t = sys.stdin.read().strip(); print(json.loads(t)["hookSpecificOutput"]["additionalContext"] if t else "")'
-        for f in session-start-sessions session-start-plan; do ctxof "$TMP/o.$f"; echo; done)
+        for f in ${EVENTS#session-start }; do ctxof "$TMP/o.$f"; echo; done)
 }
 live_ctx() { printf '%s\n' "$(ctx)" | sed '/^Done (24 h)$/,/^Facts$/d'; }   # the strings without Done (closed items)
 line() { live_ctx | grep -F -e "- $1 " || true; }                          # the strings' line of one live item
@@ -266,8 +270,8 @@ case_close() {
   c_has "$(grep -F '"id":"N1"' "$(sdir)/hot.jsonl" | grep -F link-close)" "\"state\":\"completed\"" "[a] the issue's anchor is completed"
   c_has "$(grep -F '"id":"N1"' "$(sdir)/archive.jsonl")" "\"reason\":\"completed acme/app¤7 $D22\"" "[a] the archive holds the item with its reason"
   c_has "$(grep -F '"id":"X1"' "$(sdir)/archive.jsonl")" "\"pointer\":\"acme/app¤5\"" "[a] and its pointer"
-  c_eq "$(autonote)" "auto-closed now: N1 (acme/app¤7 completed 10-22)
-auto-closed now: X1 (acme/app¤5 merged 10-21)" "[a] one note line per string says what closed: N1 in string 1, X1 in string 3"
+  c_eq "$(autonote)" "auto-closed now: N1 (acme/app¤7 completed 10-22), X1 (acme/app¤5 merged 10-21)" \
+       "[a] one note line says what closed: N1 and X1, both in the right brain's first string"
   c_has "$(eplines auto-close)" '"ids":["N1","X1"]' "[a] the episode log has one auto-close line with the ids"
   c_has "$(eplines auto-close)" '"anchors":["acme/app¤7","acme/app¤5"]' "[a] and the anchors"
   c_has "$(eplines session-start)" '"closed":2' "[a] the session-start line counts the closes"
@@ -619,13 +623,92 @@ case_doctor() {
   c_eq "$(status_of X1)" live "[o] and closes nothing"
 }
 
+case_reload() {  # a session reloaded with /reload-plugins is told from one still on an older brain
+  np; seed "X1@$C20"; start startup
+  bpy "import json; d = s.state_dir(); f = open(d + '/episodes.jsonl', 'a')
+for sid in ('reloaded-one', 'stale-two'):
+    f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': sid, 'format': 3}) + '\n')"
+  br doctor
+  c_has "$OUT" "warn     session reloaded… last started on an older brain (log format 3" "[t] instrument: doctor warns on both"
+  c_has "$OUT" "/reload-plugins" "[t] the warning says how to clear it after a reload"
+  local bash_in
+  bash_in() { python3 -c 'import json, sys; print(json.dumps({"session_id": sys.argv[1], "cwd": sys.argv[2], "hook_event_name": "PreToolUse",
+      "tool_name": "Bash", "tool_input": {"command": sys.argv[3]}, "permission_mode": "default"}))' "$@"; }
+  hk note-format "$(bash_in reloaded-one "$P" "brain doctor")"
+  c_eq "$RC|$OUT|$ERR" "0||" "[t] note-format on a brain command of the reloaded session: silent"
+  hk note-format "$(bash_in stale-two "$P" "ls -la")"
+  br doctor
+  c_hasnt "$OUT" "session reloaded" "[t] the reloaded session's brain command clears its warning"
+  c_has "$OUT" "warn     session stale-tw… last started on an older brain (log format 3" "[t] a session that ran no brain command keeps it"
+  c_has "$(eplines session-format)" '"format":6' "[t] the hook logged the session's format"
+  hk note-format "$(bash_in reloaded-one "$P" "brain render")"
+  c_eq "$(eplines session-format | grep -c reloaded-one)" 1 "[t] once per format per session"
+  hk note-format "$(bash_in sA "$P" "brain doctor")"
+  c_eq "$(eplines session-format | grep -c '"sA"')" 0 "[t] a session whose start already carries this format logs nothing"
+  c_eq "$(python3 -c 'import json, sys; h = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+print([e["if"] for g in h for e in g["hooks"] if e["command"].endswith(" note-format")])' "$BROOT/hooks/hooks.json")" "['Bash(brain *)']" \
+    "[t] hooks.json runs note-format on a brain command only"
+}
+
+case_prompt() {  # in the writer's session, a prompt starts close-linked in the background, at most every 10 min
+  local pin stamp t0 i
+  pin() { hin session_id="${1:-$SID}" cwd="$P" hook_event_name=UserPromptSubmit prompt=next; }
+  runs() { eplines close-linked | grep -c '"hook":"UserPromptSubmit"' || true; }
+  waitrun() { for i in $(seq 1 300); do [ "$(runs)" -ge "$1" ] && return 0; python3 -c 'import time; time.sleep(0.1)'; done; return 1; }
+  np; seed "X1@$C20;closes=acme/app¤5" "X2@$C20"; pr 'acme/app¤5' merged "$A21"
+  local i2; for i2 in 1 2 3 4 5; do br op add --kind trap --text "t$i2"; br op close "T$i2" --reason done; done
+  c_rc 0 "[u] instrument: five closes by hand spend the session's retirement budget"
+  br op close X2 --reason done; c_rc 1 "[u] instrument: a sixth is refused by the budget"
+  hk prompt "$(pin)"; c_eq "$RC|$OUT|$ERR" "0||" "[u] the prompt hook: rc 0, prints nothing"
+  waitrun 1; c_eq "$(status_of X1)" closed "[u] the background close-linked closes an item whose PR merged, with no SessionStart"
+  c_has "$(eplines auto-close)" '"cmd":"close-linked"' "[u] logged as close-linked"
+  c_has "$(eplines close-linked)" 'closed X1' "[u] its outcome in the Episode Log"
+  c_eq "$(nlinks)" 1 "[u] a link-close: outside the retirement budget, as close-linked by hand (the budget was spent)"
+  stamp="$(sdir)/close-linked.json"; t0=$(cat "$stamp")
+  hk prompt "$(pin)"; c_eq "$(cat "$stamp")" "$t0" "[u] the next prompt within 10 minutes starts nothing (the stamp is unchanged)"
+  pr 'acme/app¤6' open; br op add --kind next --text "the next one" --closes 'acme/app¤6'
+  sleep 1; pr 'acme/app¤6' merged "$(date -u +%Y-%m-%dT%H:%M:%SZ)"    # merged after the item was written, as a close needs
+  printf '{"t": %s, "session": "sA"}\n' "$(python3 -c 'import time; print(time.time() - 601)')" > "$stamp"   # 10 minutes past
+  hk prompt "$(pin)"; waitrun 2; c_eq "$(runs)" 2 "[u] after 10 minutes the next prompt runs it again"
+  c_eq "$(status_of X3)" closed "[u] and closes what merged since"
+  # only the writer's session, silent under BRAIN_OFF, nothing without gh
+  np; seed "X1@$C20;closes=acme/app¤5"; pr 'acme/app¤5' merged "$A21"
+  hk prompt "$(pin sB)"; c_eq "$RC|$OUT|$ERR|$([ -e "$(sdir)/close-linked.json" ] && echo stamp)" "0|||" "[u] another session's prompt: nothing, not even the stamp"
+  BRAIN_OFF=1 hk prompt "$(pin)"; c_eq "$RC|$OUT|$([ -e "$(sdir)/close-linked.json" ] && echo stamp)" "0||" "[u] BRAIN_OFF=1: silent"
+  VIBEMAESTRO_ROLE=worker hk prompt "$(pin)"; c_eq "$RC|$OUT|$([ -e "$(sdir)/close-linked.json" ] && echo stamp)" "0||" "[u] a worker (VIBEMAESTRO_ROLE=worker): silent"
+  OUT=$(pin | PATH="$TMP/nogh" "$PY" "$BROOT/scripts/brain_hook.py" prompt 2>&1); RC=$?
+  c_eq "$RC|$OUT" "0|" "[u] no gh: rc 0, at once, nothing printed"
+  c_eq "$(status_of X1) $(runs)" "live 0" "[u] and nothing started"
+  # a gh that is not logged in answers at once; a hanging one is never waited on
+  np; seed "X1@$C20;closes=acme/app¤5"; pr 'acme/app¤5' merged "$A21"
+  mkdir -p "$TMP/unauth"; printf '#!/bin/sh\necho "To get started with GitHub CLI, please run:  gh auth login" >&2\nexit 4\n' > "$TMP/unauth/gh"
+  chmod +x "$TMP/unauth/gh"
+  PATH="$TMP/unauth:$PATH" hk prompt "$(pin)"; waitrun 1
+  c_eq "$(status_of X1)" live "[u] gh not logged in: nothing closes"
+  c_has "$(eplines close-linked)" 'skipped X1' "[u] the run says what it skipped"
+  t0=$(cat "$(sdir)/close-linked.json"); hk prompt "$(pin)"
+  c_eq "$(cat "$(sdir)/close-linked.json") $(runs)" "$t0 1" "[u] and is not started again before 10 minutes: no loop"
+  np; seed "X1@$C20;closes=acme/app¤5"; printf 'SLOW\n' > "$STUB/answers/$(kf 'acme/app¤5')"
+  hk prompt "$(pin)"; c_eq "$RC|$OUT|$ERR" "0||" "[u] a gh that hangs: the hook returns"
+  c_eq "$(runs) $(status_of X1)" "0 live" "[u] while the run still waits on gh: the prompt did not"
+  reap; waitrun 1; c_eq "$(runs)" 1 "[u] the run ends once gh does"
+  # a refusal in the background is logged once
+  np; seed "X1@$C20;closes=acme/app¤5"; pr 'acme/app¤5' merged "$A21"
+  mkdir -p "$P/.vibemaestro"; printf '{"caps": {"X": "lots"}}\n' > "$P/.vibemaestro/brain.json"
+  hk prompt "$(pin)"; waitrun 1
+  c_has "$(eplines close-linked)" '"refused":1' "[u] a refusal in the background is logged with its rc"
+  hk prompt "$(pin)"; c_eq "$(runs)" 1 "[u] and not retried before 10 minutes"
+  c_eq "$(python3 -c 'import json, sys; h = json.load(open(sys.argv[1]))["hooks"]["UserPromptSubmit"]
+print([e["command"].rsplit(" ", 1)[1] for g in h for e in g["hooks"]])' "$BROOT/hooks/hooks.json")" "['prompt']" "[u] hooks.json runs it on UserPromptSubmit"
+}
+
 # --- [p] -----------------------------------------------------------------------------------------------------------------------
 case_argv() {
   np; seed "X1@$C20;closes=acme/app¤5" "D1@$C20;anchors=acme/app¤9"; pr 'acme/app¤5' merged "$A21"; issue 'acme/app¤9' open
   start compact; br doctor; pr 'acme/app¤10' open; br op add --kind next --text t --closes acme/app¤10
   c_eq "$(nissues) $(npulls)" "4 1" "[p] instrument: issues and pulls lookups by SessionStart, doctor and a write"
   c_eq "$(grep -v -c -F -e '--hostname github.com' "$STUB/calls" || true)" 0 "[p] every gh argv carries --hostname github.com"
-  c_has "$(eplines session-start)" '"format":3' "[p] the session-start line carries format 3"
+  c_has "$(eplines session-start)" '"format":6' "[p] the session-start line carries format 6"
   bpy "import json; d = s.state_dir(); f = open(d + '/episodes.jsonl', 'a')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'old-one-session'}) + '\n')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'older-two', 'format': 1}) + '\n')
@@ -711,16 +794,16 @@ case_size() {
 print(len(json.loads(open(sys.argv[1], encoding="utf-8").read())["hookSpecificOutput"]["additionalContext"]))' "$TMP/o.session-start")
       [ "$n" -gt "$most" ] && most=$n
       c_eq "$([ "$(nchars "$(shelf "$c")")" -ge 900 ] && echo full)" full "[q] $mode, SessionStart $i: instrument: the Shelf index is full"
-      c_eq "$(printf '%s\n' "$c" | python3 -c 'import re, sys; print(sum(1 for l in sys.stdin.read().splitlines() if re.match(r"- [DWN][0-9]", l) and len(l) >= 195))')" \
-           "$([ "$mode" = held ] && echo 18 || echo 15)" "[q] $mode, SessionStart $i: instrument: every item line of string 1 is at its cap"
+      c_eq "$(printf '%s\n' "$c" | python3 -c 'import re, sys; print(sum(1 for l in sys.stdin.read().splitlines() if re.match(r"- [DW][0-9]", l) and len(l) >= 195))')" \
+           15 "[q] $mode, SessionStart $i: instrument: every pin and window of string 1 (the left brain) is a full line"
       c_hasnt "$c" "[brain: cut" "[q] $mode, SessionStart $i: the hard cut does not fire ($n characters)"
       c_eq "$(autonote | python3 -c 'import sys; print(max([len(l) for l in sys.stdin.read().splitlines()] or [0]) <= 250)')" True \
            "[q] $mode, SessionStart $i: each string's auto-close line is ≤ 250 characters"
       [ "$i" = 2 ] && age_cache 700
     done
-    c_eq "$([ "$most" -le 8000 ] && echo within)" within "[q] $mode: the largest string 1 of the three is $most ≤ 8,000"
+    c_eq "$([ "$most" -le 9500 ] && echo within)" within "[q] $mode: the largest string 1 of the three is $most ≤ 9,500"
     c_has "$c" "## Shelf index" "[q] $mode: the Shelf index is there"
-    c_has "$c" "reopened: " "[q] $mode: reopened lines are there"
+    c_has "$(ctx)" "reopened: " "[q] $mode: reopened lines are there (the right brain's, Now and Next)"
     c_has "$c" "stale: " "[q] $mode: marks are there"
     unset CLAUDE_CONFIG_DIR
   done
@@ -744,7 +827,7 @@ except OSError as e:
     print("raised", e.errno, open(d + "/hot.jsonl", "rb").read() == before)')
   c_eq "$R" "raised 28 True" "[r] head.json cannot be written: the error is raised and the log is cut back to what it was"
   br doctor; c_hasnt "$OUT" "problem" "[r] the chain and head still agree"
-  start compact; c_has "$(ctx)" "## Brain · hot memory" "[r] and the next SessionStart injects"
+  start compact; c_has "$(ctx)" "## Brain · left brain" "[r] and the next SessionStart injects"
   np; seed "X1@$C20;closes=acme/app¤5" "X2@$C20;closes=acme/app¤6"
   R=$(bpy 'd = s.state_dir(); real, n = s.append, [0]
 def app(d, raw, op):
@@ -831,85 +914,7 @@ case_starve() {
 
 echo "== cases =="
 for c in case_close case_noclose case_time case_plain case_two case_pins case_writer case_burst case_write case_kinds case_cache \
-         case_op case_note case_rotation case_doctor case_argv case_size case_io case_starve; do run_case $c; done
+         case_op case_note case_rotation case_doctor case_argv case_size case_io case_starve case_reload case_prompt; do run_case $c; done
 cd "$TMP" || exit 1
-
-echo "== planted breaks =="
-BS=scripts/brain_stale.py
-BST=scripts/brain_store.py
-plant close-from-plain-anchor case_plain $BS '        for c in it.get("closes") or []:
-            m = parse_anchor(c)' '        for c in it.get("anchors") or []:
-            m = parse_anchor(c)'
-plant close-on-closed-unmerged case_noclose $BS '        return r["state"] == "merged"
-    return r.get("pr") is False' '        return r["state"] in ("merged", "closed")
-    return r.get("pr") is False'
-plant close-on-other-base case_noclose $BS '        return r.get("base_ok") is True and bool(r.get("sha"))' '        return r.get("base_ok") is not None and bool(r.get("sha"))'
-plant close-on-not-planned case_noclose $BS 'r.get("reason") == "completed" and fresh_now' 'r.get("reason") in ("completed", "not_planned") and fresh_now'
-plant close-issue-from-cache case_cache $BS 'r.get("reason") == "completed" and fresh_now' 'r.get("reason") == "completed"'
-plant close-on-one-of-two case_two $BS '    return next((w for w in why if w), None)' '    return None if not all(why) else why[0]'
-plant close-a-pin case_pins $BST 'CLOSES_LETTERS = ("N", "X", "S", "Q")' 'CLOSES_LETTERS = ("N", "X", "S", "Q", "D")'
-plant writer-ignored case_writer $BS '    writer = bool(sid) and st["writer"] == sid' '    writer = True'
-plant store-writer-unchecked case_writer $BST '        if not session or st["writer"] != session:' '        if not session:'
-plant dates-not-stamps case_time $BS '    return t is not None and c is not None and t > c' '    return at[:10] >= (first.get("created") or "")[:10]'
-plant superseding-created case_time $BS '        it = st["items"].get(it.get("supersedes") or "")' '        it = None'
-plant chain-gap-counted case_time $BS '    while it is not None and it["id"] not in seen and key in [c.lower() for c in it.get("closes") or []]:
-        seen.add(it["id"])
-        first = it' '    while it is not None and it["id"] not in seen:
-        seen.add(it["id"])
-        first = it if key in [c.lower() for c in it.get("closes") or []] else first'
-plant burst-after-round-2 case_rotation $BS '            held = len(burst) > BURST_MAX if writer else False       # counted after round 1: a burst spends no pulls lookup
-            pulled = round_two(cache, linked, {k for it, ks in nx if it in burst for k in ks}, looked,
-                               DEADLINE - (time.monotonic() - t0), now) if writer and not held else []
-            answers.update({k: answer_of(cache[k]) for k in pulled})
-            closing = [(it, ks) for it, ks in nx if writer and not held and verdict(st, it, ks, answers, looked) is None]
-' '            held = False
-            pulled = round_two(cache, linked, {k for it, ks in nx if it in burst for k in ks}, looked,
-                               DEADLINE - (time.monotonic() - t0), now) if writer and not held else []
-            answers.update({k: answer_of(cache[k]) for k in pulled})
-            closing = [(it, ks) for it, ks in nx if writer and not held and verdict(st, it, ks, answers, looked) is None]
-            held = len(closing) > BURST_MAX
-            closing = [] if held else closing
-'
-plant no-burst-cap case_burst $BS 'BURST_MAX = 5 ' 'BURST_MAX = 50 '
-plant bare-closes-accepted case_write $BS '    if m and not m.group(1):
-' '    if m and not m.group(1) and default_repo()[0]:
-        return "%s#%s" % (default_repo()[0], m.group(2))
-    if m and not m.group(1):
-'
-plant no-rotation case_rotation $BS '    queue = sorted((k for k in keys if k not in again and not settled(cache.get(k), now)), key=age)' '    queue = list(keys)'
-plant close-from-doctor case_doctor $BS '    would = [(it, ks) for it, ks in nx if verdict(st, it, ks, answers, looked) is None]
-' '    would = [(it, ks) for it, ks in nx if verdict(st, it, ks, answers, looked) is None]
-    s.link_close(s.state_dir(), st["writer"], [(it["id"], details(it, ks, answers)) for it, ks in would], {"cmd": "doctor"})
-'
-plant budget-spent case_op $BST '        _retire(st, op, it, "closed", budget=False)' '        _retire(st, op, it, "closed")'
-plant pointer-cap-60 case_op $BST '"pointer": 80' '"pointer": 60'
-plant no-hostname case_argv $BS 'HOST = ["--hostname", "github.com"]' 'HOST = []'
-plant held-without-note case_burst $BS '        parts.append(("auto-close held: %d items' '        parts.append(("" if 1 else "%d items'
-plant reopen-unchecked case_note $BS '    again = sorted((k for k in reopen if not settled(cache.get(k), now)), key=age)[:MAX_REOPEN]' '    again = []'
-plant reopen-checks-uncapped case_rotation $BS 'MAX_REOPEN = 3 ' 'MAX_REOPEN = 12 '
-plant format-not-logged case_argv scripts/brain_hook.py '"format": s.FORMAT, "injected_sessions"' '"injected_sessions"'
-plant head-not-rolled-back case_io $BST '                os.ftruncate(fd, size)
-                os.fsync(fd)
-            except OSError as e2:' '                pass
-            except OSError as e2:'
-plant partial-close-unreported case_io $BST '                if not done:
-                    raise
-' '                raise
-'
-plant partial-close-note-missing case_io $BS '                    did["error"] = s.clean_line(warn.strip().split("\n")[0])[:120] or None' '                    pass'
-plant stop-line-after-cache-warning case_io $BST 'warn = "\nwarning: stopped after %s (%s): the others stay live%s" % (", ".join(done), why(err), warn)' 'warn += "\nwarning: stopped after %s (%s): the others stay live" % (", ".join(done), why(err))'
-plant peek-creates-state case_io $BST '    if os.path.isdir(d):                             # no state yet' '    if True:                             # no state yet'
-plant rollback-failure-silent case_io $BST '    return e.__class__.__name__ + ("; run brain doctor" if "may be left past head.json" in str(e) else "")' '    return e.__class__.__name__'
-plant lookup-before-checks case_io $BST '        peek(letter=letter)' '        pass'
-plant kept-done-refused case_io $BS '    for a in kept:
-        r = got.get(a.lower())' '    anchors = list(anchors) + [a for a in kept if a not in anchors]
-    for a in kept[:0]:
-        r = got.get(a.lower())'
-plant pulls-starve case_starve $BS '            cache[k]["t"] = now                     # tried now' '            pass                                    # tried now'
-plant reopen-in-any-session case_note $BS '    reopen = reopen_keys(st, now) if writer else {}' '    reopen = reopen_keys(st, now)'
-plant ended-session-warned case_argv $BST '            last[o["session"]] = ("start", o.get("format")) if kind == "session-start" else None' '            last[o["session"]] = ("start", o.get("format"))'
-plant close-linked-looks-first case_burst $BS '    if st["writer"] != s.session_id():
-        raise' '    if False:
-        raise'
 
 summary

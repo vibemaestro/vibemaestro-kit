@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """SessionStart của plugin vibemaestro-sdlc. Đối số: `core` (lõi quy trình, and rule coordinated-work in a coordinated session), `context`
 (danh mục luật + lời nhắc luồng/kb/skill; the old names `loi` and `boi-canh` are still read) hoặc `index` (the repo's current-state index, when
-`current_state.inject` is on). Separate hooks because the 10,000-character cap counts EACH string a hook prints. Logic ở vsdlc.py; import hỏng ở đây → rc 0 kèm cảnh báo (hookout.py)."""
+`current_state.inject` is on), or `subagent` (the SubagentStart hook: a short core for a subagent, which gets no SessionStart
+context). Separate hooks because the 10,000-character cap counts EACH string a hook prints. Logic ở vsdlc.py; import hỏng ở đây → rc 0 kèm cảnh báo (hookout.py)."""
 import os
 import sys
 
@@ -13,7 +14,7 @@ except BaseException as _e:
     # import hỏng (rules.py/vsdlc.py nổ…): vẫn rc 0, công cụ không bị chặn — nhưng nói to một lần (hookout chỉ dùng thư viện chuẩn)
     try:
         import hookout
-        hookout.import_failed("SessionStart", _e)
+        hookout.import_failed("SubagentStart" if sys.argv[1:2] == ["subagent"] else "SessionStart", _e)
     except BaseException:
         pass
     sys.exit(0)
@@ -36,6 +37,8 @@ def with_baton_warning(emit):
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "context"
+    if mode == "subagent":
+        sys.exit(vsdlc.run(vsdlc.subagent_start))
     if mode in vsdlc.CORE_MODES:                    # one of the two hooks, so the line comes once
         vsdlc.emit = with_baton_warning(vsdlc.emit)
     sys.exit(vsdlc.run(vsdlc.session_start, mode))

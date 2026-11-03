@@ -2,6 +2,7 @@
 # =============================================================================
 # The stage signal — tell the sandbox which SDLC stage an intent is in
 # =============================================================================
+# Deprecated: the sandbox branch (session-notify on the PATH) leaves in the next release; the local state branch stays.
 # Use (the scripts call it; a skill runs it by "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh"):
 #   stage-signal.sh <spec|code|review|ship> [<stem>] [--branch <name>] [--subagents <0-99>]
 #   stage-signal.sh ask [<stem>] [--branch <name>]            the question on stdin

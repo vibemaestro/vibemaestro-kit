@@ -296,7 +296,7 @@ echo b > "$T2/src/b.ts"; git_ -C "$T2" add src/b.ts; git_ -C "$T2" commit -qm "f
 O=$(cd "$T2" && bash "$IB" integrate --intent 2026-10-08-flow --to origin 2>&1); rc=$?
 eq "$rc" 8 "hai commit so với điểm cắt: integrate rc 8 (một task = một commit)"
 
-echo "== A5: spec — khuôn bốn mục, máy kiểm HÌNH DẠNG, commit lên branch intent, xin duyệt trước khi code =="
+echo "== A5: spec — khuôn năm mục, máy kiểm HÌNH DẠNG, commit lên branch intent, xin duyệt trước khi code =="
 order_ok() { python3 -c '
 import sys
 t, *ks = sys.argv[1:]
@@ -309,14 +309,14 @@ O=$(cd "$WT" && python3 "$KBPY" new spec flow --date 2026-10-08 2>&1); rc=$?
 eq "$rc" 0 "new spec flow trong worktree intent: rc 0"
 [ -f "$SPECF" ] && ok "kb/specs/2026-10-08-flow.md cạnh intent cùng <ngày>-<slug>" || bad "thiếu $SPECF"
 has "$O" 'check spec 2026-10-08-flow' "lệnh in cách kiểm tiếp (kb.py check spec …)"
-eq "$(grep -E '^## ' "$SPECF")" "$(printf '## Bối cảnh\n## Mục tiêu\n## Ngoài phạm vi\n## Tiêu chí chấp nhận')" "khung có ĐÚNG bốn mục ## theo thứ tự Bối cảnh, Mục tiêu, Ngoài phạm vi, Tiêu chí chấp nhận"
+eq "$(grep -E '^## ' "$SPECF")" "$(printf '## Bối cảnh\n## Mục tiêu\n## Ngoài phạm vi\n## Inputs and failure cases\n## Tiêu chí chấp nhận')" "khung có ĐÚNG năm mục ## theo thứ tự Bối cảnh, Mục tiêu, Ngoài phạm vi, Inputs and failure cases, Tiêu chí chấp nhận"
 has "$(cat "$SPECF")" 'Intent: kb/intent/2026-10-08-flow.md' "khung trỏ về intent của branch"
 O=$(chk 2026-10-08-flow); rc=$?
 eq "$rc" 65 "ca âm: khung chưa điền → check rc 65"; has "$O" '<ĐIỀN' "…và nói lý do là còn <ĐIỀN"
 # khuôn nhất quán: README repo app (do init dựng) nêu đủ tên mục của khuôn spec, đúng thứ tự
 REAL=$(cat "$APP/kb/README.md")
-for sec in 'Bối cảnh' 'Mục tiêu' 'Ngoài phạm vi' 'Tiêu chí chấp nhận' 'Thiết kế' 'Bằng chứng chạy'; do has "$REAL" "$sec" "kb/README.md nêu '$sec' của khuôn spec"; done
-order_ok "$REAL" '## Bối cảnh`, `## Mục tiêu`, `## Ngoài phạm vi`,' '`## Tiêu chí chấp nhận`' '`## Thiết kế`' && ok "kb/README.md: bốn mục đúng thứ tự, Thiết kế SAU bốn mục" || bad "kb/README.md: thứ tự khuôn spec sai"
+for sec in 'Bối cảnh' 'Mục tiêu' 'Ngoài phạm vi' 'Inputs and failure cases' 'Tiêu chí chấp nhận' 'Thiết kế' 'Bằng chứng chạy'; do has "$REAL" "$sec" "kb/README.md nêu '$sec' của khuôn spec"; done
+order_ok "$REAL" '## Bối cảnh`, `## Mục tiêu`, `## Ngoài phạm vi`,' '`## Inputs and failure cases`' '`## Tiêu chí chấp nhận`' '`## Thiết kế`' && ok "kb/README.md: năm mục đúng thứ tự, Thiết kế SAU chúng" || bad "kb/README.md: thứ tự khuôn spec sai"
 cat > "$TMP/spec-ok.md" <<'EOS'
 ---
 description: "Thêm cờ --dry-run vào script X"
@@ -338,6 +338,12 @@ Script X ghi thẳng vào đích, người dùng không xem trước được.
 
 Không đổi định dạng log.
 
+## Inputs and failure cases
+
+| Đầu vào hay sự cố | Hành vi mong đợi | Test chứng minh |
+|---|---|---|
+| `--dry-run` trên đích chỉ đọc | rc `0`, không ghi gì | `bash test-x.sh readonly` |
+
 ## Tiêu chí chấp nhận
 
 1. `bash x.sh --dry-run` → rc `0`, không file nào đổi (`git status --short` rỗng)
@@ -346,11 +352,11 @@ Không đổi định dạng log.
 EOS
 cp "$TMP/spec-ok.md" "$SPECF"
 O=$(chk 2026-10-08-flow); rc=$?
-eq "$rc" 0 "ca dương: spec điền đủ bốn mục → check rc 0 ($O)"
+eq "$rc" 0 "ca dương: spec điền đủ năm mục → check rc 0 ($O)"
 has "$O" 'no mark shows a person approved it' "…và nói rõ máy KHÔNG biết người đã duyệt (không phải cổng duyệt)"
 O=$(chk kb/specs/2026-10-08-flow.md); rc=$?; eq "$rc" 0 "ca dương: truyền đường dẫn thay vì <ngày>-<slug> → rc 0"
 { cat "$TMP/spec-ok.md"; printf '\n## Thiết kế\n\nHướng chọn.\n\n### Phương án bị loại\n\n```\n## Bối cảnh giả trong khối rào\n```\n'; } > "$SPECF"
-O=$(chk 2026-10-08-flow); rc=$?; eq "$rc" 0 "ca dương: spec lớn có ## Thiết kế SAU bốn mục (và ### con, và ## giả trong khối rào) → rc 0 ($O)"
+O=$(chk 2026-10-08-flow); rc=$?; eq "$rc" 0 "ca dương: spec lớn có ## Thiết kế SAU các mục (và ### con, và ## giả trong khối rào) → rc 0 ($O)"
 neg() {  # <nhãn> <chuỗi báo mong đợi> <lệnh sed trên spec-ok.md>
   sed "$3" "$TMP/spec-ok.md" > "$SPECF"
   O=$(chk 2026-10-08-flow); rc=$?
@@ -407,26 +413,39 @@ has "$SP" 'git push origin intent/' "spec: đẩy lên branch intent trước kh
 has "$SP" '`kb/README.md`' "spec: khuôn nằm ở kb/README.md của CHÍNH repo (không phải repo khác)"
 order_ok "$SP" 'new spec' 'check spec' 'git push origin intent/' 'session-ask "Spec' && ok "spec: thứ tự tạo → kiểm → đẩy → xin duyệt" || bad "spec: thứ tự các bước sai"
 has "$(cat "$PLG/skills/intake/SKILL.md")" 'vibemaestro-sdlc:spec' "intake: bước tiếp là skill spec (trước khi sửa code)"
-# F3: spec and brainstorm decide "sandbox" by the sandbox-env contract (INTENT_SLUG and SEAT both set, not empty), never by
+# F3: spec and brainstorm decide "sandbox" by the worker-role and sandbox-env contract (VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and
+# SEAT both set, not empty), never by
 # a `session-ask` on PATH. The check line is taken FROM each skill and run under each env, with a fake session-ask on PATH.
 ASKD="$TMP/askdir"; mkdir -p "$ASKD"; printf '#!/bin/sh\nexit 0\n' > "$ASKD/session-ask"; chmod +x "$ASKD/session-ask"
 [ -n "$(PATH="$ASKD:$PATH" command -v session-ask)" ] && ok "F3 dụng cụ: session-ask giả có trong PATH" || bad "F3 dụng cụ: session-ask giả không thấy"
 BS=$(cat "$PLG/skills/brainstorm/SKILL.md")
-sbx() { env -u INTENT_SLUG -u SEAT "$@" PATH="$ASKD:$PATH" bash -c "$CHK" && echo sandbox || echo solo; }
+sbx() { env -u INTENT_SLUG -u SEAT -u VIBEMAESTRO_ROLE "$@" PATH="$ASKD:$PATH" bash -c "$CHK" && echo sandbox || echo solo; }
 for nm in spec brainstorm; do
   if [ "$nm" = spec ]; then txt=$SP; call='session-ask "Spec'; else txt=$BS; call='session-ask "<question>"'; fi
-  CHK=$(printf '%s\n' "$txt" | grep -F '[ -n "${INTENT_SLUG:-}"' | head -1 | sed -n 's/.*`\(\[ -n[^`]*\)`.*/\1/p')
-  has "$CHK" '${SEAT:-}' "F3 $nm: the check line was taken from the skill ($CHK)"
+  CHK=$(printf '%s\n' "$txt" | grep -F '[ "${VIBEMAESTRO_ROLE:-}" = worker ]' | head -1 | sed -n 's/.*`\(\[ "${VIBEMAESTRO_ROLE[^`]*\)`.*/\1/p')
+  has "$CHK" '"${SEAT:-}" | tr -d' "F3 $nm: the check line was taken from the skill ($CHK)"
+  has "$CHK" '${VIBEMAESTRO_ROLE:-}' "F3 $nm: the check line reads the worker switch"
   hasnt "$txt" 'command -v session-ask' "F3 $nm: no sandbox detection by session-ask in PATH"
-  order_ok "$txt" '[ -n "${INTENT_SLUG:-}"' "$call" && ok "F3 $nm: the contract check comes before the session-ask call" || bad "F3 $nm: the contract check does not precede the session-ask call"
-  order_ok "$txt" '[ -n "${INTENT_SLUG:-}"' 'command is installed' "$call" && ok "F3 $nm: the call needs the contract and the installed command" || bad "F3 $nm: the call is not tied to the installed command"
+  order_ok "$txt" '[ "${VIBEMAESTRO_ROLE:-}" = worker ]' "$call" && ok "F3 $nm: the contract check comes before the session-ask call" || bad "F3 $nm: the contract check does not precede the session-ask call"
+  order_ok "$txt" '[ "${VIBEMAESTRO_ROLE:-}" = worker ]' 'command is installed' "$call" && ok "F3 $nm: the call needs the contract and the installed command" || bad "F3 $nm: the call is not tied to the installed command"
   has "$txt" 'without the' "F3 $nm: a sandbox without the session-ask command asks in the session"
   eq "$(sbx)" solo "F3 $nm: neither variable, session-ask on PATH → solo (ask the person in the session)"
   eq "$(sbx INTENT_SLUG=x)" solo "F3 $nm: only INTENT_SLUG → solo"
   eq "$(sbx SEAT=y)" solo "F3 $nm: only SEAT → solo"
   eq "$(sbx INTENT_SLUG= SEAT=y)" solo "F3 $nm: INTENT_SLUG empty → solo"
   eq "$(sbx INTENT_SLUG=x SEAT=)" solo "F3 $nm: SEAT empty → solo"
+  eq "$(sbx INTENT_SLUG=x "SEAT=  ")" solo "F3 $nm: SEAT only spaces → solo (as the hooks decide)"
+  eq "$(sbx "INTENT_SLUG=$(printf '\t')" SEAT=y)" solo "F3 $nm: INTENT_SLUG only a tab → solo"
+  for sh in "bash -u" sh; do
+    eq "$(env -u INTENT_SLUG -u SEAT -u VIBEMAESTRO_ROLE SEAT=y $sh -c "$CHK" 2>&1 && echo sandbox || echo solo)" solo "F3 $nm: $sh, only SEAT → solo (no unbound variable)"
+    eq "$(env -u INTENT_SLUG -u SEAT -u VIBEMAESTRO_ROLE INTENT_SLUG=x SEAT=y $sh -c "$CHK" 2>&1 && echo sandbox || echo solo)" sandbox "F3 $nm: $sh, both set → sandbox"
+    eq "$(env -u INTENT_SLUG -u SEAT -u VIBEMAESTRO_ROLE VIBEMAESTRO_ROLE=worker $sh -c "$CHK" 2>&1 && echo sandbox || echo solo)" sandbox "F3 $nm: $sh, the switch alone → sandbox"
+  done
   eq "$(sbx INTENT_SLUG=x SEAT=y)" sandbox "F3 $nm: control — both set → sandbox (session-ask)"
+  eq "$(sbx VIBEMAESTRO_ROLE=worker)" sandbox "F3 $nm: VIBEMAESTRO_ROLE=worker alone → sandbox (session-ask)"
+  eq "$(sbx VIBEMAESTRO_ROLE=solo INTENT_SLUG=x SEAT=y)" sandbox "F3 $nm: another value with the pair → still sandbox"
+  eq "$(sbx VIBEMAESTRO_ROLE=Worker)" solo "F3 $nm: VIBEMAESTRO_ROLE=Worker → solo"
+  eq "$(sbx VIBEMAESTRO_ROLE=)" solo "F3 $nm: VIBEMAESTRO_ROLE empty → solo"
 done
 
 echo "== A5: ship — open-pr.sh từ cwd = repo app, thân PR có Closes #issue =="

@@ -2,6 +2,24 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.4.0
+
+Released together: vibemaestro-sdlc 0.4.0, vibemaestro-brain 0.3.0
+
+- minor: baton honours a machine mode policy that only root can write, `/etc/vibemaestro/baton-mode` (`auto` or `manual`), below the owner's own choice: a sandbox image can start its sessions in auto. `mode` and `permissions --check` name where the mode came from.
+- minor: A released plugin now requires the version of a sibling it was released with, instead of any version from 0.1.0: `release.py cut` writes `Released together: <plugin> <version>, …` as the first line of each new CHANGELOG section when two or more plugins are released, and the public export writes `>=` that sibling version into the dependent plugin's manifest (a section with no such line keeps `>=0.1.0`, so a version that does not move keeps its manifest). `release.py plan` and `cut` print that line and each raised plugin's new floor; `release.py notes` prints it first, and when a plugin's floor on a sibling moved, its Updating section says to update that sibling too, before or with it.
+- minor: A worker session is now marked by `VIBEMAESTRO_ROLE=worker`; `INTENT_SLUG` with `SEAT` still marks one this release, with a deprecation line at session start.
+- minor: Skills, rules and docs speak to one person: a session that stops for the owner hands the call to whoever briefed it; machine setup is the skill and kit `bootstrap`.
+- patch: Outside a git work tree, SessionStart no longer injects the app-repo flow reminder or the advice to scaffold `kb/` with `init-kb`; the working core, the rule catalogue and the skills list stay, and a git repository without `kb/` still gets both reminders.
+- minor: Specs list the inputs and failures a change must survive, `before-ready` re-reviews every fix round and sweeps each fixed defect's class, a new rule `test-quality` arrives when you edit a test, reviewers get a brief template, subagents get a short core at start, and rule reminders come back after a compaction and inside each subagent.
+
+### Upgrade notes
+
+- Update vibemaestro-sdlc together with vibemaestro-brain: a public brain now requires the sdlc version it was released with, and does not load over an older one.
+- Deprecated, leaving in the next release: the rule coordinated-work, the sandbox branch of stage-signal.sh, the worker signal INTENT_SLUG + SEAT (set VIBEMAESTRO_ROLE=worker instead) and the baton kinds kubectl-exec and remote-exec (keep your copy as your own baton).
+- The skill and kit coordinator-bootstrap are now bootstrap; the old names still run in this release, say they are old, and leave in the next.
+- A new spec needs a `## Inputs and failure cases` table (or one line `none, because <reason>`) to pass `kb.py check spec`; a spec that already existed only gets a WARNING line.
+
 ## 0.3.0
 
 - patch: `baton check` now flags a write onto a Claude Code settings file as stop category `security-boundary`. This covers `settings*.json` under `.claude`, under `$CLAUDE_CONFIG_DIR`, in the managed directory, or under a variable named for `claude`. The shapes are the settings guard's Bash shapes, the path as an argument of `write` or of an interpreter with a heredoc program, and the path held in a variable. A baton declared `Stops: none` that widens the settings no longer passes check. `kind:settings-merge`, `kit:coordinator-bootstrap` and `kit:permissions-upgrade` still check clean, and `skills/batonrun/limits.md` lists what is flagged and what is not seen.

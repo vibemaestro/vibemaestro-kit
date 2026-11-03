@@ -9,13 +9,17 @@
 #   [C] plan prints what a cut does and writes nothing; cut raises each named plugin one step (a plugin never released to 0.1.0)
 #       by writing its CHANGELOG entry, removes the change files, writes no manifest and no kb page, and sets `Frozen at` where the
 #       surface moved since origin/release; its result passes `release.py check` (a release, and a hotfix with --hotfix); each
-#       refusal alone
+#       refusal alone; when the marketplace has two or more plugins released after the cut, each new section (release or hotfix)
+#       starts with `Released together: <name> <version>, …` naming every one of them, raised or not (none with one); plan and
+#       cut print it and each raised plugin's floor on a sibling it depends on; notes print the section, and a paragraph to update
+#       the sibling when that floor moved since the previous release (a section with no line, or a first release: no such
+#       paragraph); check is red on a PR, a fold too, that changes the `Released together:` line of a released section on the
+#       merge-base (one above any private history), wherever a heading put in moves it, or that hides such a section (a lone CR)
 #   [F] cut --fold --public REPO joins the pending change files to each plugin's top released section when the public
 #       repository (a local bare repository here) has no tag for it: lines after the section's own, notes under its Upgrade
 #       notes, nothing twice, no version moved; check --public passes it as a fold (a CRLF base too), and is red on each
 #       broken part; a line of the unpublished section may be reworded (same level, same count), a published or older section
-#       stays frozen; each refusal
-#   [X] planted breaks: each check goes red on a copy with one break
+#       stays frozen; each refusal; the release's `Released together:` line is kept and not written again
 # Real git on throw-away repositories, no network.
 # =============================================================================
 set -uo pipefail
@@ -70,6 +74,8 @@ new_rel_repo() {
   gw push -q origin main; gw fetch -q origin; gw checkout -q -b rel
 }
 rp() { OUT=$(cd "$W" && env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$RPY" "$@" --repo "$W" 2>&1); RC=$?; }
+# rpc — rp for a run that must be red (through capped)
+rpc() { OUT=$(cd "$W" && capped env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$RPY" "$@" --repo "$W" 2>&1); RC=$?; }
 tree_id() { ( cd "$W" && { git_ status --porcelain; find . -path ./.git -prune -o -type f -print | sort | xargs cat; } | cksum ); }
 
 fam_cut() { RPY=$1; local before
@@ -85,14 +91,18 @@ fam_cut() { RPY=$1; local before
   eq "$(ls "$W/.changes")" "README.md" "[C2] …the change files consumed, README.md kept"
   has "$(cat "$W/plugins/alpha/CHANGELOG.md")" "## 2.10.0
 
+Released together: alpha 2.10.0, beta 1.0.1
+
 - minor: alpha does more
 
-## 2.9.0" "[C2] …alpha's CHANGELOG gains its entry above the last one"
+## 2.9.0" "[C2] …alpha's CHANGELOG gains its entry above the last one, after the plugins released together"
   has "$(cat "$W/plugins/beta/CHANGELOG.md")" "## 1.0.1
+
+Released together: alpha 2.10.0, beta 1.0.1
 
 - patch: beta is fixed
 
-## 1.0.0" "[C2] …beta's CHANGELOG gains its entry"
+## 1.0.0" "[C2] …beta's CHANGELOG gains its entry, after the same line"
   eq "$(gw status --porcelain -- kb)" "" "[C2] …the state line untouched (no version in kb pages)"
   has "$(cat "$W/plugins/alpha/CONTRACT.md")" "Frozen at: 2.9.0" "[C2] …Frozen at kept: the surface is release's"
   cm "release"; rp check
@@ -175,6 +185,8 @@ fam_cut() { RPY=$1; local before
   eq "$RC" 0 "[C20] cut: rc 0"
   has "$(cat "$W/plugins/alpha/CHANGELOG.md")" "## 2.10.0
 
+Released together: alpha 2.10.0, beta 1.0.1
+
 - minor: alpha does more
 - patch: both are fixed
 
@@ -185,6 +197,8 @@ fam_cut() { RPY=$1; local before
 
 ## 2.9.0" "[C20] …alpha's section ends with its upgrade notes, in the change files' order"
   has "$(cat "$W/plugins/beta/CHANGELOG.md")" "## 1.0.1
+
+Released together: alpha 2.10.0, beta 1.0.1
 
 - patch: both are fixed
 - patch: beta is fixed
@@ -209,7 +223,8 @@ PY2
   cm "release"
   RC=0; OUT=$(cd "$W" && python3 "$RPY" notes alpha 2.10.0 --repo "$W" 2>&1) || RC=$?
   eq "$RC" 0 "[C23] notes alpha 2.10.0: rc 0"
-  eq "$(printf '%s\n' "$OUT" | sed -n 1p)" "- minor: alpha does more" "[C23] …the body starts with the section's lines (the heading is the release's title)"
+  eq "$(printf '%s\n' "$OUT" | sed -n 1p)" "Released together: alpha 2.10.0, beta 1.0.1" "[C23] …the body starts with the section's lines (the heading is the release's title): the plugins released together"
+  eq "$(printf '%s\n' "$OUT" | sed -n 3p)" "- minor: alpha does more" "[C23] …then its entries"
   has "$OUT" "### Updating" "[C23] …then an Updating paragraph"
   has "$OUT" '`/plugin`' "[C23] …that names /plugin"
   has "$OUT" '`/reload-plugins`' "[C23] …and /reload-plugins"
@@ -226,6 +241,8 @@ PY2
   cfwu fix.md alpha patch "alpha no longer breaks" "Remove the stale lock file once."; cm "fix"; rp cut --hotfix
   has "$(cat "$W/plugins/alpha/CHANGELOG.md")" "## 2.9.1
 
+Released together: alpha 2.9.1, beta 1.0.0
+
 - patch: alpha no longer breaks
 
 ### Upgrade notes
@@ -233,6 +250,126 @@ PY2
 - Remove the stale lock file once." "[C25] cut --hotfix writes the upgrade note"
   cm "cut"; rp check --base origin/release
   eq "$RC" 0 "[C25] …and it passes check as a hotfix"
+  # the plugins released together: every marketplace entry released once the cut is written, raised or not
+  new_rel_repo; gw rm -q .changes/a.md; cm "only beta pending"; rp cut
+  has "$(cat "$W/plugins/beta/CHANGELOG.md")" "## 1.0.1
+
+Released together: alpha 2.9.0, beta 1.0.1
+
+- patch: beta is fixed" "[C26] a cut that raises only beta names alpha at its released version"
+  eq "$(gw status --porcelain -- plugins/alpha)" "" "[C26] …and alpha's CHANGELOG is not written"
+  new_rel_repo; python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["plugins"]=d["plugins"][:1]; json.dump(d,open(p,"w"))' "$W/.claude-plugin/marketplace.json"
+  gw rm -q .changes/b.md; cm "a one-plugin marketplace"; rp cut
+  eq "$RC:$(grep -c '^Released together: ' "$W/plugins/alpha/CHANGELOG.md")" "0:0" "[C27] a marketplace with one released plugin: no \`Released together:\` line"
+  hasnt "$OUT" "released together" "[C27] …and the cut prints none"
+  # the floor: alpha depends on beta; the cut records beta's version, plan prints it, notes tell to update beta when it moved
+  new_rel_repo; gw checkout -q main; printf '{\n  "name": "alpha",\n  "dependencies": ["beta"]\n}\n' > "$W/plugins/alpha/.claude-plugin/plugin.json"
+  cm "alpha needs beta"; gw push -q origin main; gw fetch -q origin; gw checkout -q rel; gw merge -q --ff-only main
+  RC=0; OUT=$(cd "$W" && python3 "$RPY" notes alpha 2.9.0 --repo "$W" 2>&1) || RC=$?
+  eq "$RC:$OUT" "0:- minor: older
+
+### Updating
+
+In Claude Code, run \`/plugin\`, open Marketplaces and update \`m\` there (or turn on its auto-update), then run \`/reload-plugins\`. From a shell: \`claude plugin marketplace update m\`, then \`claude plugin update alpha@m\`, then open a new session." \
+    "[C28] notes of a section with no \`Released together:\` line: the body as before, no floor paragraph"
+  rp plan
+  has "$OUT" "released together: alpha 2.10.0, beta 1.0.1" "[C29] plan prints the plugins released together"
+  has "$OUT" "plugin alpha: needs beta >=1.0.1 (was >=0.1.0)" "[C29] …and alpha's floor on beta, against its released section's"
+  hasnt "$OUT" "plugin beta: needs" "[C29] …and none for beta (it depends on nothing)"
+  rp cut; cm "release"; rp check
+  eq "$RC" 0 "[C29] …the cut passes check"
+  RC=0; OUT=$(cd "$W" && python3 "$RPY" notes alpha 2.10.0 --repo "$W" 2>&1) || RC=$?
+  has "$OUT" "### Updating
+
+This version needs beta 1.0.1 or later. Update beta too, before this plugin or with it: \`claude plugin update beta@m\`. Updated alone, this plugin fails to load, and \`/plugin\` names the version it requires.
+
+In Claude Code, run \`/plugin\`" "[C30] notes of alpha 2.10.0: its floor on beta moved, so Updating starts by telling to update beta too"
+  RC=0; OUT=$(cd "$W" && python3 "$RPY" notes beta 1.0.1 --repo "$W" 2>&1) || RC=$?
+  hasnt "$OUT" "This version needs" "[C30] …beta's notes say nothing of a floor (it depends on nothing)"
+  sed -i.bak 's/^Released together: alpha/Released together:  alpha/' "$W/plugins/alpha/CHANGELOG.md"; rm -f "$W/plugins/alpha/CHANGELOG.md.bak"  # the input, not a break
+  RC=0; OUT=$(cd "$W" && python3 "$RPY" notes alpha 2.10.0 --repo "$W" 2>&1) || RC=$?
+  hasnt "$OUT" "This version needs" "[C30] a line the export refuses (two spaces after the colon): notes read no floor from it either"
+  gw checkout -q -- plugins/alpha/CHANGELOG.md
+  gw checkout -q main; gw merge -q --ff-only rel; gw push -q origin main; gw push -q origin main:release
+  echo a4 >> "$W/plugins/alpha/a.txt"; cfw a4.md alpha patch "alpha again"; cm "alpha again"; gw push -q origin main; gw fetch -q origin
+  gw checkout -q -b rel2; rp plan
+  has "$OUT" "plugin alpha: needs beta >=1.0.1 (was >=1.0.1)" "[C31] a release of alpha alone: the floor stays beta's version"
+  rp cut; cm "release 2"
+  RC=0; OUT=$(cd "$W" && python3 "$RPY" notes alpha 2.10.1 --repo "$W" 2>&1) || RC=$?
+  has "$OUT" "Released together: alpha 2.10.1, beta 1.0.1" "[C31] …the notes name the pair"
+  hasnt "$OUT" "This version needs" "[C31] …and, the floor not moved, say nothing of it"
+  # a section on the merge-base keeps its `Released together:` line: the export reads the floor from it
+  gw checkout -q main; gw merge -q --ff-only rel2; gw push -q origin main; gw push -q origin main:release; gw fetch -q origin
+  gw checkout -q -b edit; echo a5 >> "$W/plugins/alpha/a.txt"; cfw e.md alpha patch "alpha typo"
+  sed -i.bak 's/^Released together: alpha 2\.10\.0, beta 1\.0\.1$/Released together: alpha 2.10.0, beta 1.0.2/' "$W/plugins/alpha/CHANGELOG.md"  # the input, not a break
+  rm -f "$W/plugins/alpha/CHANGELOG.md.bak"; cm "an ordinary PR that edits a released section's line"; rpc check
+  eq "$RC" 1 "[C32] check: an ordinary PR that edits the \`Released together:\` line of a released section is red"
+  has "$OUT" "plugins/alpha/CHANGELOG.md \`## 2.10.0\`: its \`Released together:\` line changed" "[C32] …naming the section"
+  gw checkout -q -b edit2 main; echo a5 >> "$W/plugins/alpha/a.txt"; cfw e.md alpha patch "alpha typo"
+  sed -i.bak 's/^- patch: alpha again$/- patch: alpha, again/' "$W/plugins/alpha/CHANGELOG.md"; rm -f "$W/plugins/alpha/CHANGELOG.md.bak"  # the input, not a break
+  cm "an ordinary PR that rewords an entry"; rp check
+  eq "$RC" 0 "[C32] control: the same PR rewording an entry line instead is green (only the line is kept)"
+  gw checkout -q -b edit3 main; echo a5 >> "$W/plugins/alpha/a.txt"; cfw e.md alpha patch "alpha typo"
+  sed -i.bak 's/^Released together: alpha 2\.10\.0,/x\rReleased together: alpha 2.10.0,/' "$W/plugins/alpha/CHANGELOG.md"; rm -f "$W/plugins/alpha/CHANGELOG.md.bak"  # the input, not a break
+  cm "the line hidden behind a lone CR"; rpc check
+  eq "$RC" 1 "[C32] check: a lone CR in front of the line (git and the export read no line there any more) is red"
+  gw checkout -q -b edit4 main; echo a5 >> "$W/plugins/alpha/a.txt"; cfw e.md alpha patch "alpha typo"
+  python3 - "$W/plugins/alpha/CHANGELOG.md" <<'PY2'  # the input, not a break
+import sys
+p = sys.argv[1]; t = open(p, newline="").read()
+t = t.replace("\n## 2.10.0\n", "\r## 2.10.0\n", 1).replace("Released together: alpha 2.10.0, beta 1.0.1", "Released together: alpha 2.10.0, beta 1.0.0", 1)
+open(p, "w", newline="").write(t)
+PY2
+  cm "a lone CR hides a released heading, and its line is edited"; rpc check
+  eq "$RC" 1 "[C32] check: a lone CR before a released heading (the section is gone as git reads it) is red"
+  has "$OUT" "plugins/alpha/CHANGELOG.md \`## 2.10.0\`: the section that holds its \`Released together:\` line is gone" "[C32] …naming the section"
+  gw checkout -q -b edit6 main; echo a5 >> "$W/plugins/alpha/a.txt"; cfw e.md alpha patch "alpha typo"
+  python3 - "$W/plugins/alpha/CHANGELOG.md" <<'PY2'  # the input, not a break
+import sys
+p = sys.argv[1]; t = open(p, newline="").read()
+t = t.replace("\n## 2.10.1\n", "\r## 2.10.1\n", 1).replace("Released together: alpha 2.10.1, beta 1.0.1", "Released together: alpha 2.10.1, beta 1.0.0", 1)
+open(p, "w", newline="").write(t)
+PY2
+  cm "a lone CR hides the top heading, and its line is edited"; rpc check
+  eq "$RC" 1 "[C32] check: a lone CR before the top released heading, its line edited, is red"
+  has "$OUT" "plugins/alpha/CHANGELOG.md \`## 2.10.1\`: the section that holds its \`Released together:\` line is gone" "[C32] …naming the section"
+  gw checkout -q -b edit5 main; echo a5 >> "$W/plugins/alpha/a.txt"; cfw e.md alpha patch "alpha typo"
+  python3 - "$W/plugins/alpha/CHANGELOG.md" <<'PY2'  # the input, not a break
+import sys
+p = sys.argv[1]; t = open(p).read()
+t = t.replace("\n## 2.10.0\n", "\n## Older releases\n\n## 2.10.0\n", 1).replace("Released together: alpha 2.10.0, beta 1.0.1", "Released together: alpha 2.10.0, beta 1.0.0", 1)
+open(p, "w").write(t)
+PY2
+  cm "a heading put above an older section, and its line edited"; rpc check
+  eq "$RC" 1 "[C32] check: a non-version heading put above a released section hides nothing: its edited line is red"
+  has "$OUT" "plugins/alpha/CHANGELOG.md \`## 2.10.0\`: its \`Released together:\` line changed" "[C32] …naming the section"
+  gw checkout -q main; echo b5 >> "$W/plugins/beta/b.txt"; cfw b5.md beta patch "beta again"; cm "beta again"; gw push -q origin main; gw fetch -q origin
+  gw checkout -q -b rel3; rp cut
+  eq "$RC:$(grep -c '^Released together: alpha 2.10.1, beta 1.0.2$' "$W/plugins/beta/CHANGELOG.md")" "0:1" "[C33] a release of beta alone: its section names alpha 2.10.1"
+  cm "release 3"; rp check
+  eq "$RC" 0 "[C33] …and passes check"
+  sed -i.bak 's/^Released together: alpha 2\.10\.1, beta 1\.0\.1$/Released together: alpha 2.10.1, beta 1.0.2/' "$W/plugins/alpha/CHANGELOG.md"  # the input, not a break
+  rm -f "$W/plugins/alpha/CHANGELOG.md.bak"; cm "the release also moves alpha's floor"; rpc check
+  eq "$RC" 1 "[C33] check: a release that also edits alpha's released line (alpha's version not moving) is red"
+  has "$OUT" "plugins/alpha/CHANGELOG.md \`## 2.10.1\`: its \`Released together:\` line changed" "[C33] …naming alpha's section"
+  # a first release: the line, and no paragraph to update a sibling (nothing was installed before)
+  new_rel_repo; gw checkout -q main; mkdir -p "$W/plugins/gamma/.claude-plugin"
+  printf '{\n  "name": "gamma",\n  "dependencies": ["beta"]\n}\n' > "$W/plugins/gamma/.claude-plugin/plugin.json"; echo g > "$W/plugins/gamma/g.txt"
+  cfw g.md gamma patch "gamma arrives"
+  python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["plugins"].append({"name": "gamma", "source": "./plugins/gamma"}); json.dump(d,open(p,"w"))' "$W/.claude-plugin/marketplace.json"
+  cm "gamma"; gw push -q origin main; gw fetch -q origin; gw checkout -q rel; gw merge -q --ff-only main; rp plan
+  has "$OUT" "plugin gamma: needs beta >=1.0.1" "[C34] plan: a first release needs beta's version"
+  hasnt "$OUT" "plugin gamma: needs beta >=1.0.1 (was" "[C34] …with no \`was\` (nothing released before)"
+  rp cut; cm "release"
+  RC=0; OUT=$(cd "$W" && python3 "$RPY" notes gamma 0.1.0 --repo "$W" 2>&1) || RC=$?
+  eq "$RC:$(printf '%s\n' "$OUT" | sed -n 1p)" "0:Released together: alpha 2.10.0, beta 1.0.1, gamma 0.1.0" "[C34] notes gamma 0.1.0: the plugins released together first"
+  hasnt "$OUT" "This version needs" "[C34] …and no paragraph to update beta: a first release is not an update"
+  # a first release whose CHANGELOG keeps an older `## 0.1.0` under its private history: that heading is not this release
+  new_rel_repo; gw checkout -q main; setm delta; echo d > "$W/plugins/delta/d.txt"; cfw d.md delta patch "delta arrives"
+  printf '# Changelog of delta\n\n## Private history\n\nNumbers below were private.\n\n## 0.1.0\n\n- patch: private start\n' > "$W/plugins/delta/CHANGELOG.md"
+  python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["plugins"].append({"name": "delta", "source": "./plugins/delta"}); json.dump(d,open(p,"w"))' "$W/.claude-plugin/marketplace.json"
+  cm "delta"; gw push -q origin main; gw fetch -q origin; gw checkout -q rel; gw merge -q --ff-only main; rp cut; cm "release"; rp check
+  eq "$RC" 0 "[C35] a first release over a private \`## 0.1.0\` of the same number passes check (the cut's line is new, not an edit)"
   eq "$(cd "$W" && python3 "$RPY" bogus >/dev/null 2>&1; echo $?)" 64 "[C16] an unknown subcommand: rc 64"
   eq "$(cd "$W" && python3 "$RPY" check --hotfix >/dev/null 2>&1; echo $?)" 64 "[C16] check --hotfix: rc 64"
 }
@@ -269,6 +406,8 @@ fam_fold() { RPY=$1; local before
   eq "$(ls "$W/.changes")" "README.md" "[F2] …the change files consumed"
   has "$(cat "$W/plugins/alpha/CHANGELOG.md")" "## 2.10.0
 
+Released together: alpha 2.10.0, beta 1.0.1
+
 - minor: alpha does more
 - patch: alpha fixed again
 
@@ -280,6 +419,8 @@ fam_fold() { RPY=$1; local before
 ## 2.9.0" "[F2] …alpha's lines after its own, its note under the Upgrade notes it had"
   has "$(cat "$W/plugins/beta/CHANGELOG.md")" "## 1.0.1
 
+Released together: alpha 2.10.0, beta 1.0.1
+
 - patch: beta is fixed
 - patch: beta faster
 
@@ -289,6 +430,7 @@ fam_fold() { RPY=$1; local before
 
 ## 1.0.0" "[F2] …beta's note under a heading made for it"
   eq "$(gw status --porcelain -- kb 'plugins/*/.claude-plugin/plugin.json')" "" "[F2] …no manifest and no kb page written"
+  eq "$(grep -c '^Released together: ' "$W/plugins/alpha/CHANGELOG.md")" 1 "[F2] …the fold keeps the release's \`Released together:\` line and writes none"
   cm "fold"; rp check --public "$P"
   eq "$RC" 0 "[F3] the fold, committed, passes check --public"
   has "$OUT" "kind: fold" "[F3] …as a fold"
@@ -454,125 +596,13 @@ PY2
   cm "one line added above the sections"; rp check --public "$P"
   eq "$RC" 1 "[F35] check of a fold that adds a line outside its section: red"
   has "$OUT" "changes 1 line(s) outside" "[F35] …and counts that one line"
+  new_fold_repo; rp cut --fold --public "$P"
+  sed -i.bak 's/^Released together: alpha 2\.10\.0, beta 1\.0\.1$/&\n&/' "$W/plugins/alpha/CHANGELOG.md"; rm -f "$W/plugins/alpha/CHANGELOG.md.bak"  # the input, not a break
+  cm "the line twice in a fold"; rpc check --public "$P"
+  eq "$RC" 1 "[F36] check of a fold that writes the \`Released together:\` line twice (the export refuses that section): red"
+  has "$OUT" "its \`Released together:\` line changed" "[F36] …naming the line"
 }
 
 echo "-- fam_fold"; fam_fold "$PLUGIN/scripts/release.py"
-
-# ── [X] planted breaks ───────────────────────────────────────────────────────────────────────────────────────────────────
-echo "-- planted breaks"
-BRKC() {  # BRKC <label> <needle> <old> <new> — a copy of release.py, family fam_cut
-  local d="$TMP/break-$1"; mkdir -p "$d"; cp "$PLUGIN/scripts/release.py" "$d/release.py"
-  mutate "$d/release.py" "$3" "$4" && expect_red "$1" fam_cut "$d/release.py" "$2"
-}
-BRKC cut-no-changelog '[C2] …alpha' '        write_changelog(repo, n, new, lines, notes)' '        pass'
-BRKC cut-keeps-files '[C2] …the change files consumed' '        os.remove(os.path.join(repo, p))' '        pass'
-BRKC cut-writes-state '[C2] …the state line untouched' '    for p in files:
-        os.remove(os.path.join(repo, p))' '    open(os.path.join(repo, "kb", "current-state.md"), "a").write("- alpha 2.10.0\\n")
-    for p in files:
-        os.remove(os.path.join(repo, p))'
-BRKC cut-first-any '[C18] …cut writes 0.1.0' '        plan[n] = (old, bump(old, level) if old else FIRST_RELEASE,' '        plan[n] = (old, bump(old or "0.0.0", level),'
-BRKC stale-release-compared '[C19]' '        ref = released_ref or last_release_commit(repo, base, n) or base' '        ref = resolve(repo, RELEASE_REF) or base'
-BRKC base-as-last-release '[C19b]' '        ref = released_ref or last_release_commit(repo, base, n) or base' '        ref = released_ref or base'
-BRKC cut-frozen-kept '[C4]' '        frozen[rel] = plan[n][1]
-    return plan, files, frozen' '        pass
-    return plan, files, frozen'
-BRKC cut-dirty-ok '[C6]' '        if not worktree_clean(repo):
-            raise Refused("the working tree' '        if False:
-            raise Refused("the working tree'
-BRKC cut-on-any-branch '[C7]' '        if branch in (RELEASE, branch_of(base_ref), default):' '        if False:'
-BRKC cut-without-release '[C12]' '        if not hotfix and rel and not is_ancestor(repo, rel, "HEAD"):' '        if False:'
-BRKC cut-hotfix-minor '[C14]' '        if hotfix and level != "patch":' '        if False:'
-BRKC cut-hotfix-from-main '[C17]' '        if hotfix and main_commits(repo, base):' '        if False:'
-BRKC cut-no-upgrade '[C20] …alpha'"'"'s section ends' '        write_changelog(repo, n, new, lines, notes)' '        write_changelog(repo, n, new, lines, [])'
-BRKC check-no-upgrade '[C21]' '            lacks = [l for l in ups.get(name, []) if l not in upgrade_part(section)]' '            lacks = []'
-BRKC plan-writes '[C1] …and plan writes nothing' '    show_plan(plan, files, frozen, bool(public))
-    print("plan only' '    do_cut(repo, hotfix, given)
-    print("plan only'
-BRKF() {  # BRKF <label> <needle> <old> <new> — a copy of release.py, family fam_fold
-  local d="$TMP/break-$1"; mkdir -p "$d"; cp "$PLUGIN/scripts/release.py" "$d/release.py"
-  mutate "$d/release.py" "$3" "$4" && expect_red "$1" fam_fold "$d/release.py" "$2"
-}
-BRKF fold-new-heading '[F2] …alpha'"'"'s lines after its own' '        if public:
-            write_fold(repo, n, new, lines, notes)' '        if False:
-            write_fold(repo, n, new, lines, notes)'
-BRKF fold-no-notes '[F2] …alpha'"'"'s lines after its own' '        ups = (ups.rstrip("\n") if ups else UPGRADE_HEADING + "\n") + "".join("\n" + l for l in notes) + "\n\n"' '        ups = ups'
-BRKF fold-kind-ordinary '[F3] …as a fold' '    return "fold" if folded(repo, mb) else "ordinary"' '    return "ordinary"'
-BRKF check-fold-no-public '[F4]' '    if not public:
-        bad.append("a fold needs' '    if False:
-        bad.append("a fold needs'
-BRKF check-fold-published '[F5]' '        if tags is not None and PUBLIC_TAG % (name, now) in tags:' '        if False:'
-BRKF fold-writes-twice '[F6] a pending line' '    lines = [l for i, l in enumerate(lines) if l not in have and l not in lines[:i]]' '    lines = list(lines)'
-BRKF cut-fold-published '[F7]' '    if PUBLIC_TAG % (n, old) in tags:
-        raise Refused' '    if False:
-        raise Refused'
-BRKF fold-unread-tags '[F8]' '    if p.returncode != 0:
-        why =' '    if False:
-        why ='
-BRKF cut-fold-unreleased '[F9] …naming it' '    if old is None:
-        raise Refused("plugin %s was never released: a fold' '    if False:
-        raise Refused("plugin %s was never released: a fold'
-BRKF cut-fold-level '[F10]' '    if want != old:
-        raise Refused' '    if False:
-        raise Refused'
-BRKF check-fold-level '[F11]' '        if want != now:
-            bad.append' '        if False:
-            bad.append'
-BRKF check-fold-drops '[F12]' '        dropped = [l for l in was if l.strip() and l not in section and l not in [b for b, _ in pairs]]' '        dropped = []'
-BRKF check-fold-left '[F13]' '    for p in change_files_here(repo):
-        bad.append("%s is in .changes/' '    for p in []:
-        bad.append("%s is in .changes/'
-BRKF check-fold-twice '[F14]' '        twice = sorted(set(l for l in listed if listed.count(l) > 1))' '        twice = []'
-BRKF check-fold-other-changelog '[F15]' '            if "plugins/%s/%s" % (name, CHANGELOG) in paths:' '            if False:'
-BRKF fold-usage '[F16] cut --fold without --public' '(fold != bool(public) or' '(False or'
-BRKF fold-usage-dash '[F16] a --public that starts with a dash' '    if public.startswith("-") or' '    if False or'
-BRKF fold-usage-hotfix '[F16] cut --fold --hotfix' 'or (fold and hotfix)' 'or False'
-BRKF check-fold-unread '[F17]' '        except Bad as e:
-            bad.append(str(e))
-    levels, lines, ups = shipped' '        except Bad as e:
-            pass
-    levels, lines, ups = shipped'
-BRKF check-fold-scope '[F18]' 'section: ok" % (name, len(pairs), now))
-    release_scope(repo, mb, paths, bad)' 'section: ok" % (name, len(pairs), now))
-    pass'
-BRKF check-fold-extra '[F19]' '        if extra:
-            bad.append' '        if False:
-            bad.append'
-BRKF check-fold-missing '[F20]' '        missing = [l for l in lines[name] if l not in entries_of(section)]' '        missing = []'
-BRKF check-fold-outside '[F21]' '        if outside[0] != outside[1]:' '        if False:'
-BRKF cut-fold-heading '[F22] …with a reason' '    if section is None:
-        raise Refused' '    if False:
-        raise Refused'
-BRKF cut-fold-nothing '[F23]' '        if public and not any(' '        if False and not any('
-BRKF check-fold-heading '[F25] …with a reason' '        if section is None:
-            bad.append("plugins/%s/%s: its first heading' '        if False:
-            bad.append("plugins/%s/%s: its first heading'
-BRKF check-fold-prose '[F26]' '        extra = [l for l in section if l.strip() and l not in allowed]' '        extra = [l for l in section if l.startswith("- ") and l not in allowed]'
-BRKF check-fold-moved '[F27]' '        if moved:
-            bad.append' '        if False:
-            bad.append'
-BRKF check-fold-crlf '[F28]' ' or "").replace("\r\n", "\n")' ' or "")'
-BRKF check-fold-eof '[F28]' '    while lines and not lines[-1]:
-        lines.pop()' '    while False:
-        lines.pop()'
-BRKF check-fold-reword-none '[F29]' '            pairs.append((b, h))' '            return [], None'
-BRKF check-fold-reword-level '[F31]' '            if (lb.group(1) if lb else None) != (lh.group(1) if lh else None):' '            if False:'
-BRKF check-fold-reword-said '[F29] …and it says so' '                print("plugin %s: rewords %d line(s)' '                (lambda *a: None)("plugin %s: rewords %d line(s)'
-BRKF check-fold-published-reword '[F32] …and it says' '", this change rewords %d of its line(s)" % len(pairs) if pairs else ""' '""'
-BRKF check-fold-reword-dedup '[F34]' '        rest = [l for l in here if l not in new or l in base]' '        rest = [l for l in here if l not in new]'
-BRKF check-fold-reword-ok-published '[F32] …and prints no reword' '            if pairs and not (tags is not None and PUBLIC_TAG % (name, now) in tags):' '            if pairs:'
-BRKF check-fold-apart '[F35]' '    return sum(max(i2 - i1, j2 - j1)' '    return sum(1 for x, y in zip(a, b) if x != y) + abs(len(a) - len(b)) or sum(max(i2 - i1, j2 - j1)'
-BRKF check-fold-lacks '[F24]' '        lacks = [l for l in ups.get(name, []) if l not in upgrade_part(section)]
-        listed' '        lacks = []
-        listed'
-PLC="$TMP/break-none"; mkdir -p "$PLC"; cp "$PLUGIN/scripts/release.py" "$PLC/release.py"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-fam_cut "$PLC/release.py" >/dev/null 2>&1
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes fam_cut (no failed check)"
-QN=0; ok() { :; }; bad() { QN=$((QN+1)); }
-fam_fold "$PLC/release.py" >/dev/null 2>&1
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes fam_fold (no failed check)"
 
 echo; summary

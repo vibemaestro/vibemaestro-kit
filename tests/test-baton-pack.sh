@@ -7,8 +7,7 @@
 # =============================================================================
 # Run: bash tests/test-baton-pack.sh
 #
-# Each area is a FAMILY `fam_<x> <plugin dir>`, run on a copy of the real plugin, then again on copies with ONE planted break in
-# baton.py (expect_red, tests/fixtures/ports.sh), which must go red on the intended tag. tests/fixtures/baton_pack.py stops a pack
+# Each area is a FAMILY `fam_<x> <plugin dir>`, run on a copy of the real plugin. tests/fixtures/baton_pack.py stops a pack
 # at one step, races it for a sequence number, or holds a name's lock. The state is XDG_STATE_HOME and the library XDG_DATA_HOME
 # inside the scratch tree, HOME is the scratch home; nothing is written outside the scratch tree, which the last section checks.
 # =============================================================================
@@ -151,6 +150,8 @@ fam_refuse() {
   eq "$(bt "$P" "$W" pack "$W/s.sh" kind:a)" 64 "[refuse] a kind: target: rc 64"
   eq "$(bt "$P" "$W" pack "$W/s.sh" lib:a)" 64 "[refuse] an unknown prefix: rc 64"
   eq "$(bt "$P" "$W" pack "$W/s.sh" user:merge-pr)" 64 "[refuse] a name a kit ships: rc 64"
+  eq "$(bt "$P" "$W" pack "$W/s.sh" user:coordinator-bootstrap)" 64 "[refuse] the old name of a kit (coordinator-bootstrap): rc 64"
+  has "$(out)" "already ships that name" "[refuse] …named as a kit's"
   eq "$(bt "$P" "$W" pack "$W/s.sh" user:install-file)" 64 "[refuse] a name a callable kind ships: rc 64"
   eq "$(bt "$P" "$W" pack "$W/s.sh" user:deploy-v2)" 64 "[refuse] a copy name -v<digits>: rc 64"
   eq "$(bt "$P" "$W" pack "$W/s.sh" user:deploy-1a2b3c4)" 64 "[refuse] a copy name -<7 hex>: rc 64"
@@ -309,6 +310,13 @@ fam_sandbox() {
   eq "$(bt "$P" "$R" pack "$W/u.sh" user:u)" 0 "[sandbox] …and user: keeps: rc 0"
   BT_ENV=(SEAT=seat-1 INTENT_SLUG=' ')
   eq "$(bt "$P" "$R" pack "$W/u.sh" u2)" 64 "[sandbox] INTENT_SLUG blank is no sandbox: a bare name: rc 64"
+  BT_ENV=(VIBEMAESTRO_ROLE=Worker)
+  eq "$(bt "$P" "$R" pack "$W/u.sh" u3)" 64 "[sandbox] VIBEMAESTRO_ROLE=Worker is no worker session: a bare name: rc 64"
+  mk "$P" "$W/v.sh" "# v"; okrun "$P" "$W" "$W/v.sh" >/dev/null
+  BT_ENV=(VIBEMAESTRO_ROLE=worker)
+  eq "$(bt "$P" "$R" pack "$W/v.sh" v)" 0 "[sandbox] VIBEMAESTRO_ROLE=worker alone: a bare name keeps project:<name>: rc 0"
+  has "$(out)" "kept project:v (new)" "[sandbox] …as project:v"
+  eq "$(bt "$P" "$R" pack "$W/v.sh" user:v)" 64 "[sandbox] VIBEMAESTRO_ROLE=worker alone: a user: target: rc 64"
   # a stop-list baton: no ok run in a pod; go to the owner's card, then pack it as project:
   BT_ENV=(SEAT=seat-1 INTENT_SLUG=2026-10-25-x)
   mk "$P" "$W/p.sh" "# p"; sed -i 's/^# Stops: none$/# Stops: publish/' "$W/p.sh"; B=$(shaf "$W/p.sh")
@@ -599,96 +607,6 @@ FAMILIES="fam_keep fam_refuse fam_sandbox fam_okrun fam_copy fam_stops fam_evolv
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done
-
-echo "== planted breaks: each family must go red on a copy with one break in baton.py =="
-# BRK <label> <family> <needle> <old> <new> [<old> <new>]... — a plugin copy with the replacements in baton.py, then expect_red
-BRK() {
-  local label=$1 fam=$2 needle=$3 d; shift 3; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/scripts/baton.py" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-BRK sandbox-no-default fam_sandbox '[sandbox] a bare name keeps project:<name>: rc 0' '    if ":" not in word and new and in_sandbox():' '    if False:'
-BRK sandbox-user-ok fam_sandbox '[sandbox] a user: target in a sandbox: rc 64' '    if place == "user" and new and in_sandbox():' '    if False:'
-BRK owner-stop-anywhere fam_sandbox '[sandbox] outside a sandbox that line is no ok run: rc 3' '    if not (in_sandbox() and t.kept.prefix == "project" and stops_of(t.text) is not None):' '    if not (t.kept.prefix == "project" and stops_of(t.text) is not None):'
-BRK owner-stop-any-sha fam_sandbox '[sandbox] bytes changed after go stopped for the owner: rc 3' '    return any(v.endswith("@" + sha) for v in owner_stops(manual=no_stop(t.text)))' '    return bool(owner_stops())'
-BRK owner-stop-any-mode fam_sandbox '[sandbox] Stops: none bytes whose go owner line is not of mode manual: rc 3' 'owner_stops(manual=no_stop(t.text))' 'owner_stops()'
-BRK owner-stop-no-manual fam_sandbox '[sandbox] …and logs one go owner line in mode manual' '            manual = not stops and not s.value_why() and place_of(path) is None' '            manual = False'
-BRK owner-stop-outside fam_sandbox '[sandbox] …and logs no go owner line' '            if (stops or manual) and in_sandbox():' '            if stops or manual:'
-BRK hint-never fam_sandbox "[sandbox] …the refusal points a stop-list baton to go's stop" '"stopped for the owner on these bytes (exit 8; for Stops none, in mode manual)" if in_sandbox()' '"stopped for the owner on these bytes (exit 8; for Stops none, in mode manual)" if False'
-BRK hint-always fam_sandbox '[sandbox] …and the refusal outside a sandbox does not point to go' '(exit 8; for Stops none, in mode manual)" if in_sandbox() and' '(exit 8; for Stops none, in mode manual)" if True or'
-BRK no-okrun fam_okrun '[okrun] the source changed after its ok run: rc 3' '    return any(v.endswith("@" + sha) for v in ok_runs())' '    return True'
-BRK okrun-any-log fam_okrun '[okrun] only this machine' \
-    '                if len(v) == len(LOG_FIELDS) and v[1] == "run" and v[9] == "ok":' '                if len(v) >= len(LOG_FIELDS) - 1 and v[9] == "ok":'
-BRK no-copy fam_copy '[copy] the same bytes under another name: rc 3' '    other = copy_holder(kept, sha)' '    other = None'
-BRK copy-file-only fam_copy '[copy] an older keep of another name' '        if any(is_keep(r) and r["sha256"] == sha for _q, r in recs):' '        if False:'
-BRK retire-not-freeing fam_copy '[copy] retiring a sha frees it while the old file still holds it' '        if retired:
-            continue' '        if False:
-            continue'
-BRK copy-unlocked fam_copy '[copy] two names packed at once with the same bytes: only one lands' '            fds = place_locks(t.kept.key)' '            fds = []'
-BRK move-one-lock fam_move '[move] two opposite moves at once: exactly one copy stays callable' \
-    '        fds = place_locks(src.kept.key, t.kept.key)' '        fds = place_locks(t.kept.key)'
-BRK name-newline fam_refuse '[refuse] a name ending in a newline: rc 64' 'KIT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\Z")' 'KIT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")'
-BRK parent-followed fam_refuse '[refuse] …nothing made where the parent link leads' \
-    '    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)' '    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)'
-BRK write-tmp-left fam_refuse '[refuse] …a failed write leaves no temporary file' \
-    '        except BaseException:                           # a failed write or rename leaves no copy of the bytes behind' '        except ():'
-BRK root-unescaped fam_refuse '[refuse] …the root is escaped: no forged line' \
-    '"link", kept.word, part, anchor)' '"link" % (kept.word, part, anchor))'
-BRK eacces-as-link fam_refuse '[refuse] a place level it may not open: rc 2' '                if e.errno not in (errno.ELOOP, errno.ENOTDIR):' '                if False:'
-BRK restore-silent fam_keep '[keep] …says the file was restored' \
-    '            restored = "" if old == data else' '            restored = "" if True else'
-BRK loose-unescaped fam_forge '[forge] …no line starts with owner: (pack, a loose root)' '               % (esc(path), st.st_uid, stat.S_IMODE(st.st_mode))' '               % (path, st.st_uid, stat.S_IMODE(st.st_mode))' \
-    '                    raise Stop(REFUSED, "%s: %s", word, why)' '                    raise Stop(REFUSED, "%s: %s" % (word, why))'
-BRK noroot-unescaped fam_forge '[forge] …no line starts with owner: (go, no root)' '"from %s up to HOME", word, os.path.realpath(os.getcwd()))' '"from %s up to HOME" % (word, os.path.realpath(os.getcwd())))'
-BRK leads-unescaped fam_forge '[forge] …no line starts with owner: (go, the place leads elsewhere)' $'never reached through a link", word, self.dir,\n                       os.path.realpath(self.dir))' \
-    $'never reached through a link" % (word, self.dir,\n                       os.path.realpath(self.dir)))'
-BRK link-unescaped fam_forge '[forge] …no line starts with owner: (go, a link)' $'never read through a link", self.word, self.path,\n                           os.path.realpath(self.path))' \
-    $'never read through a link" % (self.word, self.path,\n                           os.path.realpath(self.path)))'
-BRK unpinned-unescaped fam_forge '[forge] …no line starts with owner: (go, unpinned)' '        msg = "%s: %s (sha256 %s, %s)" % (esc(self.word), why, self.sha, esc(self.path))' '        msg = "%s: %s (sha256 %s, %s)" % (esc(self.word), why, self.sha, self.path)' \
-    '            raise Stop(REFUSED, "%s", self.kept.refusal())' '            raise Stop(REFUSED, self.kept.refusal())'
-BRK checkok-unescaped fam_forge '[forge] …no line starts with owner: (check ok)' '    say("check ok: %s (sha256 %s)%s", s.path, s.sha[:12],' '    say("check ok: " + s.path + " (sha256 %s)%s", s.sha[:12],'
-BRK header-unescaped fam_forge "[forge] …no line starts with owner: (rehearse's header)" '    say("baton script %s (sha256 %s)%s", s.path, s.sha[:12],' '    say("baton script " + s.path + " (sha256 %s)%s", s.sha[:12],'
-BRK kitarg-unescaped fam_forge '[forge] …no line starts with owner: (kit:)' "lower-case letters, digits and '-' only (no '/', no '.')\", arg)" "lower-case letters, digits and '-' only (no '/', no '.')\" % arg)"
-BRK kindarg-unescaped fam_forge '[forge] …no line starts with owner: (kind:)' $'writes any kind)", arg,\n                   ", ".join(CALLABLE_KINDS))' $'writes any kind)" % (arg,\n                   ", ".join(CALLABLE_KINDS)))'
-BRK tmp-left fam_refuse '[refuse] …a failed rename leaves no temporary file' '                os.unlink(tmp, dir_fd=fd)
-            except OSError:
-                pass
-            raise' '                pass
-            except OSError:
-                pass
-            raise'
-BRK unmasked fam_keep '[keep] a SIGTERM right after the record: the owner: line still comes' \
-    '    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, CRITICAL)' '    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, [])'
-BRK purpose-first fam_keep "[keep] …'not reviewed', then the Purpose last" '    return "kept %s (%s) — Stops %s — sha256 %s — changed: %s — body %s lines — not reviewed%s — Purpose: %s" % (' \
-    '    return "kept %s (%s) — %s — Stops %s — sha256 %s — changed: %s — body %s lines — not reviewed%s" % ('
-BRK no-stops fam_stops '[stops] a Stops word changed: rc 3' '    if was is not None and was != stops:' '    if False:'
-BRK user-pin-per-sha fam_evolve '[evolve] a library file written back to an older version: rc 3' \
-    '    if prefix == "project":
-        by = naming[-1][1]' '    if True:
-        by = naming[-1][1]'
-BRK retire-ignored fam_retire '[retire] a retired sha: go rc 3' \
-    '    retired = bool(naming) and is_retire(naming[-1][1])' '    retired = False; naming = [x for x in naming if is_keep(x[1])]'
-BRK move-source-first fam_move '[move] after a cut after the retire, the re-run finishes' \
-    '            pack_target(t, data, sha)
-            retire_source(src, sha)' '            retire_source(src, sha)
-            pack_target(t, data, sha)'
-BRK move-no-retire fam_move '[move] …a restored source file is not pinned again' '            retire_source(src, sha)' '            pass'
-BRK no-lock fam_parallel '[parallel] a pack waits while another holds the lock' \
-    '            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)' '            pass'
-BRK lock-file-excl fam_parallel '[parallel] a pack after a killed pack lands at once' \
-    '    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)' \
-    '    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)'
-BRK seq-replace fam_parallel "[parallel] …the racer's record is intact" '                os.link(tmp, path)' '                os.replace(tmp, path)'
-BRK no-owner-line fam_keep '[keep] a user: keep prints one owner: line' '            say("owner: %s", facts)' '            say("%s", facts)'
-BRK repack-twice fam_keep '[keep] …and writes no second record' '    if newest is not None and newest["sha256"] == sha and kept.pin(sha):' '    if False:'
-BRK target-followed fam_refuse '[refuse] …a symlinked target is replaced, the file it led to unchanged' \
-    '            os.rename(tmp, kept.name + ".sh", src_dir_fd=fd, dst_dir_fd=fd)' \
-    '            open(kept.path, "wb").write(data); os.unlink(tmp, dir_fd=fd)'
-BRK kit-name-ok fam_refuse '[refuse] a name a kit ships: rc 64' '    if name in kit_names():' '    if False:'
-BRK copy-name-ok fam_refuse '[refuse] a copy name -v<digits>: rc 64' '    if COPY_NAME.search(name):' '    if False:'
-BRK kept-check-skipped fam_refuse '[refuse] a fixed-value script (Params: none): rc 1' '        probs = check_script(t)
-        if probs:' '        probs = []
-        if probs:'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

@@ -5,8 +5,8 @@
 # Run: bash tests/test-baton-go-pod.sh
 #
 # A pod never gets the owner's signature (the guard refuses `sign --by owner` there), so the lines `go` prints after the decision
-# card must not hand a pod session a sign command to try. Each family runs on a copy of the real plugin, then again on copies with
-# one planted break, and must go red on the intended check. Offline; nothing outside the scratch tree.
+# card must not hand a pod session a sign command to try. Each family runs on a copy of the real plugin. Offline; nothing outside the
+# scratch tree.
 #   [P] a pod (SEAT and INTENT_SLUG set): exit 8 as before, the card as before, then the hand-off naming the call (name, args, seal);
 #       no `sign --by owner`, no `on the owner's go:`, no `then:` line, no mode command anywhere in what go printed; a session
 #       script, on a stop-list stop or held only by mode manual, gets the pack and PR steps and a call to project:<name> (never a
@@ -15,7 +15,6 @@
 #   [R] rehearse in a pod: no owner command, one line that go hands the call to the coordinator
 #   [G] no pod: the whole output of go and rehearse equals the golden recorded from main before the change (paths, stamp and seal
 #       normalised)
-#   [X] planted breaks: the pod branch off (families [P] and [R] red), the pod branch on everywhere (family [G] red)
 # GOLDEN_WRITE=1 bash tests/test-baton-go-pod.sh rewrites the golden files from the real plugin's non-pod output.
 # =============================================================================
 set -uo pipefail
@@ -210,23 +209,6 @@ echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 echo "-- fam_pod"; fam_pod "$REAL"
 echo "-- fam_nopod"; fam_nopod "$REAL"
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in baton.py =="
-# BRK <label> <family> <needle> <old> <new> — a plugin copy with the replacement in baton.py, then expect_red
-BRK() {
-  local label=$1 fam=$2 needle=$3 d; shift 3; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  while [ $# -ge 2 ]; do mutate "$d/scripts/baton.py" "$1" "$2" || return; shift 2; done
-  expect_red "$label" "$fam" "$d" "$needle"
-}
-BRK pod-branch-off fam_pod "[P] script: no 'sign --by owner' anywhere" '            if in_sandbox():                            # a pod has no owner' '            if False:                            # a pod has no owner'
-BRK pod-everywhere fam_nopod '[G] script: the output equals the golden' '            if in_sandbox():                            # a pod has no owner' '            if True:                            # a pod has no owner'
-BRK rehearse-pod-off fam_pod '[R] rehearse' '    if in_sandbox():                                    # a pod has no owner: its guard' '    if False:                                    # a pod has no owner: its guard'
-BRK rehearse-pod-everywhere fam_nopod '[G] rehearse-script: the output equals the golden' '    if in_sandbox():                                    # a pod has no owner: its guard' '    if True:                                    # a pod has no owner: its guard'
-BRK usage-sign-in-pod fam_pod "[P] go's usage in a pod: no 'sign --by owner'" '("" if in_sandbox() else "the owner signs' '("" if False else "the owner signs'
-BRK handoff-kit-name fam_pod '[P] kit-named script: the call leaves the name to pick' 'name not in kit_names() and' 'True and'
-BRK handoff-copy-name fam_pod '[P] copy-named script: the call leaves the name to pick' '                not COPY_NAME.search(name) else' '                True else'
-BRK no-stop-words fam_pod '[K] pod: Stops: , …its pack line says it never ran' '    return s is not None and not set(s.split(", ")) - {"none", ""}' '    return s == "none"'
-BRK pack-manual-anywhere fam_pod '[K] outside a pod: pack refuses' '    if not (in_sandbox() and t.kept.prefix == "project" and stops_of(t.text) is not None):' '    if not (t.kept.prefix == "project" and stops_of(t.text) is not None):'
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

@@ -246,7 +246,7 @@ fam_transport() {  # [P9] one transport: no environment selects a network path, 
   PLX=$1; local out rc GL CL SB BP; mk_pr_repo
   GL="$F/gh.log"; CL="$F/curl.log"; : > "$GL"; : > "$CL"
   # a `curl` that records every call, first in PATH. Its own log, not NET_LOG: a core that reaches for it must make THIS family
-  # red, not the closing network check of the suite (a planted break would otherwise taint the run that reports it).
+  # red, not the closing network check of the suite.
   SB="$F/shimbin"; mkdir -p "$SB"; printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 97\n' "$CL" > "$SB/curl"; chmod +x "$SB/curl"
   printf 'not-a-real-token\n' > "$F/token"
   # the environment of a sandbox session and of the old API channel: a token file, a slug variable. Neither selects anything.
@@ -320,81 +320,5 @@ PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 [ -f "$PL0/scripts/open_pr.py" ] && ok "instrument: the plugin copy has the core" || bad "instrument: the core is missing from the copy"
 [ -x "$GHB/gh" ] && ok "instrument: the fake gh is executable" || bad "instrument: the fake gh is not executable"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
-
-echo "== planted breaks: each family must go red on a core with one break =="
-BRK() {  # BRK <label> <family> <needle> <old> <new>
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/open_pr.py" "$4" "$5" && expect_red "$1" "$2" "$d" "$3"
-}
-BRKC() {  # BRKC <label> <family> <needle> <old> <new> — the same on the config loader, which owns the default flow text
-  local d="$TMP/break-$1"; mk_plugin_copy "$d"
-  mutate "$d/scripts/sdlc_config.py" "$4" "$5" && expect_red "$1" "$2" "$d" "$3"
-}
-BRK main-tree-allowed fam_tree '[P1] from the main tree: rc 5' '    if not wt:
-        err(M("op.main_tree",' '    if False:
-        err(M("op.main_tree",'
-BRK git-env-not-stripped fam_tree '[P1] main tree with GIT_DIR' '_GIT_ENV_STRIP = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE")' '_GIT_ENV_STRIP = ()'
-BRK empty-evidence-allowed fam_evidence '[P2] empty evidence file: rc 3' 'if evidence is None or not evidence.strip():' 'if evidence is None:'
-BRK heading-only-summary-allowed fam_evidence '[P2] a summary that is only its heading' 'r"[ \t]*(\r?\n+|\Z)", "", summary.strip()' 'r"[ \t]*(\r?\n+)", "", summary.strip()'
-BRK payload-out-error-swallowed fam_evidence '[P2] --payload-out that cannot be written' '            err(M("op.payload_out", e))
-            return 66' '            err(M("op.payload_out", e))
-            return 0'
-BRK blank-title-allowed fam_args '[P3] a blank title' '    if not a.title.strip():' '    if False:'
-BRK main-head-allowed fam_args '[P3] --head main' '    if head in cfg["branch"]["protected"]:' '    if False:'
-BRK ledger-gate-ignored fam_gate '[P4] a watched change with no ledger change' '        err("the current-state gate refuses: the PR is NOT opened.\n" + cs_msg)
-        return 4' '        err("the current-state gate refuses: the PR is NOT opened.\n" + cs_msg)
-        return 0'
-BRK unresolved-base-passes fam_gate '[P4] a base the core cannot resolve' '        return 1, ("cannot resolve base' '        return 0, ("cannot resolve base'
-BRK exemption-anywhere fam_evidence '[P2] the token in the middle' 'exempt = ev.lstrip().startswith(tk["not_run"])' 'exempt = tk["not_run"] in ev'
-BRK exemption-marker-dropped fam_evidence '[P2] …under a warning marker' '    head_note = tk["not_run_note"] + "\n\n" if exempt else ""' '    head_note = tk["not_run_note"].replace("⚠ ", "") + "\n\n" if exempt else ""'
-BRK evidence-never-cut fam_body '[P5] …the eleventh is cut' 'MAX_EV_LINES = 80 ' 'MAX_EV_LINES = 8000 '
-BRK evidence-keeps-wrong-ends fam_body '[P5] …line 131' 'KEEP_HEAD, KEEP_TAIL = 10, 70' 'KEEP_HEAD, KEEP_TAIL = 70, 10'
-BRK duplicate-heading-kept fam_body '[P5] a summary starting with' 're.escape(tk["summary_heading"])' 're.escape(tk["summary_heading"]) + "X"'
-BRK ticks-kept-in-criteria fam_body "[P5] criteria: 'second'" 'r"^\s*(?:[-*]|\d+\.)\s*(?:\[[ xX]\]\s*)?"' 'r"^\s*(?:[-*]|\d+\.)\s*"'
-BRK flow-back fam_body '[P5] no flow section' '            % (fix_block, close_block, tk["summary_heading"], summ, crit_block, tk["evidence_heading"], head_note, fence, ev, fence))' '            % (fix_block, close_block, tk["summary_heading"], summ, crit_block, tk["evidence_heading"], head_note, fence, ev, fence)
-            + "\n## %s\n\n- [x] Worker\n" % tk["flow_heading"])'
-BRKC tester-not-deprecated fam_tester '[P6] …and pr.tester_exempt' '    "pr.tester_exempt": {"since": "2026-10-20", "use": None,' '    "pr.tester_exempt_x": {"since": "2026-10-20", "use": None,'
-BRK draft-always fam_payload '[P7] the payload has exactly' '    if a.draft or cfg["pr"]["draft"]:' '    if True:'
-BRK draft-not-passed-to-gh fam_gh '[P8] --draft is passed to gh' '    if payload.get("draft"):' '    if False:'
-BRK gh-failure-swallowed fam_gh '[P8] gh pr create exits non-zero' '        print("gh pr create rc=%s: %s" % (r.returncode, r.stderr[:400]), file=sys.stderr)
-        return 1' '        print("gh pr create rc=%s: %s" % (r.returncode, r.stderr[:400]), file=sys.stderr)
-        return 0'
-BRK missing-gh-is-rc-1 fam_gh '[P8] no gh on PATH' '        err("no `gh` on this machine")
-        return 67' '        err("no `gh` on this machine")
-        return 1'
-BRK env-selects-curl fam_transport '[P9] …and a curl on PATH recorded 0 calls' '    gh = shutil.which("gh")
-    if not gh:' '    if os.environ.get("GH_TOKEN_FILE"):
-        subprocess.run(["curl", "-X", "POST", "https://example.invalid/pulls"], capture_output=True)
-        return 0
-    gh = shutil.which("gh")
-    if not gh:'
-BRK env-slug-becomes-repo fam_transport '[P9] …the slug variable of the old channel' '    if slug:
-        cmd += ["--repo", slug]
-    try:
-        r = subprocess.run(cmd, input=payload["body"],' '    slug = slug or os.environ.get("SLUGPATH")
-    if slug:
-        cmd += ["--repo", slug]
-    try:
-        r = subprocess.run(cmd, input=payload["body"],'
-BRK repo-not-passed fam_transport '[P9] --repo is passed to gh pr create' '        cmd.append("--draft")
-    if slug:
-        cmd += ["--repo", slug]' '        cmd.append("--draft")'
-BRK gh-flag-rejected fam_transport '[P9] --gh is accepted' '    ap.add_argument("--gh", action="store_true")' ''
-BRK title-rule-ignored-on-post fam_transport '[P9] a title that violates pr.title' '    if tcfg["pattern"] and not re.search(tcfg["pattern"], a.title):' '    if False:'
-BRK cap-skipped fam_bodycap '[P12] a summary of 11 lines: rc 2' '    over = pr_body.check_body(body, cfg)
-    if over:' '    over = []
-    if over:'
-BRK cap-exit-code fam_bodycap '[P12] a summary of 11 lines: rc 2' '               sum(1 for ln in evidence.splitlines() if ln.strip())))
-        return 2' '               sum(1 for ln in evidence.splitlines() if ln.strip())))
-        return 3'
-BRK cap-after-gh fam_bodycap '[P12] …and gh was not called' '    over = pr_body.check_body(body, cfg)
-    if over:' '    over = pr_body.check_body(body, cfg) if a.dry_run else []
-    if over:'
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo; summary

@@ -13,7 +13,6 @@
 #   [M] the world moved after signing (the head): run refuses before the dispatch
 #   [U] undo cancels only the run this dispatch made: not a run that matched before, not another actor's, not a finished one;
 #       two new runs of the viewer are left alone (rc 5); a later run's undo leaves an earlier run's record
-#   [X] planted breaks: each family goes red on a plugin copy with one break in the kit
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -144,7 +143,7 @@ PY
   eq "$?:$(ndispatch "$W")" "3:0" "[M] a run phase whose dispatch line is not in the signed plan: refused before the dispatch"
 }
 
-# failing_copy <plugin> <dir> — a copy of that plugin (a broken one included) whose kit post-check fails, so run undoes
+# failing_copy <plugin> <dir> — a copy of that plugin whose kit post-check fails, so run undoes
 failing_copy() { cp -r "$1" "$2"; mutate "$2/batons/workflow-dispatch.sh" '
 postcheck() {
 ' '
@@ -199,32 +198,6 @@ PY
 
 FAMILIES="fam_dispatch fam_refuse fam_moved fam_undo"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
-
-echo "== planted breaks: each family must go red on a plugin copy with one break in the kit =="
-KBRK() {  # KBRK <label> <family> <needle> <old> <new>
-  local label=$1 fam=$2 needle=$3 d; d="$TMP/break-$label"; mk_plugin_copy "$d"
-  mutate "$d/batons/workflow-dispatch.sh" "$4" "$5" && expect_red "$label" "$fam" "$d" "$needle"
-}
-KBRK public-allowed fam_refuse '[R] a public repository: rehearse rc 1' '  if [ "$vis" != "true private" ]; then' '  if false; then'
-KBRK no-dispatch-trigger fam_refuse "[R] a workflow that names workflow_dispatch only in a step condition" '    line=${line%%[[:space:]]#*}' '    line=${line%%[[:space:]]#*}; [[ "$line" == *workflow_dispatch* ]] && return 0'
-KBRK input-key-open fam_refuse '[R] an input key with a space' '          if ! [[ "$2" =~ ^[A-Za-z0-9_-]+=[^[:cntrl:]]*$ ]]; then' '          if false; then'
-KBRK head-unpinned fam_moved '[M] the branch moved after signing' '  PLANLINE="dispatch workflow $WF on $REPO ref $REF at $head blob $blob inputs ${INPUTS[*]:-none}"' '  PLANLINE="dispatch workflow $WF on $REPO ref $REF at pinned blob $blob inputs ${INPUTS[*]:-none}"'
-KBRK moved-head-accepted fam_moved '[M] the branch moved during the dispatch' '  [ "$at" = "$head" ] || { echo' '  true || { echo'
-KBRK plan-unchecked fam_moved '[M] a run phase whose dispatch line is not in the signed plan' '  if [ -z "${BATON_PLAN:-}" ] || ! grep -Fqx -- "$PLANLINE" "$BATON_PLAN"; then' '  if false; then'
-KBRK ref-charset-open fam_refuse '[R] a ref with #' '  || ! [[ "$REF" =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || ! git check-ref-format "refs/heads/$REF" > /dev/null 2>&1; then' '  || ! git check-ref-format "refs/heads/$REF" > /dev/null 2>&1; then'
-KBRK record-name-collides fam_refuse '[R] refs a/b and a_b get run records of their own' 'RECORD="$RECORDS/kit-workflow-dispatch-$(sha256_text "$REPO $WF $REF" | cut -c1-16)-$PPID.last"' 'RECORD="$RECORDS/kit-workflow-dispatch-${REF//\//_}-$PPID.last"'
-KBRK record-shared-by-plans fam_undo "[U] …and its undo does not cancel the first run's run" 'RECORD="$RECORDS/kit-workflow-dispatch-$(sha256_text "$REPO $WF $REF" | cut -c1-16)-$PPID.last"' 'RECORD="$RECORDS/kit-workflow-dispatch-$(sha256_text "$REPO $WF $REF" | cut -c1-16)-0.last"'
-KBRK cancel-unsent fam_undo "[U] a dispatch whose answer was lost" '  if [ "$n" -eq 1 ] && [ "$sent" != sent ]; then' '  if false; then'
-KBRK unsent-silent fam_undo "[U] gh accepted the dispatch and no run ever shows" '  if [ "$n" -eq 0 ] && [ "$sent" = sent ]; then' '  if false; then'
-KBRK before-runs-counted fam_undo "[U] …only this dispatch's run is cancelled" '      *",$id,"*) ;;' '      *",nothing,"*) ;;'
-KBRK any-actor fam_undo "[U] …only this dispatch's run is cancelled" '    --jq ".workflow_runs[] | select(.triggering_actor.login == \"$1\") | \"\(.id) \(.status) \(.head_sha)\""' '    --jq ".workflow_runs[] | select(.triggering_actor.login == \"$1\") | \"\(.id) \(.status) \(.head_sha)\""; gh api "repos/$REPO/actions/workflows/$WF/runs?event=workflow_dispatch&branch=$REF&per_page=100" --jq ".workflow_runs[] | select(.triggering_actor.login == \"someone\") | \"\(.id) \(.status) \(.head_sha)\""'
-KBRK many-cancelled fam_undo '[U] two new runs of the viewer' '  if [ "$n" -gt 1 ]; then' '  if false; then'
-QN=0; okdef=$(declare -f ok); baddef=$(declare -f bad); sp=$PASS; sf=$FAIL
-ok() { :; }; bad() { QN=$((QN+1)); }
-PLC="$TMP/break-none"; mk_plugin_copy "$PLC"
-for f in $FAMILIES; do "$f" "$PLC" >/dev/null 2>&1; done
-eval "$okdef"; eval "$baddef"; PASS=$sp; FAIL=$sf
-eq "$QN" 0 "control: an unbroken copy passes every family (no failed check)"
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

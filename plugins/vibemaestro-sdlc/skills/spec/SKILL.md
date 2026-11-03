@@ -1,13 +1,13 @@
 ---
 name: spec
-description: "Use when: the intent of an app repo is recorded (kb/intent/<date>-<slug>.md, branch intent/<date>-<slug>) and there is no spec the person has approved yet — create kb/specs/<date>-<slug>.md in the four-section shape, commit it to the intent branch, then ask the person to approve (session-ask in a sandbox, ask directly in a solo session) BEFORE editing code."
+description: "Use when: the intent of an app repo is recorded (kb/intent/<date>-<slug>.md, branch intent/<date>-<slug>) and there is no spec the person has approved yet — create kb/specs/<date>-<slug>.md in the spec shape (with its Inputs and failure cases table), commit it to the intent branch, then ask the person to approve (session-ask in a sandbox, ask directly in a solo session) BEFORE editing code."
 ---
 
 # spec — design an intent and ask the person to approve before code
 
 The intent says **what the person wants**; the spec says **what is correct and which command proves it**. The person approves the spec
 **before** the first line of code: approving one page of text is much cheaper than reviewing a PR that was built in the
-wrong direction. The spec shape is the four-section shape recorded in this repo's own `kb/README.md` (built by `init-kb`).
+wrong direction. The spec shape is the one recorded in this repo's own `kb/README.md` (built by `init-kb`).
 
 Condition: an intent exists (`vibemaestro-sdlc:intake`) and you stand in the worktree of the branch `intent/<date>-<slug>`.
 If not, do `intake` first.
@@ -20,8 +20,8 @@ If not, do `intake` first.
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" new spec <slug> --date <date>
    ```
 
-   The command creates `kb/specs/<date>-<slug>.md` in the four-section shape `## Context`, `## Goal`, `## Out of scope`,
-   `## Acceptance criteria` and points `Intent:` at the intent file if it already exists. Link it back: add `spec: kb/specs/<date>-<slug>.md`
+   The command creates `kb/specs/<date>-<slug>.md` with the sections `## Context`, `## Goal`, `## Out of scope`,
+   `## Inputs and failure cases`, `## Acceptance criteria` and points `Intent:` at the intent file if it already exists. Link it back: add `spec: kb/specs/<date>-<slug>.md`
    to the intent's frontmatter (and the intent's `plan:` line, if it has one, to the spec's) and commit the intent with the spec.
 
    **The section names come from the repo's config** (`tokens.spec`): with `"language": "en"` they are `## Context`, `## Goal`,
@@ -36,9 +36,16 @@ If not, do `intake` first.
    chosen/rejected into `## Design` if the spec is large). **Add no idea of your own** and do not widen the
    scope beyond the person's words. If the spec needs a piece of information that is missing, write it down as a question for the person in step 4;
    do not guess.
+   - `## Inputs and failure cases` (this exact heading in every language): a table of three columns, one row per input or
+     failure the change must survive, its expected behaviour, and the test that proves it. Choose rows by risk, about 10 at most:
+     the hostile input (injection, a path outside the tree, a huge or binary value), the odd one (unicode, spaces, a symlink), the
+     empty one, the oversized one, two runs at once, a failure half way (a write that dies, a network call that times out), the
+     wrong type. Most review defects are an input nobody listed. Every row's test is part of the acceptance: the criteria run it.
+     A change with no such input (a typo in a doc) replaces the table with one line `none, because <reason>`.
+     How a good test looks: rule `test-quality` of the plugin (`rules/test-quality.instructions.md`).
    - `## Acceptance criteria`: each criterion is **one command + the expected result** (``1. `bash t.sh` → `0 fail` ``),
      not a description. **The last criterion is always: the PR has a `## Run evidence` section** holding the real output of the commands above.
-   - A large spec gets a `## Design` **after** the four sections (the direction chosen, the options rejected, why); minor points inside it go
+   - A large spec gets a `## Design` **after** the other sections (the direction chosen, the options rejected, why); minor points inside it go
      in as `###`. Add no other `## ` section — the machine will report it as an unknown section.
    - Delete every `<FILL: …>`; the `description:` line in the frontmatter is a one-line description.
 
@@ -48,8 +55,16 @@ If not, do `intake` first.
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" check spec <date>-<slug>
    ```
 
-   This command checks only the **shape**: all four sections in the right order, none empty, no `<FILL` left, every criterion has a command
-   in backticks, the last criterion mentions `## Run evidence`. It does **not** know whether a command is right or runs, and
+   This command checks only the **shape**: the sections in the right order, none empty, no `<FILL` left, every criterion has a command
+   in backticks, the last criterion mentions `## Run evidence`, and `## Inputs and failure cases` holds a table of three filled
+   columns or a `none, because <reason>` line. That section is required on a spec new in the change (absent from the merge base of
+   `origin/HEAD`); a spec that already existed only gets a `WARNING` line.
+   It reads the table without rendering it: the header line, the `|---|` row under it, then the lines that hold a `|`, up to a
+   blank line or a line without one; one table, three columns, three filled cells per row. The lines around the table are not
+   judged, so a heading or a sentence above it and a list below it pass, as long as the line right under the rows holds no `|`
+   (a glued line with a `|` is read as a row); a fenced block ends the table like a blank line. What it cannot see also passes: prose glued under the
+   rows with no blank line (GitHub shows it as a broken row), a `|---|` row indented four spaces (no table on GitHub), a table
+   inside an HTML comment. Leave a blank line around the table and read the spec on GitHub once. It does **not** know whether a command is right or runs, and
    it is **not** a gate: nothing stops you editing code before you have run it — keeping the discipline is your job.
 
 4. **Commit, push, then ask the person to approve** (one commit, `git add` by pathspec):
@@ -61,8 +76,8 @@ If not, do `intake` first.
    ```
 
    Ask for approval **after** pushing, so that the person can read exactly that file:
-   - In a sandbox session (`INTENT_SLUG` and `SEAT` both set and not empty, checked by
-     `[ -n "${INTENT_SLUG:-}" ] && [ -n "${SEAT:-}" ]`; a `session-ask` on PATH does not make a session a sandbox), when the `session-ask` command is installed, call
+   - In a sandbox session (`VIBEMAESTRO_ROLE=worker`, or, deprecated and leaving in the next release, `INTENT_SLUG` and `SEAT` both set and
+     not blank; checked by `[ "${VIBEMAESTRO_ROLE:-}" = worker ] || { [ -n "$(printf %s "${INTENT_SLUG:-}" | tr -d '[:space:]')" ] && [ -n "$(printf %s "${SEAT:-}" | tr -d '[:space:]')" ]; }`; a `session-ask` on PATH does not make a session a sandbox), when the `session-ask` command is installed, call
      `session-ask "Spec kb/specs/<date>-<slug>.md is pushed to intent/<date>-<slug>. Approve so I can start coding, or name what needs changing. Open points: <…>"`
      then **end the turn** and wait for the person's message. The command records the `waiting` status so that the person is woken up; the session stays alive.
    - Otherwise (a solo session, or a sandbox without the `session-ask` command), give the spec path in your reply and ask the person right in the session.

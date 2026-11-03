@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""The engine of the kit baton kit:coordinator-bootstrap: set up a coordinator machine for BatonRun in one owner-signed run.
+"""The engine of the kit baton kit:bootstrap: set up a machine for BatonRun in one owner-signed run.
 
-    coordinator_bootstrap.py report                         the machine report: `CHECK <name>: <status> <detail>` lines, exit 0
-    coordinator_bootstrap.py plan                           0 to 2 plan lines (`bootstrap launcher …`, `bootstrap settings …`);
+    bootstrap.py report                         the machine report: `CHECK <name>: <status> <detail>` lines, exit 0
+    bootstrap.py plan                           0 to 2 plan lines (`bootstrap launcher …`, `bootstrap settings …`);
                                                             exit 3 with a REFUSE line when there is nothing to do, or when the
                                                             merge cannot reach `permissions --check` rc 0
-    coordinator_bootstrap.py do launcher|settings --expect-plan <file>
+    bootstrap.py do launcher|settings --expect-plan <file>
                                                             one write, only when its plan line is a line of the signed plan
-    coordinator_bootstrap.py postcheck                      the launcher is current and `permissions --check` finds nothing
-    coordinator_bootstrap.py undo --expect-plan <file>      put back what the run of that signed plan wrote, while it is still
+    bootstrap.py postcheck                      the launcher is current and `permissions --check` finds nothing
+    bootstrap.py undo --expect-plan <file>      put back what the run of that signed plan wrote, while it is still
                                                             what the run left (else LEAVE, exit 1)
 
 What it reuses instead of a second copy: baton.py of this plugin, imported (the launcher text and its install, the printed block,
@@ -57,10 +57,10 @@ sys.dont_write_bytecode = True
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 KIND = os.path.join(PLUGIN_ROOT, "templates", "baton-kinds", "settings-merge.sh")
 # the files the kit baton hashes into every plan line (`engine sha256 …`), in its order
-ENGINE_FILES = (os.path.join(PLUGIN_ROOT, "gates", "coordinator_bootstrap.py"), KIND,
+ENGINE_FILES = (os.path.join(PLUGIN_ROOT, "gates", "bootstrap.py"), KIND,
                 os.path.join(PLUGIN_ROOT, "scripts", "baton.py"), os.path.join(PLUGIN_ROOT, "scripts", "baton-launcher.py"))
 KIND_DATA = None  # the kind's bytes a `do` step hashed: the bytes it runs
-NAME = "coordinator-bootstrap"
+NAME = "coordinator-bootstrap"   # the prefix of the record files: kept, so an undo finds the records an older version wrote
 SDLC, MARKETPLACE = "vibemaestro-sdlc", "vibemaestro"
 REPORT_HOOK = os.path.join("scripts", "bootstrap_report.py")
 ENGINE_SUFFIX = ", engine sha256 "

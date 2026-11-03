@@ -105,7 +105,7 @@ Describe a change in plain words. The session-start reminder points Claude to `v
 
 1. **Intake.** Claude records your request word for word as `kb/intent/<date>-<slug>.md`, creates the branch `intent/<date>-<slug>` in a git worktree of its own, and opens a tracking issue.
 2. **Brainstorm**, only when the request is vague. Claude asks the questions that pick a direction and writes the answers into the intent.
-3. **Spec.** Claude writes `kb/specs/<date>-<slug>.md` in four sections: context, goal, out of scope, acceptance criteria, where each criterion is a command and its expected result. **You approve it before any code is edited**, or say what to change.
+3. **Spec.** Claude writes `kb/specs/<date>-<slug>.md` in five sections: context, goal, out of scope, inputs and failure cases (the hostile, odd or half-failed inputs it must survive, each with its test), acceptance criteria, where each criterion is a command and its expected result. **You approve it before any code is edited**, or say what to change.
 4. **Plan**, only when the work needs several pull requests: one plan file, one row per pull request.
 5. **Ship.** Claude does the work, updates `kb/current-state.md`, runs the acceptance commands and opens a draft pull request with their real output as evidence.
 6. **Review.** Before the pull request leaves draft, a subagent with a fresh context reviews the final diff; the session fixes what it finds, then marks the pull request ready (`gh pr ready`) and tells you. Going ready starts the CI gates, if you installed them.
