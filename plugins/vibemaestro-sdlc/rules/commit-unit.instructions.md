@@ -5,7 +5,7 @@ description: "The commit unit (one task or one fix round, not one typing session
 
 # The commit unit, rebase and squash
 
-A commit is a finished, self-consistent piece of work that reverts alone, not a typing session. Everything below applies only to commits no review has seen (`git-process`: reviewed commits are immutable).
+A commit is a finished, self-consistent piece of work that reverts alone, not a typing session. Everything below except **A pushed split** applies only to commits no review has seen (`git-process`: reviewed commits are immutable).
 
 | Work | Leaves |
 |---|---|
@@ -36,4 +36,4 @@ A commit is a finished, self-consistent piece of work that reverts alone, not a 
 
 Resetting to the tip of main deletes what others merged. Check both: `git diff <sha-before> HEAD` is empty, and `git diff --name-status origin/main...HEAD` lists only your files (the first cannot see a reset to the tip).
 
-**Fold before ready.** Before `gh pr ready` or the first review, fold the chain to one commit per task or round, after `git branch backup/<name>`; `git diff backup/<name> HEAD` must be empty; push with `--force-with-lease`. A chain kept on purpose is declared in the PR body with the `tokens.commit_exception` line, if the repo gates the commit count.
+**Fold before ready.** Before `gh pr ready` or the first review, fold the chain to one commit per task or round, after `git branch backup/<name>`; `git diff backup/<name> HEAD` must be empty; push with `--force-with-lease`. A chain kept on purpose is declared in the PR body with the `tokens.commit_exception` line, if the repo gates the commit count. **A pushed split** (a fix round in two commits, or a `wip` commit, that a review has seen or on a branch you cannot force-push) has no exception line: the gate cannot tell who saw it. Replace the PR with one commit of the same tree: `git fetch origin main <branch> && git switch -c <branch>-2 origin/<branch> && git reset --soft "$(git merge-base HEAD origin/main)" && git commit`; `git diff origin/<branch> HEAD` must be empty; `git push -u origin <branch>-2` (a new branch: no force). Open the new PR with `--closes <the intent's issue>` and add `#<new PR>` to the plan row's link if there is one (tools find the intent by the branch name, which no longer matches), close the old one with a comment linking it, so one PR stays live, and post the review again on the new head, naming that its tree is the reviewed head's tree.

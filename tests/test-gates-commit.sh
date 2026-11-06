@@ -12,10 +12,12 @@
 #       is not counted, a stale BASE and a self-merge of the PR branch are named
 #   [W] marks that mean "not folded": wip, fixup!, squash!, amend! in the places a mark counts and not where it does not
 #   [R] review rounds: one round in one commit; the pattern is a config value matched without case and accents
-#   [H] the red message: three files then dots, the exemption never waives the other two measures
+#   [H] the red message: three files then dots, the exemption never waives the other two measures; each finding is marked
+#       `waived by <token>` or `not waivable`, the exception hint shows only when it can help, `unfolded` names the fresh PR
 #   [A] arguments: usage rc 64, limits from flags and from config, --json fields
 #   [I] cannot conclude (rc 2): bad refs, an empty range, an internal fault is not a traceback rc 1
-#   [P] the routes: a push of the PR branch to a remote and the gate run on the remote refs
+#   [P] the routes: a push of the PR branch to a remote and the gate run on the remote refs; a pushed split replaced by a
+#       fresh one-commit PR of the same tree, by rule `commit-unit`'s recipe
 #   [C] config: limits and token from .vibemaestro/sdlc.json, an invalid file is rc 65 naming the key
 # Real git in throw-away repos, no gh, no network, no sleep.
 # =============================================================================
@@ -68,6 +70,10 @@ fam_thresholds() {
 }
 
 EXEMPT_OK='COMMIT EXCEPTION: rename the API then move callers then drop the old path, the order is load-bearing'
+EXC_HINT='A chain whose order is load-bearing: add to the PR body `COMMIT EXCEPTION: <reason of at least 15 characters>`.'
+FRESH='  `unfolded` has no exception line. A chain a review has seen, or a branch you cannot force-push: open a fresh PR with one commit of the same tree, close this PR with a link to it, and pin the review to the new head (rule `commit-unit`, "A pushed split").'
+# lacks <label> <text> — the output must NOT carry the text
+lacks() { has_q "$2" && bad "$1: the output carries «$2»: ${OUT:0:300}" || ok "$1"; }
 fam_exempt() {
   local p=$1 r i f
   r=$(mk_feat ex); for i in $(seq 1 16); do cm "$r" "f$i.txt" "feat: task $i"; done
@@ -113,6 +119,9 @@ fam_exempt() {
   cd_gate "$p" "$r" main feat --body-file "$TMP/no-such-file.md"; want 64 "[X] an unreadable --body-file is rc 64 (not skipped silently)"
   r=$(mk_feat exw); cm "$r" a.txt "wip: unfinished"
   f=$(body ok2 "$EXEMPT_OK\n"); cd_gate "$p" "$r" main feat --body-file "$f"; want 1 "[X] wip plus an exemption stays red" unfolded
+  want 1 "[X] …the wip finding is marked not waivable" "unfolded: 1 commits carry a wip/fixup/squash mark ($(G -C "$r" rev-parse --short=7 feat)) (not waivable)"
+  want 1 "[X] …and the hint names the fresh-PR path" "$FRESH"
+  lacks "[X] …and no exception-line hint (nothing it could waive blocks)" "$EXC_HINT"
 }
 
 mk_sub() {  # mk_sub <name> <n> — on intent/x, side branch wt/p1 with n commits
@@ -131,6 +140,9 @@ fam_side() {
   cd_gate "$p" "$r4" main intent/x; want 1 "[S] four side merges: red" "4 side-branch merges"
   has_q ', ...' && ok "[S] four side merges: three shas then dots" || bad "[S] four side merges without dots: $OUT"
   f=$(body ok3 "$EXEMPT_OK\n"); cd_gate "$p" "$r" main intent/x --body-file "$f"; want 1 "[S] side merge plus exemption stays red (the exemption waives two thresholds only)" side-merge
+  want 1 "[S] …the side merge is marked not waivable" "rebase, do not merge origin/<branch>) (not waivable)"
+  lacks "[S] …no exception-line hint" "$EXC_HINT"
+  lacks "[S] …no fresh-PR hint (the finding's own text names the fix)" "$FRESH"
   r=$(mk_sub subs 3); G -C "$r" merge -q --squash wt/p1 >/dev/null; G -C "$r" commit -qm "feat(p): item p"
   cd_gate "$p" "$r" main intent/x; want 0 "[S] merge --squash into one commit: green" "2 non-merge"
   r=$(mk_sub sub1 1); G -C "$r" merge -q --no-ff -m "Merge wt/p1" wt/p1
@@ -216,6 +228,23 @@ fam_report() {
   has_q ', ...' && bad "[H] exactly three files printed dots" || ok "[H] exactly three files: no dots"
   for i in 1 2 3 4 5; do cm "$r" w.txt "feat: w pass $i"; done
   cd_gate "$p" "$r" main feat --max-commits 99; want 1 "[H] four hot files: dots added" ", ..."
+  # a round split and a hot file, with a valid line: the line waives the hot file only, and says so
+  r=$(mk_feat mk); cm "$r" a.txt "feat: a"; cm "$r" a.txt "fix: round 1"; cm "$r" a.txt "fix: round 2 a"; cm "$r" a.txt "fix: round 2 b"; cm "$r" a.txt "fix: tidy"
+  f=$(body mk "$EXEMPT_OK\n"); cd_gate "$p" "$r" main feat --body-file "$f"
+  want 1 "[H] split plus file-touch plus a valid line: file-touch marked waived" "file-touch: 1 files touched again and again (limit 4 commits per file): a.txt x5 (waived by COMMIT EXCEPTION:)"
+  want 1 "[H] …the split marked not waivable" "unfolded: a review round is split over several commits: round 2 x2 (not waivable)"
+  want 1 "[H] …the hint names the fresh-PR path" "$FRESH"
+  lacks "[H] …no exception-line hint: the line already waived all it can" "$EXC_HINT"
+  cd_gate "$p" "$r" main feat --body-file "$f" --json
+  [ "$(jfield '[d["rc"], d["found"]]')" = '[1, [{"kind": "file-touch", "text": "1 files touched again and again (limit 4 commits per file): a.txt x5", "waivable": true}, {"kind": "unfolded", "text": "a review round is split over several commits: round 2 x2", "waivable": false}]]' ] && ok "[A] --json of the same marked run: found keeps its keys and its text carries no mark" || bad "[A] --json found of a marked run: $(jfield 'd["found"]')"
+  r=$(mk_feat mk2); for i in 1 2 3 4 5; do cm "$r" a.txt "feat: a pass $i"; done
+  cd_gate "$p" "$r" main feat --body-file "$f"
+  want 0 "[H] file-touch only plus a valid line: green as before, marked waived" "pass (named exemption: rename the API then move callers then drop the old path, the) - file-touch: 1 files touched again and again (limit 4 commits per file): a.txt x5 (waived by COMMIT EXCEPTION:)"
+  cd_gate "$p" "$r" main feat
+  want 1 "[H] file-touch only, no line: the hint is today's" "  Fold the chain to the unit of rule \`commit-unit\` (only a chain no review has seen may be rewritten). $EXC_HINT"
+  lacks "[H] …a waivable finding with no line carries no mark" "(waived by"
+  lacks "[H] …nor not waivable" "(not waivable)"
+  lacks "[H] …and no fresh-PR hint" "$FRESH"
 }
 
 fam_args() {
@@ -242,6 +271,7 @@ import json,sys
 d=json.load(sys.stdin)
 need={"commits","merges_total","side_merges","max_touch","markers","round_split","rc","found","file_touch","exempt"}
 sys.exit(0 if need <= set(d) and d["rc"]==1 and d["commits"]==16 else 1)'; then ok "[A] --json has every field for another machine to read"; else bad "[A] --json misses fields: $OUT"; fi
+  [ "$(jfield 'd["found"]')" = '[{"kind": "commits", "text": "16 non-merge commits (limit 15)", "waivable": true}]' ] && ok "[A] --json: found keeps kind, text, waivable and the text carries no mark" || bad "[A] --json found: $(jfield 'd["found"]')"
 }
 
 fam_infra() {
@@ -270,6 +300,19 @@ fam_routes() {
   cd_gate "$p" "$W" origin/main origin/intent/y; want 0 "[P] the same after merge --squash: green" "2 non-merge"
   W=$(mk_origin five); G -C "$W" checkout -qb intent/z; for i in 1 2 3 4 5; do cm "$W" spec.md "docs(kb): spec pass $i"; done; G -C "$W" push -q origin intent/z; G -C "$W" fetch -q origin
   cd_gate "$p" "$W" origin/main origin/intent/z; want 1 "[P] five commits on one file pushed to the remote: red" "spec.md x5"
+  # a round split pushed after a catch-up merge, then main moves on: the FAIL names the fresh PR, and the rule's recipe gets there
+  W=$(mk_origin split); G -C "$W" checkout -qb intent/s; cm "$W" a.txt "feat: a"; cm "$W" b.txt "fix: round 1 a"; G -C "$W" push -q origin intent/s
+  G -C "$W" checkout -q main; cm "$W" m1.txt "chore: main 1"; G -C "$W" push -q origin main
+  G -C "$W" checkout -q intent/s; G -C "$W" merge -q --no-ff -m "Merge main" main; cm "$W" c.txt "fix: round 1 b"; G -C "$W" push -q origin intent/s
+  G -C "$W" checkout -q main; cm "$W" m2.txt "chore: main 2"; G -C "$W" push -q origin main; G -C "$W" checkout -q intent/s
+  cd_gate "$p" "$W" origin/main origin/intent/s; want 1 "[P] a round split pushed to the remote: red" "round 1 x2 (not waivable)"
+  want 1 "[P] …and the FAIL names the fresh-PR path" "$FRESH"
+  G -C "$W" fetch -q origin main intent/s
+  G -C "$W" switch -q -c intent/s-2 origin/intent/s
+  G -C "$W" reset -q --soft "$(G -C "$W" merge-base HEAD origin/main)" && G -C "$W" commit -qm "feat: a, one commit"
+  [ -z "$(G -C "$W" diff origin/intent/s HEAD)" ] && ok "[P] the fresh branch holds the same tree as the reviewed head" || bad "[P] the fresh branch's tree differs"
+  G -C "$W" push -q -u origin intent/s-2; G -C "$W" fetch -q origin
+  cd_gate "$p" "$W" origin/main origin/intent/s-2; want 0 "[P] …and the fresh PR is green: one commit over main" "pass - 1 non-merge commits"
 }
 
 fam_config() {
@@ -283,7 +326,7 @@ fam_config() {
   r=$(mk_feat c2); for i in $(seq 1 16); do cm "$r" "f$i.txt" "feat: task $i"; done
   put_cfg "$r" '{"tokens": {"commit_exception": "NGOAI LE:"}}'
   f=$(body tok1 "COMMIT EXCEPTION: rename the API then move callers then drop the old path\n"); cd_gate "$p" "$r" main feat --body-file "$f"; want 1 "[C] the configured token replaces the default: the old literal no longer waives"
-  f=$(body tok2 "NGOAI LE: rename the API then move callers then drop the old path\n"); cd_gate "$p" "$r" main feat --body-file "$f"; want 0 "[C] …and the configured one does"
+  f=$(body tok2 "NGOAI LE: rename the API then move callers then drop the old path\n"); cd_gate "$p" "$r" main feat --body-file "$f"; want 0 "[C] …and the configured one does" "16 non-merge commits (limit 15) (waived by NGOAI LE:)"
   put_cfg "$r" '{"commits": {"max_per_pr": 0}}'; cd_gate "$p" "$r" main feat; want 65 "[C] an invalid config is rc 65" commits.max_per_pr
   put_cfg "$r" '{"commits": {"round_pattern": "round"}}'; cd_gate "$p" "$r" main feat; want 65 "[C] a round pattern without a group is rc 65" commits.round_pattern
   # a pattern that can never match the normalised subject (upper case, an accent, the d with stroke) is warned about; the

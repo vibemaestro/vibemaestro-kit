@@ -20,7 +20,8 @@ it does not. A commit belongs to exactly ONE round: the first round number found
 with the configured token (`tokens.commit_exception`, default `COMMIT EXCEPTION:`) followed by a reason of at least 15 characters.
 The line does not count inside a code fence, an HTML comment, a blockquote, an indented block, or when the reason is only a `<...>`
 placeholder. The FIRST such line decides: a placeholder or short line above a valid one leaves the PR red, as in 1.0.0.
-The other two measures have no exemption: there is no good reason to hand in `wip` or to keep a side-branch merge.
+The other two measures have no exemption: there is no good reason to hand in `wip` or to keep a side-branch merge. A split
+that a review has already seen goes to a fresh one-commit PR of the same tree (rule `commit-unit`, "A pushed split").
 
 Use:
     commit_discipline.py [BASE] [HEAD]            # default origin/main HEAD
@@ -155,11 +156,14 @@ def decide(facts, body, limits, token, rx):
     return (1 if blocking else 0), found, m
 
 
-def render(rc, found, m):
+def render(rc, found, m, token):
+    """One line. Each finding says whether the exemption line waived it, or that no line can."""
     if not found:
         return "pass - %d non-merge commits, no file touched more than %d times, no side-branch merge" % (m["commits"], m["max_touch"])
+    def mark(w):
+        return (" (waived by %s)" % token if m["exempt"] else "") if w else " (not waivable)"
     head = "FAIL" if rc else "pass (named exemption: %s)" % m["exempt"][:60]
-    return head + " - " + "; ".join("%s: %s" % (k, t) for k, t, _ in found)
+    return head + " - " + "; ".join("%s: %s%s" % (k, t, mark(w)) for k, t, w in found)
 
 
 def main(argv=None):
@@ -202,14 +206,20 @@ def main(argv=None):
         out["markers"] = [c["sha"] for c in m["markers"]]
         print(json.dumps(out, ensure_ascii=False))
     else:
-        print("commit-discipline: " + render(rc, found, m))
+        token = cfg["tokens"]["commit_exception"]
+        print("commit-discipline: " + render(rc, found, m, token))
         if rc:
-            print("  Fold the chain to the unit of rule `commit-unit` (only a chain no review has seen may be rewritten). A chain whose "
-                  "order is load-bearing: add to the PR body `%s <reason of at least %d characters>`."
-                  % (cfg["tokens"]["commit_exception"], MIN_REASON))
-            if any(w for _, _, w in found) and first_line(body, cfg["tokens"]["commit_exception"]) is not None and not m["exempt"]:
+            blocking = [f for f in found if not (f[2] and m["exempt"])]
+            print("  Fold the chain to the unit of rule `commit-unit` (only a chain no review has seen may be rewritten)."
+                  + (" A chain whose order is load-bearing: add to the PR body `%s <reason of at least %d characters>`."
+                     % (token, MIN_REASON) if any(w for _, _, w in blocking) else ""))
+            if any(k == "unfolded" for k, _, _ in blocking):
+                print("  `unfolded` has no exception line. A chain a review has seen, or a branch you cannot force-push: open a fresh PR "
+                      "with one commit of the same tree, close this PR with a link to it, and pin the review to the new head (rule "
+                      "`commit-unit`, \"A pushed split\").")
+            if any(w for _, _, w in found) and first_line(body, token) is not None and not m["exempt"]:
                 print("  The first `%s` line of the body is a placeholder or shorter than %d characters: only the first such line "
-                      "counts, a line below it does not." % (cfg["tokens"]["commit_exception"], MIN_REASON))
+                      "counts, a line below it does not." % (token, MIN_REASON))
     return rc
 
 

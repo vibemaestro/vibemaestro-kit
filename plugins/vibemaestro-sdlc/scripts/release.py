@@ -1193,10 +1193,12 @@ def shipped(repo, base_ref, base, bad):
 def added_in_commits(repo, mb):
     """[(path, text)] of each change file a commit in mb..HEAD added (merges are not diffed), with its last text: the one before
     the commit that removed it (the cut), else the working tree's."""
-    rc, out = git(repo, "log", "--format=", "--diff-filter=A", "--name-only", "--no-renames", "%s..HEAD" % mb, "--", CHANGES + "/")
+    # --full-history: on CI's test merge .changes/ is the same on both parents (added and consumed inside the PR), and the default
+    # history simplification would follow the base alone and skip the PR's commits
+    rc, out = git(repo, "log", "--full-history", "--format=", "--diff-filter=A", "--name-only", "--no-renames", "%s..HEAD" % mb, "--", CHANGES + "/")
     found = []
     for p in sorted(set(l for l in out.decode("utf-8", "surrogateescape").split("\n") if l.strip() and l != CHANGES + "/README.md")):
-        rc, gone = git(repo, "log", "-1", "--format=%H", "--diff-filter=D", "--no-renames", "%s..HEAD" % mb, "--", p)
+        rc, gone = git(repo, "log", "--full-history", "-1", "--format=%H", "--diff-filter=D", "--no-renames", "%s..HEAD" % mb, "--", p)
         text = show(repo, gone.decode().strip() + "^", p) if gone.strip() else (text_here(repo, p) or "").encode()
         found.append((p, (text or b"").decode("utf-8", "replace")))
     return found

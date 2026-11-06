@@ -166,6 +166,11 @@ Released together: alpha 2.10.0, beta 1.0.1
   cm "cut"; rp check --base origin/release
   eq "$RC" 0 "[C13] …and it passes check as a hotfix"
   has "$OUT" "kind: hotfix" "[C13] …the hotfix kind"
+  # CI checks out the test merge of the PR into release: the change file is added and consumed inside the PR, so .changes/ is
+  # the same on both parents and a plain `git log -- .changes/` skips the PR's commits
+  gw checkout -q --detach origin/release; gw merge -q --no-ff -m "test merge" hf; rp check --base origin/release
+  eq "$RC" 0 "[C13b] the same hotfix on the test merge of it into release passes check"
+  has "$OUT" "hotfix change file .changes/fix.md" "[C13b] …and the check finds its change file"
   new_rel_repo; gw checkout -q -b hf origin/release; echo fix >> "$W/plugins/alpha/a.txt"; cfw fix.md alpha minor "a feature"; cm "fix"
   rp cut --hotfix
   eq "$RC" 1 "[C14] cut --hotfix with a minor change file: refused"

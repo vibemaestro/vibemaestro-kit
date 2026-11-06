@@ -2,6 +2,17 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.4.1
+
+Released together: vibemaestro-sdlc 0.4.1, vibemaestro-brain 0.3.0
+
+- patch: commit-discipline: each finding says `waived by <token>` or `not waivable`, the exception hint shows only when the line could help, and a review-round split that is already pushed is named a way to green: rule `commit-unit`'s "A pushed split", a fresh one-commit PR of the same tree.
+- patch: release.py check finds the change files of a hotfix on CI's test merge of the PR into `release` (it read the history without `--full-history`, so a hotfix that adds and consumes its change file in one PR was red with "no change file of this hotfix names it").
+
+### Upgrade notes
+
+- A repository that vendors the gate deletes `.vibemaestro/gates/` and runs the install-gates skill again; a plain re-run keeps the old copy (`kept (differs)`).
+
 ## 0.4.0
 
 Released together: vibemaestro-sdlc 0.4.0, vibemaestro-brain 0.3.0
