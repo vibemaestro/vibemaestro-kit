@@ -3,18 +3,18 @@
 # Targets: <claude-dir>/plugins: known_marketplaces.json, installed_plugins.json, the vibemaestro marketplace clone, new cache directories of the plugins it updates; a run record with byte copies of both JSON files and the run's targets under the baton state directory, kept seven days, or until the owner moves it when undo left it
 # Blast: the vibemaestro marketplace's clone and the user-scope installs of its plugins: vibemaestro-sdlc, vibemaestro-brain and its marketplace-local plugins; no other scope or marketplace, no settings file
 # Undo: from this run's record only: installed_plugins.json and known_marketplaces.json put back byte for byte from the copies made before the act, unless either changed outside the run's plugins and the marketplace since, a plugin of the run is no longer what the run left (another hand updated it), or the copy names an install that is gone (both files then stay, with the copies, for the owner); it names what it leaves: the new cache directories and the marketplace clone at the new marketplace head
-# Pre: the SHA is 40 lower-case hex; CLAUDE_CONFIG_DIR is unset or absolute; the vibemaestro marketplace is a known github.com source at most at ref main, whose clone lies under <claude-dir>/plugins/marketplaces, is a repository git trusts, and has one origin URL, the known source's repository, with no URL rewrite, include or transport key (a proxy, a pinned address, a branch remote other than origin, an ssh command, TLS checks off) in its config, and git's real fetch URL (every config level) names that repository too; none of the git variables that point git at another repository or config file (GIT_DIR, GIT_CONFIG, …) is set; each marketplace entry carries only name, source and description; its layout is the kit's own marketplace or the git-subdir marketplace (sdlc and brain git-subdir of one https github.com repository at ref main), and names exactly one kit repository; every other entry is a marketplace-local plugin, source exactly ./plugins/<its name>; the clone's plugins directory and each local plugin's directory are real directories, and nothing under .claude-plugin or a local plugin's directory differs from the clone's HEAD; kit main is that SHA on GitHub, and the marketplace's main M is read from GitHub (in the kit's own layout M is the SHA); sdlc and brain have a user-scope install, a local plugin at most one; not every plugin at its target already; at each write, its plan line is in the signed plan; after the marketplace update, the layout, kit and local plugins are the same, kit main is still the SHA, the marketplace's main is still M, and the clone is at M, clean
+# Pre: the SHA is 40 lower-case hex; CLAUDE_CONFIG_DIR is unset or absolute; the vibemaestro marketplace is a known github.com source at most at ref main, whose clone lies under <claude-dir>/plugins/marketplaces, is a repository git trusts, and has one origin URL, the known source's repository, with no URL rewrite, include or transport key (a proxy, a pinned address, a branch remote other than origin, an ssh command, TLS checks off) in its config, and git's real fetch URL (every config level) names that repository too; none of the git variables that point git at another repository or config file (GIT_DIR, GIT_CONFIG, …) is set; each marketplace entry carries only name, source and description; its layout is the kit's own marketplace or the git-subdir marketplace (sdlc and brain git-subdir of one https github.com repository at ref main), and names exactly one kit repository; every other entry is a marketplace-local plugin, source exactly ./plugins/<its name>; the clone's plugins directory and each local plugin's directory are real directories, and nothing under .claude-plugin or a local plugin's directory differs from the clone's HEAD; kit main is that SHA on GitHub, and the marketplace's main M is read from GitHub (in the kit's own layout M is the SHA); sdlc and brain have a user-scope install, a local plugin at most one; not every plugin at its target already; at each write, its plan line is in the signed plan; after the marketplace update, the layout, kit and local plugins are the same, kit main is still the SHA, the marketplace's main is still M, and the clone is at M, clean; no signed run (signatures/) or queued item (queue/, pending or signed) of a kit baton of a plugin it will move is waiting to run, checked at rehearse and again in run (--wait <s> waits up to s seconds for it)
 # Stops: none
 #   Why none (the owner's standing rule): updating the machine's own merged plugins is routine. The kit takes only kit main at a SHA
 #   the session names, and the marketplace's own main at the commit the plan line pins, from the marketplace the machine already
 #   has; the post-check proves each install is its commit (kit main can move between the check and the update: a git-subdir
 #   source at ref main fetches the newest main), and undo puts both registry files back byte for byte. Another marketplace,
 #   layout, ref or scope is refused at rehearse.
-# Usage: <full kit sha>
+# Usage: <full kit sha> [--wait <seconds, 1 to 300>]
 # Each: plugin-update *
 #
 # The kit baton kit:plugin-update. Run it only through the baton runner:
-#   <launcher> go kit:plugin-update <full kit sha>
+#   <launcher> go kit:plugin-update <full kit sha> [--wait <seconds>]
 # The claude directory is CLAUDE_CONFIG_DIR when set, else ~/.claude; a relative CLAUDE_CONFIG_DIR is refused. The layout
 # is read from the marketplace clone, never assumed: (1) the kit's own marketplace (the two plugins at ./plugins/<name>; the kit
 # is the github.com repository the known source and the clone's origin both name), (2) the git-subdir marketplace (the two plugins
@@ -46,6 +46,13 @@
 # accepts every directory and resolves to the new sdlc. It then prints the setup step the session runs next, its paths
 # shell-quoted. It writes nothing: the run record stays, and the next run of this kit deletes records older than seven days,
 # except one undo marked left for the owner.
+# A signature binds a kit baton to its plugin's versioned directory, which this update moves: another session's signed run that has not
+# started, or a queued item, would stop matching ("no signature for this script") and the owner would sign it twice. So before the
+# first plan line, in both phases, the kit refuses while one of a plugin it moves is waiting (the engine's `pending`: baton.py's own
+# readers of signatures/ and queue/; a signature whose run has started, a run-start with no `run` line since, is not waiting, one that
+# came back after an unanswered run is; this run's own record is not counted; a reader that fails is a refusal, never a wait), naming each: the baton, its time and its directory. `--wait <s>` (1 to 300, for each check: rehearse and run each wait
+# up to s) checks again every second until none is waiting, then goes on; at s seconds it refuses as above. A run that has begun is
+# not waited for. What a signature binds is not changed here.
 # The engine is gates/plugin_update.py (reads only; --help lists its modes); undo asks it whether the copies may go back, then
 # puts them back itself with cp and mv.
 # This script is plugin code: baton lets a kit baton, and nothing else, run a plugin gate as python3 -I -B "$BATON_PLUGIN_ROOT/gates/…".
@@ -79,8 +86,15 @@ if [ -z "${BATON_PLUGIN_ROOT:-}" ]; then
   echo "kit:plugin-update runs only through the baton runner (baton go kit:plugin-update <full kit sha>)" >&2
   exit 64
 fi
-usage() { echo "usage: baton rehearse|run kit:plugin-update <full kit sha>" >&2; }
-if [ $# -ne 1 ] || ! [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then
+usage() { echo "usage: baton rehearse|run kit:plugin-update <full kit sha> [--wait <seconds, 1 to 300>]" >&2; }
+ARGV=("$@") WAIT=0
+if [ $# -eq 3 ] && [ "$2" = --wait ] && [[ "$3" =~ ^[1-9][0-9]{0,2}$ ]] && [ "$3" -le 300 ]; then
+  WAIT=$3
+elif [ $# -ne 1 ]; then
+  usage
+  exit 64
+fi
+if ! [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then
   usage
   exit 64
 fi
@@ -207,6 +221,29 @@ transport_keys() {
       return 3
     fi
   done < <(GIT_DIR="$CLONE/.git" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git config -z --list 2> /dev/null)
+}
+# pending_runs <plugin,...> — rc 3, naming each, while a signed run or queued item of one of those plugins waits to run (the move
+# would void it); with --wait, the check repeats every second for up to WAIT seconds first
+pending_runs() {
+  local o rc n=0
+  while :; do
+    rc=0
+    o=$(reader pending "$CFG" "${BATON_SCRIPT:-$0}" "$1" "${ARGV[@]}") || rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) [ "$n" -lt "$WAIT" ] || break ;;
+      *)
+        printf '%s\n' "${o:-REFUSE the signed runs and queued items cannot be read}" >&2
+        return 3
+        ;;
+    esac
+    sleep 1
+    n=$((n + 1))
+  done
+  printf 'REFUSE a signed run or queued item of a plugin this update moves has not run yet%s; the move would void it (a signature binds a kit baton to its plugin directory) and the owner would sign it again:\n%s\n' \
+    "$([ "$WAIT" -gt 0 ] && printf ' (still waiting after %s s)' "$WAIT")" "$o" >&2
+  echo "wait for it to run, or pass --wait <seconds, 1 to 300>" >&2
+  return 3
 }
 # main_of <owner/name> — that repository's main as GitHub reports it now, or nothing
 main_of() { gh api --hostname "$HOST" "repos/$1/git/ref/heads/main" --jq '.object.sha' 2> /dev/null || true; }
@@ -345,6 +382,7 @@ act() {
     echo "REFUSE nothing to do: every plugin already records its target (sdlc and brain $SHA, local plugins $mmain)" >&2
     return 3
   fi
+  pending_runs "${todo// /,}" || return 3
   printf 'PLAN-COUNT %s\n' "$((total + 3))"
   regsum=$(sha256_file "$REG")
   knownsum=$(sha256_file "$KNOWN")

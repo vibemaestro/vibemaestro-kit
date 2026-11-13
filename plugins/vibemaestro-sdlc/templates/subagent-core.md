@@ -11,12 +11,15 @@ The vibemaestro-sdlc process, short form for a subagent (the session that starte
   fix the shared code, or question the design and say so.
 - **Rules reach you as hook reminders** when you edit a file or run a command: read the named rule file before you go on.
 - No secret, token, public IP, account ID or personal machine path in code, commits or PR text.
+- **kb content in the repo's language:** a new kb file (story, spec, plan, decision) is written in the `language` key of
+  `.vibemaestro/sdlc.json` (`vi` when unset); an older file keeps its language; the person's own words are quoted as given;
+  everything else is in English.
 
 Tests (rule `test-quality`):
 1. Each test names the break it catches.
 2. Expected values are literal, never computed by the code under test.
-3. At least one refusal or negative case per rule; every row of the spec's `## Inputs and failure cases` has a test.
-4. No test that only asserts that a source file contains a line.
+3. At least one refusal or negative case per rule; every risk the spec lists (an older spec: every row of `## Inputs and failure cases`) has a test, or the PR says why only a review can catch it.
+4. No test that only asserts that a source file contains a line, or the wording of the spec: test the behaviour of the AC and the risks.
 5. No assertion that only checks a mock.
 6. A new test is red on main before the change and green after it.
 7. Never revert or mutate the fix (or copy and edit the code under test) to see red: that is a planted break. A negative case

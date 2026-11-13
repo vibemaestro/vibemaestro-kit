@@ -6,7 +6,7 @@ description: "Use when: on one machine (no sandbox, only vibemaestro-sdlc and vi
 # local-parallel — several tasks at once on one machine
 
 Local way of working: one machine, `vibemaestro-sdlc` and `vibemaestro-brain`, no sandbox. The main session
-talks with the person, briefs each task (what must be true, with its acceptance command), decides, post-checks, merges, and edits no file of a task;
+talks with the person, briefs each task (what must be true, with how it is checked), decides, post-checks, merges, and edits no file of a task;
 each task runs in a subagent started with the Agent tool on `agents.worker_model`, which works from its brief: intake to a
 draft PR. One task at a time needs none of this: run the normal flow in the main session.
 
@@ -58,7 +58,7 @@ A subagent (on `agents.worker_model`) has no `session-ask` and cannot start anot
   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" bind <stem> --agent <agent id>`, the agent id from the Agent tool's result
   that started the task (on `agents.worker_model`). It ties the task's local state file to that subagent's transcript; the subagent
   cannot do it, as its environment holds no agent id.
-- `SPEC ready …`: show the person the spec path and get their approval (silence is not approval), then resume that task with
+- `SPEC ready …`: show the person the story and the spec path and get their approval (one ask for both) (silence is not approval), then resume that task with
   `SendMessage` and the person's words. A question outside the brief: answer it, or ask the person, the same way.
 - **The fresh-context review** of rule `before-ready`: you start it, one Agent call on `agents.review_model`, pinned to the PR head,
   and send its findings to the subagent through `SendMessage`; the subagent answers with one fix commit. When you start it, record

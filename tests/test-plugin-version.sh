@@ -18,6 +18,12 @@
 #   [X] the ordinary kind, a plugin removed whole: its marketplace entry may go once plugins/<name>/ holds no file; a pending change
 #       file naming only it may be deleted; one that also names others may lose exactly its name, keep its level and reword its
 #       body, which then names no removed plugin (the name or the part after its first -, any case); every other pending note stays
+#   [K] the ordinary kind, a change file's `supersedes:` and `cancels:`: each name is a change file pending or consumed (its name
+#       without .md, comma-separated, no empty item), never the file itself, naming a plugin it names too, not naming it back, a
+#       consumed one's line still in a CHANGELOG section, a name without its leading date naming the one dated file (two: red),
+#       and a new change file never shares its name without the date with another;
+#       a `cancels:` never names a file with marks; a pending change file of the
+#       base keeps its marks (also when it loses a removed plugin); a hotfix change file has none
 #   [R] [H] [B] the release, hotfix and back-merge kinds: the released version is the CHANGELOG's; a plugin never released goes to
 #       0.1.0; the cut writes no manifest and no kb page
 # Real git on throw-away repositories, no network.
@@ -54,13 +60,19 @@ setcl() {
 cm() { gw add -A; gw commit -q -m "$1"; }
 # new_repo [alpha version] — W: a clone of a bare origin whose main holds plugins alpha (default 2.9.0) and beta (1.0.0), on branch feat
 new_repo() {
-  local d; d=$(fresh); O="$d/origin.git"
+  local d; d=$(fresh); O="$d/origin.git"; P=""
   git_ init -q --bare -b main "$O"; git_ clone -q "$O" "$d/w" 2>/dev/null; W="$d/w"
   setv alpha "\"${1:-2.9.0}\""; setv beta '"1.0.0"'
   echo a > "$W/plugins/alpha/a.txt"; echo b > "$W/plugins/beta/b.txt"; echo r > "$W/README.md"
   gw add -A; gw commit -q -m base; gw branch -M main; gw push -q -u origin main; gw checkout -q -b feat
 }
-pv() { OUT=$(cd "$W" && env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$PV" check --repo "$W" "$@" 2>&1); RC=$?; }
+# pub_args <args> — the args, plus --public P (a release fixture's public repository) when they name no --public, --fold or --hotfix
+pub_args() {
+  A=("$@")
+  case " $* " in *" --public "*|*" --fold "*|*" --hotfix "*) return;; esac
+  [ -z "${P:-}" ] || A+=(--public "$P")
+}
+pv() { pub_args "$@"; OUT=$(cd "$W" && env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$PV" check --repo "$W" ${A[@]+"${A[@]}"} 2>&1); RC=$?; }
 # expect <tag> <rc> <what> — the last pv run
 expect() { eq "$RC" "$2" "[$1] $3: rc $2"; }
 
@@ -68,7 +80,7 @@ fam_real() { PV=$1
   # the public export has one commit of its own, no origin, and carries released versions: a private-repo change has no meaning there
   if [ "$(tree_shape "$SRC_ROOT")" = export ]; then echo "  (not counted: the public export has no base to compare, [R1] judges a change of the private repo)"; return; fi
   # the CI environment is kept: GITHUB_BASE_REF picks the PR's base, and GITHUB_ACTIONS makes a check that cannot run red;
-  # --public is the repository the export publishes to (export-public.sh's default): only a fold reads its tags
+  # --public is the repository the export publishes to (export-public.sh's default): a release and a fold read its tags
   local pub; pub=$(sed -n 's/^REPOSITORY=\([^ ]*\).*/\1/p' "$SRC_ROOT/scripts/export-public.sh")
   OUT=$(cd "$SRC_ROOT" && python3 "$PV" check --repo "$SRC_ROOT" --public "${pub:?export-public.sh names no REPOSITORY}" 2>&1); RC=$?
   printf '%s\n' "$OUT" | sed 's/^/  /'
@@ -360,6 +372,10 @@ fam_removal() { PV=$1
   expect X6 1 "a mixed note that gains a name"
   new_repo_x; rm_xn; cfw mix.md "kit-gamma, alpha" minor "alpha does more"; cm "reordered"; pv
   expect X6b 1 "a mixed note that keeps the removed name"
+  new_repo_x; rm_x; gw rm -q .changes/gonly.md; printf -- '---\nplugins: alpha\nlevel: minor\nsupersedes: al\n---\nalpha does more\n' > "$W/.changes/mix.md"
+  cm "the mixed note loses kit-gamma and gains a mark"; pv
+  expect X13 1 "a pending note that loses a removed plugin and gains a mark"
+  has "$OUT" ".changes/mix.md: its supersedes:/cancels: changed" "[X13b] …naming it"
   new_repo_x; rm_xn; gw rm -q .changes/al.md; cm "a note of a staying plugin deleted"; pv
   expect X7 1 "a deleted note that names only a staying plugin"
   new_repo_x; rm_x; gw rm -q .changes/gonly.md .changes/mix.md; cm "a mixed note deleted"; pv
@@ -410,10 +426,16 @@ new_repo_r() {
   setm gamma; setcl gamma 0.3.0; echo g > "$W/plugins/gamma/g.txt"; mp_add gamma ./plugins/gamma
   printf 'Frozen at: 2.9.0\n<!-- surface:begin -->\nx\n<!-- surface:end -->\n' > "$W/plugins/alpha/CONTRACT.md"
   cm "gamma and a contract"; gw push -q origin main; gw push -q origin main:release
+  # the public repository P publishes every version released so far
+  P="$(dirname "$O")/public.git"; git_ init -q --bare -b main "$P"
+  for c in "$W"/plugins/*/CHANGELOG.md; do
+    n=$(basename "$(dirname "$c")"); v=$(sed -n 's/^## \([0-9][0-9.]*\)$/\1/p' "$c" | head -n 1)
+    [ -z "$v" ] || gw push -q "$P" "main:refs/tags/$n--v$v"
+  done
   echo a3 >> "$W/plugins/alpha/a.txt"; cfw feat1.md alpha minor "alpha does more"; cm "a feature"; gw push -q origin main
   gw fetch -q origin; gw checkout -q feat; gw merge -q --ff-only main
 }
-cut_() { ( cd "$W" && env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$PV" cut "$@" ) >/dev/null 2>&1; }
+cut_() { pub_args cut "$@"; ( cd "$W" && env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$PV" "${A[@]}" ) >/dev/null 2>&1; }
 # vof <plugin> — its released version: the first `## ` heading of its CHANGELOG when that is a version, else "unreleased"
 vof() { python3 -c 'import re,sys
 h=[l[3:].strip() for l in open(sys.argv[1]).read().split("\n") if l.startswith("## ")]
@@ -518,6 +540,16 @@ fam_hotfix() { PV=$1
   expect H10 1 "a hotfix branched from main: it carries main's unreleased commit"
   new_repo_h; cut_ --hotfix; setm alpha ', "version": "2.10.1"'; cm "cut, and a version written into the manifest"; ph
   expect H12 1 "a hotfix that writes its version into a manifest"
+  # a hotfix change file names no earlier change: cut --hotfix refuses one, and check is red on one consumed by hand
+  new_repo_h; printf -- '---\nplugins: alpha\nlevel: patch\nsupersedes: feat1\n---\nalpha no longer breaks\n' > "$W/.changes/fix.md"; cm "marked"
+  OUT=$(cd "$W" && env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$PV" cut --hotfix 2>&1); RC=$?
+  expect H13 1 "cut --hotfix with a supersedes: line"
+  has "$OUT" "supersedes:/cancels: in a hotfix" "[H13b] …naming it"
+  printf '# Changelog of alpha\n\n## 2.10.1\n\n- patch: alpha no longer breaks\n\n' > "$W/plugins/alpha/CHANGELOG.md.new"
+  sed -n '3,$p' "$W/plugins/alpha/CHANGELOG.md" >> "$W/plugins/alpha/CHANGELOG.md.new"; mv "$W/plugins/alpha/CHANGELOG.md.new" "$W/plugins/alpha/CHANGELOG.md"
+  gw rm -q .changes/fix.md; cm "by hand"; ph
+  expect H14 1 "a hotfix whose consumed change file has a supersedes: line"
+  has "$OUT" ".changes/fix.md: supersedes:/cancels: in a hotfix" "[H14b] …naming it"
   # a release branch from before the reset (its manifests carry a version): cut --hotfix refuses, the first release is from main
   new_repo_h; gw checkout -q -b old origin/release; setv beta '"1.0.1"'; cm "a pre-reset manifest"; gw push -q origin old:release
   gw fetch -q origin; gw checkout -q -b hf3 origin/release; echo fix3 >> "$W/plugins/alpha/a.txt"; cfw fix3.md alpha patch "x"; cm "fix"
@@ -554,7 +586,99 @@ fam_backmerge() { PV=$1
   hasnt "$OUT" "kind: back-merge" "[B6b] …is not read as a back-merge"
 }
 
-FAMILIES="fam_real fam_scratch fam_ordinary fam_removal fam_release fam_hotfix fam_backmerge"
+# ── supersedes: and cancels: in an ordinary PR ─────────────────────────────────────────────────────────────────
+# cfwm <file> <marks line(s)> <line> — an alpha change file (minor) with marks, e.g. cfwm y.md 'supersedes: x' "alpha, better"
+cfwm() { mkdir -p "$W/.changes"; printf -- '---\nplugins: alpha\nlevel: minor\n%b\n---\n%s\n' "$2" "$3" > "$W/.changes/$1"; }
+# new_repo_k — new_repo_o plus, on main: a pending change file x.md (alpha), one c.md that cancels it, and one gone.md added
+# then consumed (deleted, its line written into alpha's CHANGELOG); W on feat at main's tip with a change to alpha
+new_repo_k() {
+  new_repo_o; gw checkout -q main
+  cfw gone.md alpha patch "alpha fixed once"; cm "gone"
+  gw rm -q .changes/gone.md; printf -- '- patch: alpha fixed once\n' >> "$W/plugins/alpha/CHANGELOG.md"; cm "consumed into 2.9.0"
+  cfw x.md alpha minor "alpha has a knob"; cfwm c.md 'cancels: x' "the knob is gone"; cm "pending"
+  gw push -q origin main; gw checkout -q feat; gw merge -q --ff-only main; echo k >> "$W/plugins/alpha/a.txt"
+}
+
+fam_marks() { PV=$1
+  new_repo_k; cfwm y.md 'supersedes: x, gone' "alpha has a better knob"; cm "y"; pv
+  expect K1 0 "a change file that supersedes a pending file and a consumed one"
+  has "$OUT" "change file .changes/y.md: supersedes gone" "[K1b] …each name is read"
+  new_repo_k; cfwm y.md 'supersedes: nope' "alpha"; cm "y"; pv
+  expect K2 1 "supersedes: a name that is no change file"
+  has "$OUT" ".changes/y.md: supersedes: nope is no change file of this repository (pending or consumed)" "[K2b] …naming it"
+  new_repo_k; cfwm y.md 'cancels: y' "alpha"; cm "y"; pv
+  expect K3 1 "cancels: the file itself"
+  has "$OUT" ".changes/y.md: cancels: names itself" "[K3b] …naming it"
+  new_repo_k; cfwm y.md 'supersedes: x.md' "alpha"; cm "y"; pv
+  expect K4 1 "supersedes: a name with .md"
+  has "$OUT" "supersedes: x.md is not a change file's name (its file name in .changes/ without .md)" "[K4b] …naming it"
+  new_repo_k; cfwm y.md 'supersedes: x, , gone' "alpha"; cm "y"; pv
+  expect K5 1 "supersedes: an empty item"
+  has "$OUT" "supersedes: is empty or has an empty name" "[K5b] …naming the key"
+  new_repo_k; cfwm y.md 'cancels: c' "the knob is back"; cm "y"; pv
+  expect K6 1 "cancels: a file that itself cancels"
+  has "$OUT" ".changes/y.md: cancels c, which itself supersedes or cancels" "[K6b] …naming it"
+  new_repo_k; printf -- '---\nplugins: alpha\nlevel: minor\nsupersedes: c\n---\nalpha has a knob\n' > "$W/.changes/x.md"; cm "x gains a mark"; pv
+  expect K7 1 "an ordinary PR that adds a mark to a pending change file of the base"
+  has "$OUT" ".changes/x.md is a pending change file of the base" "[K7b] …naming it"
+  new_repo_k; printf -- '---\r\nplugins: alpha\r\nlevel: minor\r\ncancels: gone\r\n---\r\nalpha, once more\r\n' > "$W/.changes/y.md"; cm "crlf"; pv
+  expect K8 0 "a CRLF change file with a mark"
+  # a consumed file whose line no section holds any more (an earlier cut took it out): nothing to take out, red now, not at the cut
+  new_repo_k; gw checkout -q main; cfw old.md alpha patch "alpha once"; cm "old"; gw rm -q .changes/old.md; cm "consumed, its line taken out"
+  gw push -q origin main; gw checkout -q feat; gw merge -q --ff-only main; cfwm y.md 'supersedes: old' "alpha"; cm "y"; pv
+  expect K9 1 "supersedes: a consumed file whose line is in no CHANGELOG section"
+  has "$OUT" ".changes/y.md: supersedes old, whose line is in no section of plugins/alpha/CHANGELOG.md as written" "[K9b] …naming it"
+  new_repo_k; gw checkout -q main; cfwm s.md 'supersedes: x' "alpha, better"; cm "s"; gw push -q origin main; gw checkout -q feat
+  gw merge -q --ff-only main; cfwm y.md 'cancels: s' "alpha, back"; cm "y"; pv
+  expect K10 1 "cancels: a file that supersedes"
+  has "$OUT" ".changes/y.md: cancels s, which itself supersedes or cancels" "[K10b] …naming it"
+  new_repo_k; printf -- '---\nplugins: beta\nlevel: patch\nsupersedes: x\n---\nbeta\n' > "$W/.changes/y.md"; cm "y"; pv
+  expect K11 1 "supersedes: a file that names none of its plugins"
+  has "$OUT" ".changes/y.md: supersedes x, which names none of beta" "[K11b] …naming it"
+  new_repo_k; cfwm p.md 'supersedes: q' "alpha p"; cfwm q.md 'supersedes: p' "alpha q"; cm "p and q"; pv
+  expect K12 1 "two files that supersede each other"
+  has "$OUT" ".changes/p.md: supersedes q, which names it back" "[K12b] …naming it"
+  new_repo_k; cfwm p.md 'supersedes: q' "alpha p"; cfwm q.md 'supersedes: r' "alpha q"; cfwm r.md 'supersedes: p' "alpha r"; cm "a ring"; pv
+  expect K13 1 "three files that supersede one another in a ring"
+  has "$OUT" ".changes/p.md: supersedes q, which names it back (directly or through others)" "[K13b] …naming it"
+  new_repo_k; gw checkout -q main; cfwu kn.md alpha minor "alpha knob" "Run knob."; cm "kn"; gw rm -q .changes/kn.md
+  printf -- '- minor: alpha knob\n' >> "$W/plugins/alpha/CHANGELOG.md"; cm "consumed, its note reworded away"
+  gw push -q origin main; gw checkout -q feat; gw merge -q --ff-only main; cfwm y.md 'supersedes: kn' "alpha"; cm "y"; pv
+  expect K14 1 "supersedes: a consumed file whose upgrade note is in no section as written"
+  has "$OUT" ".changes/y.md: supersedes kn, whose upgrade note is in no section of plugins/alpha/CHANGELOG.md as written" "[K14b] …naming it"
+  # a mark written without the leading date names the one dated change file, consumed or pending; two matches are red
+  new_repo_k; gw checkout -q main; cfw 2026-01-02-dated.md alpha patch "alpha dated"; cm "dated"; gw rm -q .changes/2026-01-02-dated.md
+  printf -- '- patch: alpha dated\n' >> "$W/plugins/alpha/CHANGELOG.md"; cm "consumed"; cfw 2026-01-03-later.md alpha patch "alpha later"; cm "later"
+  gw push -q origin main; gw checkout -q feat; gw merge -q --ff-only main; cfwm y.md 'supersedes: dated, later' "alpha, final"; cm "y"; pv
+  expect K15 0 "supersedes: two names without their date, one consumed, one pending"
+  has "$OUT" "change file .changes/y.md: supersedes dated (2026-01-02-dated)" "[K15b] …each read as the dated file"
+  has "$OUT" "change file .changes/y.md: supersedes later (2026-01-03-later)" "[K15c] …the pending one too"
+  new_repo_k; gw checkout -q main; cfw 2026-01-03-pend.md alpha patch "alpha pend"; cm "a dated pend beside pend.md"
+  gw push -q origin main; gw checkout -q feat; gw merge -q --ff-only main; cfwm y.md 'supersedes: pend' "alpha"; cm "y"; pv
+  expect K17 1 "supersedes: a name both an undated and a dated change file match"
+  has "$OUT" ".changes/y.md: supersedes: pend matches 2 change files (2026-01-03-pend, pend)" "[K17b] …naming both"
+  # a dated file naming itself without its date; dated files naming each other without their dates
+  new_repo_k; cfwm 2026-01-04-self.md 'cancels: self' "alpha"; cm "self"; pv
+  expect K18 1 "a dated change file that cancels itself, written without the date"
+  has "$OUT" ".changes/2026-01-04-self.md: cancels: names itself" "[K18b] …naming it"
+  new_repo_k; cfwm 2026-01-04-p.md 'supersedes: q' "alpha p"; cfwm 2026-01-05-q.md 'supersedes: p' "alpha q"; cm "a ring, undated"; pv
+  expect K19 1 "two dated files that supersede each other, written without their dates"
+  has "$OUT" ".changes/2026-01-04-p.md: supersedes q, which names it back" "[K19b] …naming it"
+  # a new change file whose name without the date is another's: red (a mark naming it would then match two files)
+  new_repo_k; gw checkout -q main; cfw 2026-01-05-k.md alpha patch "alpha k"; cm "k"; gw push -q origin main; gw checkout -q feat
+  gw merge -q --ff-only main; cfw 2026-02-01-k.md alpha patch "alpha k again"; cm "k again"; pv
+  expect K20 1 "a new change file that shares its name without the date with a pending one"
+  has "$OUT" ".changes/2026-02-01-k.md: its name without the date, k, is also that of 2026-01-05-k" "[K20b] …naming both"
+  # a change file renamed inside its own PR is judged against the merge-base, not against the name the PR dropped
+  new_repo_k; cfw 2026-02-01-m.md alpha patch "alpha m"; cm "m"; gw mv .changes/2026-02-01-m.md .changes/2026-02-05-m.md; cm "m, renamed"; pv
+  expect K21 0 "a change file renamed within its own PR"
+  new_repo_k; gw checkout -q main; cfw 2026-01-02-dup.md alpha patch "alpha dup one"; cfw 2026-02-03-dup.md alpha patch "alpha dup two"; cm "dups"
+  gw push -q origin main; gw checkout -q feat; gw merge -q --ff-only main; cfwm y.md 'supersedes: dup' "alpha"; cm "y"; pv
+  expect K16 1 "supersedes: a name without its date that two change files match"
+  has "$OUT" ".changes/y.md: supersedes: dup matches 2 change files (2026-01-02-dup, 2026-02-03-dup): name one with its date" "[K16b] …naming both"
+}
+
+FAMILIES="fam_real fam_scratch fam_ordinary fam_removal fam_marks fam_release fam_hotfix fam_backmerge"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PV_REAL"; done
 
 echo; summary

@@ -3,11 +3,13 @@
 # Targets: the repository (--repo), the workflow file (--workflow, under .github/workflows) and the branch (--ref) named; a run record under the baton state directory
 # Blast: one queued run of that workflow on that branch (runner time, and whatever the pinned workflow itself does); nothing in the repository changes
 # Undo: cancels the run this dispatch made while it is queued or in progress; a finished run stays (GitHub keeps every run); the run record is removed; an earlier run's record (another signed plan) is left alone
-# Pre: not a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set: refused, ask the coordinator); the repository reads private (not internal, not public); the branch exists (letters, digits and ._/-); the workflow file is on its head and declares a workflow_dispatch trigger; each input key is letters, digits, _ and -; at the dispatch, its plan line is in the signed plan
+# Pre: not a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set: refused, ask the coordinator); the repository reads private (not internal, not public); the branch exists (letters, digits and ._/-); the workflow file is on its head and declares a workflow_dispatch trigger; on a ref other than the repository's default branch, that file at that head (and the local workflows it calls) uses no secret: no `secrets` reference, no job `environment:`, no `secrets: inherit` (refused otherwise, and when a file cannot be read: it fails closed); each input key is letters, digits, _ and -; at the dispatch, its plan line is in the signed plan
 # Stops: none
 #   Why none: it starts, in a private repository, one run of a workflow whose bytes the plan line pins (the blob at the branch
 #   head), and the run can be cancelled while it runs. A public or internal repository is refused at rehearse, so it is never
-#   escalated to a signature.
+#   escalated to a signature. On a branch other than the default one a workflow that uses secrets is refused too (exit 3): the
+#   branch's unmerged files would run with them, and `kit:branch-push` refuses only workflow and action paths. Merge it to the
+#   default branch and dispatch there, or the owner acts.
 # Usage: --repo <owner/name> --workflow <file.yml> --ref <branch> [--input <key>=<value>]...  (it declares workflow_dispatch)
 # Expect: record *
 # Expect: dispatch workflow * on * ref * at * blob * inputs *
@@ -204,6 +206,68 @@ declares_dispatch() {
   return 1
 }
 
+# scan_secrets <file name> <text> <depth> <head> — does this workflow file under .github/workflows (its text, as read at <head>) use secrets? 0: yes, and SECRET_USE
+# says what (the first sign); 1: no; 2: a file it needs cannot be read, SECRET_USE says which. A sign is the word `secrets` as a
+# context or a key (secrets.X, secrets['X'], secrets: inherit, toJSON(secrets), secrets || x; any letter case; a quoted key too), or an
+# `environment:` key inside `jobs:` (wherever the file is indented). A local reusable workflow (`uses: ./.github/workflows/<file>`) is
+# read at <head> and scanned the same way, to depth 5; a reusable workflow of another repository cannot be read here (2).
+# A false refusal is cheaper than a leak: comments count, a path such as `scripts/secrets.yaml` is skipped but `secrets.yaml` alone is not,
+# and a job input named `environment:` inside `jobs:` refuses.
+# shortcut: a line scan, no YAML parser: `secrets` at the end of a line or split from `.X` onto the next line is not seen;
+# upgrade to a parser if a workflow ever needs either.
+SECRET_RE='(^|[^A-Za-z0-9_./-])([Ss][Ee][Cc][Rr][Ee][Tt][Ss]["'"'"']?[[:space:]]*(\.[A-Za-z0-9_*-]+|\[[^]]*\]|[:,)]|\|\||&&|\}\}))'
+ENV_RE='(^|[{,[:space:]])["'"'"']?environment["'"'"']?[[:space:]]*:'
+JOBS_RE='^["'"'"']?jobs["'"'"']?[[:space:]]*:'
+LOCAL_USES_RE='["'"'"']?uses["'"'"']?[[:space:]]*:[[:space:]]*["'"'"']?\./\.github/workflows/([A-Za-z0-9_.-]+\.ya?ml)'
+REMOTE_USES_RE='["'"'"']?uses["'"'"']?[[:space:]]*:[[:space:]]*["'"'"']?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.github/workflows/'
+# clean <text> — one short printable ASCII line: a workflow file is the branch's, so no control or bidi character reaches the terminal
+clean() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]' | cut -c1-80; }
+scan_secrets() {
+  local file=$1 depth=$3 line lead rest in_jobs=0 jobs_indent=0 sub subtext rc
+  while IFS= read -r line; do
+    lead=${line%%[![:space:]]*}
+    rest=${line#"$lead"}
+    rest=${rest%$'\r'}
+    case "$rest" in '' | '#'*) ;; *)
+      if [ "$in_jobs" -eq 1 ] && [ "${#lead}" -le "$jobs_indent" ]; then
+        in_jobs=0
+      fi
+      if [ "$in_jobs" -eq 0 ] && [[ "$rest" =~ $JOBS_RE ]]; then
+        in_jobs=1
+        jobs_indent=${#lead}
+      fi
+      ;;
+    esac
+    if [[ "$line" =~ $SECRET_RE ]]; then
+      SECRET_USE="$(clean "${BASH_REMATCH[2]}") in $file"
+      return 0
+    fi
+    [ "$in_jobs" -eq 1 ] || continue
+    if [[ "$line" =~ $ENV_RE ]]; then
+      SECRET_USE="$(clean "$rest") in $file"
+      return 0
+    fi
+    if [[ "$line" =~ $LOCAL_USES_RE ]]; then
+      sub=${BASH_REMATCH[1]}
+      if [ "$depth" -ge 5 ]; then
+        SECRET_USE="cannot follow .github/workflows/$sub, which $file calls: reusable workflows nested deeper than 5"
+        return 2
+      fi
+      if ! subtext=$(gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/.github/workflows/$sub?ref=$4" 2> /dev/null); then
+        SECRET_USE="cannot read .github/workflows/$sub, which $file calls"
+        return 2
+      fi
+      rc=0
+      scan_secrets "$sub" "$subtext" $((depth + 1)) "$4" || rc=$?
+      [ "$rc" -eq 1 ] || return "$rc"
+    elif [[ "$line" =~ $REMOTE_USES_RE ]]; then
+      SECRET_USE="cannot read $(clean "$rest"), a workflow of another repository that $file calls"
+      return 2
+    fi
+  done <<< "$2"
+  return 1
+}
+
 # in_sandbox — a worker session: VIBEMAESTRO_ROLE=worker, or (deprecated, leaves in the next release) SEAT and INTENT_SLUG both
 # set and not blank (the test of in_sandbox() in baton.py: one alone can sit in a laptop shell). Its token has no actions:write, so a
 # write to Actions there ends in HTTP 403 after the owner's sign.
@@ -215,13 +279,14 @@ in_sandbox() {
 
 # ── the act: every change through write() ──
 act() {
-  local vis head blob body login
+  local vis head blob body login priv visib default rc
   if in_sandbox; then
     echo "REFUSE a sandbox session (VIBEMAESTRO_ROLE=worker, or SEAT and INTENT_SLUG set): its token cannot write to Actions (HTTP 403). Ask the coordinator to dispatch workflow $WF on $REPO ref $REF" >&2
     return 3
   fi
-  vis=$(gh api "repos/$REPO" --jq '"\(.private) \(.visibility)"' 2>&1 || true)
-  if [ "$vis" != "true private" ]; then
+  vis=$(gh api "repos/$REPO" --jq '"\(.private) \(.visibility) \(.default_branch)"' 2>&1 || true)
+  read -r priv visib default <<< "$vis"
+  if [ "$priv $visib" != "true private" ]; then
     echo "REFUSE $REPO does not read private (private, visibility: $vis): this kit dispatches in private repositories only" >&2
     return 3
   fi
@@ -237,10 +302,31 @@ act() {
     return 3
   fi
   blob=$(gh api "repos/$REPO/contents/.github/workflows/$WF?ref=$head" --jq .sha)
-  body=$(gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/.github/workflows/$WF?ref=$head")
+  if ! body=$(gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/.github/workflows/$WF?ref=$head" 2> /dev/null); then
+    echo "REFUSE cannot read .github/workflows/$WF at $head: nothing dispatched" >&2
+    return 3
+  fi
   if ! declares_dispatch "$body"; then
     echo "REFUSE .github/workflows/$WF at $head declares no workflow_dispatch" >&2
     return 3
+  fi
+  if [ -z "$default" ] || [ "$default" = null ]; then
+    echo "REFUSE cannot read the default branch of $REPO: nothing dispatched" >&2
+    return 3
+  fi
+  if [ "$REF" != "$default" ]; then
+    rc=0
+    scan_secrets "$WF" "$body" 0 "$head" || rc=$?
+    case "$rc" in
+      0)
+        echo "REFUSE workflow $WF on $REPO ref $REF uses secrets (first: $SECRET_USE) and $REF is not the default branch ($default): merge the workflow to $default and dispatch there, or the owner acts" >&2
+        return 3
+        ;;
+      2)
+        echo "REFUSE $SECRET_USE (at $head): $REF is not the default branch ($default), so the check cannot clear the workflow: nothing dispatched" >&2
+        return 3
+        ;;
+    esac
   fi
   login=$(viewer)
   write "record the runs of $WF on $REF by $login before the dispatch" record "$head" "$login"

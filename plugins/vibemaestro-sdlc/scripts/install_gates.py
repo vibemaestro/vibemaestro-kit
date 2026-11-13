@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 """Install the SDLC gates into a repo: workflows into `.github/workflows/`, the gate scripts into `.vibemaestro/gates/`, an allowlist header.
 
-    install_gates.py [--root DIR] [--only commit-discipline,pr-sensitive,pr-title,pr-body,dead-branches]
-                     [--runner-var NAME] [--runner-default LABEL] [--dry-run]
+    install_gates.py [--root DIR] [--only commit-discipline,pr-sensitive,pr-title,pr-body,dead-branches,signing-rules,<dependent gate>]
+                     [--runner-var NAME] [--runner-default LABEL] [--update] [--dry-run]
 
 Skills ask, scripts do: the `install-gates` skill collects the answers, this script writes the files, with no model in between.
 
 - Never overwrites. A file that exists is KEPT, byte for byte: `kept` when it equals what would be written, `kept (differs)` when it does
   not (the repo changed it on purpose, or the plugin has moved on: a person decides). A second run is a no-op.
+- `--update` replaces the plugin's own copies under `.vibemaestro/gates/` that differ (a link there too), each printed `replaced`;
+  a file the repo owns (a workflow, the allowlist, the signing-rules list) is still never overwritten.
+- With no `--only` the six gates above are installed. `signing-rules` is opt-in: `--only signing-rules` writes its workflow, vendors
+  the gate with `baton.py` (from which it reads Stops) and writes the repo's list `.vibemaestro/signing-rules.json` when absent.
+- A gate of a dependent plugin is opt-in too. Every installed plugin that declares a dependency on vibemaestro-sdlc and ships
+  `gates/install.json` (found by `gates/bootstrap.py`'s `dependents`, the one rule for a dependent plugin) declares
+  `{"format": 1, "gates": {"<name>": {"keys": "<text>", "files": [{"from": "<path in the plugin>", "to": "<path in the repo>"}]}}}`;
+  `--only <name>` installs it by the rules above. A `to` is `.github/workflows/<n>.yml|.yaml` (a template the repo owns) or
+  `.vibemaestro/gates/<n>` (a copy of the plugin's). Every declaration is checked first, whatever `--only` says: a malformed one, a
+  `from` outside the plugin or not a plain file, another `to`, a file named like a module the gates import, a kit gate's name or path,
+  or a name or path two declarations share is refused with rc 65 and nothing is written. A dependent's file, and a copy `--update`
+  replaces, is refused (rc 64) when a directory on its path is a link.
 - The workflow templates (`gates/workflows/*.yml`) get `runs-on: ${{ vars.CI_GATE_RUNNER || vars.<runner var> || '<runner default>' }}`. The two
   values come from the flags, else from `ci.runner_var` / `ci.runner_default` of the repo's `.vibemaestro/sdlc.json`, else `CI_RUNNER` / `ubuntu-latest`.
   A runner label that is not `[A-Za-z0-9._-]+` and a variable that is not an identifier are refused before anything is written.
@@ -30,17 +42,20 @@ Skills ask, scripts do: the `install-gates` skill collects the answers, this scr
   locked the gates never start and read as failed). When `gh` cannot answer it prints one "check skipped" line. Neither changes the rc.
 
 rc 0 done (or nothing to do; the runner-variable check never changes it), 64 bad usage (unknown gate, bad runner label, not a git repo),
-65 invalid config, or a Vietnamese letter that the `en` rewrite could not remove.
+65 invalid config, a Vietnamese letter that the `en` rewrite could not remove, or a dependent plugin's declaration that is refused.
 Standard library only, Python 3.8+.
 """
 import argparse
 import ast
+import importlib.util
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -58,7 +73,10 @@ GATES = {
     "pr-body": ("pr-body.yml", "pr_body.py"),
     "pr-evidence": ("pr-evidence.yml", "pr_evidence.py"),
     "dead-branches": ("dead-branches.yml", "dead_branches.sh"),
+    "signing-rules": ("signing-rules.yml", "signing_rules.py"),
 }
+OPT_IN = {"signing-rules"}          # installed only when --only names it
+SIGNING_LIST = ".vibemaestro/signing-rules.json"
 KEYS = {
     "commit-discipline": "commits.max_per_pr, commits.max_touches, commits.round_pattern, tokens.commit_exception",
     "pr-sensitive": "sensitive.scan, sensitive.allowlist",
@@ -66,7 +84,19 @@ KEYS = {
     "pr-body": "pr.body.max_chars, pr.body.summary_max_lines, pr.body.evidence_max_lines, tokens.summary_heading, tokens.evidence_heading",
     "pr-evidence": "evidence.ui_paths, tokens.round_comment_prefix, commits.round_pattern",
     "dead-branches": "dead_branches.max_merged_on_remote, branch.protected, branch.intent_prefix",
+    "signing-rules": "none; its list is %s, read at the base (add the names that decide who signs here)" % SIGNING_LIST,
 }
+# the gate, every file it loads and its job: a PR that changes one is an owner merge (the list file itself is red too)
+# .vibemaestro/gates is a baton directory too: a new file there (one that would shadow a module the gate imports) is red
+SIGNING_LIST_TEXT = json.dumps({"baton_dirs": ["batons", "templates/baton-kinds", ".vibemaestro/gates"], "lists": {},
+                                "files": [".github/workflows/signing-rules.yml", ".vibemaestro/gates/signing_rules.py",
+                                          ".vibemaestro/gates/gate_common.py", ".vibemaestro/gates/sdlc_config.py",
+                                          ".vibemaestro/gates/baton.py"]}, indent=2) + "\n"
+DECL = "gates/install.json"
+GATE_NAME = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
+SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?<!\.)\Z")
+# a gate runs with .vibemaestro/gates/ first on sys.path: a dependent's file named like a module it imports would replace it
+KIT_MODULES = {fn.split(".")[0] for d in (HERE, GATES_DIR) for fn in os.listdir(d)} | {"sitecustomize", "usercustomize"}
 ALLOWLIST_HEADER = """# Allowlist of the sensitive-info gate (.vibemaestro/gates/pr_sensitive.py): ONLY for a false positive that a person has looked at.
 #
 # The workflow reads this file at the BASE of the PR, not at its head: a line added in a PR takes effect for the PRs AFTER it has
@@ -312,12 +342,104 @@ def write_new(path, data, mode, dry):
     return "wrote"
 
 
+def replace(path, data, mode, dry):
+    """--update for a plugin copy: 'replaced' when `path` differs from `data` (a link counts as differing and is replaced itself, never
+    followed), else what write_new says. Written beside it, then renamed over it, so a run that dies leaves the old file whole."""
+    if not os.path.islink(path):
+        res = write_new(path, data, mode, dry)
+        if res != "kept (differs)" or os.path.isdir(path):
+            return res
+    if dry:
+        return "would replace"
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".install-gates-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    return "replaced"
+
+
+def repo_rel(v):
+    """A relative path with no `.`, `..` or empty part, no `\\` or NUL, or None."""
+    if not isinstance(v, str) or not v or v.startswith("/") or "\\" in v or "\0" in v:
+        return None
+    return v if all(p not in ("", ".", "..") for p in v.split("/")) else None
+
+
+def read_decl(plugin, path):
+    """{gate: (keys text, [(source path, target rel)])} of a dependent plugin's declaration; ValueError naming what is wrong.
+    `path` is a regular file whose real path is itself (bootstrap.dependents), so its plugin root is real too."""
+    root = os.path.dirname(os.path.dirname(path))
+
+    def bad(msg):
+        raise ValueError("%s of plugin %s: %s" % (DECL, plugin, msg))
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError, RecursionError) as e:
+        bad("not readable as JSON (%s)" % e.__class__.__name__)
+    if not isinstance(d, dict) or set(d) != {"format", "gates"}:
+        bad('an object with exactly the keys "format" and "gates"')
+    if d["format"] != 1 or isinstance(d["format"], bool):
+        bad("format must be 1")
+    if not isinstance(d["gates"], dict) or not d["gates"]:
+        bad("gates must be a non-empty object")
+    out = {}
+    for g, spec in d["gates"].items():
+        if not GATE_NAME.match(g):
+            bad("gate name %r is not [a-z0-9][a-z0-9-]*" % g)
+        if not isinstance(spec, dict) or set(spec) != {"keys", "files"} or not isinstance(spec["keys"], str):
+            bad('gate %s: an object with exactly the keys "keys" (a string) and "files"' % g)
+        if not isinstance(spec["files"], list) or not spec["files"]:
+            bad("gate %s: files must be a non-empty list" % g)
+        pairs = []
+        for e in spec["files"]:
+            if not isinstance(e, dict) or set(e) != {"from", "to"} or not all(isinstance(v, str) for v in e.values()):
+                bad('gate %s: each file is {"from": <path>, "to": <path>}' % g)
+            src = repo_rel(e["from"])
+            full = src and os.path.join(root, *src.split("/"))
+            if not full or not os.path.isfile(full) or os.path.realpath(full) != full:
+                bad("gate %s: from %r is not a plain file inside the plugin (absolute, `..`, a link, or missing)" % (g, e["from"]))
+            where, _sep, seg = e["to"].rpartition("/")
+            if not (SEGMENT.match(seg) and (where == ".vibemaestro/gates" or where == ".github/workflows" and seg.endswith((".yml", ".yaml")))):
+                bad("gate %s: to %r is neither .github/workflows/<name>.yml nor .vibemaestro/gates/<name>" % (g, e["to"]))
+            if where == ".vibemaestro/gates" and shadows(seg.split(".")[0]):
+                bad("gate %s: to %r would shadow the module %s that the gates import" % (g, e["to"], seg.split(".")[0]))
+            pairs.append((full, e["to"]))
+        out[g] = ("".join(c for c in spec["keys"] if c.isprintable())[:200], pairs)
+    return out
+
+
+def shadows(stem):
+    """True when `stem` names a module a gate may import: the kit's own, the standard library's, or any this Python finds."""
+    if stem in KIT_MODULES or stem in sys.builtin_module_names or stem in getattr(sys, "stdlib_module_names", ()):
+        return True
+    try:
+        return stem.isidentifier() and importlib.util.find_spec(stem) is not None
+    except (ImportError, ValueError):
+        return True
+
+
+def dependent_gates():
+    """[(plugin, version, {gate: (keys, pairs)})] of the installed dependents that ship a declaration; ValueError on a bad one."""
+    spec = importlib.util.spec_from_file_location("bootstrap_for_install_gates", os.path.join(GATES_DIR, "bootstrap.py"))
+    boot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(boot)
+    return [(name, version, read_decl(name, decl)) for name, version, decl in boot.dependents(os.path.join(*DECL.split("/"))) if decl]
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root")
     ap.add_argument("--only")
     ap.add_argument("--runner-var")
     ap.add_argument("--runner-default")
+    ap.add_argument("--update", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     try:
         a = ap.parse_args(argv)
@@ -328,14 +450,37 @@ def main(argv):
     if top.returncode != 0:
         return die(64, "%s is not inside a git repo" % root)
     root = top.stdout.strip()
-    names = list(GATES) if not a.only else [n.strip() for n in a.only.split(",") if n.strip()]
-    unknown = [n for n in names if n not in GATES]
+    try:
+        deps = dependent_gates()        # every declaration, whatever --only names: a bad one refuses the run
+    except ValueError as e:
+        return die(65, str(e))
+    dep_gate = {}                       # gate -> (plugin, version, keys, pairs)
+    for plugin, version, gates in deps:
+        for g, (keys, pairs) in gates.items():
+            if g in GATES or g in dep_gate:
+                return die(65, "%s of plugin %s: gate name %s is already %s" % (
+                    DECL, plugin, g, "a gate of this plugin" if g in GATES else "declared by plugin " + dep_gate[g][0]))
+            dep_gate[g] = (plugin, version, keys, pairs)
+    names = [n for n in GATES if n not in OPT_IN] if not a.only else [n.strip() for n in a.only.split(",") if n.strip()]
+    unknown = [n for n in names if n not in GATES and n not in dep_gate]
     if unknown or not names:
-        return die(64, "unknown gate %s (known: %s)" % (", ".join(unknown) or "(none given)", ", ".join(GATES)))
+        return die(64, "unknown gate %s (known: %s)" % (", ".join(unknown) or "(none given)", ", ".join(list(GATES) + list(dep_gate))))
     cfg, probs, _present = sdlc_config.load(root)
     if probs:
         sys.stderr.write(sdlc_config.render_problems(probs) + "\n")
         return 65
+    # no declared target may be a path this plugin can write, or another declaration's (case folded: a case-insensitive checkout)
+    taken = {posixpath.normpath(p).casefold(): "a path of this plugin" for p in
+             [".github/workflows/" + w for w, _s in GATES.values()] + [".vibemaestro/gates/" + s for _w, s in GATES.values()]
+             + [".vibemaestro/gates/" + f for f in ("gate_common.py", "sdlc_config.py", "messages.py", "baton.py")]
+             + [cfg["sensitive"]["allowlist"], SIGNING_LIST]}
+    for g, (plugin, _v, _k, pairs) in dep_gate.items():
+        for _src, to in pairs:
+            if to.casefold() in taken:
+                return die(65, "%s of plugin %s: gate %s: to %s is already %s" % (DECL, plugin, g, to, taken[to.casefold()]))
+            taken[to.casefold()] = "declared by plugin %s (gate %s)" % (plugin, g)
+    kit_names = [n for n in names if n in GATES]
+    dep_names = [n for n in names if n in dep_gate]
     var = a.runner_var or cfg["ci"]["runner_var"]
     default = a.runner_default or cfg["ci"]["runner_default"]
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var):
@@ -346,7 +491,7 @@ def main(argv):
     plan = []   # (relative path, bytes, mode)
     owned = []  # (label, bytes) the plugin writes as its own text: what language en must find free of Vietnamese letters
     vendored_rels = set()
-    for n in names:
+    for n in kit_names:
         with open(os.path.join(TEMPLATES, GATES[n][0]), encoding="utf-8") as f:
             tmpl = f.read()
             owned.append(("gates/workflows/" + GATES[n][0] + " (the template)", tmpl.encode("utf-8")))
@@ -355,11 +500,13 @@ def main(argv):
             except ValueError as e:
                 return die(65, str(e))
             plan.append((".github/workflows/" + GATES[n][0], text.encode("utf-8"), 0o644))
-    vendored = ["gate_common.py"] + [GATES[n][1] for n in names]
-    for fn in vendored:
-        with open(os.path.join(GATES_DIR, fn), "rb") as f:
-            plan.append((".vibemaestro/gates/" + fn, f.read(), 0o755))
-            vendored_rels.add(".vibemaestro/gates/" + fn)
+    vendored = [os.path.join(GATES_DIR, fn) for fn in ["gate_common.py"] + [GATES[n][1] for n in kit_names]]
+    if "signing-rules" in kit_names:
+        vendored.append(os.path.join(HERE, "baton.py"))     # signing_rules.py reads Stops with it, from beside itself
+    for src in vendored:
+        with open(src, "rb") as f:
+            plan.append((".vibemaestro/gates/" + os.path.basename(src), f.read(), 0o755))
+            vendored_rels.add(".vibemaestro/gates/" + os.path.basename(src))
     english = {"sdlc_config.py": english_config, "messages.py": english_messages}
     for fn in ("sdlc_config.py", "messages.py"):        # the config loader, and the message table a gate prints from
         with open(os.path.join(HERE, fn), "rb") as f:
@@ -374,6 +521,25 @@ def main(argv):
     if "pr-sensitive" in names:
         owned.append(("the allowlist header", ALLOWLIST_HEADER.encode("utf-8")))
         plan.append((cfg["sensitive"]["allowlist"], ALLOWLIST_HEADER.encode("utf-8"), 0o644))
+    if "signing-rules" in kit_names:
+        plan.append((SIGNING_LIST, SIGNING_LIST_TEXT.encode("utf-8"), 0o644))
+    dep_rels = set()
+    for g in dep_names:
+        plugin, _v, _keys, pairs = dep_gate[g]
+        for src, to in pairs:
+            dep_rels.add(to)
+            try:
+                with open(src, "rb") as f:
+                    data = f.read()
+                if to.startswith(".github/workflows/"):
+                    owned.append(("%s of plugin %s (the template)" % (to, plugin), data))
+                    data = render(data.decode("utf-8"), var, default, cfg["tokens"]["commit_exception"]).encode("utf-8")
+                    plan.append((to, data, 0o644))
+                else:
+                    plan.append((to, data, 0o755 if os.stat(src).st_mode & 0o100 else 0o644))
+                    vendored_rels.add(to)
+            except (OSError, ValueError) as e:      # UnicodeDecodeError is a ValueError
+                return die(65, "%s of plugin %s: gate %s: %s cannot be installed: %s" % (DECL, plugin, g, to, e.__class__.__name__))
 
     if cfg["language"] == "en":
         # the plugin's own text only: a rendered workflow carries the repo's own tokens, which may hold such a letter on purpose
@@ -397,10 +563,19 @@ def main(argv):
             return die(64, "%s: a parent of this path is not a directory" % rel)
         if os.path.commonpath([real_root, os.path.realpath(anc)]) != real_root:
             return die(64, "%s resolves outside the repo (a symlinked directory?): nothing was written" % rel)
+        # a file --update may replace, and a dependent's file, land only where their path says: no parent may be a link
+        if rel in dep_rels or a.update and rel in vendored_rels:
+            parents = rel.split("/")[:-1]
+            if any(os.path.islink(os.path.join(root, *parents[:i])) for i in range(1, len(parents) + 1)):
+                return die(64, "%s: a parent directory is a link, so the file would land elsewhere in the repo: nothing was written" % rel)
 
+    for plugin, version, gates in deps:
+        if any(g in dep_names for g in gates):
+            print("dependent plugin %s %s: %s" % (plugin, version, ", ".join(g for g in dep_names if g in gates)))
     counts = {}
     for rel, data, mode in plan:
-        res = write_new(os.path.join(root, *rel.split("/")), data, mode, a.dry_run)
+        write = replace if a.update and rel in vendored_rels else write_new
+        res = write(os.path.join(root, *rel.split("/")), data, mode, a.dry_run)
         counts[res] = counts.get(res, 0) + 1
         print("%-16s %s" % (res, rel))
         if res == "kept (differs)" and self_hosted_only(default) and rel.startswith(".github/workflows/"):
@@ -435,7 +610,7 @@ def main(argv):
     print(runner_var_report(root, var, default))
     print("config keys the gates read:")
     for n in names:
-        print("  %s: %s" % (n, KEYS[n]))
+        print("  %s: %s" % (n, KEYS[n] if n in KEYS else dep_gate[n][2]))
     print("a gate judges a PR by the scripts and the config of its BASE branch: merge this change first, then it applies to later PRs")
     return 0
 

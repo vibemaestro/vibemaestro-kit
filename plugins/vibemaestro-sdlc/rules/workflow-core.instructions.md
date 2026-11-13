@@ -6,11 +6,11 @@ description: "General way of working for a Claude Code session in an app repo: e
 
 This core is delivered verbatim when a session opens. Rules by file or command (git, PR, current-state) arrive through hooks at the right moment;
 the rule catalogue is at the top of the session. The work flows: `intake` → `brainstorm` (when unclear) → `spec` → `plan` (when work must
-be split) → `ship`. Everything is written into the `kb/` of the repo you stand in; `kb/current-state.md` records only the present state.
+be split) → `ship`. Everything goes into this repo's `kb/`, new files in its `language` (`.vibemaestro/sdlc.json`; `vi` when unset), by every session; the rest in English. `kb/current-state.md` records only the present state.
 When another plugin's skill says otherwise (run the whole suite, revert the fix to see it fail, ask a human partner,
 decide without asking), the brief and sdlc win.
 
-- **Explain "why" before doing.** The person wants to understand, not just follow: give the reason (system constraint, security, cost), not only a command.
+- **Explain "why" before doing.** Give the reason (constraint, security, cost), not only a command.
 - **Work in a worktree of its own, and run it before opening a PR.** The test: *which command proves what you just changed?* Run it.
   What a subagent returns is a claim, not evidence: run the acceptance command again yourself before you believe it.
 - **State the requirement and the solution; execution may go to a subagent.** When you hand a task to a subagent, write *what must be true*
@@ -25,8 +25,8 @@ decide without asking), the brief and sdlc win.
   `docs/batonrun.md` in the plugin root) and keep it with `pack` the second time. Adding a permission rule: `go kind:settings-merge`, never an Edit. A stop-list act waits for the owner; a refused act is never done another way. Never hand the owner command lines to type.
 - **Name a pull request or issue as a markdown link.** When you ask the person to review, merge or act on one, write the full URL inside the
   sentence, one link per item, next to the action asked: `[PR <n>](https://<host>/<org>/<repo>/pull/<n>)`.
-- **Check the instrument before trusting a measurement.** The costliest diagnostic mistakes share one shape: the command ran, a number
-  appeared, but it did not ask the question we thought. Four habits:
+- **Check the instrument before trusting a measurement.** The costliest diagnostic mistake: the command ran, a number appeared,
+  but it did not ask the question we thought. Four habits:
   1. One command per question when the result will lead to a conclusion; do not batch commands and read their output together.
   2. An all-yes or all-no result: suspect the instrument first, the system second (a regex with a syntax error always returns empty; a default
      `--limit` cuts the results; `git log A..B` is empty when B is already merged into A).

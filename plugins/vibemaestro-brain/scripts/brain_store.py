@@ -95,8 +95,9 @@ CLOSES_LETTERS = ("N", "X", "S", "Q", "R")
 # G, P and R, whose ids a brain of format 4 refuses to fold; 6 adds the ops `evidence`, `progress` and `owner-demote`, and
 # `promote` on an `owner-promote` of a lesson or a fact, which a brain of format 5 refuses to fold (the fields `goal` and
 # `no_goal` of a session and `soul` of a promotion it folds unread). An older brain wrote those last three; this one folds
-# them as it did and writes none (a plugin that extends the brain may), and an extension's `ext` entries are fields too
-FORMAT = 6
+# them as it did and writes none (a plugin that extends the brain may), and an extension's `ext` entries are fields too; 7 adds the
+# op `words` (a focus's done when and not doing, in place), which a brain of format 6 refuses to fold
+FORMAT = 7
 LOCK_WAIT = 1.0                                     # seconds a SessionStart waits for the lock: to read, then to close by a link
 BUDGET_N, BUDGET_WINDOW = 5, 30 * 60                # retirements per session in any 30 minutes
 SHRINK_MIN = 0.6                                    # supersede keeps ≥ 60% of the first item of its chain
@@ -852,6 +853,13 @@ def apply(st, op):
     elif kind == "progress":                        # a goal's progress: ledger data, the goal itself unchanged
         if item()["id"][0] != "G":
             raise Refused(5, "hot.jsonl line %d: progress for an item that is not a goal" % op["seq"])
+    elif kind == "words":                           # a focus's done when and not doing, set in place: same id (log format 7)
+        it = item()
+        got = {k: op[k] for k in ("done", "not_doing") if isinstance(op.get(k), str)}
+        if it["id"][0] != "P" or not got:
+            raise Refused(5, "hot.jsonl line %d: words for an item that is not a focus, or with no words" % op["seq"])
+        it.update(got)
+        it["touched"] = op["seq"]
     elif kind == "touch":
         item()["touched"] = op["seq"]
     elif kind == "hit":
@@ -2088,12 +2096,49 @@ def fit_items(head, items, sep, cap=CARD_LINE):
     return line + (" +%d" % (len(items) - shown) if shown < len(items) else "")
 
 
+FOCUS_FILE_MAX = 4096                               # bytes of a focus's counts file read: its JSON is a few hundred
+FOCUS_TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}")
+
+
+def focus_counts(ids):
+    """The card's counts line of each live focus in `ids`: the `line` of `kb.py focus`'s file for the session's project with its
+    time, else `P1: not counted yet` (no file, one that cannot be read or does not parse, or one that names another focus).
+    The file is `<state base>/vibemaestro/focus/<place key>/<P>.json`; the key is sdlc's (`project-` and 16 hex of the SHA-256
+    of git's common directory), computed here: the brain reads sdlc's file and imports nothing from it.
+    shortcut: outside git the key is of the directory, which sdlc never writes under: not counted yet, until a dotfiles repo
+    or a non-git project needs counts."""
+    if not ids:
+        return []                                   # no focus: no git call
+    try:
+        key = "project-" + hashlib.sha256(project_dir(session_project()).encode("utf-8", "surrogateescape")).hexdigest()[:16]
+        base = os.path.join(os.path.dirname(state_root()), "focus", key)
+    except (OSError, ValueError, Refused):          # ValueError: a project path with a NUL or a lone surrogate
+        return ["%s: not counted yet" % p for p in ids]
+    out = []
+    for p in ids:
+        try:
+            fd = os.open(os.path.join(base, p + ".json"), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+            try:
+                data = os.read(fd, FOCUS_FILE_MAX + 1) if stat.S_ISREG(os.fstat(fd).st_mode) else b""
+            finally:
+                os.close(fd)
+            rec = json.loads(data.decode("utf-8")) if len(data) <= FOCUS_FILE_MAX else None
+            line, t = rec.get("line"), rec.get("time")
+            if rec.get("focus") != p or not isinstance(line, str) or not line.startswith(p + ": ") or not FOCUS_TIME_RE.match(str(t)):
+                raise ValueError(p)
+            out.append("%s (%s)" % (cut_units(clean_line(line), CARD_LINE - 14), t[5:16].replace("T", " ")))   # the time always shows
+        except (OSError, ValueError, RecursionError, AttributeError):   # AttributeError: a JSON that is not an object
+            out.append("%s: not counted yet" % p)
+    return out
+
+
 def card_lines(st, now, stale=(), loss=None, ops=None, d=None):
     """The lines of the review card this brain computes: one line per live goal (its review day, the live focus that points
     to it and, with the log's `ops`, its last progress), the dormant items, the sections at 85 % of their caps or over, the
     live items whose anchors closed (`stale`: [(id, "owner/name#N merged")]), the overflow queue, the record due and a backup
-    that fails or falls behind (both from the state directory `d`), and the loss score of the last compaction logged (`loss`:
-    (score or None, its time) or None). Without `ops`, no ledger line. An extension's lines follow these
+    that fails or falls behind (both from the state directory `d`), the loss score of the last compaction logged (`loss`:
+    (score or None, its time) or None), and, last of these, one counts line per live focus
+    (from the session's project, see focus_counts). Without `ops`, no ledger line. An extension's lines follow these
     (brain_ext.start_lines)."""
     out = []
     led = None
@@ -2131,6 +2176,7 @@ def card_lines(st, now, stale=(), loss=None, ops=None, d=None):
         score, t = loss
         out.append("loss score of the last compaction logged: %s (%s)" % (
             "%.2f" % score if score is not None else "none (no anchor or no summary)", t[5:16].replace("T", " ")))
+    out += focus_counts([p["id"] for p in focus])
     return out
 
 
@@ -2407,6 +2453,31 @@ def layer_args(letter, quote, where, goal, focus, due):
     return dict(SESSION_SOURCE, quote=quote, where=where) if letter in ("P", "R") else dict(SESSION_SOURCE)
 
 
+JIRA_RX = re.compile(r"[A-Z][A-Z0-9_]+-[1-9][0-9]*")   # a Jira issue key like ABC-12: the shape of an intent's `jira:` (kb.py)
+JIRA_MAX = 40                                       # a stored key is short; this keeps a long one out of the log
+
+
+def check_jira(jira, ok, noun):
+    """A `jira` key is for the kinds named in `noun` (`ok`: the letter that takes it); a malformed one is refused (64): the
+    stored value is never synced, never sent, only shown."""
+    if jira is None:
+        return
+    if not ok:
+        raise Refused(64, "--jira is for %s" % noun)
+    if len(jira) > JIRA_MAX or not JIRA_RX.fullmatch(jira):
+        raise Refused(64, "--jira must be a Jira issue key like ABC-12 (capital letters, digits or _, a hyphen, a number from 1; "
+                          "at most %d characters)" % JIRA_MAX)
+
+
+def check_focus_words(letter, done, not_doing):
+    """A focus's `done when` and `not doing` are the owner's words, whole like the quote (its text guards and `quote_max`); 64
+    on another kind."""
+    if letter != "P" and (done is not None or not_doing is not None):
+        raise Refused(64, "--done-when and --not-doing are for a focus")
+    check_text("done when", done, required=done is not None, cap=quote_max())
+    check_text("not doing", not_doing, required=not_doing is not None, cap=quote_max())
+
+
 def check_focus_due(letter, focus, due):
     """`--focus` names a focus on a Next item, `--due` a day of the calendar on a request (64 otherwise)."""
     if focus is not None and not (letter == "X" and focus[:1] == "P" and ID_RE.fullmatch(focus)):
@@ -2454,7 +2525,7 @@ def notes_text(notes):
 
 
 def op_add(kind, text, links, anchors, expires, closes=(), quote=None, where=None, goal=None, focus=None, due=None,
-           extopts=None):
+           extopts=None, done=None, not_doing=None, jira=None):
     letter = KINDS.get(kind)
     if letter is None:
         raise Refused(64, "--kind must be one of %s" % ", ".join(KINDS))
@@ -2464,6 +2535,8 @@ def op_add(kind, text, links, anchors, expires, closes=(), quote=None, where=Non
     given, left = ext_options("add", kind, extopts, {"--goal": goal, "--focus": focus, "--due": due})
     goal, focus, due = left["--goal"], left["--focus"], left["--due"]
     source = layer_args(letter, quote, where, goal, focus, due)
+    check_focus_words(letter, done, not_doing)
+    check_jira(jira, letter == "P", "a focus (a goal's goes through `brain owner add`)")
     check_text("text", text, cap=text_max(letter))
     check_list("link", links)
     anchors = with_closes(anchors, closes)
@@ -2483,14 +2556,17 @@ def op_add(kind, text, links, anchors, expires, closes=(), quote=None, where=Non
                 "expires": expires, "links": links, "anchors": anchors, "supersedes": None}
         if closes:
             item["closes"] = closes
-        item.update({k: v for k, v in (("goal", goal), ("focus", focus), ("due", due)) if v is not None})
+        item.update({k: v for k, v in (("goal", goal), ("focus", focus), ("due", due), ("done", done),
+                                       ("not_doing", not_doing), ("jira", jira)) if v is not None})
         op = {"op": name, "item": item}
         if up:
             op["promote"] = up
-        own = [text, quote, where] + links + anchors
+        own = [text, quote, where, done, not_doing] + links + anchors
         texts, notes = ext_check("add", kind, given, op, d, st, ops, own)
         return (op, own + texts,
-                line + moved(up) + seen + anchor_warning(letter, anchors) + notes_text(notes), None)
+                line + moved(up) + seen + anchor_warning(letter, anchors) + notes_text(notes)
+                + ("\nwarning: this focus has no --done-when; a charter for it will need one (brain op words adds it)"
+                   if letter == "P" and done is None else ""), None)
     return write(build, ops_too=True)
 
 
@@ -2513,11 +2589,44 @@ def op_close(iid, reason, pointer, bulk, extopts=None):
         if up:
             op["promote"] = up
         texts, notes = ext_check("close", it["kind"], given, op, d, st, ops, [reason, pointer])
-        return op, [reason, pointer] + texts, "closed %s%s%s" % (iid, moved(up), notes_text(notes)), None
+        ended = charters_end(iid, d, [reason, pointer] + texts)
+        return op, [reason, pointer] + texts, "closed %s%s%s%s" % (iid, moved(up), notes_text(notes), ended), None
     return write(build, ops_too=True)
 
 
-def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(), focus=None, due=None, extopts=None):
+def charters_end(iid, d, texts):
+    """"" for any item but a focus; for a focus that a close or a supersede ends, its charters revoked (revoke_charters), after
+    every check of the op, its sensitive filter `texts` included (write's runs again): a revoke is never undone."""
+    if iid[0] != "P":
+        return ""
+    sanitize(d, texts)
+    return revoke_charters(iid)
+
+
+def revoke_charters(focus):
+    """"\n<lines>" of vibemaestro-sdlc's `baton.py grant revoke --focus <P>` run from this project: each charter the owner signed for
+    the focus from it ends with the focus ("" when none was in force). Refused (1) when it cannot run or fails: a closed or
+    superseded focus never leaves its charter in force."""
+    baton = sdlc_file(os.path.join("scripts", "baton.py"))
+    if not baton:
+        raise Refused(1, "vibemaestro-sdlc's baton.py was not found, so the charters of %s cannot be revoked; nothing was written"
+                      % focus)
+    try:
+        r = subprocess.run([sys.executable, baton, "grant", "revoke", "--focus", focus], cwd=project_root(), capture_output=True,
+                           text=True, errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Refused(1, "the charters of %s could not be revoked (%s); nothing was written" % (focus, e.__class__.__name__))
+    if r.returncode != 0:
+        raise Refused(1, "the charters of %s could not be revoked (baton.py rc %d: %s)%s; nothing was written" % (
+            focus, r.returncode, printable((r.stderr or r.stdout).strip()[:300]),
+            ": this vibemaestro-sdlc predates `grant revoke --focus`, update it"     # its usage names only `grant revoke <id>`
+            if r.returncode == 64 and "usage: baton.py grant revoke <id>" in r.stderr + r.stdout else ""))
+    lines = [ln for ln in r.stdout.splitlines() if ln.startswith("grant ")]
+    return "".join("\n" + printable(ln) for ln in lines)
+
+
+def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(), focus=None, due=None, extopts=None,
+                 done=None, not_doing=None):
     """A supersede of an S or Q item (a session's next step, a queue item's state) is status, not a decision: it spends no
     retirement budget and may shrink (spec R4 point 1); it still keeps every anchor. A focus or a request keeps the owner's
     words byte for byte (and a focus its goal); a request may change its due day, a Next item its focus."""
@@ -2525,6 +2634,7 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
     given, left = ext_options("supersede", KIND_OF.get(iid[:1]), extopts, {"--focus": focus, "--due": due})
     focus, due = left["--focus"], left["--due"]
     check_focus_due(iid[:1], focus, due)
+    check_focus_words(iid[:1], done, not_doing)
     check_text("text", text, cap=text_max(iid[:1]))
     check_text("reason", reason)
     new_closes = closes_list(iid[:1], list(closes))
@@ -2565,7 +2675,9 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
         if closes:
             item["closes"] = closes
         carry = {"goal": old.get("goal"), "focus": focus or old.get("focus"), "due": due or old.get("due"),
-                 "no_goal": old.get("no_goal")}           # a session's reason for no goal, as an older brain wrote it
+                 "no_goal": old.get("no_goal"),           # a session's reason for no goal, as an older brain wrote it
+                 "done": done or old.get("done"), "not_doing": not_doing or old.get("not_doing"),   # a focus's words
+                 "jira": old.get("jira")}
         item.update({k: v for k, v in carry.items() if v is not None})
         if old.get("ext"):                          # every extension's entry goes over; its own check may replace it
             item["ext"] = dict(old["ext"])
@@ -2583,8 +2695,9 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
             op["promote"] = up
         kept = "\ncloses carried: %s" % ", ".join(carried) if carried and not new_closes else ""
         texts, notes = ext_check("supersede", old["kind"], given, op, d, st, ops, [text, reason] + anchors)
-        return op, [text, reason] + anchors + texts, "superseded %s with %s%s%s%s%s%s%s" % (
-            iid, nid, where, moved(up), kept, seen, anchor_warning(iid[0], anchors), notes_text(notes)), None
+        ended = charters_end(iid, d, [text, reason, done, not_doing] + anchors + texts)   # a superseded focus ends too
+        return op, [text, reason, done, not_doing] + anchors + texts, "superseded %s with %s%s%s%s%s%s%s%s" % (
+            iid, nid, where, moved(up), kept, seen, anchor_warning(iid[0], anchors), notes_text(notes), ended), None
     return write(build, ops_too=True)
 
 
@@ -2651,6 +2764,29 @@ def op_counter(iid, verb):
     def build(d, st):
         get_item(st, iid, OP_LETTERS)
         return {"op": verb, "id": iid}, [], "%s %s" % (verb, iid), None
+    return write(build)
+
+
+def op_words(iid, done, not_doing):
+    """`brain op words P8 --done-when D --not-doing N`: a live focus's words, added in place (same id, no charter ends: a charter's
+    digest of the focus's words is taken when it is signed and nothing rechecks it after). Only adds: a field already set goes through `supersede`."""
+    if iid[:1] != "P":
+        raise Refused(1, "words are for a focus: %s is not one" % iid)
+    if done is None and not_doing is None:
+        raise Refused(1, "words needs --done-when or --not-doing")
+    check_focus_words("P", done, not_doing)
+
+    def build(d, st):
+        it = st["items"].get(iid)
+        if it is None or it["status"] != "live":
+            raise Refused(1, "%s is not a live focus" % iid)
+        for key, label, v in (("done", "done when", done), ("not_doing", "not doing", not_doing)):
+            if v is not None and it.get(key) is not None:
+                raise Refused(1, "%s already has its %s; a change goes through `brain op supersede` (a new id)" % (iid, label))
+        op = {"op": "words", "id": iid}
+        op.update({k: v for k, v in (("done", done), ("not_doing", not_doing)) if v is not None})
+        return op, [done, not_doing], "words %s: set %s" % (iid, ", ".join(
+            l for l, v in (("done when", done), ("not doing", not_doing)) if v is not None)), None
     return write(build)
 
 
@@ -2729,8 +2865,9 @@ def owner_add_line(item):
     """An owner add's line of the dialog, from the item it writes: every field before the text, the text last."""
     letter, iid, w = item["id"][0], item["id"], (item.get("source") or {}).get("where")
     if letter == "G":
-        return 'Pin owner goal %s (review %s, scope %s), from "%s", done when "%s", not doing "%s": "%s"' % (
-            iid, item["review"], item["scope"], w, item["done"], item["not_doing"], item["text"])
+        return 'Pin owner goal %s (review %s, scope %s%s), from "%s", done when "%s", not doing "%s": "%s"' % (
+            iid, item["review"], item["scope"], ", jira %s" % item["jira"] if item.get("jira") else "", w, item["done"],
+            item["not_doing"], item["text"])
     if letter == "D":
         return 'Pin owner decision %s (%s)%s, from "%s": "%s"' % (iid, DECISION_KIND, " (scope %s)" % item["scope"]
                                                                  if item.get("scope") else "", w, item["text"])
@@ -2748,7 +2885,8 @@ def owner_line(ns, st, ops=(), d=None, session=None):
         letter = KINDS[ns.kind]
         check_cap(st, letter)                       # at a left cap: refused here, so the owner never approves a refused write
         item = {"id": next_id(st, letter), "text": ns.text, "source": {"where": ns.where}, "expires": ns.expires,
-                "review": ns.review, "scope": ns.scope, "done": ns.done, "not_doing": ns.not_doing}
+                "review": ns.review, "scope": ns.scope, "done": ns.done, "not_doing": ns.not_doing,
+                "jira": getattr(ns, "jira", None)}
         return owner_add_line(item)
     if ns.verb not in ("unpin", "supersede", "promote"):
         import brain_ext
@@ -2786,6 +2924,8 @@ def owner_op(st, ops, verb, ns, confirm):
                 "expires": ns.expires, "links": ns.link, "anchors": ns.anchor, "supersedes": None}
         if letter == "G":
             item.update({k: getattr(ns, k) for k in GOAL_FIELDS})
+            if getattr(ns, "jira", None) is not None:
+                item["jira"] = ns.jira
         elif letter == "D" and getattr(ns, "scope", None):
             item["scope"] = ns.scope
         texts = [ns.text, ns.owner_quote, ns.where, getattr(ns, "done", None), getattr(ns, "not_doing", None)]
@@ -2806,6 +2946,8 @@ def owner_op(st, ops, verb, ns, confirm):
         item["source"] = dict(old["source"])
     if ns.id[0] == "G":                             # each field of a goal not given is carried
         item.update({k: getattr(ns, k, None) or old.get(k) for k in GOAL_FIELDS})
+        if old.get("jira"):                         # a goal's Jira key goes over
+            item["jira"] = old["jira"]
     elif ns.id[0] == "D" and (getattr(ns, "scope", None) or old.get("scope")):
         item["scope"] = getattr(ns, "scope", None) or old["scope"]
     if isinstance(old.get("import"), dict):         # where an imported item came from goes with it
@@ -2910,6 +3052,7 @@ def owner_check(verb, ns):
             raise Refused(64, "a goal needs --done D, --not-doing N, --review YYYY-MM-DD and --scope global|project")
         if ns.kind != "goal" and [k for k in given if k != "scope" or ns.kind != "decision"]:
             raise Refused(64, FIELDS_FOR)
+        check_jira(getattr(ns, "jira", None), ns.kind == "goal", "a goal")
         check_text("text", ns.text, cap=text_max(KINDS[ns.kind]))
         check_text("quote", ns.owner_quote, cap=quote_max())
         check_text("where", ns.where)
@@ -3108,9 +3251,9 @@ def goal_check(ns):
         raise Refused(64, "--scope must be global or project")
 
 
-def show(iid):
+def show(iid, as_json=False):
     """`brain show ID`: every stored field of one item, live, queued or retired, one `field: value` line each; the owner's words
-    whole, as stored (the render cuts a quote line for room, this never does)."""
+    whole, as stored (the render cuts a quote line for room, this never does). `--json`: the stored item as one JSON object."""
     d = state_dir()
     if not os.path.isdir(d):
         raise Refused(1, "no brain state for this project yet")
@@ -3119,6 +3262,8 @@ def show(iid):
     it = st["items"].get(iid)
     if it is None:
         raise Refused(1, "%s is not an item of this brain" % iid)
+    if as_json:
+        return dumps(dict(it, id=iid))
     val = lambda v: v if isinstance(v, str) else dumps(v)
     src = it.get("source") if isinstance(it.get("source"), dict) else {}
     first = ("id", "kind", "status", "text")

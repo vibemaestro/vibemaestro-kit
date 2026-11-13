@@ -825,7 +825,8 @@ case_bundle() {
 b = json.load(open(sys.argv[1]))
 print([json.loads(e["line"])["item"].get("ext") for e in b["log"] if "\"add\"" in e["line"] and "\"S1\"" in e["line"]])' "$f")" \
        "[{'example': {'ticket': 'ABC-1'}}]" "[k] the extension's data travels in the bundle's log"
-  np; install "$EID" "$FIX"
+  newp; SID=sB; cfg_new; br op add --kind now --text "the task at hand"   # np with its own session id: two logs that open alike
+  install "$EID" "$FIX"                                                      # within one second would read as one chain
   br import "$f"; c_rc 0 "[k] brain import lands the bundle"
   c_has "$OUT" "; S1 as S1;" "[k] the session lands"
   c_eq "$(bpy 'it = s.load(s.state_dir())[1]["items"]["S1"]; print("ext" in it, "import" in it)')" "False True" \

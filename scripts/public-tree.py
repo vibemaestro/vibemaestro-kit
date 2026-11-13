@@ -6,8 +6,9 @@ Usage (in the repository, or with --root):
   python3 scripts/public-tree.py [--root DIR] --write-baseline
 
 What it reads: every tracked file but the root kb/, the paths matching a glob of `public.private` in HEAD's .vibemaestro/sdlc.json
-(the `applyTo` glob language, as scripts/export-public.sh reads it) and the allow file. Docs are read like code. A file with NUL
-bytes is read too: UTF-32 and UTF-16 decoded, anything else as text with each NUL read as a blank (counted as read as text);
+(the `applyTo` glob language, as scripts/export-public.sh reads it) and scripts/public-tree.allow; tests/public-tree.allow is read
+for `mail`, `home` and terms. Docs are read like code. A file with NUL bytes is read too: UTF-32 and UTF-16 decoded, anything else
+as text with each NUL read as a blank (counted as read as text);
 compressed content is not decompressed. A symlink (the export refuses one) and a submodule are skipped and counted. A file whose
 working-tree bytes are not its blob although git sees no change (a checkout attribute converted it) is `converted`: red, since
 the export ships the blob and every reader here, the term scanner too, reads the working tree. Line endings alone (core.autocrlf,
@@ -39,10 +40,15 @@ Green only when the hits, after the allow file, equal the baseline exactly:
     first 16 hex of the sha256 of the line with its surrounding blanks stripped, so the file holds no line text. A line is known
     by path and hash; its classes are recorded for the reader (they may change with kb/ while the line does not). `#` lines are
     comments.
-  scripts/public-tree.allow: `<path>\\t<class>\\t<exact string>`, for test data a test needs or a well-known public no-reply or
-    service address that product code whitelists; never a real person's address (a per-user no-reply address carries a login,
-    so it is one) or a private term; the PR adding one says why. A class hit on a line of that path is allowed when every match
-    of the class lies inside an occurrence of the string on that line. An entry that covers no hit is `stale-allow`.
+  The allow files, `<path>\\t<class>\\t<exact string>` per row, `#` lines comments; the rows of both apply. A class hit on a line
+    of that path is allowed when every match of the class lies inside an occurrence of the string on that line. An entry that
+    covers no hit is `stale-allow`. Never a real person's address (a per-user no-reply address carries a login, so it is one) or a
+    private term; the PR adding a row says why.
+  scripts/public-tree.allow (an owner merge, never scanned): the `mail` and `home` rows test data needs, and a well-known public
+    no-reply or service address that product code whitelists.
+  tests/public-tree.allow (not an owner merge): the `ref`, `kb` and `diary` rows of test data, for a path under tests/ in git's
+    form (no `.` or `..` segment, no `//`); any other row is a broken instrument, and so is the file as a symlink. It is scanned
+    for `mail`, `home` and terms like any file; a `ref`, `kb` or `diary` match there is a row's own only inside its string.
 
 Output: one line per finding, `new <path>:<line> <classes>`, `stale <path> <classes> <hash>`, `grows <path> <classes> <hash>`,
 `converted <path>`,
@@ -58,6 +64,7 @@ import collections
 import hashlib
 import json
 import os
+import posixpath
 import re
 import secrets
 import subprocess
@@ -69,6 +76,8 @@ KB_COMMON = {"kb/current-state.md", "kb/README.md"}    # in every kb: the plugin
 CONFIG = ".vibemaestro/sdlc.json"
 BASELINE = "scripts/public-tree.baseline"
 ALLOW = "scripts/public-tree.allow"
+TESTS_ALLOW = "tests/public-tree.allow"
+TESTS_CLASSES = ("kb", "ref", "diary")              # the classes tests/public-tree.allow may hold; mail and home stay owner-signed
 SELF = "scripts/public-tree.py"
 SCANNER = "scripts/scan-internal-terms.sh"
 CLASSES = ("kb", "ref", "diary", "mail", "home")      # the order of the classes column; `term` is the scanner's
@@ -336,6 +345,11 @@ def scan(root, allow_entries=()):
             decoded[path] = "\n".join(t for t, _ in lines) + "\n"
         for n, (line, raw) in enumerate(lines, 1):
             sp = cls.spans(line)
+            if path == TESTS_ALLOW and not line.startswith("#") and line.count("\t") >= 2:
+                # a row's own string (column 3) holds its kb, ref or diary match; a comment, a path and any mail or home are scanned
+                at = line.index("\t", line.index("\t") + 1) + 1
+                sp = {c: [m for m in v if not (c in TESTS_CLASSES and m[0] >= at)] for c, v in sp.items()}
+                sp = {c: v for c, v in sp.items() if v}
             if not sp:
                 continue
             left = []
@@ -376,8 +390,10 @@ def parse_baseline(text, where):
 
 
 def parse_allow(text, where):
+    """[(where, line, (path, class, string))]; a row of tests/public-tree.allow must be a tests/ path and one of TESTS_CLASSES."""
     rows = []
-    for n, line in enumerate(text.split("\n"), 1):
+    for n, line in enumerate(text.split("\n"), 1):    # lines as the scan splits them: a lone CR is inside a line, a CRLF ends one
+        line = line[:-1] if line.endswith("\r") else line
         if not line.strip() or line.startswith("#"):
             continue
         parts = line.split("\t", 2)
@@ -385,13 +401,29 @@ def parse_allow(text, where):
             raise Broken("%s:%d is not `<path>\\t<class>\\t<exact string>`" % (where, n))
         if parts[1] not in CLASSES:
             raise Broken("%s:%d: class %r cannot be allowed (one of %s; a term never)" % (where, n, parts[1], ", ".join(CLASSES)))
-        rows.append((n, (parts[0], parts[1], parts[2])))
+        if where == TESTS_ALLOW and parts[1] not in TESTS_CLASSES:
+            raise Broken("%s:%d: class %r belongs in %s (an owner merge); this file takes %s"
+                         % (where, n, parts[1], ALLOW, ", ".join(TESTS_CLASSES)))
+        if where == TESTS_ALLOW and not (parts[0].startswith("tests/") and posixpath.normpath(parts[0]) == parts[0]):
+            raise Broken("%s:%d: the path is not a path under tests/ in git's form" % (where, n))
+        rows.append((where, n, (parts[0], parts[1], parts[2])))
     return rows
 
 
-def read_text(path):
+def read_allow(root):
+    """The rows of both allow files; tests/public-tree.allow is read only as a tracked file of the tree, never through a symlink."""
+    full = os.path.join(root, TESTS_ALLOW)
+    if os.path.realpath(full) != os.path.join(os.path.realpath(root), TESTS_ALLOW):
+        raise Broken("%s is a symlink or below one: it must be a regular file of the tree" % TESTS_ALLOW)
+    if os.path.lexists(full) and TESTS_ALLOW not in {p for _, p, _ in tracked(root)}:
+        raise Broken("%s is not tracked: the scan would not read the rows it applies (git add it)" % TESTS_ALLOW)
+    return (parse_allow(read_text(os.path.join(root, ALLOW), newline=""), ALLOW)
+            + parse_allow(read_text(full, newline=""), TESTS_ALLOW))
+
+
+def read_text(path, newline=None):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", newline=newline) as f:
             return f.read()
     except FileNotFoundError:
         return ""
@@ -515,9 +547,9 @@ def main():
     try:
         root = a.root or git(os.getcwd(), "rev-parse", "--show-toplevel").stdout.decode().strip()
         root = os.path.abspath(root)
-        allow_rows = parse_allow(read_text(os.path.join(root, ALLOW)), ALLOW)
+        allow_rows = read_allow(root)
         if a.write_baseline:
-            hits = scan(root, [e for _, e in allow_rows])[0]
+            hits = scan(root, [e for _, _, e in allow_rows])[0]
             print("public-tree: wrote %d line(s) to %s" % (write_baseline(root, hits), BASELINE))
             return 0
         if a.ci and not (a.terms and a.base):
@@ -535,7 +567,7 @@ def main():
         if got != n_classes:
             raise Broken("control: found %d of %d planted classes: the instrument is broken" % (got, n_classes))
 
-        hits, allowed, used, skipped, decoded, read = scan(root, [e for _, e in allow_rows])
+        hits, allowed, used, skipped, decoded, read = scan(root, [e for _, _, e in allow_rows])
         baseline = parse_baseline(read_text(os.path.join(root, BASELINE)), BASELINE)
         # a line is known by path and hash: its classes may change with kb/ or the allow file while its text does not
         have = collections.Counter((p, h) for p, _, h in baseline)
@@ -548,9 +580,9 @@ def main():
                 out.append("new %s:%d %s" % (p, n, ",".join(c)))
         for (p, h), k in sorted(have.items()):
             out += ["stale %s %s %s" % (p, ",".join(recorded[(p, h)]), h)] * k
-        for i, (n, _) in enumerate(allow_rows):
+        for i, (where, n, _) in enumerate(allow_rows):
             if i not in used:
-                out.append("stale-allow %s:%d" % (ALLOW, n))
+                out.append("stale-allow %s:%d" % (where, n))
         first = git(root, "cat-file", "-e", "%s:%s" % (base, SELF), check=False).returncode != 0
         if first:
             print("public-tree: the base has no check: the baseline is accepted as the first baseline")

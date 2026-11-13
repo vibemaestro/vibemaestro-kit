@@ -13,7 +13,8 @@
 #   4. log: no xtrace, no `${{ }}` inside `run:`, only masked values printed
 #   5. exit code: the step's own shell block is RUN against scratch repos and a fake gh: a planted fault is red, a clean case is green,
 #      gh failing is not green, a PR that relaxes its own limit and neutralises its own gate is still judged by the base
-#   6. pins: every `uses:` is pinned by a full commit SHA (or local), and only actions/checkout is used
+#   6. pins: every `uses:` is pinned by a full commit SHA (or local), and only actions/checkout is used (signing-rules also uploads its
+#      findings with actions/upload-artifact, at one pin)
 #   7. runner: `runs-on: ${{ vars.CI_GATE_RUNNER || vars.<ci.runner_var> || '<ci.runner_default>' }}`, from flags, from config, or the defaults;
 #      with ci.runner_default `self-hosted only` the last operand is a failing fromJSON instead of a label, in every job, and a kept old file is warned about
 #   8. the kit's OWN workflows (not the templates): each job's `runs-on` is evaluated, and in a private repository with the runner variables
@@ -43,8 +44,8 @@ TPL="$PLUGIN/gates/workflows"
 KINDS="commit-discipline pr-title pr-body pr-sensitive dead-branches"
 
 echo "== templates and pins =="
-for k in $KINDS; do [ -f "$TPL/$k.yml" ] && ok "template $k.yml exists" || bad "template $k.yml is missing"; done
-for k in $KINDS; do
+for k in $KINDS signing-rules; do [ -f "$TPL/$k.yml" ] && ok "template $k.yml exists" || bad "template $k.yml is missing"; done
+for k in $KINDS signing-rules; do
   n=$(grep -c -F '@@RUNNER_VAR@@' "$TPL/$k.yml"); m=$(grep -c -F '@@RUNNER_DEFAULT@@' "$TPL/$k.yml")
   [ "$n" = 1 ] && [ "$m" = 1 ] && ok "$k.yml carries the two runner markers once" || bad "$k.yml markers: var $n, default $m"
 done
@@ -53,7 +54,7 @@ empty "$UNPINNED" "every 'uses:' under gates/ is local or pinned by a full 40-ch
 mkdir -p "$TMP/ctl"; sed 's/@[0-9a-f]\{40\} # v4.2.2/@v4/' "$TPL/commit-discipline.yml" > "$TMP/ctl/c.yml"
 CTL=$(grep -n 'uses:' "$TMP/ctl/c.yml" | grep -v -E -e 'uses: \./' -e '@[0-9a-f]{40}' || true)
 nonempty "$CTL" "control: the same grep flags a template whose pin was replaced by a tag"
-[ "$(grep -c -E 'uses: actions/checkout@[0-9a-f]{40} # v' "$TPL"/*.yml | awk -F: '{s+=$2} END{print s}')" = 6 ] && ok "each of the six templates has one pinned checkout with its tag in a comment" || bad "checkout pins are not one per template"
+[ "$(grep -c -E 'uses: actions/checkout@[0-9a-f]{40} # v' "$TPL"/*.yml | awk -F: '{s+=$2} END{print s}')" = 7 ] && ok "each of the seven templates has one pinned checkout with its tag in a comment" || bad "checkout pins are not one per template"
 
 echo "== rendering (install_gates.py) =="
 R="$TMP/repo"; mkdir -p "$R"; git_ -C "$R" init -q -b main
@@ -156,6 +157,18 @@ O=$(python3 "$CHECK" build "$W" "$PLUGIN" 2>&1); eq "$?" 0 "the scratch repos an
 for k in $KINDS; do
   O=$(python3 "$CHECK" check "$W" "$PLUGIN" "$k" "$R/.github/workflows/$k.yml" 2>&1); eq "$?" 0 "$k: structure and run pass on the real rendered template ${O:+($O)}"
 done
+# signing-rules is opt-in: rendered by --only, run from the vendored gate at the base, its findings uploaded at one pinned action
+RSR="$TMP/repo-sr"; mkdir -p "$RSR"; git_ -C "$RSR" init -q -b main
+O=$(cenv python3 "$PLUGIN/scripts/install_gates.py" --root "$RSR" --only signing-rules 2>&1); eq "$?" 0 "the installer renders signing-rules.yml (--only)"
+SRW="$RSR/.github/workflows/signing-rules.yml"
+grep -qxF "    runs-on: \${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}" "$SRW" && ok "signing-rules.yml: runs-on is the runner variable with its fallback" || bad "signing-rules.yml: runs-on is not the default expression"
+O=$(python3 "$CHECK" check "$W" "$PLUGIN" signing-rules "$SRW" 2>&1); eq "$?" 0 "signing-rules: structure and run pass on the real rendered template ${O:+($O)}"
+sed 's/upload-artifact@[0-9a-f]\{40\}/upload-artifact@v4/' "$SRW" > "$TMP/sr-v4.yml"     # an input for the checker, not a break
+RC=0; O=$(capped python3 "$CHECK" check "$W" "$PLUGIN" signing-rules "$TMP/sr-v4.yml" 2>&1) || RC=$?
+eq "$RC" 1 "an unpinned actions/upload-artifact@v4 is refused"; has "$O" "FAIL \`uses: actions/upload-artifact@v4\` is neither local nor pinned by a full commit SHA" "…naming the pin"
+sed 's/upload-artifact@[0-9a-f]\{40\}/upload-artifact@0123456789abcdef0123456789abcdef01234567/' "$SRW" > "$TMP/sr-sha.yml"     # an input for the checker, not a break
+RC=0; O=$(capped python3 "$CHECK" check "$W" "$PLUGIN" signing-rules "$TMP/sr-sha.yml" 2>&1) || RC=$?
+eq "$RC" 1 "actions/upload-artifact at another SHA is refused"; has "$O" "FAIL \`uses: actions/upload-artifact@0123456789abcdef0123456789abcdef01234567\`: only actions/checkout and actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 are allowed" "…naming the one allowed pin"
 
 echo "== concurrency: only a new commit on a PR cancels (tests/fixtures/concurrency_check.py) =="
 CONC="$HERE/fixtures/concurrency_check.py"
@@ -163,7 +176,7 @@ CONC="$HERE/fixtures/concurrency_check.py"
 # so the list cannot outlive the fix
 KNOWN_GAP=""
 for g in $KNOWN_GAP; do [ -f "$SRC_ROOT/$g" ] || bad "concurrency: KNOWN_GAP names $g, which does not exist: take it off"; done
-for f in "$TPL"/*.yml "$R"/.github/workflows/*.yml "$SRC_ROOT"/.github/workflows/*.yml; do
+for f in "$TPL"/*.yml "$R"/.github/workflows/*.yml "$SRW" "$SRC_ROOT"/.github/workflows/*.yml; do
   rel=${f#"$SRC_ROOT/"}; rel=${rel#"$TMP/"}
   O=$(python3 "$CONC" "$f" 2>&1); rc=$?
   case " $KNOWN_GAP " in
@@ -182,6 +195,7 @@ ifmat() {
 }
 RW="$R/.github/workflows"
 ifmat "$RW/pr-body.yml" pr-body edit-title=false edit-body=true edit-base=true draft-private=false draft-public=false ready=true
+ifmat "$SRW" signing-rules edit-title=false edit-body=false edit-base=true draft-private=false ready=true
 ifmat "$RW/pr-title.yml" pr-title edit-title=true edit-body=false edit-base=true draft-private=false ready=true
 ifmat "$RW/commit-discipline.yml" commit-discipline edit-title=false edit-title-token=false edit-body=false edit-base=true \
   edit-body-token-before=true edit-body-token-after=true draft-private=false ready=true
@@ -258,12 +272,12 @@ echo "== the kit's own workflows: no job can land on a hosted runner of a privat
 RON="$HERE/fixtures/runs_on_check.py"
 O=$(python3 "$RON" "$SRC_ROOT/.github/workflows" 2>&1); rc=$?
 eq "$rc" 0 "runs-on: every job of .github/workflows answers a runner of ours, or fails, in a private repository ($(printf '%s' "$O" | grep -c '^FAIL') jobs red)"
-has "$O" "jobs=7" "runs-on: the checker saw all 7 jobs (an empty glob cannot pass)"
+has "$O" "jobs=8" "runs-on: the checker saw all 8 jobs (an empty glob cannot pass)"
 mkdir -p "$TMP/ron"
 # a workflow file named *.yaml is run by Actions too: the checker must read it, and must see its jobs
 rm -rf "$TMP/ron/wf"; cp -R "$SRC_ROOT/.github/workflows" "$TMP/ron/wf"; printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps: []\n' > "$TMP/ron/wf/zz.yaml"
 O=$(python3 "$RON" "$TMP/ron/wf" 2>&1); rc=$?
 [ "$rc" = 1 ] && has "$O" "FAIL zz.yaml x" "runs-on break yaml-extension: red (a job of a *.yaml file is judged)" || bad "runs-on break yaml-extension: the checker does not read *.yaml, the probe is blind"
-has "$O" "jobs=8" "runs-on break yaml-extension: …and it counted the extra job"
+has "$O" "jobs=9" "runs-on break yaml-extension: …and it counted the extra job"
 
 echo; summary

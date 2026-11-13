@@ -53,7 +53,7 @@ Deprecated: these parts still work in the release that says so and leave vibemae
 - the baton kinds `kubectl-exec` and `remote-exec` of `templates/baton-kinds/`: a user keeps the script `baton new --from` wrote as
   their own baton.
 
-Frozen at: 0.4.0
+Frozen at: 0.6.0
 
 <!-- surface:begin -->
 ## Items
@@ -127,7 +127,7 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | entry point | rc | meaning |
 |---|---|---|
 | `scripts/intent-branch.sh` | 0 | done |
-| `scripts/intent-branch.sh` | 1 | `retry-issue` could not create the issue (best effort) |
+| `scripts/intent-branch.sh` | 1 | `retry-issue` could not create the issue (best effort); or `create-intent` under `issue.code` has no issue number (the issue could not be opened, or `--no-issue` and no `issue: N`): no branch is created |
 | `scripts/intent-branch.sh` | 2 | environment: not a git repository, no `python3` or core, an argument the core rejects |
 | `scripts/intent-branch.sh` | 3 | `kb/intent/<slug>.md` is missing |
 | `scripts/intent-branch.sh` | 4 | the branch cannot be integrated (BLOCK) |
@@ -135,6 +135,7 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | `scripts/intent-branch.sh` | 6 | the branch already exists |
 | `scripts/intent-branch.sh` | 7 | run from the wrong place (main tree without `--no-checkout`, submodule, `GIT_DIR`) |
 | `scripts/intent-branch.sh` | 8 | the task branch has more than one commit over its cut point |
+| `scripts/intent-branch.sh` | 9 | `create-intent` under `intake.focus: required`: the intent has no `type:` or `focus:`, or its focus is not an open one; nothing is created |
 | `scripts/intent-branch.sh` | 64 | bad arguments |
 | `scripts/open-pr.sh` | 0 | done; stdout is the PR number (with `--dry-run`: the payload) |
 | `scripts/open-pr.sh` | 1 | `gh` refused |
@@ -142,6 +143,7 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | `scripts/open-pr.sh` | 3 | the evidence is missing |
 | `scripts/open-pr.sh` | 4 | the current-state gate refused |
 | `scripts/open-pr.sh` | 5 | not in a linked worktree |
+| `scripts/open-pr.sh` | 6 | a story's kb check refused (`kb.py check spec`, or `check intent` where it exists, with `--strict`) |
 | `scripts/open-pr.sh` | 64 | bad arguments, a title outside the config, an invalid config |
 | `scripts/open-pr.sh` | 66 | a file argument cannot be read |
 | `scripts/kb.py` | 0 | done |
@@ -154,11 +156,11 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | `scripts/sdlc_config.py` | 64 | bad usage, an unknown key, an invalid config |
 | `scripts/install_gates.py` | 0 | done, or nothing to do; the runner-variable check (a WARNING or a skipped line) never changes it |
 | `scripts/install_gates.py` | 64 | bad usage (unknown gate, bad runner label, not a git repository) |
-| `scripts/install_gates.py` | 65 | invalid config |
+| `scripts/install_gates.py` | 65 | invalid config, or a dependent plugin's `gates/install.json` that is refused |
 | `scripts/baton.py` | 0 | done |
 | `scripts/baton.py` | 1 | the script fails `check` (its Params, its parameter checks, a kept baton's Targets), or its rehearse fails (a plan line outside Expect, or outside the declared Targets of a baton with Params); `go` refuses an `input` value older than 120 s; `pack`'s source fails `check` as a kept baton of the target place |
 | `scripts/baton.py` | 2 | environment: no `bash`, or the state directory cannot be written; `pack` finds a place's lock still held after 30 s |
-| `scripts/baton.py` | 3 | refused, nothing ran: no signature matches, a seal differs from the one shown, the mode does not allow the signer, `sign --by owner` has no record of the owner's dialog for that call (for a `project:` or `user:` baton, of the file it resolves to), or it stopped before the run phase; a queued item (`sign --by owner --queued`, `run --queued`) that is absent, not signed, expired, used, damaged (its bytes changed after the dialog opened or after signing), signed from the session or Claude Code process that queued it, run from another directory, or whose rehearse no longer gives the sealed plan; `log --wait-queued`: the item can no longer be signed; a `project:` or `user:` baton whose bytes no keep record pins on this machine, or that were retired, unless a `project:` baton's bytes are the blob at its path on `refs/remotes/origin/HEAD` (a branch of origin) and origin's canonical URL is on the owner's remote list (`mode remotes`); a project root or its `.vibemaestro/batons` that another user owns or others can write; an input copy that no longer holds its bytes (made again: the next call works); `pack` finds no `ok` run of these bytes in this machine's `log.tsv` (in a sandbox, a `project:` keep of a baton whose Stops is not none also takes a `go` that stopped for the owner on these bytes), the same bytes kept under another name in that place, or the name kept with another `Stops`, or is asked to move a source that is not pinned |
+| `scripts/baton.py` | 3 | refused, nothing ran: no signature matches, a seal differs from the one shown, the mode does not allow the signer, `sign --by owner` has no record of the owner's dialog for that call (for a `project:` or `user:` baton, of the file it resolves to), or it stopped before the run phase; a queued item (`sign --by owner --queued`, `run --queued`) that is absent, not signed, expired, used, damaged (its bytes changed after the dialog opened or after signing), signed from the session or Claude Code process that queued it, run from another directory, or whose rehearse no longer gives the sealed plan; `log --wait-queued`: the item can no longer be signed; `sign --by owner --approve`: the approval (the spec, a plan's rows, the project directory) changed since the dialog showed it; a `project:` or `user:` baton whose bytes no keep record pins on this machine, or that were retired, unless a `project:` baton's bytes are the blob at its path on `refs/remotes/origin/HEAD` (a branch of origin) and origin's canonical URL is on the owner's remote list (`mode remotes`); a project root or its `.vibemaestro/batons` that another user owns or others can write; an input copy that no longer holds its bytes (made again: the next call works); `pack` finds no `ok` run of these bytes in this machine's `log.tsv` (in a sandbox, a `project:` keep of a baton whose Stops is not none also takes a `go` that stopped for the owner on these bytes), the same bytes kept under another name in that place, or the name kept with another `Stops`, or is asked to move a source that is not pinned |
 | `scripts/baton.py` | 4 | the run or its post-check failed, and undo put the state back |
 | `scripts/baton.py` | 5 | the state is unknown: undo failed too, or the run was interrupted; `pack` was interrupted (the same command finishes it) |
 | `scripts/baton.py` | 6 | `new`: the file already exists |
@@ -166,8 +168,9 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | `scripts/baton.py` | 8 | `go`: the baton needs the owner's signature (a Stops item, or mode manual); nothing was signed, nothing ran. A value that needs quoting gets no owner command (the owner's dialog shows only a literal command): its text goes through an input file |
 | `scripts/baton.py` | 9 | `log --wait-names`: at the deadline a named script's latest run line since `--since` is not ok, or it has none; `log --wait-queued`: at the deadline the item is not signed |
 | `scripts/baton.py` | 10 | `permissions --check`, or `permissions --install-launcher` without `--force`: this `baton.py` is an installed copy that no `vibemaestro-sdlc@vibemaestro` entry of the registry lists any more, and the entry the launcher would run is another version directory (the session started before a plugin update); one line names both versions and says restart Claude Code; nothing written |
-| `scripts/baton.py` | 64 | bad usage: a call that does not fit the baton's Params (a key missing, unknown or given twice, a word with no `=`, a value that fails its type), a prefix other than `kit:`, `kind:`, `project:` or `user:`, a bare name, a kept baton or place reached through a link, a relative HOME for `under:~`, a state directory whose path is not a plain path for a file value; a `pack` target with no place outside a sandbox (in a sandbox a bare name is `project:<name>`), `user:` in a sandbox, or a place other than `project:` or `user:`; `mode trust` or `mode untrust` with a remote that is not a network remote; a name a kit or callable kind ships, a copy name (`-v<digits>`, `-<7 or more hex>`), a move inside one place; `go --queue` in a sandbox, with no session id, with `--by`, or on a baton the session may sign itself; `--queued` with a malformed id, with a signer other than the owner, or with a word after the id |
-| `scripts/baton.py` | 66 | the script cannot be read: no such name in the place named, no project root, a kept baton over 256 KiB; `pack`'s source cannot be read (absent, not a regular file, over 256 KiB); `pack --retire` of a sha no keep record of that name names |
+| `scripts/baton.py` | 64 | bad usage: a call that does not fit the baton's Params (a key missing, unknown or given twice, a word with no `=`, a value that fails its type), a prefix other than `kit:`, `kind:`, `project:` or `user:`, a bare name, a kept baton or place reached through a link, a relative HOME for `under:~`, a state directory whose path is not a plain path for a file value; a `pack` target with no place outside a sandbox (in a sandbox a bare name is `project:<name>`), `user:` in a sandbox, or a place other than `project:` or `user:`; `mode trust` or `mode untrust` with a remote that is not a network remote; a name a kit or callable kind ships, a copy name (`-v<digits>`, `-<7 or more hex>`), a move inside one place; `go --queue` in a sandbox, with no session id, with `--by`, or on a baton the session may sign itself; `--queued` with a malformed id, with a signer other than the owner, or with a word after the id; `--approve` with a signer other than the owner, a relative path or a word after it, or an approval spec that breaks its rules (each named); `grant revoke` with a malformed id; `go --grant` and `sign --grant` in any spelling (there are no plan grants) |
+| `scripts/baton.py` | 65 | `sign --by owner --charter`: the charter spec breaks a rule (each named): not exactly its five keys, the repositories, a kind outside `baton`, `workflow`, `script`, `test`, `owner-acts` or a `SIGN_AGAIN_STOPS` word in `max_stops`, an expiry past or more than 90 days ahead; the focus is malformed, closed, unknown or has no `done when`, or no brain answers; or a charter for that focus is in force from this project (named) |
+| `scripts/baton.py` | 66 | the script cannot be read: no such name in the place named, no project root, a kept baton over 256 KiB; `pack`'s source cannot be read (absent, not a regular file, over 256 KiB); `pack --retire` of a sha no keep record of that name names; `grant revoke` of no such approval |
 | `gates/commit_discipline.py` | 0 | pass |
 | `gates/commit_discipline.py` | 1 | red |
 | `gates/commit_discipline.py` | 2 | could not conclude |
@@ -183,6 +186,11 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | `gates/pr_title.py` | 2 | could not conclude |
 | `gates/pr_title.py` | 64 | bad usage |
 | `gates/pr_title.py` | 65 | invalid config |
+| `gates/signing_rules.py` | 0 | green: the pull request changes no baton's Stops, adds no file under a baton directory, and changes no list or file of the list read at the base |
+| `gates/signing_rules.py` | 1 | red, an owner merge: each cause named, judged on the head merged into the base tip (a Stops change, a new file under a baton directory, a symlink or submodule added, a list name changed or absent in the merged tree, a list file that does not parse, the gate or its list changed) |
+| `gates/signing_rules.py` | 2 | could not conclude: a rev does not read, the head does not merge into the base tip (a conflict, unrelated histories, a git older than 2.38), a git call failed |
+| `gates/signing_rules.py` | 64 | bad usage (a `--list` path that is absolute or holds `..`) |
+| `gates/signing_rules.py` | 65 | the `--list` file is absent at the base, is not JSON, or breaks its shape, or the list names a file or a name absent at the base tip (each named) |
 | `gates/merge_guard.py` | 0 | every condition holds (dry run), or the pull request merged |
 | `gates/merge_guard.py` | 1 | a condition fails (each failed condition is named) |
 | `gates/merge_guard.py` | 2 | could not conclude: a `gh` call failed, a GitHub read was incomplete, GitHub refused the merge pinned to the head or left it pending, an `external:` adapter exited, or the merge log cannot be written |
@@ -202,6 +210,8 @@ Paths are relative to the plugin directory. An entry point is called by its path
 ## Config keys of schema 1
 
 A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py get <key>` reads it.
+`intake.focus` is `required`, `warn` or `off`; `warn` is the default in this release, and the next release makes `required` the default.
+`issue.code` is `null` (the default) or 3 capital letters A-Z; set, `create-intent` names the branch `intent/<code>-<issue number>-<slug>` and writes the intent's `key:`.
 
 | key |
 |---|
@@ -268,6 +278,8 @@ A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py ge
 | `merge.required_checks` |
 | `merge.log` |
 | `merge.planner` |
+| `merge.touch_checks` |
+| `merge.touch_inputs` |
 | `merge.image_bump.enabled` |
 | `merge.image_bump.tag_files` |
 | `merge.image_bump.tree` |
@@ -275,6 +287,8 @@ A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py ge
 | `merge.image_bump.registry` |
 | `rebase.identity` |
 | `upstream_issues` |
+| `intake.focus` |
+| `issue.code` |
 | `agents.review_model` |
 | `agents.search_model` |
 | `agents.worker_model` |
@@ -296,6 +310,9 @@ A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py ge
 | `tokens.spec.out_of_scope` |
 | `tokens.spec.criteria` |
 | `tokens.spec.design` |
+| `tokens.spec.constraints` |
+| `tokens.spec.risks` |
+| `tokens.spec.clarify` |
 | `tokens.spec.evidence` |
 | `tokens.spec.placeholder` |
 ## Dependent calls

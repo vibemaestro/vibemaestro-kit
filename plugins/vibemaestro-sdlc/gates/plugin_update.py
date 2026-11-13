@@ -26,6 +26,12 @@
     plugin_update.py entry <claude dir> <plugin>         the plugin's user-scope entries now, as one JSON line
     plugin_update.py gone <record dir>                   GONE <plugin> <installPath> and exit 1 for each user install of the
                                                          record's plugins that its copy names whose directory is gone
+    plugin_update.py pending <claude dir> <own script> <plugin>,... [<own argument>...]
+                                                         PENDING <kind> … and exit 1 for each signed run (signatures/) or queued
+                                                         item (queue/, pending or signed) whose script lies in the cache
+                                                         directory of one of those plugins and that has not run, by baton.py's
+                                                         own readers; the run's own record (its script, arguments and
+                                                         directory) is not counted
 
 The record's `targets` file holds one line per plugin in scope: <plugin> <old commit or -> <target commit>.
 
@@ -55,7 +61,7 @@ its `.claude-plugin/plugin.json` carries no `version`. Then the new sdlc's launc
 from the new install: its INSTALL_DIR accepts both directories, and its resolve(), pointed at this claude directory, picks the
 new sdlc's scripts/baton.py. Standard library and git only, Python 3.8+.
 """
-import hashlib, importlib.util, json, os, re, stat, subprocess, sys
+import errno, hashlib, importlib.util, json, os, re, stat, subprocess, sys
 MKT, NAMES = "vibemaestro", ("vibemaestro-sdlc", "vibemaestro-brain")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 LOCAL = re.compile(r"^[a-z0-9][a-z0-9._-]*\Z")
@@ -533,6 +539,60 @@ def gone(rec):
     if miss:
         sys.exit(1)
 
+def baton():
+    """scripts/baton.py of this plugin, imported the way gates/bootstrap.py does: the readers of its signatures and queue."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location("baton_for_plugin_update", os.path.join(here, "scripts", "baton.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+def pending(cfg, own, plugins, args):
+    """What this update would void: a signed run or a queued item of a kit baton of a plugin it moves that has not run (a signature
+    binds the baton to its plugin's versioned directory). A signature whose run has started (a run-start of its binding at or after
+    its time, and no `run` line of the binding since) is being spent, not waiting; one that came back (an unanswered run) waits again."""
+    b = baton()
+    roots = tuple(os.path.join(os.path.realpath(os.path.join(cfg, "plugins", "cache", MKT, n)), "") for n in plugins)
+    own, here = os.path.realpath(own), os.path.realpath(os.getcwd())
+    def mine(script, a, cwd):
+        return isinstance(script, str) and script.startswith(roots) and not (os.path.realpath(script) == own and a == args and cwd == here)
+    started, ended = {}, {}
+    try:
+        with open(os.path.join(b.state_dir(), "log.tsv"), encoding="utf-8", errors="backslashreplace", newline="") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        lines = []
+    for f in (ln.split("\t")[-len(b.LOG_FIELDS):] for ln in lines):
+        t = b.iso_seconds(f[0]) if len(f) >= 12 and f[1] in ("run-start", "run") else None
+        if t is not None:
+            (started if f[1] == "run-start" else ended)[f[4]] = max((started if f[1] == "run-start" else ended).get(f[4], t), t)
+    found = []
+    try:
+        recs = b.pending(b.state_dir())
+    except OSError as e:
+        if e.errno not in (errno.ENOENT, errno.ENOTDIR):     # no signatures directory: nothing was ever signed; any other error is a refusal
+            raise
+        recs = []
+    for r in recs:
+        when, bound = b.iso_seconds(str(r.get("time"))), str(r.get("binding"))[:12]
+        running = when is not None and started.get(bound, -1) >= when and ended.get(bound, -1) < started[bound]
+        if mine(r.get("script_path"), r.get("args"), r.get("cwd")) and not running:
+            found.append("signature %s signed %s in %s" % (os.path.basename(r["script_path"]), r.get("time"), r.get("cwd")))
+    try:
+        ids = sorted(n[:-5] for n in os.listdir(b.queue_dir()) if n.endswith(".json") and b.QUEUE_ID.match(n[:-5]))
+    except OSError as e:
+        if e.errno not in (errno.ENOENT, errno.ENOTDIR):
+            raise
+        ids = []
+    for qid in ids:
+        _p, it, state = b.load_item(qid)
+        if state in ("pending", "signed") and mine(it.get("script_path"), it.get("args"), it.get("cwd")):
+            found.append("queued-item %s %s queued %s in %s" % (qid, it.get("name"), it.get("created"), it.get("cwd")))
+    for line in found:                                       # a name that is not UTF-8 (a lone surrogate) prints as ?, never a crash
+        out("PENDING", b.esc(line).encode("utf-8", "replace").decode("utf-8"))
+    if found:
+        sys.exit(1)
+
 mode = sys.argv[1] if len(sys.argv) > 1 else "--help"
 if mode in ("-h", "--help"):
     print(__doc__.strip())
@@ -553,6 +613,11 @@ elif mode == "entry":
     print(json.dumps(user_entries(load(registry(sys.argv[2]), "installed_plugins.json"), sys.argv[3]), sort_keys=True))
 elif mode == "gone":
     gone(sys.argv[2])
+elif mode == "pending":
+    try:                                                     # exit 1 means pending: any other failure is a refusal, never a wait
+        pending(sys.argv[2], sys.argv[3], sys.argv[4].split(","), sys.argv[5:])
+    except Exception as e:
+        refuse("the signed runs and queued items cannot be read: %s" % (getattr(e, "strerror", None) or type(e).__name__))
 else:
     sys.stderr.write("plugin_update.py: unknown mode %r (--help lists them)\n" % mode)
     sys.exit(64)

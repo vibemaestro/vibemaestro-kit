@@ -187,9 +187,10 @@ def names_sdlc(d):
     return isinstance(n, str) and (n == SDLC or n.startswith(SDLC + "@"))
 
 
-def dependents():
-    """[(plugin name, version, report hook or None)] of the installed vibemaestro plugins that declare a dependency on
-    vibemaestro-sdlc, by name; the hook is the newest version's that holds one."""
+def dependents(hook_rel=REPORT_HOOK):
+    """[(plugin name, version, file or None)] of the installed vibemaestro plugins that declare a dependency on
+    vibemaestro-sdlc, by name; the file (`hook_rel` under the plugin root: the report hook, or install-gates' declaration) is the newest
+    version's that holds one."""
     data = read_json(os.path.join(os.path.realpath(B.claude_config_dir()), "plugins", "installed_plugins.json"))
     ids = sorted((data.get("plugins") or {}) if isinstance(data, dict) and isinstance(data.get("plugins"), dict) else [])
     out = []
@@ -203,7 +204,7 @@ def dependents():
             deps = m.get("dependencies") if isinstance(m, dict) else None
             if not isinstance(deps, list) or not any(names_sdlc(d) for d in deps):
                 continue
-            hook = os.path.join(real, REPORT_HOOK)
+            hook = os.path.join(real, hook_rel)
             ok = os.path.isfile(hook) and not os.path.islink(hook) and os.path.realpath(hook) == hook
             if found is None:
                 found = (name, show(v), hook if ok else None)

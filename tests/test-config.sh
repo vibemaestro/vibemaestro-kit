@@ -646,6 +646,11 @@ fam_merge() {
   vcase "merge: a planner input that is absolute" '{"merge": {"planner": {"script": "tests/plan.py", "inputs": ["/srv/map.txt"]}}}' 'merge.planner.inputs[0]'
   vcase "merge: planner inputs as a string" '{"merge": {"planner": {"script": "tests/plan.py", "inputs": "tests/suites.map"}}}' 'merge.planner.inputs'
   vcase "merge: a planner without its inputs list" '{"merge": {"planner": {"script": "tests/plan.py"}}}' 'merge.planner.inputs'
+  vcase "merge: a touch check with its inputs (plan-approved merges)" '{"merge": {"touch_checks": ["signing-rules"], "touch_inputs": {"signing-rules": {"workflow": ".github/workflows/s.yml", "paths": ["gates/s.py"]}}}}' ok
+  vcase "merge: a touch check merge.touch_inputs does not name" '{"merge": {"touch_checks": ["signing-rules"]}}' 'merge.touch_checks: names signing-rules, which merge.touch_inputs does not'
+  vcase "merge: touch_inputs as a list" '{"merge": {"touch_inputs": [".github/workflows/s.yml"]}}' 'merge.touch_inputs: must be an object of name to {workflow, paths}'
+  vcase "merge: a touch input without its paths" '{"merge": {"touch_inputs": {"s": {"workflow": ".github/workflows/s.yml"}}}}' 'merge.touch_inputs.s.paths'
+  vcase "merge: a touch input workflow outside the repo" '{"merge": {"touch_inputs": {"s": {"workflow": "../s.yml", "paths": []}}}}' 'merge.touch_inputs.s.workflow'
   out=$(cd "$TMP" && cenv python3 "$PLX/scripts/sdlc_config.py" get merge.deny_globs --default 2>&1); rc=$?
   eq "$rc:$out" "0:null" "[M] the plugin default of merge.deny_globs is null (unset: the guard fails closed)"
   out=$(cd "$TMP" && cenv python3 "$PLX/scripts/sdlc_config.py" get ci.backend --default 2>&1)
@@ -654,6 +659,8 @@ fam_merge() {
   eq "$out" "false" "[M] the plugin default of merge.admin_bypass is false"
   out=$(cd "$TMP" && cenv python3 "$PLX/scripts/sdlc_config.py" get merge.planner --default 2>&1)
   eq "$out" "null" "[M] the plugin default of merge.planner is null (no planner: --behind auto takes its docs-only fallback)"
+  out=$(cd "$TMP" && cenv python3 "$PLX/scripts/sdlc_config.py" get merge.touch_checks --default 2>&1)
+  eq "$out" "[]" "[M] the plugin default of merge.touch_checks is [] (no touches: a denied path stays an owner merge)"
   # the deny floor follows the config's rules.dirs: merge_deny_floor(dirs) is the default plus <dir>/** for each folder under .vibemaestro/
   fl() { (cd "$TMP" && cenv python3 -I -B -c 'import json, sys
 sys.path.insert(0, sys.argv[1] + "/scripts")

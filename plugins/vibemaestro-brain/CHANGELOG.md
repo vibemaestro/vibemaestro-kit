@@ -2,6 +2,21 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.4.0
+
+Released together: vibemaestro-sdlc 0.6.0, vibemaestro-brain 0.4.0
+
+- minor: The review card after a compaction prints, for each live focus, the counts line `kb.py focus` last wrote for this project (gate 1, gate 2, in progress, waiting for the owner, done) with its time, or `P1: not counted yet` when there is none or it cannot be read.
+- minor: A goal and a focus take a Jira issue key: `brain owner add --kind goal … --jira ABC-12` (the owner's dialog line shows it) and `brain op add --kind focus … --jira ABC-12`. It is stored with the item, shown by `brain show` (text and `--json`), carried on supersede and through export and import, and never synced or sent anywhere. A malformed key, or one on another kind, is refused (rc 64); an item without it stores no `jira` key.
+- minor: The owner signs a focus charter: `baton.py sign --by owner --charter <spec>` (focus, repos, kinds, max_stops, expires at most 90 days ahead) goes through the same dialog as `--approve`, shows the focus's words, its `done when` and `not doing`, and keeps a `kind: charter` record under `grants/`, one in force per focus and project directory; it is refused with exit 65 for a focus closed, unknown or with no `done when`, `owner-acts` or a `SIGN_AGAIN_STOPS` word in `max_stops`, a kind outside `baton`, `workflow`, `script`, `test`, or an expiry out of range. Where no plan approval covers a pull request, `kit:merge-pr`'s guard reads the charter in force for the `focus:` of the plan's frontmatter (the plan's repository in its `repos`, the row the same at the default branch and the PR's head, a use left, every change a touch of the row inside its repos, kinds and `max_stops`, never the floor or a `(signs again)` touch) and says `touches:charter-<id>/<row>`; `go --row <owner/repo>:kb/plans/<file>.md#<row>` runs a declared baton under it, signed `plan:<charter>/<row>/<n>`, its spent record naming the charter and the matched touch. Approvals are read first; a plan with no `focus:`, and a `go --row` line that names no repository, read approvals only. `log --grants` lists charters, `grant revoke` ends one, `grant revoke --focus <P>` ends a focus's charters, and the brain's `op close` or `op supersede` of a focus runs it before it ends the focus.
+- minor: A focus takes `--done-when` and `--not-doing`: `brain op add --kind focus` and `brain op supersede` store both as the owner's words, whole, and `brain export` and `brain import` carry them; a supersede carries what it is not asked to change. `op add` with no `--done-when` stores the focus with a warning that a charter for it will need one. `brain show <P> --json` returns both; a focus that has neither does not carry the keys.
+- minor: `brain op words <P> [--done-when D] [--not-doing N]` gives a live focus its `done when` and `not doing` in place: the focus keeps its id and no charter ends. It only adds: a field already set is refused (a change goes through `brain op supersede`, a new id), as is a goal, a closed or unknown id, or no option. The log format is now 7: an older brain stops folding a log that holds a `words` line. The words pass the same text checks as `brain op add --kind focus`; `brain show <P> --json` returns them at once.
+- minor: intake: an intent says its type (story, task, bug) and its focus (an open P of the brain). `kb.py new intent --type --focus` writes the card of its type and `kb.py check intent` judges it; `create-intent` reads the focus from the brain, or in a worker from the issue's `type:`/`focus:` labels, and labels the issue it opens. `intake.focus` (`required`, `warn`, `off`) decides what a missing or closed focus does: `warn` is the default in this release, `required` refuses with rc 9. `brain show <id> --json` prints the stored item as JSON.
+
+### Upgrade notes
+
+- Restart every session of a project on this version before the first `brain op words` is written: an older brain stops folding a log that holds a `words` line.
+
 ## 0.3.0
 
 Released together: vibemaestro-sdlc 0.4.0, vibemaestro-brain 0.3.0

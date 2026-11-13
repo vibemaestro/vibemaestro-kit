@@ -55,7 +55,8 @@ Conditions:
                      `release` ahead of or identical to the head; no `release` is a FAIL); any other PR whose head is already on
                      `release` is refused, since a squash of it would cut `release` off the default branch's history
   files              every changed file was read (a rename counts its source too)
-  deny               no changed path matches merge.deny_globs, whatever the case (normal lane)
+  deny               no changed path matches merge.deny_globs, whatever the case, nor has a `.claude-plugin` segment at any
+                     depth and in any case, whatever the globs (normal lane; in bootstrap it is never a scaffold path)
   brief              every changed path matches an allowed glob, case-sensitively
   links              no changed path is a symlink or a submodule at the head
   own-inputs         no changed path is the config file or an `external:` adapter the config names (whatever the deny globs)
@@ -88,23 +89,61 @@ Conditions:
                      it prints one suite per line or one line `@full <reason>`), with Python's sockets refused, an environment
                      of an empty PATH, HOME that dir and LC_ALL=C, and a 60 s timeout: no code or data of the head reaches it.
                      The plan line says `behind <n> auto`; the log line gains behind_auto and both sides' suites
+  touches            only when merge.touch_checks (at the base) names a check, in the normal lane: plan-approved merges. The PR's
+                     trust-layer changes are each changed path deny matches (a rename's source too; its kind by kb_plan's path
+                     table: baton, workflow, config, script, test, else other; a baton's Stops read at the head, `removed` when it
+                     goes) and each finding of a touch check whose latest runs are all red: the `trust-touches` artifact of its
+                     workflow run (one zip of one file, at most 1 MiB: `trust-touches v1` or `v2`, a JSON line [kind, path,
+                     object, stops] per finding, `end <n>`). A touch check's conclusion is its workflow run's (red when it or the
+                     check run is; a check run that says success over a workflow run that is not, cancelled or still running,
+                     fails checks and required). With no change it holds. Else it holds only when the body has exactly one line
+                     `plan: [<owner/repo>:]kb/plans/<name>.md#<row>` (a line starting `plan:` that is not that shape is no plan
+                     line), an approval in force (baton's `sign --by owner --approve`,
+                     signed from this project directory, record v 2) holds that row, and: the row is one row of the plan, not
+                     dropped, at the plan repository's default branch and, when the PR is in that repository, at its head, where
+                     the intent and the spec the plan names have the sha256 the approval holds and the row every cell it held but
+                     Link ("the plan changed since the owner signed it"); earlier merges used the row fewer times than its PRs
+                     (`touches used` lines in baton's log.tsv or their markers, for the plan's repo, path and the row at any
+                     commit); and every change is a touch of the row as the approval holds it, on repository, path (a `test`
+                     directory ending in `/` holds every file under it), kind, object and Stops, not marked `(signs again)`.
+                     Never covered: the floor (a path that judges a later PR: the config, an adapter, the planner's script and
+                     inputs, every touch_inputs path, .vibemaestro/risk-tier.yaml and .vibemaestro/gates/; a path with a
+                     `.claude-plugin` segment; a signing-rules finding of kind other; a baton whose head drops a SIGN_AGAIN_STOPS
+                     word its Stops hold at the base tip, a rename read at its source), an `owner-merge` finding, the `other` of a
+                     v1 block, a kind no row declares, the path `-`, a run of a touch check's name another workflow file made,
+                     and a red touch check with no artifact, no end line, a count that differs or `end 0`. deny, checks and
+                     required then leave those paths and red runs to it (a pending, skipped or cancelled touch check stays
+                     `required`); `--merge` takes one of the row's uses right before the merge call (O_EXCL; a refused call still
+                     spends it), and the plan line says ` touches:<approval>/<row>`. When no approval covers it, a charter in
+                     force (baton's `sign --by owner --charter`, signed from this project directory) for the plan's frontmatter
+                     `focus:` does, read with no pinned commit: the plan says that focus at the default branch's tip and, when the
+                     PR is in its repository, at its head; the plan's repository is in the charter's repos and its path is written
+                     plainly (no `.` or `..` part); the row is one row of it on both sides, not dropped, its cells but Link the
+                     same ("row moved in this PR"); a use is left (the approvals' uses count too); and every change is a touch of
+                     the row (as above, never the floor or marked) inside the envelope: its repository in repos, its kind in
+                     kinds, its Stops within max_stops. The plan line then says ` touches:charter-<id>/<row>`; else an owner
+                     merge, naming each part outside; a plan read that fails is could not conclude
   image              --require-image and the lane's new tag exist in the registry
-  lane-*             --image-bump (only when merge.image_bump.enabled) replaces deny: lane-files, lane-deny, lane-tag-only
+  lane-*             --image-bump (only when merge.image_bump.enabled) replaces deny: lane-files, lane-deny (a file under the
+                     tree meets a deny glob that its tree-neutral path does not, or any changed path has a `.claude-plugin`
+                     segment), lane-tag-only
                      (a changed line of a tag file changes only the tag of the configured image reference, or is `key: <tag>`;
                      a tag file is changed in place, never renamed or removed), lane-one-tag, lane-revision
 --admin (only when merge.admin_bypass) adds `--admin` to gh pr merge; it changes no condition.
 
 Every run that gets past its arguments appends one JSON line to the merge log (merge.log under $XDG_STATE_HOME/vibemaestro,
 else ~/.local/state/vibemaestro; default merge-log.jsonl, always the default in bootstrap), mode 0600, never the PR's title or
-body. A log that cannot be written is rc 2, before any merge.
+body (`touches` reads the body for its plan line only; the line logs the approval, the row's key and the covered changes). A log
+that cannot be written is rc 2, before any merge.
 
 Exit codes (the gates'): 0 every condition holds (dry run) or merged; 1 a condition fails, each named; 2 could not conclude (a
 `gh` error, mergeable still unknown, a truncated tree, the merge refused by GitHub or left pending, the PR not readable after
 the merge, an adapter that exits, the log, a guard input not found in the base's trees, a test merge still stale, a planner
-that cannot answer); 64 misuse (also an argument or a --brief/--expect-plan file that is not UTF-8, a --behind-ok-clean glob
-that is not docs-only, --behind with another value than auto or beside --behind-ok or --behind-ok-clean, --admin without
-merge.admin_bypass or in bootstrap, --image-bump with the lane off or in bootstrap, --require-image without a registry, naming
-another image or in bootstrap); 65 invalid config, or merge.deny_globs unset (in bootstrap: the added or changed config invalid, without
+that cannot answer, the row's use that cannot be recorded); 64 misuse (also an argument or a --brief/--expect-plan file that is
+not UTF-8, a --behind-ok-clean glob that is not docs-only, --behind with another value than auto or beside --behind-ok or
+--behind-ok-clean, --admin without merge.admin_bypass or in bootstrap, --image-bump with the lane off or in bootstrap,
+--require-image without a registry, naming another image or in bootstrap); 65 invalid config (a merge.touch_checks name
+merge.touch_inputs lacks too), or merge.deny_globs unset (in bootstrap: the added or changed config invalid, without
 merge.deny_globs, naming an external adapter or, over a base config, changing more than the merge section).
 
 Standard library only, Python 3.8+.
@@ -112,6 +151,8 @@ Standard library only, Python 3.8+.
 import argparse
 import datetime
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import posixpath
@@ -123,6 +164,7 @@ import tempfile
 import time
 import unicodedata
 import urllib.parse
+import zipfile
 
 sys.dont_write_bytecode = True
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -336,6 +378,13 @@ def match_fold(g, p):
     return C.glob_match(g.lower(), p.lower())
 
 
+def plugin_path(p):
+    """True when a path has a `.claude-plugin` segment at any depth, its case ignored (and the trailing dots and spaces a Windows
+    disk drops): a marketplace or plugin manifest chooses the code every machine installs. Denied in every lane whatever
+    merge.deny_globs says (they hold only the root `.claude-plugin/**`), never a scaffold path, never covered by a plan."""
+    return any(s.rstrip(" .").casefold() == ".claude-plugin" for s in p.split("/"))
+
+
 # ── checks ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 def _num(x):
     try:
@@ -415,18 +464,27 @@ def acceptance(a, ci, r):
     return " (failed steps not accepted: %s)" % ", ".join(s for s in steps if not any(word_prefix(s, p) for p in prefixes))
 
 
-def checks(a, mcfg, ci, V):
+def checks(a, mcfg, ci, V, T=None):
     try:
         runs = ci.runs(a.repo, a.head) or []
     except G.Infra as e:
         V.unknown("checks", "the CI backend could not read the runs: %s" % e)
         V.unknown("required", "the runs are not known")
+        if T:
+            T.known = False
         return
     latest = latest_runs(runs)
+    judged = T.split(latest) if T else set()             # red touch-check runs: `touches` judges them
     green, ignored, accepted, red, notes = 0, 0, [], [], []
     for r in latest:
         concl = r.get("conclusion")
-        if r.get("_bad_time"):
+        if id(r) in judged:
+            notes.append("%s=%s: a touch check, judged by touches" % (label(r), concl))
+            if concl == "success":
+                green += 1
+        elif T and T.rewritten(run=r):
+            red.append("%s=success, but its workflow run is %s" % (label(r), ",".join(T.rewritten(run=r))))
+        elif r.get("_bad_time"):
             red.append("%s=%s with no readable start time" % (label(r), concl))
         elif r.get("status") != "completed" or concl is None:
             red.append("%s=pending" % label(r))
@@ -452,14 +510,21 @@ def checks(a, mcfg, ci, V):
     if not required:
         V.na("required", "merge.required_checks is empty: at least one green check is asked instead")
         return
-    missing = []
+    missing, touched = [], set(n for n, _r in T.judged) if T else set()
     for name in required:
         mine = [r for r in latest if r.get("kind") != "status" and name in (r.get("name"), label(r))]
+        if name in touched:
+            continue
         if not mine:
             missing.append("%s (no check run)" % name)
         elif any(r.get("status") != "completed" or r.get("conclusion") != "success" for r in mine):
             missing.append("%s (%s)" % (name, ",".join(sorted(set(str(r.get("conclusion") or "pending") for r in mine)))))
-    V.cond("required", not missing, "%d required check(s)%s" % (len(required), ("; not green: " + ", ".join(missing)) if missing else ", all green"))
+        elif T and T.rewritten(name):
+            missing.append("%s (its check run says success, its workflow run %s)" % (name, ",".join(sorted(set(T.rewritten(name))))))
+    left = sorted(n for n in touched if n in required)                  # red touch checks: `touches` says whether they pass
+    V.cond("required", not missing, "%d required check(s)%s%s" % (len(required), ("; not green: " + ", ".join(missing)) if missing else
+                                                                  "" if left else ", all green",
+                                                                  "; red and judged by touches: " + ", ".join(left) if left else ""))
 
 
 # ── files ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -567,10 +632,331 @@ def links(a, files, V):
         V.cond("links", True, "no changed path is a symlink or a submodule")
 
 
+# ── touches: plan-approved merges ─────────────────────────────────────────────────────────────────────────────────────────────
+TOUCH_ARTIFACT, TOUCH_CAP = "trust-touches", 1 << 20
+PLAN_LINE = re.compile(r"plan:\s*(?:([A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+):)?(kb/plans/[A-Za-z0-9._/-]+\.md)#([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+class Touch(object):
+    """What `touches` judges in one run: on only when the base's merge.touch_checks names a check (normal lane, not bootstrap)."""
+
+    def __init__(self, cfg, base_sha):
+        self.cfg, self.checks, self.inputs = cfg, list(cfg["merge"]["touch_checks"]), cfg["merge"]["touch_inputs"]
+        self.base_sha = base_sha    # the base tip: a baton's Stops are read there too
+        self.judged = []            # the red runs of touch checks it judges (the latest runs of a name, all red)
+        self.unsettled = []         # (name, run, conclusion) of a touch check run not judged whose effective conclusion is not success
+        self.foreign = []           # runs of a touch check's name that its workflow (touch_inputs) did not make
+        self.known = True           # the runs were read
+        self.denied = None          # the changed paths deny matches
+        self.used = None            # what it merges under: {approval or charter, key, row, prs, covered}
+
+    def modules(self):
+        """baton.py (the approval records, the use) and kb_plan.py (the Trust touches cells, the path table), from ../scripts,
+        loaded by their paths only when `touches` is on: no other run of the guard reads them."""
+        out = []
+        for name in ("baton", "kb_plan"):
+            if name not in sys.modules:
+                spec = importlib.util.spec_from_file_location(name, os.path.join(os.path.dirname(_HERE), "scripts", name + ".py"))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                sys.modules[name] = mod
+            out.append(sys.modules[name])
+        return tuple(out)
+
+    def own(self, r, name):
+        """True when run r of the touch check `name` was made by the workflow merge.touch_inputs names for it."""
+        run = r.get("run")
+        return isinstance(run, dict) and run.get("path") == self.inputs[name]["workflow"] and run.get("id") is not None
+
+    def effective(self, r, name):
+        """A touch check run's conclusion: its workflow run's when this check's workflow made it (a token with `checks: write`
+        can rewrite the check run, not the workflow run), red when either is; None while either is not complete."""
+        run = r.get("run") if self.own(r, name) else {"status": "completed", "conclusion": r.get("conclusion")}
+        if r.get("status") != "completed" or run.get("status") != "completed" or r.get("_bad_time"):
+            return None
+        both = (r.get("conclusion"), run.get("conclusion"))
+        return "failure" if "failure" in both else next((c for c in both if c != "success"), "success")
+
+    def split(self, latest):
+        """The runs `checks` and `required` leave to touches: for each touch check, all its latest runs when every one is red."""
+        for name in self.checks:
+            mine = [r for r in latest if r.get("kind") != "status" and name in (r.get("name"), label(r))]
+            self.foreign += [(name, r) for r in mine if not self.own(r, name)]
+            eff = [self.effective(r, name) for r in mine]
+            if mine and all(e == "failure" for e in eff):
+                self.judged += [(name, r) for r in mine]
+            else:
+                self.unsettled += [(name, r, e) for r, e in zip(mine, eff) if e != "success"]
+        return set(id(r) for _n, r in self.judged)
+
+    def rewritten(self, name=None, run=None):
+        """The conclusions of the workflow runs behind touch check runs that say success when their workflow run does not
+        (cancelled, still running, red): a check run a token can rewrite is never read as green."""
+        return [e or "pending" for n, r, e in self.unsettled if (name is None or n == name) and (run is None or r is run)
+                and r.get("status") == "completed" and r.get("conclusion") == "success"]
+
+
+def touch_block(a, run_id):
+    """(findings [kind, path, object, stops], None, its version 1 or 2) of the `trust-touches` block a workflow run uploaded, else
+    (None, why, None)."""
+    try:
+        arts = [x for x in (B.api("repos/%s/actions/runs/%s/artifacts?name=%s&per_page=100" % (a.repo, run_id, TOUCH_ARTIFACT))
+                            or {}).get("artifacts") or [] if x.get("name") == TOUCH_ARTIFACT]
+    except G.Infra as e:
+        return None, "its artifacts cannot be read (%s)" % e, None
+    if len(arts) != 1 or arts[0].get("expired") or not isinstance(arts[0].get("size_in_bytes"), int) or arts[0]["size_in_bytes"] > TOUCH_CAP:
+        return None, "it has no single unexpired artifact %s of at most 1 MiB (%d found)" % (TOUCH_ARTIFACT, len(arts)), None
+    try:
+        with zipfile.ZipFile(io.BytesIO(B.api_bytes("repos/%s/actions/artifacts/%s/zip" % (a.repo, arts[0].get("id"))))) as z:
+            files = z.infolist()
+            if len(files) != 1 or files[0].file_size > TOUCH_CAP:
+                return None, "its artifact is not one file of at most 1 MiB", None
+            text = z.read(files[0]).decode("utf-8")
+    except G.Infra as e:
+        return None, "its artifact cannot be downloaded (%s)" % e, None
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, UnicodeDecodeError, ValueError, OSError):
+        return None, "its artifact is not a zip of one UTF-8 file", None
+    lines = text.split("\n")
+    lines = lines[:-1] if lines and lines[-1] == "" else lines
+    ver = {"trust-touches v1": 1, "trust-touches v2": 2}.get(lines[0]) if len(lines) > 1 else None
+    m = re.fullmatch(r"end (0|[1-9][0-9]{0,6})", lines[-1]) if ver else None
+    if not m:
+        return None, "its block has no `trust-touches v1` or `v2` line or no `end` line (the gate stopped before judging every change)", None
+    if int(m.group(1)) != len(lines) - 2 or not lines[1:-1]:
+        return None, "its block ends `%s` over %d finding line(s): a red run is red through its findings only" % (lines[-1], len(lines) - 2), None
+    out = []
+    for ln in lines[1:-1]:
+        try:
+            f = json.loads(ln)
+        except ValueError:
+            f = None
+        if not (isinstance(f, list) and len(f) == 4 and all(isinstance(x, str) and x for x in f)):
+            return None, "a line of its block is not [kind, path, object, stops]", None
+        out.append(f)
+    return out, None, ver
+
+
+def change_text(c):
+    return "%s %s:%s%s%s" % (c["kind"], c["repo"], c["path"], " " + c["object"] if c.get("object") else "",
+                             " Stops: " + c["stops"] if c.get("stops") else "")
+
+
+def trust_changes(a, T, files):
+    """The PR's trust-layer changes, each {kind, repo, path, object, stops, why, never}: every denied path (its kind by the path
+    table, a baton's Stops read at the head) and every finding of a judged red touch check. `never` names why no plan signature
+    covers it, None when a row may declare it: the floor (a path that judges a later PR, a `.claude-plugin` path, a signing-rules
+    finding of kind other, a baton whose head drops a SIGN_AGAIN_STOPS word its base holds), and what no check vouches for (a run
+    another workflow made, a red check with no block, an `owner-merge` finding, the `other` of a v1 block, a kind no row declares,
+    the path `-`)."""
+    BT, KP = T.modules()
+    judged, out = KP.judges(T.cfg), []
+    prev = dict((f.get("filename"), f.get("previous_filename")) for f in files if f.get("previous_filename"))
+    gone = set(prev.values()) | set(f.get("filename") for f in files if f.get("status") == "removed")
+
+    def stops_at(p, ref):
+        return BT.stops_of(B.api_raw("repos/%s/contents/%s?ref=%s" % (a.repo, urllib.parse.quote(p, safe="/"), ref)) or "")
+
+    def add(kind, path, obj, stops, why, never=None):
+        if KP.is_judge(path, judged):
+            never = "it judges a later PR: the floor"
+        elif plugin_path(path):
+            never = "a .claude-plugin path: the floor"
+        elif never is None and (kind == "baton" or KP.touch_kind(path) == "baton"):   # its base's Stops, read at the base tip
+            base = stops_at(prev.get(path) or path, T.base_sha) or ""
+            lost = BT.stops_dropped(base, stops if kind == "baton" else None)
+            never = "its head drops %s, which its base's Stops (%s) hold: the floor" % (", ".join(lost), base) if lost else None
+        out.append({"kind": kind, "repo": a.repo, "path": path, "object": obj, "stops": stops, "why": why, "never": never})
+    for p in T.denied:
+        kind, stops = KP.touch_kind(p), None
+        if kind == "baton" and p in gone:
+            stops = "removed"
+        elif kind == "baton":
+            stops = stops_at(p, a.head)
+            kind = kind if stops is not None else "other"
+        add(kind, p, None, stops, "a denied path")
+    for name, r in T.foreign:
+        add("other", label(r), None, None, "a run of %s that %s did not make" % (name, T.inputs[name]["workflow"]),
+            "the check cannot be believed")
+    seen = set()
+    for name, r in T.judged:
+        rid = (r.get("run") or {}).get("id")
+        if not T.own(r, name) or rid in seen:
+            continue
+        seen.add(rid)
+        found, why, ver = touch_block(a, rid)
+        if found is None:
+            add("other", label(r), None, None, "red, and %s" % why, "the check cannot be believed")
+        for k, p, o, s in found or []:
+            never = ("the check could not judge it, or judged it a secret (owner-merge)" if k == "owner-merge" else
+                     "of no kind a row declares" if k == "test" or k not in KP.TOUCH_KINDS else "a finding of no path" if p == "-" else
+                     "a signing-rules finding of kind other changes who signs: the floor" if k == "other" and name == "signing-rules"
+                     else "kind other of a trust-touches v1 block, where what a check could not judge reads the same"
+                     if k == "other" and ver == 1 else None)
+            add(k, p, None if o == "-" else o, None if s == "-" else s, "a finding of %s" % name, never)
+    return out
+
+
+def plan_doc(a, KP, repo, path, ref):
+    """The plan `path` of `repo` parsed at `ref` (None: its default branch), or None when it is not there."""
+    text = B.api_raw("repos/%s/contents/%s%s" % (repo, urllib.parse.quote(path, safe="/"), "?ref=" + ref if ref else ""))
+    return KP.read_plan_text(text, path) if text is not None else None
+
+
+def file_sha(repo, path, ref):
+    """sha256 of a file's bytes at `ref` (None: the default branch), None when it is not there."""
+    q = "repos/%s/contents/%s%s" % (repo, urllib.parse.quote(path, safe="/"), "?ref=" + ref if ref else "")
+    rc, out, err = B.gh(["api", "-H", "Accept: application/vnd.github.raw", q], raw=True)
+    if rc != 0 and "HTTP 404" not in err:
+        raise G.Infra("gh api %s failed: %s" % (q, err[:200]))
+    return sha256(out) if rc == 0 else None
+
+
+def covers(t, c):
+    """True when the touch t of a signed row names the change c: its kind, repository, path (every file under a `test` directory
+    ending in `/`), object and Stops."""
+    path = t.get("path") or ""
+    return (t.get("kind") == c["kind"] and str(t.get("repo")).lower() == c["repo"].lower() and t.get("object") == c["object"]
+            and t.get("stops") == c["stops"] and (path == c["path"] or c["kind"] == "test" and path.endswith("/")
+                                                  and c["path"].startswith(path)))
+
+
+def under(a, T, g, r, changes):
+    """Why the approval g's row r does not cover every change (empty when it does)."""
+    BT, KP = T.modules()
+    p, row = r["plan"], r["row"]
+    why, at = [], "%s %s @ %s" % (p["repo"], p["path"], p["commit"][:12])
+    bound = [x for x in g.get("plans") or [] if isinstance(x, dict) and x.get("plan") == p]
+    if g.get("v") != 2 or len(bound) != 1:
+        return ["approval %s binds no intent, spec or row cells (signed before a plan signature bound them): sign the plan again"
+                % g["id"]]
+    sides = [("the default branch's tip", None)] + ([("the PR's head", a.head)] if p["repo"].lower() == a.repo.lower() else [])
+    for side, ref in sides:                             # the plan as signed: its intent, its spec and the row's cells but Link
+        doc = plan_doc(a, KP, p["repo"], p["path"], ref)
+        same = [x for x in (doc or {}).get("rows") or [] if x["id"].lower() == row.lower()]
+        if doc is None or [x["id"] for x in same] != [row]:
+            why.append("row %s is not one row of the plan at %s" % (row, side))
+            continue
+        if same[0]["link"]["dropped"] is not None:
+            why.append("row %s is dropped at %s (%s)" % (row, side, same[0]["link"]["dropped"]))
+        moved = [] if KP.row_cells(same[0]) == r.get("cells") else ["row %s's cells" % row]
+        for key, rel in zip(("intent", "spec"), KP.plan_refs(doc)[0]):
+            if rel != bound[0][key]["path"] or file_sha(p["repo"], rel, ref) != bound[0][key]["sha256"]:
+                moved.append("its %s %s" % (key, bound[0][key]["path"]))
+        if moved:
+            why.append("the plan changed since the owner signed it (%s, at %s): sign it again" % (", ".join(moved), side))
+    used, prs = BT.touch_uses(BT.touch_key(p, row)), r.get("prs") or 1
+    if len(used) >= prs:
+        why.append("an earlier merge used row %s of %s (%d of its PRs: %d)" % (row, at, len(used), prs))
+    ts = [t for t in r.get("touches") or [] if isinstance(t, dict)]
+    for c in changes:
+        hit = [t for t in ts if covers(t, c)]
+        if c["never"]:
+            why.append("%s (%s): %s, never covered by a plan signature" % (change_text(c), c["why"], c["never"]))
+        elif not hit:
+            why.append("%s (%s): not a touch of row %s at %s" % (change_text(c), c["why"], row, p["commit"][:12]))
+        elif any(t.get("again") or t.get("floor") for t in hit):      # a mark holds, whatever other touch also names it
+            why.append("%s (%s): row %s marks it (signs again): the owner merges it" % (change_text(c), c["why"], row))
+    return why
+
+
+def chartered(a, T, repo, path, row, changes):
+    """(the use {charter, key, row, prs, covered}, the focus, []) when a charter covers every change, read after the approvals: the
+    row of the plan at the default branch's tip as baton's charter_plan_row reads it (the focus, the charter in force here, its
+    repos, the path written plainly, the row not dropped); the plan, when the PR is in its repository, the same at the PR's head
+    (the focus, the row not dropped, its cells but Link: a PR cannot widen its own row); its uses (an approval's too) fewer than
+    its PRs; and every change a touch of it (covers) inside the envelope (repos, kinds, Stops within max_stops), never the floor
+    nor marked (signs again). Else (None, the focus, why): the focus None and why [] for a plan with no focus, or none at the tip.
+    A read that fails raises G.Infra: the guard cannot conclude."""
+    BT, KP = T.modules()
+    tip = plan_doc(a, KP, repo, path, None)
+    focus = (tip or {}).get("focus")
+    g, r, cell, why = BT.charter_plan_row(tip, repo, path, row)
+    if g is None:
+        return None, focus, [why] if why else []
+    head = plan_doc(a, KP, repo, path, a.head) if repo.lower() == a.repo.lower() else tip
+    same = [x for x in (head or {}).get("rows") or [] if x["id"].lower() == row.lower()]
+    if head is not None and head.get("focus") != focus:
+        why = "the plan says focus %s at the PR's head, not %s: row moved in this PR" % (head.get("focus"), focus)
+    elif [x["id"] for x in same] != [row]:
+        why = "row %s is not one row of the plan at the PR's head: row moved in this PR" % row
+    elif same[0]["link"]["dropped"] is not None:
+        why = "row %s is dropped at the PR's head (%s): row moved in this PR" % (row, same[0]["link"]["dropped"])
+    elif KP.row_cells(same[0]) != KP.row_cells(r):
+        why = "row %s's cells at the PR's head are not those at the default branch's tip: row moved in this PR" % row
+    at, why = "charter %s for %s" % (g["id"], focus), [why] if why else []
+    if why:
+        return None, focus, ["%s: %s" % (at, w) for w in why]
+    key = BT.touch_key({"repo": repo, "path": path, "commit": None}, row)
+    used = BT.touch_uses(key)
+    if len(used) >= cell["prs"]:
+        why.append("an earlier merge used row %s of %s %s (%d of its PRs: %d)" % (row, repo, path, len(used), cell["prs"]))
+    for c in changes:
+        hit = [t for t in cell["touches"] if covers(t, c)]
+        out = BT.outside_charter(g, c["repo"], c["kind"], [] if c["stops"] in (None, "none", "removed") else c["stops"].split(", "))
+        if c["never"]:
+            why.append("%s (%s): %s, never covered by a charter" % (change_text(c), c["why"], c["never"]))
+        elif not hit:
+            why.append("%s (%s): not a touch of row %s at the default branch's tip" % (change_text(c), c["why"], row))
+        elif any(t.get("again") for t in hit):      # a mark holds, whatever other touch also names it
+            why.append("%s (%s): row %s marks it (signs again): the owner merges it" % (change_text(c), c["why"], row))
+        elif out:
+            why.append("%s (%s): %s" % (change_text(c), c["why"], out))
+    if why:
+        return None, focus, ["%s: %s" % (at, w) for w in why]
+    return {"charter": g["id"], "key": key, "row": row, "prs": cell["prs"],
+            "covered": [[c["kind"], c["repo"], c["path"], c["object"], c["stops"]] for c in changes]}, focus, []
+
+
+def touches(a, T, files, V):
+    """The condition `touches`: every trust-layer change is a touch of the row the PR names, under an approval in force, else
+    under a charter in force for the plan's focus (chartered)."""
+    if not T.known or T.denied is None:
+        V.unknown("touches", "the runs or the changed files are not known")
+        return
+    changes = trust_changes(a, T, files)
+    if not changes:
+        V.cond("touches", True, "no trust-layer change (no denied path, no red touch check, no foreign run)")
+        return
+    listed = ["%s (%s)" % (change_text(c), c["why"]) for c in changes]
+    # a line that is not a plan row (the CI planner's `plan: 8/45 suites`) is no plan line
+    named = [ln.strip() for ln in (pr_view(a, "body").get("body") or "").split("\n") if PLAN_LINE.fullmatch(ln.strip())]
+    m = PLAN_LINE.fullmatch(named[0]) if len(named) == 1 else None
+    if not m:
+        V.cond("touches", False, "%d trust-layer change(s), and the body has %d plan-row line(s), not one `plan: [<owner/repo>:]"
+               "kb/plans/<name>.md#<row>`: an owner merge" % (len(changes), len(named)), listed)
+        return
+    BT, _KP = T.modules()
+    repo, path, row = m.group(1) or a.repo, m.group(2), m.group(3)
+    found, near = BT.approvals_for(repo, path, row)
+    first = None
+    for g, r in found:
+        why = under(a, T, g, r, changes)
+        if not why:
+            T.used = {"approval": g["id"], "key": BT.touch_key(r["plan"], row), "row": row, "prs": r.get("prs") or 1,
+                      "covered": [[c["kind"], c["repo"], c["path"], c["object"], c["stops"]] for c in changes]}
+            V.cond("touches", True, "%d trust-layer change(s), each a touch of row %s, approval %s at %s" % (
+                len(changes), row, g["id"], r["plan"]["commit"][:12]), listed)
+            return
+        first = first or (g, why)
+    used, focus, cwhy = chartered(a, T, repo, path, row, changes)   # the approvals first: nothing that merges today stops merging
+    if used:
+        T.used = used
+        V.cond("touches", True, "%d trust-layer change(s), each a touch of row %s inside charter %s for %s" % (
+            len(changes), row, used["charter"], focus), listed)
+        return
+    nor = ", nor does a charter for %s cover it" % focus if focus else ""
+    if not found:
+        V.cond("touches", False, "%d trust-layer change(s), and no approval in force signed from this directory lists row %s of "
+               "%s %s%s: an owner merge" % (len(changes), row, repo, path, nor), listed + [w for _g, w in near] + cwhy)
+        return
+    V.cond("touches", False, "%d trust-layer change(s) not covered by approval %s of row %s%s: an owner merge" % (
+        len(changes), first[0]["id"], row, nor), first[1] + cwhy)
+
+
 def behind(a, base_sha, files, paths, cfg, V):
     """(commits the head is behind, the shared files --behind-ok-clean accepted)."""
     try:
-        cmp_ = B.api("repos/%s/compare/%s...%s" % (a.repo, a.head, base_sha))
+        cmp_ = B.api_retry("repos/%s/compare/%s...%s" % (a.repo, a.head, base_sha))
     except G.Infra as e:
         V.unknown("behind", "the comparison with the base cannot be read: %s" % e)
         return 0, []
@@ -1047,6 +1433,7 @@ def lane(a, mcfg, files, paths, V):
             continue
         neutral = tree + "/".join("-" for _seg in p[len(tree):].split("/"))
         hits += ["%s (%s)" % (p, g) for g in deny if match_fold(g, p) and not match_fold(g, neutral)]
+    hits += ["%s (a .claude-plugin path)" % p for p in paths if plugin_path(p)]
     V.cond("lane-deny", not hits, "a file under the tree still meets every deny glob but the tree's own%s"
            % ("; denied: " + ", ".join(hits[:8]) if hits else ""))
     reg = ib["registry"]
@@ -1297,6 +1684,7 @@ class Run(object):
         self.boot, self.clean = None, []                  # bootstrap: sha256 of the head's config; the shared files merged clean
         self.amend = None                                 # bootstrap over a base config with no merge.deny_globs: that base config
         self.merge_commit = False                         # the back-merge lane: a merge commit instead of a squash
+        self.touch = None                                 # `touches` (merge.touch_checks set at the base, normal lane)
 
     def log_cfg(self):
         # bootstrap without a base config: the default log, the one --status reads while the base has none; over a base config: that
@@ -1319,7 +1707,7 @@ class Run(object):
             "behind_auto": getattr(a, "auto", False), "suites": getattr(a, "auto_suites", None),
             "mode": "merge" if a.merge else "dry-run", "caller": os.environ.get("BATON_PHASE") or None,
             "conditions": dict((n, v) for n, v in self.V.items), "result": result, "merge_sha": self.merge_sha,
-            "guard": self.digest}, sort_keys=True) + "\n"
+            "guard": self.digest, "touches": self.touch.used if self.touch else None}, sort_keys=True) + "\n"
         try:
             if self.fd is None:
                 self.open_log()
@@ -1397,7 +1785,10 @@ class Run(object):
         if req or a.image_bump:
             registry = B.load("registry", reg["backend"], fetch)
             used.append(registry)
-        self.digest = code_digest(used)
+        if mcfg["touch_checks"] and not self.boot and not a.image_bump:
+            self.touch = Touch(self.cfg, base_sha)
+            self.touch.modules()                         # a fault loading them is could-not-conclude, before any condition
+        self.digest = code_digest(used, self.touch)
         say("merge_guard: %s#%s into %s (%s, %s), head %s, lane %s"
             % (a.repo, a.pr, self.base, base_sha[:12],
                ("bootstrap: the base's %s sets no merge.deny_globs, so the one this PR changes is read at the head" % C.CONFIG_REL
@@ -1418,7 +1809,7 @@ class Run(object):
             self.log("refused")
             return RED
         self.merge_commit = backmerge(a, pr, base, V)
-        checks(a, mcfg, ci, V)
+        checks(a, mcfg, ci, V, self.touch)
         files, paths = changed(a, pr, V)
         lane_tag = None
         if paths is None:
@@ -1433,8 +1824,11 @@ class Run(object):
                 if self.boot:                           # the PR's own list cannot be emptied below the init default
                     deny = list(deny) + [g for g in C.merge_deny_floor(self.cfg["rules"]["dirs"]) if g not in deny]
                     scaffold = {C.CONFIG_REL} if self.amend else bootstrap_scaffold(self.cfg, files)
-                hit = [p for p in paths if p not in scaffold and any(match_fold(g, p) for g in deny)]
-                cond("deny", not hit, "%d deny glob(s)%s%s" % (len(deny), ("; denied: " + ", ".join(hit[:8])) if hit else ", none matches",
+                hit = [p for p in paths if plugin_path(p) or p not in scaffold and any(match_fold(g, p) for g in deny)]
+                if self.touch:
+                    self.touch.denied = hit
+                cond("deny", not hit or self.touch, "%d deny glob(s)%s%s" % (len(deny), ("; denied: " + ", ".join(hit[:8]) + (
+                    ": judged by touches" if self.touch else "")) if hit else ", none matches",
                      ("; bootstrap: the init default is added, and the config this PR changes is its scaffold" if self.amend else
                       "; bootstrap: the init default is added, and the %d file(s) this PR adds as its config and its rules' "
                       "Markdown are its scaffold" % len(scaffold)) if self.boot else ""))
@@ -1453,6 +1847,11 @@ class Run(object):
                     V.unknown("own-inputs", "the guard's inputs cannot be read at the base: %s" % e)
                 else:
                     own_inputs(self.cfg, paths, modes, V)
+        if self.touch:
+            touches(a, self.touch, files or [], V)
+        elif mcfg["touch_checks"]:
+            V.na("touches", "merge.touch_checks applies to the normal lane of a base config, not to %s" % (
+                "bootstrap" if self.boot else "the image-bump lane"))
         a.boot = bool(self.boot)                        # --behind auto: in bootstrap the config, and so merge.planner, is the PR's
         ahead, self.clean = behind(a, base_sha, files, paths, self.cfg, V)
         tags = ([req[1]] if req else []) + ([lane_tag] if lane_tag else [])
@@ -1479,7 +1878,9 @@ class Run(object):
                    "image-bump" if a.image_bump else "normal",
                    "yes" if a.admin else "no", len(a.accept), refs, ahead, " auto" if a.auto else "", sha256("\n".join(a.allowed))[:12],
                    self.digest[:12])
-                + (" clean %d" % len(self.clean) if self.clean else "") + (" bootstrap %s" % self.boot[:12] if self.boot else ""))
+                + (" clean %d" % len(self.clean) if self.clean else "") + (" bootstrap %s" % self.boot[:12] if self.boot else "")
+                + (" touches:%s/%s" % (self.touch.used.get("approval") or "charter-" + self.touch.used["charter"], self.touch.used["row"])
+                   if self.touch and self.touch.used else ""))
         say("merge-plan: " + plan)
         expected = a.expected
         if a.expect_plan is not None and expected != [plan]:
@@ -1501,6 +1902,21 @@ class Run(object):
             say("REFUSED: base: nothing merged")
             self.log("refused")
             return RED
+        if self.touch and self.touch.used:            # a use of the row, taken before the merge call: a refused call still spends it
+            try:
+                kind = "approval" if "approval" in self.touch.used else "charter"
+                took = self.touch.modules()[0].take_touch(self.touch.used["key"], self.touch.used[kind],
+                                                          "%s#%s head %s" % (a.repo, a.pr, a.head), self.touch.used["prs"], kind)
+            except OSError as e:
+                say("merge_guard: the use of %s cannot be recorded (%s): nothing merged" % (self.touch.used["key"], e.strerror or e), sys.stderr)
+                self.log("error")
+                return INFRA
+            if took is None:
+                V.cond("touches", False, "another merge used %s since the check (the last of its PRs: %d)" % (
+                    self.touch.used["key"], self.touch.used["prs"]))
+                say("REFUSED: touches: nothing merged")
+                self.log("refused")
+                return RED
         args = ["pr", "merge", a.pr, "--repo", a.repo, "--merge" if self.merge_commit else "--squash", "--match-head-commit", a.head]
         if a.admin:
             args.append("--admin")
@@ -1560,7 +1976,7 @@ def backmerge(a, pr, base, V):
         V.unknown("backmerge", "the branch %s has no commit SHA" % RELEASE_BRANCH)
         return False
     try:
-        status = (B.api("repos/%s/compare/%s...%s" % (a.repo, a.head, rel)) or {}).get("status")
+        status = (B.api_retry("repos/%s/compare/%s...%s" % (a.repo, a.head, rel)) or {}).get("status")
     except G.Infra as e:
         V.unknown("backmerge", "the head cannot be compared with %s: %s" % (RELEASE_BRANCH, e))
         return False
@@ -1591,11 +2007,13 @@ def mergeable(a, pr, V):
     return m != "CONFLICTING"
 
 
-def code_digest(used):
+def code_digest(used, touch=None):
     """sha256 of the code that decides: this file, the gate helpers, the loader, the backends package, the current-state check
-    and each backend used."""
+    and each backend used; with `touches` on, also baton.py (the approvals) and kb_plan.py with kb_index.py (the plan cells, the
+    path table)."""
     h = hashlib.sha256()
-    for p in (os.path.abspath(__file__), G.__file__, C.__file__, B.__file__, CS.__file__):
+    for p in (os.path.abspath(__file__), G.__file__, C.__file__, B.__file__, CS.__file__) + (
+            tuple(m.__file__ for m in touch.modules()) + (sys.modules["kb_index"].__file__,) if touch else ()):
         with open(p, "rb") as f:
             h.update(f.read())
     for b in used:

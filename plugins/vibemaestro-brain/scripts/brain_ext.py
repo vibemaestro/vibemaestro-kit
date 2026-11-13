@@ -53,9 +53,9 @@ OPTIONS_MAX, ARGS_MAX = 4, 2
 # brain's own options of each verb an extension may check: it adds none of them, but may take one of CLAIMABLE for the kinds
 # brain does not use it on (a focus's --goal, a Next item's --focus, a request's --due)
 BRAIN_OPTIONS = {"add": ("--kind", "--text", "--expires", "--link", "--anchor", "--closes", "--owner-quote", "--where", "--goal",
-                         "--focus", "--due"),
+                         "--focus", "--due", "--done-when", "--not-doing", "--jira"),
                  "supersede": ("--text", "--reason", "--drop-anchor", "--anchor", "--closes", "--focus", "--due", "--shorter",
-                               "--bulk"),
+                               "--bulk", "--done-when", "--not-doing"),
                  "close": ("--reason", "--pointer", "--bulk"), "held": ("--pointer", "--session"),
                  "broke": ("--pointer", "--differed", "--session"), "hit": ("--pointer", "--session"),
                  "progress": ("--measure", "--pointer")}

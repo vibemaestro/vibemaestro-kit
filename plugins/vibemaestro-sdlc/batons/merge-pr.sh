@@ -7,8 +7,10 @@
 # Stops: none
 #   Why none (the owner's standing rule): the coordinator merges a PR whose guard passes. A merge cannot be undone, but its dry run
 #   is its rehearse, so no-way-back (neither rehearsable nor reversible) does not apply. A PR that touches merge.deny_globs fails the
-#   guard at rehearse, so it is refused and never escalated to a signature. --admin passes only when merge.admin_bypass is true in
-#   the base branch's config, which is the repo owner's standing rule.
+#   guard at rehearse, so it is refused and never escalated to a signature, unless the base's merge.touch_checks is set and every
+#   denied path and touch-check finding is a touch of the row the PR names, under the owner's plan approval (the guard's
+#   `touches`): the owner signed those changes once, in that approval, and the plan line names it. --admin passes only when
+#   merge.admin_bypass is true in the base branch's config, which is the repo owner's standing rule.
 # Usage: --repo <owner/name> --pr <n> --head <sha40> --brief <file> [--behind auto, never beside --behind-ok] [merge_guard.py options]
 # Expect: merge *
 #

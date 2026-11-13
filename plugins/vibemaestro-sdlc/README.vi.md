@@ -31,13 +31,13 @@ Quy trình, theo skill:
 intake → brainstorm (chỉ khi yêu cầu còn mơ hồ) → spec → plan (chỉ khi phải chia việc) → ship
 ```
 
-Mọi yêu cầu thay đổi đều bắt đầu bằng `intake`. Người dùng duyệt spec trước khi có code. Hành động đặc quyền (merge, đẩy lên registry, xóa) đi qua `batonrun`.
+Mọi yêu cầu thay đổi đều bắt đầu bằng `intake`. Chủ repo duyệt story; spec được duyệt trước khi có code (máy điều phối duyệt, hoặc người dùng một mình duyệt cùng story). Hành động đặc quyền (merge, đẩy lên registry, xóa) đi qua `batonrun`.
 
 ## Một việc hay nhiều việc
 
 Plugin làm cho một người trên một máy, với `vibemaestro-brain` bên cạnh.
 
-- **Một việc** chạy trong phiên bạn mở, từ `intake` đến một pull request nháp. Bạn duyệt spec và bạn merge pull request.
+- **Một việc** chạy trong phiên bạn mở, từ `intake` đến một pull request nháp. Bạn duyệt story và spec trong một lần hỏi, và bạn merge pull request.
 - **Nhiều việc cùng lúc:** skill `local-parallel`. Phiên chính mở một subagent cho mỗi việc, mỗi subagent trong một git worktree riêng, từ `intake` đến một pull request nháp, chuyển từng spec cho bạn, giữ hàng đợi, hậu kiểm từng pull request và merge nó bằng `kit:merge-pr`.
 
 Plugin không cần plugin nào khác và không đọc repo nào khác.
@@ -98,13 +98,13 @@ Skill được gọi theo tên, `vibemaestro-sdlc:<tên>`. Chúng ghi vào `kb/`
 | Skill | Việc làm | Kích hoạt khi |
 |---|---|---|
 | `init-kb` | Dựng `kb/` tự đủ và config của repo (`.vibemaestro/sdlc.json`, một thư mục luật). Chạy lại an toàn; `--adopt` cho repo đã có file quy trình. | repo chưa có `kb/`, thiếu một thư mục của nó, hoặc vừa dùng plugin |
-| `intake` | Ghi yêu cầu bằng lời của người dùng thành `kb/intent/<ngày>-<slug>.md`, tạo branch `intent/<ngày>-<slug>` và issue theo dõi. | người dùng giao một việc mới |
-| `brainstorm` | Làm rõ yêu cầu mơ hồ và ghi mục `Brainstorm result` vào file intent. Không tạo file spec riêng. | yêu cầu còn mơ hồ hoặc cần chọn hướng |
-| `spec` | Viết `kb/specs/<ngày>-<slug>.md` theo năm mục (bối cảnh, mục tiêu, ngoài phạm vi, đầu vào và tình huống hỏng, tiêu chí chấp nhận) và xin người dùng duyệt trước khi có code. | intent đã ghi và chưa có spec nào được duyệt |
-| `plan` | Viết `kb/plans/<ngày>-<slug>.md`, mỗi PR một hàng kèm lệnh nghiệm thu; nối intent vào hàng; đọc trạng thái sống bằng `kb.py plan status`. | một chủ đề cần hai PR trở lên, hoặc có người hỏi trạng thái của nó |
+| `intake` | Ghi yêu cầu bằng lời của người dùng thành `kb/intent/<ngày>-<slug>.md` (với story: story chủ repo duyệt, bằng ngôn ngữ repo đặt), tạo branch `intent/<ngày>-<slug>` và issue theo dõi. | người dùng giao một việc mới |
+| `brainstorm` | Làm rõ yêu cầu mơ hồ. Với story, kết thúc bằng chính story trong intent (tối đa 3 câu hỏi, mỗi câu kèm đề xuất); việc khác thì ghi mục `Brainstorm result`. Không tạo file spec riêng. | yêu cầu còn mơ hồ hoặc cần chọn hướng |
+| `spec` | Viết `kb/specs/<ngày>-<slug>.md`, suy ra từ intent, theo năm mục (mục tiêu, ràng buộc, tiêu chí theo hành vi trỏ về AC của story, rủi ro cần test phủ, điểm cần làm rõ), không có cách làm, và xin duyệt trước khi có code. | intent đã ghi và chưa có spec nào được duyệt |
+| `plan` | Viết `kb/plans/<ngày>-<slug>.md`, mỗi PR một hàng (cách làm, AC giao, phụ thuộc, chỗ cần ký), plan sống; nối intent vào hàng; đọc trạng thái sống bằng `kb.py plan status`. | một chủ đề cần hai PR trở lên, hoặc có người hỏi trạng thái của nó |
 | `ship` | Viết đè `kb/current-state.md`, chạy các lệnh nghiệm thu, ghi bằng chứng, rồi mở PR draft bằng `scripts/open-pr.sh`. | việc của một intent đã xong |
 | `release` | Cắt PR release hoặc PR hotfix của một repo marketplace plugin bằng `scripts/release.py`; công bố bản release đã merge là bước riêng của repo. | hàng release của plan đến hạn, hoặc plugin đã cài cần hotfix |
-| `install-gates` | Cài sáu cổng quy trình thành workflow GitHub kèm script. Hỏi cổng nào và runner nào. Không bao giờ ghi đè. | repo muốn có các cổng đứng sau luật |
+| `install-gates` | Cài sáu cổng quy trình thành workflow GitHub kèm script. Hỏi cổng nào và runner nào. Không bao giờ ghi đè file của repo; `--update` nâng cấp các bản chép của chính plugin. | repo muốn có các cổng đứng sau luật |
 | `batonrun` | Chạy một hành động ghi ra ngoài phiên thành một baton script: kiểm, diễn tập, ký, chạy, kiểm sau, ghi log. | merge, đẩy registry, xóa, force-push, đổi cấu hình plugin của người dùng |
 | `bootstrap` | Dựng một máy cho BatonRun trong một run do chủ ký: launcher và khối quyền. `coordinator-bootstrap` là tên cũ của nó, bị bỏ ở bản phát hành kế tiếp. | một máy mới, hoặc kiểm quyền lúc mở phiên báo lỗi |
 | `local-parallel` | Chạy nhiều việc cùng lúc trên một máy: mỗi việc một subagent (worktree riêng, `intake` đến PR nháp, model `agents.worker_model`); phiên chính giữ hàng đợi, chuyển lời duyệt spec, hậu kiểm từng PR và merge bằng `kit:merge-pr`. | người dùng muốn làm nhiều việc song song |
@@ -133,7 +133,7 @@ Khi nào chúng chạy:
 - Một commit mới hủy các lần chạy của head mà nó thay thế. Không sự kiện nào khác hủy một lần chạy, và không sự kiện nào thế chỗ một lần đang chờ.
 - Một lần chạy bị bỏ qua không kiểm gì: merge guard giữ kết luận của lần chạy thật gần nhất trên head đó, và một check bắt buộc chưa có lần chạy thật nào là đỏ.
 
-`install_gates.py` không bao giờ ghi đè file: file đã có được giữ nguyên, và `kept (differs)` đánh dấu file khác với thứ plugin sẽ ghi. Nó không ghi `.vibemaestro/sdlc.json`; nó in ra mỗi cổng đọc những key nào. Có `gh` thì nó kiểm tiếp, chỉ đọc, rằng biến repo tên `ci.runner_var` đã được đặt, và in một cảnh báo khi chưa.
+`install_gates.py` không bao giờ ghi đè file: file đã có được giữ nguyên, và `kept (differs)` đánh dấu file khác với thứ plugin sẽ ghi. Với `--update` nó thay các bản chép của chính plugin trong `.vibemaestro/gates/` (workflow, allowlist và danh sách signing-rules là của repo và vẫn được giữ), và `--only` còn cài cổng `signing-rules` (chỉ khi được gọi tên) hay cổng mà một plugin phụ thuộc khai trong `gates/install.json` của nó. Nó không ghi `.vibemaestro/sdlc.json`; nó in ra mỗi cổng đọc những key nào. Có `gh` thì nó kiểm tiếp, chỉ đọc, rằng biến repo tên `ci.runner_var` đã được đặt, và in một cảnh báo khi chưa.
 
 Hai kiểm tra nữa chạy bên trong các script bạn vốn đã gọi, không phải workflow:
 
@@ -170,9 +170,9 @@ Mỗi luật nói gì, một dòng:
 - `commit-unit`: một commit là một task hoặc một vòng sửa, không phải một buổi gõ phím; gộp các vòng sửa trước khi ready.
 - `pr-body-shape`: thân PR là trạng thái hiện hành, viết đè mỗi vòng, và ngắn; lịch sử các vòng đi vào comment.
 - `pr-no-leaks`: không secret, IP công khai, account ID, e-mail hay đường dẫn cá nhân trong thân PR, comment hoặc commit message.
-- `before-ready`: trước khi ready cần bằng chứng chạy trên bản cuối, hiện trạng đúng, một review bằng context mới (giao việc theo [`skills/ship/reviewer-brief.md`](skills/ship/reviewer-brief.md)), review lại mỗi vòng sửa với hàm đã đổi được đọc trọn, quét cùng loại lỗi cho mỗi lỗi đã sửa, dừng vá sau lần sửa thứ hai cùng một loại, và không tự merge.
+- `before-ready`: trước khi ready cần bằng chứng chạy trên bản cuối, hiện trạng đúng, một review bằng context mới (giao việc theo [`skills/ship/reviewer-brief.md`](skills/ship/reviewer-brief.md)), một vòng; vòng hai chỉ khi vòng một tìm ra lỗi về tính đúng, và vòng hai đọc trọn các hàm đã đổi; vòng ba chỉ cho việc chạm bảo mật hay passphrase holder; quét cùng loại lỗi cho mỗi lỗi đã sửa, dừng vá sau lần sửa thứ hai cùng một loại, và không tự merge.
 - `measurement-commands`: chạy một ca chắc chắn dương làm đối chứng trước khi trích một con số đếm.
-- `test-quality`: mỗi test nêu chỗ hỏng nó bắt, giá trị mong đợi viết thẳng và một ca từ chối cho mỗi luật; đỏ trên main và xanh sau thay đổi; không test chỉ đọc chữ trong mã nguồn hay chỉ kiểm mock; không bao giờ hoàn tác bản sửa để thấy đỏ; tìm nguyên nhân gốc trước khi sửa.
+- `test-quality`: mỗi test nêu chỗ hỏng nó bắt, giá trị mong đợi viết thẳng và một ca từ chối cho mỗi luật; đỏ trên main và xanh sau thay đổi; mỗi rủi ro spec liệt kê có một test; không test chỉ đọc chữ trong mã nguồn, câu chữ của spec hay chỉ kiểm mock; không bao giờ hoàn tác bản sửa để thấy đỏ; tìm nguyên nhân gốc trước khi sửa.
 - `document-precedence`: khi hai tài liệu mâu thuẫn, supersession tường minh thắng, rồi tới mức ràng buộc, rồi tới ngày.
 - `public-tree`: ở repo công bố cây của mình, mọi file ngoài `kb/` và `public.private` là public: không gì riêng tư, không trỏ vào `kb/`, không số issue riêng, và test chạy được chỉ từ cây đó.
 - `current-state-shape`: file chỉ ghi trạng thái hiện hành, viết đè, có trần kích thước.
@@ -207,7 +207,7 @@ Quy tắc của định dạng:
 - Vấn đề do bên gọi xử lý. Hook cảnh báo một lần mỗi phiên rồi chạy tiếp với mặc định. `kb.py` và các cổng thoát 65 và nêu tên key. Lõi branch và lõi PR thoát 64.
 - Đọc một giá trị hiệu lực: `python3 "$SDLC/scripts/sdlc_config.py" get <key.chấm>`. Đọc mặc định của plugin cho một key, dù file nói gì: thêm `--default`.
 - Kiểm file, và liệt kê cảnh báo (ví dụ một thư mục luật không tồn tại): `python3 "$SDLC/scripts/kb.py" config check`.
-- `"language"` là `vi` hoặc `en`. Nó đặt tên các mục của spec, tiêu đề thân PR và các dòng luồng. Mặc định là `vi`; đặt `en` để dùng tiếng Anh. Key bạn đặt trong `tokens` thắng ngôn ngữ.
+- `"language"` là `vi` hoặc `en`. Đó là ngôn ngữ của nội dung kb (story, spec, plan, quyết định), mọi phiên kể cả worker sandbox viết bằng nó, và nó đặt nhãn của thẻ story, tên các mục của spec, tiêu đề thân PR và các dòng luồng. Mặc định là `vi`; đặt `en` để dùng tiếng Anh. Key bạn đặt trong `tokens` thắng ngôn ngữ.
 
 Subagent chạy trên model của đúng việc nó làm. Skill đọc `agents.<key>` và truyền làm `model` của công cụ Agent. Giá trị là một trong các alias `fable`, `opus`, `sonnet`, `haiku`.
 
@@ -217,7 +217,7 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 |---|---|---|
 | `schema` | `1` | Số schema của config, phiên bản lớn của định dạng. Plugin từ chối số lớn hơn của nó và nêu lệnh cập nhật cần chạy. |
 | `hooks` | `"auto"` | `"off"` làm mọi hook của plugin im. |
-| `language` | `"vi"` | `"vi"` hoặc `"en"`: ngôn ngữ của tên mục spec, tiêu đề thân PR và các dòng luồng. `kb.py init` ghi khoá này vào mọi config mới, `"en"` nếu không được trả lời, nên chỉ config tạo từ trước mới dùng mặc định. |
+| `language` | `"vi"` | `"vi"` hoặc `"en"`: ngôn ngữ của nội dung kb (mọi phiên viết bằng nó) và của nhãn story, tên mục spec, tiêu đề thân PR, các dòng luồng. `kb.py init` ghi khoá này vào mọi config mới, `"en"` nếu không được trả lời, nên chỉ config tạo từ trước mới dùng mặc định. |
 | `update_check` | `true` | `false` tắt lời nhắc cập nhật của bản cài public trong repo này, cho vibemaestro-sdlc và vibemaestro-brain (xem README của kit, mục Cập nhật). |
 | `branch.intent_prefix` | `"intent/"` | Tiền tố của branch intent. |
 | `branch.protected` | `["main", "master"]` | Các branch không bao giờ là head của PR và không bao giờ bị tính là chết. |
@@ -277,6 +277,8 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | `merge.admin_bypass` | `false` | `true` cho phép `--admin` ở cổng merge có bảo vệ. Nó không đổi điều kiện nào. |
 | `merge.required_checks` | `[]` | Tên các check phải xanh. Rỗng thì đòi ít nhất một check run xanh. |
 | `merge.planner` | `null` | `{"script", "inputs"}`: bộ lập kế hoạch test của repo, mà merge có bảo vệ chạy với `--behind auto` để xét một pull request tụt sau base. |
+| `merge.touch_checks` | `[]` | Các check mà `touches` của merge có bảo vệ xét phát hiện: một đường dẫn bị deny, hay một run đỏ của một trong các check này, được merge mà không cần owner chỉ khi nó là một touch mà hàng được pull request nêu đã khai báo, dưới bản duyệt kế hoạch của owner (`baton.py sign --by owner --approve`). Mỗi check cần một mục `merge.touch_inputs`. |
+| `merge.touch_inputs` | `{}` | Cho từng touch check, `{"workflow", "paths"}`: tệp workflow chạy nó và mọi đường dẫn mà kết quả của nó phụ thuộc (gate, những gì gate import, tệp danh sách). Một thay đổi ở đó không bao giờ được duyệt theo kế hoạch. |
 | `merge.log` | `null` | Tên file của log merge trong thư mục state của người dùng; `null` nghĩa là `merge-log.jsonl`. |
 | `merge.image_bump.enabled` | `false` | Bật làn image-bump của cổng merge có bảo vệ. |
 | `merge.image_bump.tag_files` | `[]` | Các file mà làn này được đổi dòng, chỉ để dời tag của image đã cấu hình. |
@@ -285,6 +287,8 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | `merge.image_bump.registry` | `null` | `{"backend": "ghcr", "host", "image"}`: registry nơi làn này kiểm tag mới đã tồn tại. |
 | `rebase.identity` | `null` | `{"name", "email"}` dùng làm committer khi `intent-branch.sh integrate` phải rebase. Nó thắng biến môi trường. |
 | `upstream_issues` | `true` | Được chấp nhận và kiểm hợp lệ; không có gì trong plugin này đọc nó. |
+| `intake.focus` | `"warn"` | `type:` (story, task, bug) và `focus:` (một trọng tâm đang mở của brain) của intent, ở `intent-branch.sh create-intent` và trong `kb.py check intent`: `"required"` từ chối intent thiếu chúng (rc 9), `"warn"` in một dòng WARNING rồi đi tiếp, `"off"` không đọc. Bản phát hành sau đặt mặc định là `"required"`. |
+| `issue.code` | `null` | Mã 3 chữ của repo (3 chữ in hoa, như `KIT`). Khi đặt: `intent-branch.sh create-intent` mở issue trước, ghi khóa `<mã>-<số issue>` vào `key:` của intent và đặt tên branch `intent/<khóa>-<slug>`; file intent giữ tên có ngày, và `kb.py plan status` nối PR qua tên branch nào cũng được. `null`: branch vẫn là `intent/<ngày>-<slug>`, không có khóa. |
 | `agents.review_model` | `"opus"` | Model của review bằng context mới trước khi ready (`ship`, `before-ready`). |
 | `agents.search_model` | `"haiku"` | Model của một lần tìm chỉ đọc (`brainstorm`). |
 | `agents.worker_model` | `"sonnet"` | Model của worker dựng một task (`plan`, `batonrun`, `workflow-core`). |
@@ -306,7 +310,10 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | `tokens.spec.out_of_scope` | `"Ngoài phạm vi"` (`"Out of scope"`) | Tiêu đề mục spec thứ ba. |
 | `tokens.spec.criteria` | `"Tiêu chí chấp nhận"` (`"Acceptance criteria"`) | Tiêu đề mục tiêu chí chấp nhận, mục bắt buộc cuối cùng. |
 | `tokens.spec.design` | `"Thiết kế"` (`"Design"`) | Tiêu đề mục thiết kế tùy chọn. |
-| `tokens.spec.evidence` | `"Bằng chứng chạy"` (`"Run evidence"`) | Tiêu đề mà tiêu chí cuối của spec phải nêu tên. |
+| `tokens.spec.constraints` | `"Ràng buộc"` (`"Constraints"`) | Tiêu đề mục ràng buộc cứng của spec suy ra từ story. |
+| `tokens.spec.risks` | `"Rủi ro cần test phủ"` (`"Risks to cover"`) | Tiêu đề mục rủi ro mà test phủ, trong spec suy ra từ story. |
+| `tokens.spec.clarify` | `"Cần làm rõ"` (`"To clarify"`) | Tiêu đề mục điểm cần làm rõ của spec suy ra từ story. |
+| `tokens.spec.evidence` | `"Bằng chứng chạy"` (`"Run evidence"`) | Tiêu đề mà tiêu chí cuối của spec dạng cũ phải nêu tên. |
 | `tokens.spec.placeholder` | `"<ĐIỀN"` (`"<FILL"`) | Dấu của chỗ trống còn lại trong khung; `kb.py check spec` từ chối spec còn dấu này. |
 
 ## Chính sách phiên bản
@@ -324,8 +331,8 @@ Mục này áp dụng cho repo xuất bản plugin, như chính kit. Repo ứng 
   Một dòng mà người dùng plugin đã cài hiểu được: điều gì đổi với họ.
   ```
 
-  `level` là `patch` cho một bản vá, `minor` cho một tính năng, `major` cho thay đổi phá vỡ (với plugin này, một hàng của `CONTRACT.md` bị xóa hoặc đổi tên). Plugin 0.x được phép phá vỡ trong một bản minor. `upgrade` là tuỳ chọn; một file thay đổi đang chờ chỉ được sửa để thêm hay đổi dòng đó.
-- **PR release** (skill `release`, do hàng release của plan khởi động) biến mọi file thay đổi đang chờ thành một bước version cho mỗi plugin, ghi các mục `CHANGELOG.md` (các dòng `upgrade` dưới `### Upgrade notes`), và đặt `Frozen at` trong `CONTRACT.md` khi bề mặt của nó đã đổi. `release.py notes <plugin> <version>` in thân của bản phát hành công khai của version đó: mục CHANGELOG của nó và cách cập nhật.
+  `level` là `patch` cho một bản vá, `minor` cho một tính năng, `major` cho thay đổi phá vỡ (với plugin này, một hàng của `CONTRACT.md` bị xóa hoặc đổi tên). Plugin 0.x được phép phá vỡ trong một bản minor. `upgrade` là tuỳ chọn; một file thay đổi đang chờ chỉ được sửa để thêm hay đổi dòng đó. `supersedes:` và `cancels:` cũng là tuỳ chọn: các file thay đổi trước đó, ghi tên không có ngày đầu và `.md` (không hai tệp thay đổi nào trùng tên đó), ngăn bằng dấu phẩy, mà thay đổi này thay thế hay hủy bỏ. Dòng và ghi chú nâng cấp của thay đổi bị thay rời khỏi bản phát hành công khai kế tiếp, nên dòng của file này ghi hành vi cuối; thay đổi bị hủy rời đi cùng dòng hủy, trừ khi điều nó hủy đã được công bố.
+- **PR release** (skill `release`, do hàng release của plan khởi động) biến mọi file thay đổi đang chờ thành một bước version cho mỗi plugin, ghi các mục `CHANGELOG.md` (các dòng `upgrade` dưới `### Upgrade notes`), và đặt `Frozen at` trong `CONTRACT.md` khi bề mặt của nó đã đổi. Mỗi mục là hiện trạng cuối kể từ version công khai trước của plugin: một version đã cắt mà chưa công bố gộp vào lần cắt kế tiếp, và một dòng mà `supersedes:` hay `cancels:` nêu, hay một dòng đã công bố, bị bỏ ra. `release.py notes <plugin> <version>` in thân của bản phát hành công khai của version đó: mục CHANGELOG của nó và cách cập nhật.
 - **Một lần gộp** (`cut --fold --public <owner/name>`) dành cho một release đã cắt mà chưa công bố: các file thay đổi đang chờ vào mục `CHANGELOG.md` của chính version đó thay vì nâng version. Tag `<plugin>--v<version>` của repo công khai cho biết version đã công bố chưa; khi tag đã có, lần gộp bị từ chối.
 - **PR hotfix** rẽ từ nhánh `release`, nên tính năng chưa phát hành không bao giờ đi theo. Nó nâng một bản patch. Một PR back-merge từ `backmerge/<sha12>` đưa nó về main và merge bằng merge commit, không bao giờ squash.
 - **Sau khi một trong hai merge**, một baton script do bạn ký dời nhánh `release` tới commit release, hoặc, sau một hotfix, đẩy `backmerge/<sha12>` và mở pull request của nó; repo công bố bản phát hành theo cách riêng của mình. Bản phát hành công khai của chính kit ghi version đã phát hành của từng plugin vào `plugin.json` của nó và gắn tag `<plugin>--v<version>`.
@@ -334,9 +341,9 @@ Mục này áp dụng cho repo xuất bản plugin, như chính kit. Repo ứng 
 Các lệnh, chỉ đọc trừ khi có ghi chú:
 
 ```bash
-python3 "$SDLC/scripts/release.py" check          # thay đổi này có là thay đổi thường, release, hotfix hay back-merge hợp lệ không?
-python3 "$SDLC/scripts/release.py" plan           # một lần cắt sẽ làm gì ở đây
-python3 "$SDLC/scripts/release.py" cut            # ghi cây làm việc thành một release
+python3 "$SDLC/scripts/release.py" check --public <owner/name>   # thay đổi này có là thay đổi thường, release, hotfix hay back-merge hợp lệ không?
+python3 "$SDLC/scripts/release.py" plan --public <owner/name>    # một lần cắt sẽ làm gì ở đây (tag công khai cho biết điều gì đã công bố)
+python3 "$SDLC/scripts/release.py" cut --public <owner/name>     # ghi cây làm việc thành một release
 python3 "$SDLC/scripts/release.py" cut --hotfix   # tương tự cho một hotfix
 python3 "$SDLC/scripts/release.py" cut --fold --public <owner/name>   # gộp các file thay đổi đang chờ vào một version đã cắt mà chưa công bố
 ```
@@ -349,7 +356,7 @@ Một lần ghi ra ngoài phiên (ghi GitHub như merge, đẩy registry, đổi
 
 ## Xử lý sự cố
 
-Chạy các lệnh này trong repo đang có vấn đề. `$SDLC` là thư mục plugin (xem [Bắt đầu nhanh](#bắt-đầu-nhanh)). Một số thông báo của script bằng tiếng Việt.
+Chạy các lệnh này trong repo đang có vấn đề. `$SDLC` là thư mục plugin (xem [Bắt đầu nhanh](#bắt-đầu-nhanh)). Thông báo của script theo `language` của repo: tiếng Việt, trừ khi `.vibemaestro/sdlc.json` đặt `"language": "en"`; một vài thông báo là tiếng Anh ở cả hai.
 
 | Triệu chứng | Lệnh | Nó cho bạn biết |
 |---|---|---|

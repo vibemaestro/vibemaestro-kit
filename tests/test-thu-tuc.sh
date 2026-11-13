@@ -60,7 +60,7 @@ git_ -C "$APP" add kb; N=$(git_ -C "$APP" ls-files kb | grep -c '/\.gitkeep$')
 eq "$N" 4 "git add kb/ thấy đủ 4 thư mục (mỗi cái một .gitkeep)"
 git_ -C "$APP" reset -q
 R=$(cat "$APP/kb/README.md" 2>/dev/null)
-for pat in 'applyTo' '| Thư mục' 'YYYY-MM-DD' 'Bối cảnh' 'Ngoài phạm vi' 'Tiêu chí chấp nhận' 'Bằng chứng chạy' 'current-state' 'superseded'; do has "$R" "$pat" "README repo app TỰ ĐỦ: có '$pat'"; done
+for pat in 'applyTo' '| Thư mục' 'YYYY-MM-DD' 'Mục tiêu' 'Ràng buộc' 'Tiêu chí chấp nhận' 'Rủi ro cần test phủ' 'current-state' 'superseded'; do has "$R" "$pat" "README repo app TỰ ĐỦ: có '$pat'"; done
 for pat in 'hub' 'gitops' 'kanban' '/home/'; do hasnt "$R" "$pat" "README repo app không tham chiếu thứ ngoài repo: '$pat'"; done
 CS=$(cat "$APP/kb/current-state.md")
 hasnt "$CS" '2026' "current-state.md sinh ra KHÔNG mang ngày đo (ngày là lịch sử)"
@@ -309,14 +309,14 @@ O=$(cd "$WT" && python3 "$KBPY" new spec flow --date 2026-10-08 2>&1); rc=$?
 eq "$rc" 0 "new spec flow trong worktree intent: rc 0"
 [ -f "$SPECF" ] && ok "kb/specs/2026-10-08-flow.md cạnh intent cùng <ngày>-<slug>" || bad "thiếu $SPECF"
 has "$O" 'check spec 2026-10-08-flow' "lệnh in cách kiểm tiếp (kb.py check spec …)"
-eq "$(grep -E '^## ' "$SPECF")" "$(printf '## Bối cảnh\n## Mục tiêu\n## Ngoài phạm vi\n## Inputs and failure cases\n## Tiêu chí chấp nhận')" "khung có ĐÚNG năm mục ## theo thứ tự Bối cảnh, Mục tiêu, Ngoài phạm vi, Inputs and failure cases, Tiêu chí chấp nhận"
+eq "$(grep -E '^## ' "$SPECF")" "$(printf '## Mục tiêu\n## Ràng buộc\n## Tiêu chí chấp nhận\n## Rủi ro cần test phủ\n## Cần làm rõ')" "khung có ĐÚNG năm mục ## của spec suy ra từ story: Mục tiêu, Ràng buộc, Tiêu chí chấp nhận, Rủi ro cần test phủ, Cần làm rõ"
 has "$(cat "$SPECF")" 'Intent: kb/intent/2026-10-08-flow.md' "khung trỏ về intent của branch"
 O=$(chk 2026-10-08-flow); rc=$?
 eq "$rc" 65 "ca âm: khung chưa điền → check rc 65"; has "$O" '<ĐIỀN' "…và nói lý do là còn <ĐIỀN"
 # khuôn nhất quán: README repo app (do init dựng) nêu đủ tên mục của khuôn spec, đúng thứ tự
 REAL=$(cat "$APP/kb/README.md")
-for sec in 'Bối cảnh' 'Mục tiêu' 'Ngoài phạm vi' 'Inputs and failure cases' 'Tiêu chí chấp nhận' 'Thiết kế' 'Bằng chứng chạy'; do has "$REAL" "$sec" "kb/README.md nêu '$sec' của khuôn spec"; done
-order_ok "$REAL" '## Bối cảnh`, `## Mục tiêu`, `## Ngoài phạm vi`,' '`## Inputs and failure cases`' '`## Tiêu chí chấp nhận`' '`## Thiết kế`' && ok "kb/README.md: năm mục đúng thứ tự, Thiết kế SAU chúng" || bad "kb/README.md: thứ tự khuôn spec sai"
+for sec in 'Mục tiêu' 'Ràng buộc' 'Tiêu chí chấp nhận' 'Rủi ro cần test phủ' 'Cần làm rõ'; do has "$REAL" "$sec" "kb/README.md nêu '$sec' của khuôn spec"; done
+order_ok "$REAL" '`## Mục tiêu`' '`## Ràng buộc`' '`## Tiêu chí chấp nhận`' '`## Rủi ro cần test phủ`' '`## Cần làm rõ`' && ok "kb/README.md: năm mục của khuôn spec, theo thứ tự khung viết" || bad "kb/README.md: thứ tự khuôn spec sai"
 cat > "$TMP/spec-ok.md" <<'EOS'
 ---
 description: "Thêm cờ --dry-run vào script X"
@@ -408,7 +408,7 @@ has "$SP" 'session-ask' "spec: xin duyệt bằng session-ask"; hasnt "$SP" 'com
 has "$SP" 'end the turn' "spec: sau session-ask thì kết thúc lượt chờ tin"
 has "$SP" 'No code edit without an approval' "spec: chưa duyệt thì không sửa code"
 has "$SP" '**not** a gate' "spec: nói rõ check không phải cổng (không chặn sửa code)"
-has "$SP" 'Run evidence' "spec: tiêu chí cuối là mục Bằng chứng chạy"
+has "$SP" 'no evidence line' "spec: tiêu chí không có dòng bằng chứng (bằng chứng ở thân PR, skill ship)"
 has "$SP" 'git push origin intent/' "spec: đẩy lên branch intent trước khi xin duyệt"
 has "$SP" '`kb/README.md`' "spec: khuôn nằm ở kb/README.md của CHÍNH repo (không phải repo khác)"
 order_ok "$SP" 'new spec' 'check spec' 'git push origin intent/' 'session-ask "Spec' && ok "spec: thứ tự tạo → kiểm → đẩy → xin duyệt" || bad "spec: thứ tự các bước sai"

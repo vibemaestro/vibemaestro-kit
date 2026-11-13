@@ -638,6 +638,13 @@ PY
       *) has "$(out)" "  Usage:" "[list] …with its Usage" ;;
     esac
   done
+  bt "$P" "$W" list kit:branch-delete >/dev/null
+  has "$(out)" "  Params:  repo=repo branch=ref head=sha40" "[list] a keyword that is one baton's full name, among several that match: that baton's whole entry"
+  hasnt "$(out)" "kit:branch-delete-recoverable" "[list] …not the other that matches (kit:branch-delete-recoverable)"
+  bt "$P" "$W" list branch-delete >/dev/null
+  has "$(out)" "kit:branch-delete-recoverable  " "[list] a keyword several match and none is named by: one line each, the recoverable kit's"
+  has "$(out)" "kit:branch-delete  " "[list] …and kit:branch-delete's"
+  hasnt "$(out)" "  Params:  " "[list] …no whole entry"
   local deep; deep="$(fresh)"; for n in 1 2 3 4 5 6 7; do deep="$deep/$(printf 'd%.0s' $(seq 1 200))"; done
   mkdir -p "$deep/vibemaestro/batons"; mkb "$P" "$deep/vibemaestro/batons/deep-one.sh" "dest=path" "{dest}/** — the file"
   eq "$(cd "$W" && within 20 env -i PATH="$PATH" HOME="$HOME" XDG_STATE_HOME="$ST" XDG_DATA_HOME="$deep" python3 "$P/scripts/baton.py" list deep-one)" 0 \

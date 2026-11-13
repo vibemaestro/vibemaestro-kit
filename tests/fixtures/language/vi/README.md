@@ -5,9 +5,9 @@ Dựng bởi skill `init-kb` của plugin `vibemaestro-sdlc`; file này tự đ�
 
 | Thư mục / file | Nội dung | Có nghĩa vụ cập nhật? |
 |---|---|---|
-| `intent/` | yêu cầu gốc bằng lời người đặt, 1-2 đoạn | không — bản ghi một lần |
-| `specs/` | thiết kế: vì sao, đánh đổi, số đo; spec của một intent theo khuôn bên dưới | không — đóng lại khi thi hành xong |
-| `plans/` | chia việc: cái gì phải đúng + lệnh nghiệm thu | không |
+| `intent/` | yêu cầu gốc bằng lời người đặt, 1-2 đoạn; với story: chính story chủ repo duyệt | không — bản ghi một lần |
+| `specs/` | điều phải đúng, suy ra từ story: mục tiêu, ràng buộc, tiêu chí, rủi ro; spec của một intent theo khuôn bên dưới | có, khi code dạy điều mới (spec sống) |
+| `plans/` | cách làm: mỗi PR một hàng, giao AC nào, phụ thuộc, chỗ cần ký; plan sống | có, khi code dạy điều mới |
 | `decisions/` | chốt một lựa chọn, **kèm phương án bị loại** | không, nhưng nêu rõ khi bị thay |
 | `current-state.md` | trạng thái hiện hành của repo | **có — file DUY NHẤT phải luôn đúng** |
 
@@ -26,10 +26,15 @@ Check: `kb.py check [--strict]`.
 **Finding things without reading them:** `kb.py find <words>` (superseded/done hidden unless `--all`), `kb.py list
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
-**Khuôn spec của một intent:** năm mục `## ` đúng thứ tự — `## Bối cảnh`, `## Mục tiêu`, `## Ngoài phạm vi`,
-`## Inputs and failure cases`, `## Tiêu chí chấp nhận`; `## Thiết kế` (tuỳ chọn) đứng sau. `Inputs and failure cases` là bảng
-đầu vào hay sự cố / hành vi mong đợi / test chứng minh (hoặc một dòng `không có, vì <lý do>`); spec có từ trước chỉ bị cảnh báo.
-Tiêu chí là **lệnh** + kết quả mong đợi; tiêu chí cuối luôn là: PR có mục `## Bằng chứng chạy`. Kiểm hình dạng: `kb.py check spec <ngày>-<slug>`.
+**Story** (intent loại story, viết bằng ngôn ngữ repo đặt): dòng "Là / tôi muốn / để", bối cảnh, AC đánh số, phần không làm,
+khẩu phần, tối đa 3 câu hỏi mỗi câu kèm đề xuất và lý do; vừa một màn hình điện thoại, không lệnh, tên tệp hay code.
+Kiểm: `kb.py check intent <ngày>-<slug>`.
+
+**Khuôn spec của một intent:** năm mục `## `, thứ tự tuỳ ý — `## Mục tiêu` (mỗi mục trỏ về AC, `→ AC<n>`), `## Ràng buộc`
+(bảo mật, chi phí, tương thích; không phải cách làm), `## Tiêu chí chấp nhận` (theo hành vi, "khi … thì …", mỗi tiêu chí trỏ về AC),
+`## Rủi ro cần test phủ` (rủi ro test phải phủ), `## Cần làm rõ`. Không cách làm, không lệnh trừ khi chính lệnh là hành vi; khoảng 2 trang.
+Spec dạng cũ (`## Bối cảnh`, `## Ngoài phạm vi`, `## Inputs and failure cases`, tiêu chí là lệnh) đã có chỉ bị cảnh báo; spec
+của story mới viết hay bị sửa thì theo dạng mới. Kiểm hình dạng: `kb.py check spec <ngày>-<slug>`.
 
 **Khuôn `current-state.md`:** chỉ trạng thái hiện hành, viết đè không nối thêm; không lịch sử (ngày đo, số PR, "trước
 đây…"), không cách làm hay số liệu thí nghiệm — chi tiết nằm ở `specs/` và `decisions/`, file này chỉ trỏ tới. Có trần

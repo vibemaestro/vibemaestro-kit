@@ -12,7 +12,8 @@
 #       floor (a path-skipped required check), accepted red steps (exact check, whole-word prefix, every failed step)
 #   [F] files: deny (also the config itself, so a PR cannot turn admin bypass on), brief, rename source, case, symlink,
 #       submodule, a count that does not add up, a truncated tree
-#   [B] behind base: refused, printed, listed with --behind-ok, overlapping, unlisted
+#   [B] behind base: refused, printed, listed with --behind-ok, overlapping, unlisted; the compare API failing with a 5xx or a
+#       dropped connection is asked again (4 attempts) and, when it keeps failing, could not conclude and says transient; a 4xx is not
 #   [S] --behind-ok-clean: a docs file both sides changed, accepted when git merge-file and GitHub's test merge agree on a clean
 #       merge (and the merged current-state passes its check); refused on a conflict, a test file, a rename, an add, a symlink,
 #       other bytes, a merge over the cap; a stale test merge is could-not-conclude; a glob that is not docs-only is rc 64
@@ -26,7 +27,7 @@
 #       its files, so does the floor of a first PR; .vibemaestro/batons still merges
 #   [L] the back-merge lane: a backmerge/* PR into the default branch (whatever its name) with its head on release merges with
 #       a merge commit; one whose head is not on release, or with no release, is refused; another PR whose head is on release is
-#       refused; every other PR squashes
+#       refused; every other PR squashes; its comparison with release is asked again after a 5xx (4 attempts)
 #   [A] --behind auto: a fresh test merge (re-asked when stale, a conflict at once), disjoint files or a shared docs file merged
 #       clean (not code, a planner's map, a dot-directory or CLAUDE.md), and disjoint suites by the base's planner (the kit's
 #       tests/plan.py --suites: the base's files --woken, with the merge base's map as --old; the PR's as CI plans them), read and
@@ -42,6 +43,8 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 . "$HERE/fixtures/lib.sh"
 # shellcheck source=fixtures/ports.sh
 . "$HERE/fixtures/ports.sh"
+# shellcheck source=fixtures/baton-owner.sh
+. "$HERE/fixtures/baton-owner.sh"
 
 PLUGIN="$SRC_ROOT/plugins/vibemaestro-sdlc"
 SKILL="$PLUGIN/skills/init-kb/SKILL.md"
@@ -67,7 +70,7 @@ GENV=()
 guard() {
   local pl=$1 d=$2; shift 2
   OUT=$(cd "$d" && cenv XDG_STATE_HOME="$d/state" FAKE_GH_FX="$d/fx.json" FAKE_GH_LOG="$d/gh.log" FAKE_GH_STATE="$d/merged.json" \
-        ${GENV[@]+"${GENV[@]}"} python3 -B "$pl/gates/merge_guard.py" "$@" 2>&1); RC=$?
+        MERGE_GUARD_RETRY_WAIT_S=0 ${GENV[@]+"${GENV[@]}"} python3 -B "$pl/gates/merge_guard.py" "$@" 2>&1); RC=$?
 }
 STD=(--repo acme/app --pr 7 --head "$H" --brief brief.txt)
 merges() { grep -c '^\["pr", "merge"' "$1/gh.log"; }
@@ -178,6 +181,11 @@ fam_files() {
   PL=$1; local d deny
   alone "[F] a file under a deny glob" deny file=deploy/app.yaml -- --allow 'deploy/**'
   alone "[F] a deny glob matches whatever the case" deny file=src/Secret.env
+  # a .claude-plugin segment at any depth and in any case is denied whatever merge.deny_globs says (the skill's list names none)
+  for p in .claude-plugin/m.json plugins/p/.claude-plugin/p.json plugins/p/.Claude-Plugin/p.json "a/.claude-plugin./x.json"; do
+    alone "[F] a .claude-plugin path no deny glob names ($p)" deny "file=$p" -- --allow '**'
+    has "$OUT" "denied: $p" "[F] …named"
+  done
   deny=$(python3 -c 'import json,re,sys
 for l in open(sys.argv[1]):
     lists = re.findall(r"`(\[.*?\])`", l) if "`merge.deny_globs`" in l else []
@@ -223,6 +231,30 @@ fam_behind() {
   has "$OUT" "ops/a.yaml" "[B] …the base files are printed when accepted too"
   alone "[B] a base file not listed in --behind-ok" behind behind=ops/a.yaml,lib/y.py -- --behind-ok 'ops/**'
   alone "[B] a base file that is also a file of the PR" behind behind=ops/a.yaml,src/app.py -- --behind-ok 'ops/**,src/**'
+  # a transient fault of the compare API: asked again; a 4xx is not. MERGE_GUARD_RETRY_WAIT_S=0 (guard) makes the waits 0.
+  ncmp() { grep -c '/compare/' "$1/gh.log"; }
+  d=$(mkfx compare-seq=500,ok); guard "$PL" "$d" "${STD[@]}" --behind-ok 'docs/**'
+  eq "$RC:$(ncmp "$d")" "0:2" "[B] the comparison fails once with HTTP 500, then answers: it is asked twice and the check concludes (rc 0)"
+  has "$OUT" "  ok    behind: behind the base by 2 commit(s)" "[B] …and behind is concluded, not unknown"
+  d=$(mkfx compare-seq=502,drop,ok); guard "$PL" "$d" "${STD[@]}" --behind-ok 'docs/**'
+  eq "$RC:$(ncmp "$d")" "0:3" "[B] an HTTP 502 then a dropped connection, then it answers: asked three times, rc 0"
+  d=$(mkfx compare-seq=500); guard "$PL" "$d" "${STD[@]}" --behind-ok 'docs/**' --merge
+  eq "$RC:$(ncmp "$d"):$(merges "$d")" "2:4:0" "[B] the comparison fails with HTTP 500 every time: asked 4 times, could not conclude (rc 2), no pr merge call"
+  has "$OUT" "??    behind: the comparison with the base cannot be read: gh api repos/acme/app/compare/" "[B] …behind is the condition it could not judge"
+  has "$OUT" "[transient: HTTP 500 on all 4 attempts; run it again later]" "[B] …and the line says it is transient: the status, the attempts, run again"
+  d=$(mkfx compare-seq=drop); guard "$PL" "$d" "${STD[@]}" --behind-ok 'docs/**'
+  eq "$RC:$(ncmp "$d")" "2:4" "[B] a dropped connection every time: asked 4 times, rc 2"
+  has "$OUT" "[transient: connection error on all 4 attempts; run it again later]" "[B] …the line says connection error"
+  d=$(mkfx compare-seq=eof,ok); guard "$PL" "$d" "${STD[@]}" --behind-ok 'docs/**'
+  eq "$RC:$(ncmp "$d")" "0:2" "[B] a connection that ends with a bare EOF, then it answers: asked twice, rc 0"
+  d=$(mkfx compare-seq=422-body5xx,ok); guard "$PL" "$d" "${STD[@]}" --behind-ok 'docs/**'
+  eq "$RC:$(ncmp "$d")" "2:1" "[B] HTTP 422 whose body quotes HTTP 500: a 4xx, asked once, rc 2"
+  hasnt "$OUT" "transient" "[B] …and it is not called transient"
+  d=$(mkfx compare-seq=404,ok); guard "$PL" "$d" "${STD[@]}" --behind-ok 'docs/**'
+  eq "$RC:$(ncmp "$d")" "2:1" "[B] the comparison answers HTTP 404: asked once, could not conclude (rc 2)"
+  hasnt "$OUT" "transient" "[B] …and it is not called transient"
+  d=$(mkfx compare-seq=403,ok); guard "$PL" "$d" "${STD[@]}" --behind-ok 'docs/**'
+  eq "$RC:$(ncmp "$d")" "2:1" "[B] the comparison answers HTTP 403: asked once, rc 2"
 }
 
 LED=kb/current-state.md
@@ -282,6 +314,9 @@ fam_boot() {
   has "$(cat "$d/gh.log")" "sdlc.json?ref=$H" "[P] …the config was read at the head"
   alone "[P] bootstrap: the added deny globs still refuse a workflow" deny bootstrap=workflow -- "${BA[@]}" --allow '.github/**'
   alone "[P] bootstrap: the brief still applies" brief bootstrap
+  alone "[P] bootstrap: a nested .claude-plugin path the added deny globs and the init default omit" deny bootstrap file=plugins/p/.claude-plugin/p.json -- "${BA[@]}" --allow 'plugins/**'
+  alone "[P] bootstrap: a .claude-plugin path is never a scaffold path (rules directory .vibemaestro/.claude-plugin)" deny bootstrap=plugin-rules -- "${BA[@]}"
+  has "$OUT" "denied: .vibemaestro/.claude-plugin/README.md" "[P] …named"
   alone "[P] bootstrap: gate code the PR adds under .vibemaestro/ is denied (CI runs it)" deny bootstrap file=.vibemaestro/gates/pr_sensitive.py -- "${BA[@]}"
   alone "[P] bootstrap: an added config that denies nothing still gets the init default" deny bootstrap=empty-deny file=.github/workflows/ci.yml -- "${BA[@]}" --allow '.github/**'
   d=$(mkfx bootstrap=empty-deny file=.vibemaestro/batons/x.sh); guard "$PL" "$d" "${STD[@]}" "${BA[@]}"
@@ -331,6 +366,9 @@ fam_image() {
     eq "$RC" 1 "[I] the lane, fault $1: rc 1"; has "$OUT" "FAIL  $2:" "[I] …named $2"
     eq "$(nfail)" 1 "[I] …the only failed condition"
   done
+  d=$(mkfx lane file=image/.claude-plugin/p.json); guard "$PL" "$d" --repo acme/app --pr 7 --head "$H" --brief lane.txt --image-bump
+  eq "$RC/$(nfail)" "1/1" "[I] the lane, a .claude-plugin path under the image tree (image/** covers it, the root glob does not): rc 1, one failed condition"
+  has "$OUT" "FAIL  lane-deny: " "[I] …named lane-deny"; has "$OUT" "image/.claude-plugin/p.json (a .claude-plugin path)" "[I] …and the path"
   for c in "rename-tag lane-tag-only" "sidecar lane-tag-only" "args lane-tag-only"; do
     set -- $c
     d=$(mkfx lane="$1"); guard "$PL" "$d" --repo acme/app --pr 7 --head "$H" --brief lane.txt --image-bump
@@ -568,6 +606,12 @@ fam_backmerge() {
   alone "[L3] a backmerge/* PR and no branch release" backmerge backmerge=none
   has "$OUT" "follow-up creates it" "[L3] …and the refusal names the follow-up that creates release"
   alone "[L4] a PR into the default branch whose head is on release, from a branch that is not backmerge/*" backmerge on-release=on
+  d=$(mkfx backmerge=on release-flaky=1); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(grep '/compare/' "$d/gh.log" | grep -vc "$B0")" "0:2" "[L9] the head's comparison with release fails once with HTTP 500, then answers: rc 0, asked twice"
+  has "$(mlog "$d")" '"--merge"' "[L9] …and the back-merge lane still merges with a merge commit"
+  d=$(mkfx backmerge=on release-flaky=9); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(grep '/compare/' "$d/gh.log" | grep -vc "$B0"):$(merges "$d")" "2:4:0" "[L9] …HTTP 500 every time: asked 4 times, rc 2, no pr merge call"
+  has "$OUT" "[transient: HTTP 500 on all 4 attempts; run it again later]" "[L9] …and backmerge says it is transient"
   d=$(mkfx on-release=off); guard "$PL" "$d" "${STD[@]}" --merge
   eq "$RC" 0 "[L5] a PR whose head is not on release, release present: rc 0"
   has "$(mlog "$d")" '"--squash"' "[L5] …squashed"
@@ -599,9 +643,19 @@ fam_auto() {
   has "$(tail -n 1 "$d/state/vibemaestro/merge-log.jsonl")" '"suites": {"base": ["lib"], "pr": ["app", "docs-check", "plan"]}' "[A] …with both sides' suites"
   has "$(cat "$d/gh.log")" "contents/tests/plan.py?ref=$B0" "[A] …the planner was read at the base tip"
   hasnt "$(cat "$d/gh.log")" "?ref=$H\"" "[A] …and nothing at the head"
+  # this repository's own merge.planner (a published export has no config): without one, main's lib/y.py is code and blocks
+  if [ -f "$SRC_ROOT/.vibemaestro/sdlc.json" ]; then
+    d=$(mkfx planner=repo auto behind=lib/y.py); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
+    eq "$RC" 0 "[A] this repository's merge.planner: the base's lib/y.py (lib) against the PR's app, docs-check, plan: rc 0"
+    has "$OUT" "(c) the base's files and this PR's files wake no suite in common (planner tests/plan.py, read at the base)" "[A] …(c) asked the planner"
+    alone "[A] this repository's merge.planner: the base's src/core/z.py wakes app, as the PR's src/app.py does" behind planner=repo auto behind=src/core/z.py -- "${AU[@]}"
+    has "$OUT" "(c) the base's files and this PR's files wake the same suite(s): app" "[A] …refused for the shared suite"
+  fi
   alone "[A] intersecting suites: the base's src/core/z.py wakes app, as the PR's src/app.py does" behind planner auto behind=src/core/z.py -- "${AU[@]}"
   has "$OUT" "(c) the base's files and this PR's files wake the same suite(s): app" "[A] …the shared suite is named under (c)"
   has "$OUT" "merge the base into the branch" "[A] …and the way on is to merge the base"
+  alone "[A] the PR changed an @always suite's check (tests/plan-input.txt): it never read the base's lib/y.py" behind planner auto behind=lib/y.py file=tests/plan-input.txt -- "${AT[@]}" "${AU[@]}"
+  has "$OUT" "this PR's files need every suite (\`tests/plan-input.txt\` changes @always suite plan, which reads every tracked file), and the base's files wake lib" "[A] …named under (c)"
   alone "[A] the base changed an @always suite's own file (tests/test-plan.sh): the PR's CI ran the old one" behind planner auto behind=tests/test-plan.sh -- "${AU[@]}"
   has "$OUT" "wake the same suite(s): plan" "[A] …named under (c)"
   alone "[A] main's map moved src/new/* onto web, and the PR changes src/new/x.py: web never ran on it" behind planner base-map file=src/new/x.py auto -- "${AU[@]}"
@@ -842,8 +896,582 @@ fam_amend() {
   eq "$RC" 64 "[U] --require-image in this lane: rc 64"
 }
 
-FAMILIES="fam_conditions fam_checks fam_files fam_behind fam_clean fam_boot fam_amend fam_floor fam_image fam_options fam_merge fam_baton fam_backmerge fam_auto fam_auto_stale"
+# ── [T6] touches: plan-approved merges ────────────────────────────────────────────────────────────────────────────────────────────
+# A scratch repository W (acme/app, and acme/plans, to the fake gh) holds the plan; approvals are signed through the owner's
+# dialog (the plugin's guard hook, then sign --by owner --approve) into the state TS; the guard runs from W with that state.
+SID=s-owner
+# tplan — W with kb/plans/p.md (the rows a spec lists) and kb/plans/q.md (signed whole), their intent and spec, committed on main (C1)
+tplan() {
+  W=$(fresh); git_ init -q -b main "$W"; mkdir -p "$W/kb/plans" "$W/kb/intent" "$W/kb/specs"
+  printf '# Intent\n\nThe owner, verbatim: guard the plan.\n' > "$W/kb/intent/i.md"
+  printf '# Spec\n\n## Acceptance criteria\n\n1. `bash tests/t.sh` gives 0 fail.\n2. The guard covers what a row declares.\n' > "$W/kb/specs/s.md"
+  cat > "$W/kb/plans/p.md" <<'EOF'
+# Plan
+
+Intent: kb/intent/i.md · Spec: kb/specs/s.md
+
+## Rows
+
+| Row | Must be true | Trust touches | Link |
+|---|---|---|---|
+| A | a | workflow .github/workflows/x.yml; baton batons/b.sh Stops: secrets; rbac deploy/r.yaml Role/app/reader | — |
+| B | b | workflow .github/workflows/y.yml | — |
+| C | c | workflow .github/workflows/c.yml | — |
+| E | e | workflow .github/workflows/signing-rules.yml | — |
+| F | f | workflow .github/workflows/f.yml | — |
+| G | g | workflow .github/workflows/g.yml | — |
+| H | h | workflow .github/workflows/h.yml | approved by the owner |
+| K | k | workflow acme/app:.github/workflows/k.yml | — |
+| M | m | workflow .github/workflows/m.yml | — |
+| R | r | workflow .github/workflows/r.yml | — |
+| X | x | workflow .github/workflows/xx.yml | — |
+EOF
+  cat > "$W/kb/plans/q.md" <<'EOF'
+# Plan Q
+
+Intent: kb/intent/i.md · Spec: kb/specs/s.md · Issue: #1
+
+## Rows
+
+| Row | Must be true | Trust touches | Link |
+|---|---|---|---|
+| N | n | workflow .github/workflows/n.yml; PRs: 2 | — |
+| O | o | other src/secret-notes.txt; other src/data.txt; other clusters/prod apps/Deployment shop/web; rbac clusters/prod Role/shop/maker; workflow .github/workflows/w.yml | — |
+| T | t | test tests/fixtures/; test src/tests/one.pin | — |
+| Q | q | baton batons/q.sh Stops: none; baton ops/runbooks/x.sh Stops: none | — |
+| S | s | other plugins/p/.claude-plugin/p.json (signs again); config .vibemaestro/sdlc.json (signs again); workflow .github/workflows/s.yml (signs again) | — |
+| U | u | other plugins/x/baton.py GRANT_NEVER | — |
+| L | l | workflow .github/workflows/l.yml | — |
+| W | w | workflow .github/workflows/dup.yml (signs again); workflow .github/workflows/dup.yml; test tests/m/; test tests/m/migrate.pin (signs again) | — |
+| D | d | workflow .github/workflows/d.yml | dropped: not needed |
+
+## Decisions
+
+- none yet
+EOF
+  git_ -C "$W" add -A; git_ -C "$W" commit -q -m plan; C1=$(git_ -C "$W" rev-parse HEAD)
+}
+# tapprove <dir> <rows> [expires in s] [plan repo] [commit] [plan path] — an approval of those rows (`*`: every row, a spec with no
+# rows) of W's plan kb/plans/p.md (or <plan path>) at C1 (or <commit>), signed through the owner's dialog from <dir> into TS; its id in TA
+tapprove() {
+  local dir=$1 rows=$2 sec=${3:-86400} repo=${4:-acme/app} commit=${5:-$C1} path=${6:-kb/plans/p.md} out
+  python3 - "$dir/a.json" "$commit" "$rows" "$sec" "$repo" "$path" <<'PY'
+import json, sys, time
+p, commit, rows, sec, repo, path = sys.argv[1], sys.argv[2], sys.argv[3].split(), int(sys.argv[4]), sys.argv[5], sys.argv[6]
+plan = {"repo": repo, "path": path, "commit": commit}
+spec = {"plan": [plan], "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + sec))}
+if rows != ["*"]:
+    spec["rows"] = [{"plan": plan, "row": r} for r in rows]
+json.dump(spec, open(p, "w"))
+PY
+  printf '{"repo": "acme/app", "git": {"acme/app": "%s", "acme/plans": "%s"}, "api": {}}\n' "$W" "$W" > "$dir/a.fx.json"
+  : > "$dir/a.gh.log"; BT_ENV=(FAKE_GH_FX="$dir/a.fx.json" FAKE_GH_LOG="$dir/a.gh.log")
+  [ "$(owner_asked "$PL" "$dir" "$TS" "$SID" --by owner --approve "$dir/a.json")" = ask ] || bad "[T6] fixture: the approval dialog did not ask ($rows)"
+  out=$(cd "$dir" && cenv XDG_STATE_HOME="$TS" CLAUDE_CODE_SESSION_ID="$SID" "${BT_ENV[@]}" python3 "$PL/scripts/baton.py" sign --by owner --approve "$dir/a.json" 2>&1)
+  BT_ENV=(); TA=$(printf '%s\n' "$out" | sed -n 's/^signed approval \([0-9a-f]\{16\}\) by owner: .*/\1/p')
+  [ -n "$TA" ] || bad "[T6] fixture: no approval signed ($rows): $out"
+}
+# tg <case dir> [guard args...] — the guard from W with the state TS (whatever the case dir's own state); OUT, RC
+tg() {
+  local d=$1; shift
+  OUT=$(cd "$W" && cenv XDG_STATE_HOME="${TG_STATE:-$TS}" FAKE_GH_FX="$d/fx.json" FAKE_GH_LOG="$d/gh.log" FAKE_GH_STATE="$d/merged.json" \
+        python3 -B "$PL/gates/merge_guard.py" --repo acme/app --pr 7 --head "$H" --brief "$d/brief.txt" --allow '**' "$@" 2>&1); RC=$?
+}
+pl() { printf 'body=plan: %s' "$1"; }
+# trefused <label> <reason> <mutations...> — refused: rc 1, FAIL touches with the reason, no merge call
+trefused() {
+  local label=$1 why=$2 d; shift 2
+  d=$(mkfx touch="$W" "$@"); tg "$d"
+  eq "$RC" 1 "[T6] $label: rc 1"
+  has "$OUT" "  FAIL  touches: " "[T6] …FAIL touches"
+  has "$OUT" "$why" "[T6] …the reason named: $why"
+  eq "$(merges "$d")" 0 "[T6] …no pr merge call"
+}
+fam_touches() {
+  PL=$1; local d d2 A1 W2 EX
+  TS=$(fresh)/state; tplan
+  tapprove "$W" "A B C E M"; A1=$TA
+  tapprove "$W" "R"; eq "$(cd "$W" && cenv XDG_STATE_HOME="$TS" python3 "$PL/scripts/baton.py" grant revoke "$TA" >/dev/null 2>&1; echo $?)" 0 "[T6] fixture: approval of R revoked"
+  tapprove "$W" "X" 4; EX=$(( $(date +%s) + 4 ))
+  W2=$(fresh); git_ init -q -b main "$W2"; W2=$(cd "$W2" && pwd -P); tapprove "$W2" "F"
+  tapprove "$W" "G"
+  python3 - "$TS/vibemaestro/baton/grants/$TA.json" <<'PY'
+import json, sys
+p = sys.argv[1]; g = json.load(open(p)); g["rows"][0]["touches"][0]["path"] = ".github/workflows/z.yml"; open(p, "w").write(json.dumps(g))
+PY
+  tapprove "$W" "K" 86400 acme/plans
+  # the declared change merges with no owner merge
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 0 "[T6] a PR changing the denied .github/workflows/x.yml its approved row A declares: rc 0"
+  has "$OUT" "  ok    touches: 1 trust-layer change(s), each a touch of row A, approval $A1 at ${C1:0:12}" "[T6] …ok touches names the row and the approval"
+  has "$OUT" "  ok    deny: " "[T6] …deny passes the covered path"
+  has "$OUT" "denied: .github/workflows/x.yml: judged by touches" "[T6] …named as judged by touches"
+  has "$(printf '%s\n' "$OUT" | grep '^merge-plan: ')" " touches:$A1/A" "[T6] …the plan line says touches:<id>/<row>"
+  eq "$(merges "$d")" 0 "[T6] …and the dry run merges nothing"
+  d=$(mkfx touch="$W" file=.github/workflows/k.yml "$(pl acme/plans:kb/plans/p.md#K)"); tg "$d"
+  eq "$RC" 0 "[T6] a plan held in another repository (acme/plans:kb/plans/p.md#K), its touch naming acme/app: rc 0"
+  d=$(mkfx touch="$W" baton-head=batons/b.sh:secrets "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 0 "[T6] a denied baton whose Stops at the head are the declared ones: rc 0"
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml sr-red=rbac:deploy/r.yaml:Role/app/reader:- "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 0 "[T6] a red touch check whose one finding is the declared rbac object: rc 0"
+  has "$OUT" "red and judged by touches: signing-rules" "[T6] …required leaves the red touch check to touches"
+  d=$(mkfx touch="$W" "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 0 "[T6] no trust-layer change: rc 0"
+  has "$OUT" "  ok    touches: no trust-layer change" "[T6] …ok touches says so"
+  # refused: each change that is not a touch of the row, and each record that does not hold
+  trefused "an undeclared path" "workflow acme/app:.github/workflows/z.yml (a denied path): not a touch of row A at ${C1:0:12}" \
+    file=.github/workflows/z.yml "$(pl kb/plans/p.md#A)"
+  trefused "a path only another row declares" "workflow acme/app:.github/workflows/y.yml (a denied path): not a touch of row A" \
+    file=.github/workflows/y.yml "$(pl kb/plans/p.md#A)"
+  trefused "a rename whose source is undeclared" "workflow acme/app:.github/workflows/old.yml (a denied path): not a touch of row A" \
+    rename=.github/workflows/old.yml:.github/workflows/x.yml "$(pl kb/plans/p.md#A)"
+  trefused "a case variant of a declared path" "acme/app:.github/workflows/X.yml" file=.github/workflows/X.yml "$(pl kb/plans/p.md#A)"
+  trefused "another object of a declared rbac path" "rbac acme/app:deploy/r.yaml Role/app/writer (a finding of signing-rules): not a touch" \
+    sr-red=rbac:deploy/r.yaml:Role/app/writer:- "$(pl kb/plans/p.md#A)"
+  trefused "a baton touch with other Stops at the head" "baton acme/app:batons/b.sh Stops: publish (a denied path): not a touch of row A" \
+    baton-head=batons/b.sh:publish "$(pl kb/plans/p.md#A)"
+  trefused "no plan: line" "the body has 0 plan-row line(s)" file=.github/workflows/x.yml
+  trefused "two plan: lines" "the body has 2 plan-row line(s)" file=.github/workflows/x.yml "body=plan: kb/plans/p.md#A|plan: kb/plans/p.md#B"
+  # [plan-line-planner] the CI planner's `plan: N/M suites` line is no plan line; two plan-row lines are still not one
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml "body=plan: kb/plans/p.md#A|plan: 8/45 suites — 15 changed paths"); tg "$d"
+  eq "$RC" 0 "[plan-line-planner] a body with the row line and the planner's line 'plan: 8/45 suites': rc 0"
+  has "$OUT" "  ok    touches: 1 trust-layer change(s), each a touch of row A, approval $A1 at ${C1:0:12}" "[plan-line-planner] …the row is the one named"
+  trefused "two row lines and the planner's line [plan-line-planner]" "the body has 2 plan-row line(s)" file=.github/workflows/x.yml \
+    "body=plan: kb/plans/p.md#A|plan: 8/45 suites — 15 changed paths|plan: kb/plans/p.md#B"
+  trefused "only the planner's line [plan-line-planner]" "the body has 0 plan-row line(s)" file=.github/workflows/x.yml "body=plan: 8/45 suites — 15 changed paths"
+  trefused "an approved line in the plan and the body, and no approval" "no approval in force signed from this directory lists row H" \
+    file=.github/workflows/h.yml "body=approved by the owner|plan: kb/plans/p.md#H"
+  trefused "an approval signed from another directory" "was signed from $W2, not from $W" file=.github/workflows/f.yml "$(pl kb/plans/p.md#F)"
+  trefused "a revoked approval" "was revoked" file=.github/workflows/r.yml "$(pl kb/plans/p.md#R)"
+  trefused "an altered approval file" "is damaged" file=.github/workflows/z.yml "$(pl kb/plans/p.md#G)"
+  trefused "a finding of kind other" "other acme/app:plugins/x/baton.py GRANT_NEVER (a finding of signing-rules): a signing-rules finding of kind other changes who signs: the floor, never covered" \
+    file=.github/workflows/x.yml sr-red=other:plugins/x/baton.py:GRANT_NEVER:- "$(pl kb/plans/p.md#A)"
+  trefused "a red touch check with no artifact" "red, and it has no single unexpired artifact trust-touches" sr-block=none "$(pl kb/plans/p.md#A)"
+  trefused "two artifacts of one run" "(2 found)" sr-block=two "$(pl kb/plans/p.md#A)"
+  trefused "a block with no end line" "no \`end\` line" sr-block=noend "$(pl kb/plans/p.md#A)"
+  trefused "a block whose end counts 2 lines over 1" "its block ends \`end 2\` over 1 finding line(s)" sr-block=count "$(pl kb/plans/p.md#A)"
+  trefused "a red run with end 0" "its block ends \`end 0\` over 0 finding line(s)" sr-block=end0 "$(pl kb/plans/p.md#A)"
+  trefused "a check run rewritten to success over a red workflow run" "baton acme/app:batons/q.sh Stops: none (a finding of signing-rules)" \
+    file=.github/workflows/x.yml sr-block=flip "$(pl kb/plans/p.md#A)"
+  for r in "completed:cancelled|cancelled" "in_progress:|pending"; do
+    d=$(mkfx touch="$W" file=.github/workflows/x.yml sr-run="${r%%|*}" "$(pl kb/plans/p.md#A)"); tg "$d"
+    eq "$RC/$(merges "$d")" "1/0" "[T6] a check run that says success over a workflow run ${r%%|*}: rc 1, no merge"
+    has "$OUT" "signing-rules (its check run says success, its workflow run ${r#*|})" "[T6] …FAIL required: the workflow run is read, not the check run"
+    has "$OUT" "signing-rules/signing-rules=success, but its workflow run is ${r#*|}" "[T6] …and FAIL checks"
+  done
+  trefused "a second same-name run from another workflow" "(a run of signing-rules that .github/workflows/signing-rules.yml did not make)" \
+    file=.github/workflows/x.yml sr-foreign "$(pl kb/plans/p.md#A)"
+  trefused "a declared change to a touch_inputs path" "workflow acme/app:.github/workflows/signing-rules.yml (a denied path): it judges a later PR: the floor, never covered" \
+    file=.github/workflows/signing-rules.yml "$(pl kb/plans/p.md#E)"
+  trefused "an own-inputs path" "config acme/app:.vibemaestro/sdlc.json (a denied path): it judges a later PR: the floor, never covered" \
+    file=.vibemaestro/sdlc.json "$(pl kb/plans/p.md#A)"
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml red-unit="Run tests" "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 1 "[T6] a red required check outside touch_checks: rc 1"
+  has "$OUT" "  FAIL  checks: " "[T6] …FAIL checks, as today" ; has "$OUT" "test/unit=failure" "[T6] …naming it"
+  has "$OUT" "  ok    touches: " "[T6] …touches does not cover it"
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml sr-skipped "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 1 "[T6] a skipped touch check: rc 1"; has "$OUT" "  FAIL  required: 1 required check(s); not green: signing-rules (skipped)" "[T6] …FAIL required"
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml sr-missing "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 1 "[T6] a missing touch check run: rc 1"; has "$OUT" "signing-rules (no check run)" "[T6] …FAIL required names it"
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml touch-no-inputs "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 65 "[T6] merge.touch_checks names a check merge.touch_inputs lacks: rc 65"
+  has "$OUT" "merge.touch_checks: names signing-rules, which merge.touch_inputs does not" "[T6] …named"
+  d=$(mkfx file=.github/workflows/x.yml "$(pl kb/plans/p.md#A)"); tg "$d"
+  eq "$RC" 1 "[T6] a repository with no touch_checks: the declared path is refused as today (rc 1)"
+  has "$OUT" "  FAIL  deny: " "[T6] …FAIL deny"; hasnt "$OUT" "touches:" "[T6] …and no touches condition"
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml "$(pl kb/plans/p.md#A)"); TG_STATE=$(fresh) tg "$d"
+  eq "$RC" 1 "[T6] the guard run outside baton's state (no approval there): rc 1"; has "$OUT" "no approval in force" "[T6] …named"
+  # the plan moves after the approval: read at the approved commit, and at the default branch's tip for dropped
+  python3 - "$W/kb/plans/p.md" <<'PY'
+import sys
+p = sys.argv[1]; t = open(p).read()
+t = t.replace("| workflow .github/workflows/y.yml |", "| workflow .github/workflows/y.yml; workflow .github/workflows/late.yml |")
+t = t.replace("| c | workflow .github/workflows/c.yml | — |", "| c | workflow .github/workflows/c.yml | dropped: not needed |")
+open(p, "w").write(t)
+PY
+  git_ -C "$W" commit -q -am "a touch added to B, C dropped"
+  trefused "a touch added to the plan on main after the approved commit" "workflow acme/app:.github/workflows/late.yml (a denied path): not a touch of row B at ${C1:0:12}" \
+    file=.github/workflows/late.yml "$(pl kb/plans/p.md#B)"
+  trefused "a touch added in the PR's own plan" "not a touch of row B at ${C1:0:12}" file=.github/workflows/late.yml file=kb/plans/p.md "$(pl kb/plans/p.md#B)"
+  trefused "a row dropped on main after the approval" "row C is dropped at the default branch's tip (not needed)" \
+    file=.github/workflows/c.yml "$(pl kb/plans/p.md#C)"
+  # the one use of a row: --merge takes it, keyed by the plan and the row
+  d=$(mkfx touch="$W" file=.github/workflows/x.yml "$(pl kb/plans/p.md#A)"); tg "$d" --merge
+  eq "$RC/$(merges "$d")" "0/1" "[T6] --merge of the declared change: rc 0, one pr merge call"
+  eq "$(grep "	touches	" "$TS/vibemaestro/baton/log.tsv" | cut -f8,10,12)" "$(printf 'approval:%s\tused\tacme/app:kb/plans/p.md@%s#a' "$A1" "$C1")" \
+     "[T6] …a touches used line in baton's log.tsv, keyed by the plan's repo, path, commit and the row"
+  has "$(tail -n 1 "$TS/vibemaestro/merge-log.jsonl")" "\"touches\": {\"approval\": \"$A1\"" "[T6] …the merge log line names the approval"
+  has "$(tail -n 1 "$TS/vibemaestro/merge-log.jsonl")" "[\"workflow\", \"acme/app\", \".github/workflows/x.yml\", null, null]" "[T6] …and the covered change"
+  has "$(cd "$W" && cenv XDG_STATE_HOME="$TS" python3 "$PL/scripts/baton.py" log --digest 2>&1)" "kit:merge-pr	approval:$A1	touches acme/app:kb/plans/p.md@$C1#a	-" \
+      "[T6] …log --digest lists the merge under the approval, with the row it used"
+  trefused "a second PR for a used row" "an earlier merge used row A of acme/app kb/plans/p.md @ ${C1:0:12} (1 of its PRs: 1)" \
+    file=.github/workflows/x.yml "$(pl kb/plans/p.md#A)"
+  tapprove "$W" "A"
+  trefused "a used row under an approval signed again at the same commit" "an earlier merge used row A" file=.github/workflows/x.yml "$(pl kb/plans/p.md#A)"
+  tapprove "$W" "A" 86400 acme/app "$(git_ -C "$W" rev-parse HEAD)"
+  trefused "a used row under an approval at a later commit of the plan" "an earlier merge used row A" file=.github/workflows/x.yml "$(pl kb/plans/p.md#A)"
+  rm -rf "$TS/vibemaestro/baton/touches"                               # a use marker deleted: an input, not a break
+  trefused "the use marker deleted (the log line still counts)" "an earlier merge used row A" file=.github/workflows/x.yml "$(pl kb/plans/p.md#A)"
+  # two merges of one row at once: one merges
+  d=$(mkfx touch="$W" file=.github/workflows/m.yml "$(pl kb/plans/p.md#M)"); d2=$(mkfx touch="$W" file=.github/workflows/m.yml "$(pl kb/plans/p.md#M)")
+  ( tg "$d" --merge ) & ( tg "$d2" --merge ) & wait
+  eq "$(( $(merges "$d") + $(merges "$d2") ))" 1 "[T6] two merges of one row at once: exactly one pr merge call"
+  while [ "$(date +%s)" -le "$EX" ]; do sleep 1; done
+  trefused "an expired approval" "expired at" file=.github/workflows/xx.yml "$(pl kb/plans/p.md#X)"
+  fam_touches_plan
+}
+
+# [T7] one owner signature for every row of a plan (kb/plans/q.md, a spec with no rows): PRs: <n>, other, test, the floor, the
+# plan as signed at the default branch's tip and at the PR's head
+qok() {   # qok <label> <mutations...> — covered: rc 0, ok touches, no merge call (dry run)
+  local label=$1 d; shift
+  d=$(mkfx touch="$W" "$@"); tg "$d"
+  eq "$RC/$(merges "$d")" "0/0" "[T7] $label: rc 0 in dry run"; has "$OUT" "  ok    touches: " "[T7] …ok touches"
+}
+qno() {   # qno <label> <reason> <mutations...> — refused: rc 1, FAIL touches with the reason
+  local label=$1 why=$2 d; shift 2
+  d=$(mkfx touch="$W" "$@"); tg "$d"
+  eq "$RC/$(merges "$d")" "1/0" "[T7] $label: rc 1, no merge call"
+  has "$OUT" "  FAIL  touches: " "[T7] …FAIL touches"; has "$OUT" "$why" "[T7] …named: $why"
+}
+q() { printf 'body=plan: kb/plans/q.md#%s' "$1"; }
+# oldshape <grants dir> <approval id> — a copy of that approval as a record of the old shape (v 1: no intent, spec or cells) with
+# its digest and signature computed again, and its `grant signed` line: state from before plan signing, built as an input
+oldshape() {
+  local sha
+  sha=$(python3 - "$1" "$2" <<'PY'
+import hashlib, json, os, sys
+g = json.load(open(os.path.join(sys.argv[1], sys.argv[2] + ".json")))
+g.pop("plans"); g["v"] = 1; g["id"] = "00000000000000aa"
+for r in g["rows"]:
+    r.pop("cells")
+body = {k: v for k, v in g.items() if k not in ("body_sha256", "signature")}
+g["body_sha256"] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+g["signature"]["body_sha256"] = g["body_sha256"]
+open(os.path.join(sys.argv[1], g["id"] + ".json"), "w").write(json.dumps(g))
+print(g["body_sha256"])
+PY
+)
+  printf '2026-11-07T00:00:00Z\tgrant\t-\t-\t-\t-\t-\towner\t-\tsigned\t-\t00000000000000aa %s\t-\n' "$sha" >> "$TS/vibemaestro/baton/log.tsv"
+}
+fam_touches_plan() {
+  local d d2 AQ CQ=$C1 G="$TS/vibemaestro/baton/grants"
+  # a spec that still lists rows covers those rows only; one with no rows covers every row that is not dropped
+  tapprove "$W" "N" 86400 acme/app "$CQ" kb/plans/q.md
+  qok "a row a listing spec names (q.md#N)" file=.github/workflows/n.yml "$(q N)"
+  qno "a row the listing spec leaves out (q.md#L)" "no approval in force signed from this directory lists row L" file=.github/workflows/l.yml "$(q L)"
+  # an approval of the old shape listing the row (the signed one revoked): never in force for a merge
+  oldshape "$G" "$TA"
+  eq "$(cd "$W" && cenv XDG_STATE_HOME="$TS" python3 "$PL/scripts/baton.py" grant revoke "$TA" >/dev/null 2>&1; echo $?)" 0 "[T7] fixture: the approval of N revoked"
+  qno "an approval of the old shape (v 1, no intent, spec or cells)" "approval 00000000000000aa binds no intent, spec or row cells" file=.github/workflows/l.yml "$(q N)"
+  tapprove "$W" "*" 86400 acme/app "$CQ" kb/plans/q.md; AQ=$TA
+  eq "$(python3 -c 'import json, sys; g = json.load(open(sys.argv[1])); print(g["v"], [r["row"] for r in g["rows"]], g["plans"][0]["intent"]["path"], g["plans"][0]["criteria"], g["rows"][0]["cells"])' "$G/$AQ.json")" \
+     "2 ['N', 'O', 'T', 'Q', 'S', 'U', 'L', 'W'] kb/intent/i.md ['\`bash tests/t.sh\` gives 0 fail.', 'The guard covers what a row declares.'] [['Row', 'N'], ['Must be true', 'n'], ['Trust touches', 'workflow .github/workflows/n.yml; PRs: 2']]" \
+     "[T7] one signature for every row not dropped: the record binds the intent, the spec's criteria, each row's cells but Link"
+  qok "a row of the plan the one signature covers (q.md#L)" file=.github/workflows/l.yml "$(q L)"
+  qno "the dropped row" "no approval in force signed from this directory lists row D" file=.github/workflows/d.yml "$(q D)"
+  # PRs: 2 — two uses, one of two racing merges takes the last, a third is an owner merge
+  d=$(mkfx touch="$W" file=.github/workflows/n.yml "$(q N)"); tg "$d" --merge
+  eq "$RC/$(merges "$d")" "0/1" "[T7] PRs: 2, the first PR: merged"
+  d=$(mkfx touch="$W" file=.github/workflows/n.yml "$(q N)"); d2=$(mkfx touch="$W" file=.github/workflows/n.yml "$(q N)")
+  ( tg "$d" --merge ) & ( tg "$d2" --merge ) & wait
+  eq "$(( $(merges "$d") + $(merges "$d2") ))" 1 "[T7] PRs: 2, two merges at once for the last use: exactly one pr merge call"
+  has "$(grep "	touches	" "$TS/vibemaestro/baton/log.tsv" | cut -f12)" "acme/app:kb/plans/q.md@$CQ#n/2" "[T7] …the second use logged as #n/2"
+  qno "PRs: 2, a third PR" "an earlier merge used row N of acme/app kb/plans/q.md @ ${CQ:0:12} (2 of its PRs: 2)" file=.github/workflows/n.yml "$(q N)"
+  # other: one exact path (and object), from a denied path or a trust-touches v2 finding; never v1, owner-merge, - or an unknown kind
+  qok "other by path: a denied path (src/secret-notes.txt)" file=src/secret-notes.txt "$(q O)"
+  qok "other, rbac and workflow findings of a v2 block" touch-name=risk-tier \
+    "sr-red2=other:src/data.txt:-:-;other:clusters/prod:apps/Deployment shop/web:-;rbac:clusters/prod:Role/shop/maker:-;workflow:.github/workflows/w.yml:-:-" "$(q O)"
+  qno "the same other in a v1 block" "other acme/app:src/data.txt (a finding of risk-tier): kind other of a trust-touches v1 block" \
+    touch-name=risk-tier sr-red=other:src/data.txt:-:- "$(q O)"
+  qno "an owner-merge finding of a declared path" "owner-merge acme/app:src/data.txt (a finding of risk-tier): the check could not judge it" \
+    touch-name=risk-tier sr-red2=owner-merge:src/data.txt:-:- "$(q O)"
+  qno "an other finding of path -" "a finding of no path, never covered" touch-name=risk-tier "sr-red2=other:-:-:-" "$(q O)"
+  qno "a finding of an unknown kind" "magic acme/app:src/data.txt (a finding of risk-tier): of no kind a row declares" \
+    touch-name=risk-tier sr-red2=magic:src/data.txt:-:- "$(q O)"
+  qno "another object of a declared other path" "not a touch of row O" touch-name=risk-tier "sr-red2=other:clusters/prod:apps/Deployment shop/api:-" "$(q O)"
+  # test <dir>/: every test-data file under it
+  qok "test tests/fixtures/ and test src/tests/one.pin" file=tests/fixtures/a.pin file=tests/fixtures/sub/b.pin file=src/tests/one.pin "$(q T)"
+  qno "test data outside the declared directory" "test acme/app:tests/fixtures-x/c.pin (a denied path): not a touch of row T" file=tests/fixtures-x/c.pin "$(q T)"
+  # the floor: never covered, marked or not
+  qno "a judge path the row marks (signs again)" "config acme/app:.vibemaestro/sdlc.json (a denied path): it judges a later PR: the floor" file=.vibemaestro/sdlc.json "$(q S)"
+  qno "a nested .claude-plugin path the row marks (signs again)" "other acme/app:plugins/p/.claude-plugin/p.json (a denied path): a .claude-plugin path: the floor" \
+    file=plugins/p/.claude-plugin/p.json "$(q S)"
+  qno "a .claude-plugin path in another case, under no deny glob" "PLUGINS/P/.CLAUDE-PLUGIN/p.json (a denied path): a .claude-plugin path: the floor" \
+    file=PLUGINS/P/.CLAUDE-PLUGIN/p.json "$(q L)"
+  qno "a touch the row marks (signs again)" "workflow acme/app:.github/workflows/s.yml (a denied path): row S marks it (signs again)" file=.github/workflows/s.yml "$(q S)"
+  qno "a signing-rules finding of kind other, declared, in a v2 block" "a signing-rules finding of kind other changes who signs: the floor" \
+    sr-red2=other:plugins/x/baton.py:GRANT_NEVER:- "$(q U)"
+  qno "a baton whose head drops a SIGN_AGAIN_STOPS word its base holds" "baton acme/app:batons/q.sh Stops: none (a denied path): its head drops irreversible-delete, which its base's Stops (irreversible-delete) hold: the floor" \
+    baton-head=batons/q.sh:none baton-base=batons/q.sh:irreversible-delete "$(q Q)"
+  qno "…and the same in a v2 baton finding" "its head drops no-way-back" touch-name=risk-tier sr-red2=baton:batons/q.sh:-:none baton-base=batons/q.sh:no-way-back "$(q Q)"
+  qok "control: a base Stops word off the floor (publish) dropped" baton-head=batons/q.sh:none baton-base=batons/q.sh:publish "$(q Q)"
+  qno "a baton finding outside the path table's baton directories (a list's own baton_dirs) that drops a floor word" \
+    "baton acme/app:ops/runbooks/x.sh Stops: none (a finding of risk-tier): its head drops security-boundary" \
+    touch-name=risk-tier sr-red2=baton:ops/runbooks/x.sh:-:none baton-base=ops/runbooks/x.sh:security-boundary "$(q Q)"
+  qok "control: that finding over a base Stops off the floor" touch-name=risk-tier sr-red2=baton:ops/runbooks/x.sh:-:none \
+    baton-base=ops/runbooks/x.sh:publish "$(q Q)"
+  # a mark holds whatever other touch of the row also names the change
+  qno "an unmarked duplicate of a touch the row marks (signs again)" "workflow acme/app:.github/workflows/dup.yml (a denied path): row W marks it (signs again)" \
+    file=.github/workflows/dup.yml "$(q W)"
+  qno "a marked test file under a test directory the row declares" "test acme/app:tests/m/migrate.pin (a denied path): row W marks it (signs again)" \
+    file=tests/m/migrate.pin "$(q W)"
+  qok "control: another file of that directory" file=tests/m/other.pin "$(q W)"
+  qno "a foreign run of the touch check" "the check cannot be believed, never covered" file=.github/workflows/l.yml sr-foreign "$(q L)"
+  qno "a red touch check with no block" "red, and it has no single unexpired artifact" sr-block=none "$(q L)"
+  # the plan as signed: the intent, the spec and the row's cells at the default branch's tip, and at the PR's head
+  qok "control: the plan as signed" file=.github/workflows/l.yml "$(q L)"
+  for f in "kb/intent/i.md|its intent kb/intent/i.md" "kb/specs/s.md|its spec kb/specs/s.md"; do
+    printf '\nOne more line.\n' >> "$W/${f%%|*}"; git_ -C "$W" commit -q -am "edit ${f%%|*}"
+    qno "${f%%|*} changed at the default branch's tip" "the plan changed since the owner signed it (${f#*|}, at the default branch's tip): sign it again" file=.github/workflows/l.yml "$(q L)"
+    git_ -C "$W" revert --no-edit HEAD >/dev/null
+  done
+  sed -i 's/^| L | l |/| L | l, and more |/' "$W/kb/plans/q.md"; git_ -C "$W" commit -q -am "edit row L"
+  qno "a cell of the row changed at the tip" "the plan changed since the owner signed it (row L's cells, at the default branch's tip)" file=.github/workflows/l.yml "$(q L)"
+  git_ -C "$W" revert --no-edit HEAD >/dev/null
+  qok "control: the plan reverted to what was signed" file=.github/workflows/l.yml "$(q L)"
+  sed -i -e 's/^| L | l | workflow .github\/workflows\/l.yml | — |/| L | l | workflow .github\/workflows\/l.yml | intent\/l-branch |/' \
+         -e 's/^- none yet$/- none yet\n- one more line/' -e 's/^| D | d |\(.*\)$/| D | d |\1\n| Z | z | none | — |/' "$W/kb/plans/q.md"
+  git_ -C "$W" commit -q -am "a Link cell, a Decisions line, a new row"
+  has "$(git_ -C "$W" show HEAD:kb/plans/q.md)" "| L | l | workflow .github/workflows/l.yml | intent/l-branch |" "[T7] fixture: L's Link cell at the tip"
+  has "$(git_ -C "$W" show HEAD:kb/plans/q.md)" "| D | d | workflow .github/workflows/d.yml | dropped: not needed |
+| Z | z | none | — |" "[T7] fixture: a new row Z at the tip"
+  has "$(git_ -C "$W" show HEAD:kb/plans/q.md)" "- one more line" "[T7] fixture: a Decisions line at the tip"
+  qok "a new row, a Link cell and a Decisions line change nothing signed" file=.github/workflows/l.yml "$(q L)"
+  git_ -C "$W" checkout -q -b h1; printf '\nA head-only line.\n' >> "$W/kb/specs/s.md"; git_ -C "$W" commit -q -am "spec at the head"
+  git_ -C "$W" checkout -q -b h2 main; sed -i 's/^| L | l |/| L | l at the head |/' "$W/kb/plans/q.md"; git_ -C "$W" commit -q -am "row L at the head"
+  git_ -C "$W" checkout -q main
+  qno "the spec changed at the PR's head (the plan's repository)" "the plan changed since the owner signed it (its spec kb/specs/s.md, at the PR's head)" \
+    touch-head=h1 file=.github/workflows/l.yml "$(q L)"
+  qno "a cell of the row changed at the PR's head" "the plan changed since the owner signed it (row L's cells, at the PR's head)" \
+    touch-head=h2 file=.github/workflows/l.yml "$(q L)"
+}
+
+# ── [charter-*] touches under a focus charter, read after the approvals ────────────────────────────────────────────────────────
+# The owner signs a charter (sign --by owner --charter, through the plugin's guard hook) from a copy of the plugin in a plugin
+# cache whose registry names a brain beside it: a fake built from scratch that answers `show <P> --json` for P8 and P9, live
+# focuses with their done when, as the dialog reads a focus. W's plans c.md (focus: P8), c9.md (focus: P9) and c7.md (focus: P7)
+# are committed on main (C2); the guard runs from that copy, from W, with the state TS.
+cbrain() {  # cbrain <claude dir> <sdlc copy> — the fake brain beside the copy, and the registry naming both
+  mkdir -p "$1/brain/scripts"   # its file written from inside the directory: a fake, not a path the planner reads as the brain plugin's
+  ( cd "$1/brain/scripts" && cat > brain.py ) <<'PY'
+import json, sys
+src = {"type": "session", "quote": "q", "where": "chat"}
+items = {p: {"kind": "focus", "status": "live", "text": "focus " + p, "goal": "G1", "source": src, "done": "it shipped"} for p in ("P8", "P9")}
+if sys.argv[1:2] != ["show"] or sys.argv[3:] != ["--json"] or sys.argv[2] not in items:
+    sys.exit("brain: no such item")
+print(json.dumps(dict(items[sys.argv[2]], id=sys.argv[2])))
+PY
+  python3 - "$1/plugins/installed_plugins.json" "$2" "$1/brain" <<'PY'
+import json, sys
+e = lambda p: [{"scope": "user", "installPath": p, "version": "1.0.0", "lastUpdated": "2026-11-09T00:00:00.000Z"}]
+json.dump({"version": 2, "plugins": {"vibemaestro-sdlc@vibemaestro": e(sys.argv[2]), "vibemaestro-brain@vibemaestro": e(sys.argv[3])}},
+          open(sys.argv[1], "w"))
+PY
+}
+# tcharter <dir> <focus> <repos> <kinds> <max_stops> — the owner's charter (each list space-separated, `-` for none, a day ahead)
+# signed from <dir> into TS through the dialog; its id in TC
+tcharter() {
+  python3 - "$1/c.json" "$2" "$3" "$4" "$5" <<'PY'
+import json, sys, time
+p, focus, repos, kinds, stops = sys.argv[1:6]
+w = lambda s: [] if s == "-" else s.split()
+json.dump({"focus": focus, "repos": w(repos), "kinds": w(kinds), "max_stops": w(stops),
+           "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 86400))}, open(p, "w"))
+PY
+  [ "$(owner_asked "$PL" "$1" "$TS" "$SID" --by owner --charter "$1/c.json")" = ask ] || bad "[charter] fixture: the charter dialog did not ask ($2)"
+  TC=$(cd "$1" && cenv XDG_STATE_HOME="$TS" CLAUDE_CODE_SESSION_ID="$SID" python3 "$PL/scripts/baton.py" sign --by owner --charter "$1/c.json" 2>&1 \
+       | sed -n 's/^signed charter \([0-9a-f]\{16\}\) by owner: .*/\1/p')
+  [ -n "$TC" ] || bad "[charter] fixture: no charter signed ($2)"
+}
+# cplans — c.md, c9.md and c7.md on W's main (C2), and the PR heads m1 (row M widened), m2 (focus P9), m3 (a row N2 added),
+# m4 (row M's Link cell), m5 (p.md given focus: P8), m6 (row M dropped) and m7 (row M deleted), each a branch of W from C2
+cplans() {  # W's plans and the PR heads built as inputs: not a break
+  local f
+  for f in "c P8" "c9 P9" "c7 P7"; do
+    printf -- '---\nfocus: %s\n---\n\n# Plan %s\n\nIntent: kb/intent/i.md · Spec: kb/specs/s.md\n\n## Rows\n\n| Row | Must be true | Trust touches | Link |\n|---|---|---|---|\n' \
+      "${f#* }" "${f%% *}" > "$W/kb/plans/${f%% *}.md"
+  done
+  cat >> "$W/kb/plans/c.md" <<'EOF'
+| A | a | workflow .github/workflows/ca.yml; baton batons/cb.sh Stops: secrets; test tests/fixtures/; PRs: 2 | — |
+| A2 | a2 | workflow acme/app:.github/workflows/ca2.yml | — |
+| B | b | workflow .github/workflows/cbb.yml | — |
+| O | o | rbac deploy/r.yaml Role/app/reader | — |
+| X | x | rbac deploy/r.yaml Role/app/reader; baton batons/cp.sh Stops: publish | — |
+| F | f | workflow .github/workflows/signing-rules.yml; other plugins/p/.claude-plugin/p.json (signs again); workflow .github/workflows/fs.yml (signs again); baton batons/fq.sh Stops: none; baton batons/cw.sh Stops: irreversible-delete; other plugins/x/baton.py GRANT_NEVER | — |
+| M | m | workflow .github/workflows/cm.yml | — |
+| D | d | workflow .github/workflows/cd.yml | dropped: not needed |
+EOF
+  printf '| K | k | workflow acme/app:.github/workflows/k9.yml | — |\n' >> "$W/kb/plans/c9.md"
+  printf '| A | a | workflow .github/workflows/c7.yml | — |\n' >> "$W/kb/plans/c7.md"
+  git_ -C "$W" add -A; git_ -C "$W" commit -q -m "plans of a focus"; C2=$(git_ -C "$W" rev-parse HEAD)
+  for f in 'm1|s#^| M | m | workflow .github/workflows/cm.yml |#| M | m | workflow .github/workflows/cm.yml; workflow .github/workflows/cm2.yml |#' \
+           'm2|s#^focus: P8$#focus: P9#' 'm3|$a\| N2 | n2 | workflow .github/workflows/cn2.yml | — |' \
+           'm4|s#^\(| M | m | workflow .github/workflows/cm.yml | \)— |#\1intent/m-branch |#' \
+           'm6|s#^\(| M | m | workflow .github/workflows/cm.yml | \)— |#\1dropped: not needed |#' 'm7|/^| M | m |/d'; do
+    git_ -C "$W" checkout -q -b "${f%%|*}" "$C2"; sed -i "${f#*|}" "$W/kb/plans/c.md"; git_ -C "$W" commit -q -am "${f%%|*}"
+  done
+  git_ -C "$W" checkout -q -b m5 "$C2"; sed -i '1i ---\nfocus: P8\n---\n' "$W/kb/plans/p.md"; git_ -C "$W" commit -q -am m5
+  git_ -C "$W" checkout -q main
+}
+tagged() { [ "$FAIL" = "$2" ] && echo "[$1] ok" || echo "[$1] FAIL"; }   # tagged <tag> <FAIL before its checks>
+cok() {   # cok <tag> <label> <mutations...> — covered: rc 0 in dry run, ok touches
+  local tag=$1 label=$2 d; shift 2
+  d=$(mkfx touch="$W" "$@"); tg "$d"
+  eq "$RC/$(merges "$d")" "0/0" "[$tag] $label: rc 0 in dry run"; has "$OUT" "  ok    touches: " "[$tag] …ok touches"
+}
+cno() {   # cno <tag> <label> <reason> <mutations...> — refused: rc 1, FAIL touches with the reason, no merge call
+  local tag=$1 label=$2 why=$3 d; shift 3
+  d=$(mkfx touch="$W" "$@"); tg "$d"
+  eq "$RC/$(merges "$d")" "1/0" "[$tag] $label: rc 1, no merge call"
+  has "$OUT" "  FAIL  touches: " "[$tag] …FAIL touches"; has "$OUT" "$why" "[$tag] …named: $why"
+}
+c() { printf 'body=plan: %skb/plans/%s' "${2:+$2:}" "$1"; }   # c <file#row> [<owner/repo>] — the PR body's plan line
+
+fam_charter() {
+  local C="$TMP/claude" CP CP9 f0
+  PL="$C/plugins/cache/vibemaestro/vibemaestro-sdlc/1.0.0"; mkdir -p "$(dirname "$PL")"; mk_plugin_copy "$PL"; cbrain "$C" "$PL"
+  TS=$(fresh)/state; tplan; cplans
+  tcharter "$W" P8 "acme/app acme/ops" "baton workflow script test" secrets; CP=$TC
+  tcharter "$W" P9 "acme/plans" workflow -; CP9=$TC
+  f0=$FAIL; charter_inside; tagged charter-inside "$f0"
+  f0=$FAIL; charter_floor; tagged charter-floor "$f0"
+  f0=$FAIL; charter_row_moved; tagged charter-row-moved "$f0"
+  f0=$FAIL; charter_plan_repo; tagged charter-plan-repo-outside "$f0"
+  f0=$FAIL; charter_approval_first; tagged approval-first "$f0"
+  f0=$FAIL; charter_outside; tagged charter-outside "$f0"
+}
+
+charter_inside() {  # [charter-inside] every change a touch of the row inside the envelope: covered, the plan line, the uses
+  local T=charter-inside d
+  d=$(mkfx touch="$W" file=.github/workflows/ca.yml "$(c c.md#A)"); tg "$d"
+  eq "$RC/$(merges "$d")" "0/0" "[$T] a declared workflow of row A of a plan whose focus P8 a charter holds, no approval: rc 0 in dry run"
+  has "$OUT" "  ok    touches: 1 trust-layer change(s), each a touch of row A inside charter $CP for P8" "[$T] …ok touches names the row and the charter"
+  has "$(printf '%s\n' "$OUT" | grep '^merge-plan: ')" " touches:charter-$CP/A" "[$T] …the plan line says touches:charter-<id>/<row>"
+  d=$(mkfx touch="$W" file=.github/workflows/ca.yml baton-head=batons/cb.sh:secrets file=tests/fixtures/a.pin file=tests/fixtures/sub/b.pin "$(c c.md#A)"); tg "$d"
+  eq "$RC" 0 "[$T] a workflow, a baton with Stops secrets (within max_stops) and two files of a declared test directory: rc 0"
+  has "$OUT" "  ok    touches: 4 trust-layer change(s), each a touch of row A inside charter $CP for P8" "[$T] …all four covered"
+  d=$(mkfx touch="$W" file=.github/workflows/ca.yml "$(c c.md#A)"); tg "$d" --merge
+  eq "$RC/$(merges "$d")" "0/1" "[$T] --merge: rc 0, one pr merge call"
+  eq "$(grep "	touches	" "$TS/vibemaestro/baton/log.tsv" | cut -f8,10,12)" "$(printf 'charter:%s\tused\tacme/app:kb/plans/c.md#a' "$CP")" \
+     "[$T] …a touches used line signed charter:<id>, keyed by the plan's repo, path and the row (no commit)"
+  has "$(tail -n 1 "$TS/vibemaestro/merge-log.jsonl")" "\"touches\": {\"charter\": \"$CP\"" "[$T] …the merge log line names the charter"
+  d=$(mkfx touch="$W" file=.github/workflows/ca.yml "$(c c.md#A)"); tg "$d" --merge
+  eq "$RC/$(merges "$d")" "0/1" "[$T] PRs: 2, the second PR: merged"
+  has "$(grep "	touches	" "$TS/vibemaestro/baton/log.tsv" | cut -f12)" "acme/app:kb/plans/c.md#a/2" "[$T] …logged as use 2"
+  cno "$T" "PRs: 2, a third PR" "charter $CP for P8: an earlier merge used row A of acme/app kb/plans/c.md (2 of its PRs: 2)" \
+    file=.github/workflows/ca.yml "$(c c.md#A)"
+  has "$OUT" "1 trust-layer change(s), and no approval in force signed from this directory lists row A of acme/app kb/plans/c.md, nor does a charter for P8 cover it: an owner merge" \
+    "[$T] …an owner merge, the approvals and the charter named"
+  cno "$T" "a fourth PR naming the plan kb/plans/./c.md (GitHub serves the same file; another use key)" \
+    "charter $CP for P8: the plan's path kb/plans/./c.md is not written plainly (kb/plans/c.md)" file=.github/workflows/ca.yml "$(c ./c.md#A)"
+  cno "$T" "…or kb/plans/x/../c.md" "charter $CP for P8: the plan's path kb/plans/x/../c.md is not written plainly (kb/plans/c.md)" \
+    file=.github/workflows/ca.yml "$(c x/../c.md#A)"
+  d=$(mkfx touch="$W" file=.github/workflows/ca2.yml fail-path=repos/acme/app/contents/kb/plans/c.md "$(c c.md#A2)"); tg "$d"
+  eq "$RC/$(merges "$d")" "2/0" "[$T] the plan cannot be read (HTTP 500) under a charter: rc 2, could not conclude, never an owner merge"
+  has "$OUT" "merge_guard: could not conclude: " "[$T] …said so"
+}
+
+charter_floor() {  # [charter-floor] the floor and a marked touch, never covered by a charter, declared or not
+  local T=charter-floor
+  cno "$T" "a touch_inputs path the row declares" "charter $CP for P8: workflow acme/app:.github/workflows/signing-rules.yml (a denied path): it judges a later PR: the floor, never covered by a charter" \
+    file=.github/workflows/signing-rules.yml "$(c c.md#F)"
+  cno "$T" "a .claude-plugin path the row marks" "charter $CP for P8: other acme/app:plugins/p/.claude-plugin/p.json (a denied path): a .claude-plugin path: the floor, never covered by a charter" \
+    file=plugins/p/.claude-plugin/p.json "$(c c.md#F)"
+  cno "$T" "a touch the row marks (signs again)" "charter $CP for P8: workflow acme/app:.github/workflows/fs.yml (a denied path): row F marks it (signs again): the owner merges it" \
+    file=.github/workflows/fs.yml "$(c c.md#F)"
+  cno "$T" "a baton whose head drops a SIGN_AGAIN_STOPS word its base holds" \
+    "charter $CP for P8: baton acme/app:batons/fq.sh Stops: none (a denied path): its head drops irreversible-delete, which its base's Stops (irreversible-delete) hold: the floor, never covered by a charter" \
+    baton-head=batons/fq.sh:none baton-base=batons/fq.sh:irreversible-delete "$(c c.md#F)"
+  cok "$T" "control: the same baton over a base Stops off the floor (publish)" baton-head=batons/fq.sh:none baton-base=batons/fq.sh:publish "$(c c.md#F)"
+  has "$OUT" "each a touch of row F inside charter $CP for P8" "[$T] …covered by the charter"
+  cno "$T" "a declared baton whose Stops hold a SIGN_AGAIN_STOPS word" \
+    "charter $CP for P8: baton acme/app:batons/cw.sh Stops: irreversible-delete (a denied path): Stops irreversible-delete go beyond charter $CP's max_stops (secrets)" \
+    baton-head=batons/cw.sh:irreversible-delete "$(c c.md#F)"
+  cno "$T" "a declared signing-rules finding of kind other" \
+    "charter $CP for P8: other acme/app:plugins/x/baton.py GRANT_NEVER (a finding of signing-rules): a signing-rules finding of kind other changes who signs: the floor, never covered by a charter" \
+    sr-red2=other:plugins/x/baton.py:GRANT_NEVER:- "$(c c.md#F)"
+}
+
+charter_row_moved() {  # [charter-row-moved] the plan read at the tip and at the PR's head: a PR cannot widen its own row
+  local T=charter-row-moved
+  cok "$T" "control: the PR's head changes row M's Link cell only" touch-head=m4 file=.github/workflows/cm.yml "$(c c.md#M)"
+  cno "$T" "a touch added to row M at the PR's head, and the change it adds" \
+    "charter $CP for P8: row M's cells at the PR's head are not those at the default branch's tip: row moved in this PR" \
+    touch-head=m1 file=.github/workflows/cm2.yml "$(c c.md#M)"
+  cno "$T" "…and a change the row declared before" "row moved in this PR" touch-head=m1 file=.github/workflows/cm.yml "$(c c.md#M)"
+  cno "$T" "the plan's focus changed at the PR's head" "charter $CP for P8: the plan says focus P9 at the PR's head, not P8: row moved in this PR" \
+    touch-head=m2 file=.github/workflows/cm.yml "$(c c.md#M)"
+  cno "$T" "a row the PR's head adds" "charter $CP for P8: row N2 is not one row of the plan at the default branch's tip" \
+    touch-head=m3 file=.github/workflows/cn2.yml "$(c c.md#N2)"
+  cno "$T" "row M dropped at the PR's head" "charter $CP for P8: row M is dropped at the PR's head (not needed): row moved in this PR" \
+    touch-head=m6 file=.github/workflows/cm.yml "$(c c.md#M)"
+  cno "$T" "row M deleted at the PR's head" "charter $CP for P8: row M is not one row of the plan at the PR's head: row moved in this PR" \
+    touch-head=m7 file=.github/workflows/cm.yml "$(c c.md#M)"
+  cno "$T" "a plan with no focus at the tip, given focus P8 at the PR's head: read as today" \
+    "1 trust-layer change(s), and no approval in force signed from this directory lists row B of acme/app kb/plans/p.md: an owner merge" \
+    touch-head=m5 file=.github/workflows/y.yml "$(c p.md#B)"
+}
+
+charter_plan_repo() {  # [charter-plan-repo-outside] the plan's own repository in the charter's repos (decision 09/11)
+  local T=charter-plan-repo-outside
+  cok "$T" "control: row A2 of the plan in acme/app, its touch on acme/app" file=.github/workflows/ca2.yml "$(c c.md#A2)"
+  has "$OUT" "each a touch of row A2 inside charter $CP for P8" "[$T] …covered by the charter"
+  cno "$T" "the same plan and row read in acme/plans, a repository the charter does not list" \
+    "charter $CP for P8: the plan's repository acme/plans is outside its repos (acme/app, acme/ops)" \
+    file=.github/workflows/ca2.yml "$(c c.md#A2 acme/plans)"
+}
+
+charter_approval_first() {  # [approval-first] an approval in force that holds the row covers first; the uses are the row's
+  local T=approval-first d AB
+  tapprove "$W" "B O" 86400 acme/app "$C2" kb/plans/c.md; AB=$TA
+  d=$(mkfx touch="$W" file=.github/workflows/cbb.yml "$(c c.md#B)"); tg "$d"
+  eq "$RC" 0 "[$T] row B, held by an approval and inside the charter: rc 0"
+  has "$OUT" "  ok    touches: 1 trust-layer change(s), each a touch of row B, approval $AB at ${C2:0:12}" "[$T] …the approval covers it"
+  has "$(printf '%s\n' "$OUT" | grep '^merge-plan: ')" " touches:$AB/B" "[$T] …the plan line says touches:<approval>/<row>"
+  cok "$T" "row O's rbac object, a kind no charter holds, under the approval" sr-red=rbac:deploy/r.yaml:Role/app/reader:- "$(c c.md#O)"
+  has "$OUT" "approval $AB at ${C2:0:12}" "[$T] …the approval covers it"
+  eq "$(cd "$W" && cenv XDG_STATE_HOME="$TS" python3 "$PL/scripts/baton.py" grant revoke "$AB" >/dev/null 2>&1; echo $?)" 0 "[$T] the approval revoked"
+  d=$(mkfx touch="$W" file=.github/workflows/cbb.yml "$(c c.md#B)"); tg "$d"
+  eq "$RC" 0 "[$T] …row B: rc 0"
+  has "$OUT" "each a touch of row B inside charter $CP for P8" "[$T] …the charter covers it now"
+  has "$(printf '%s\n' "$OUT" | grep '^merge-plan: ')" " touches:charter-$CP/B" "[$T] …the plan line says touches:charter-<id>/<row>"
+  cno "$T" "…row O's rbac object" "charter $CP for P8: rbac acme/app:deploy/r.yaml Role/app/reader (a finding of signing-rules): kind rbac is outside charter $CP's kinds (baton, workflow, script, test)" \
+    sr-red=rbac:deploy/r.yaml:Role/app/reader:- "$(c c.md#O)"
+  d=$(mkfx touch="$W" file=.github/workflows/cbb.yml "$(c c.md#B)"); tg "$d" --merge
+  eq "$RC/$(merges "$d")" "0/1" "[$T] --merge of row B under the charter: merged"
+  tapprove "$W" "B" 86400 acme/app "$C2" kb/plans/c.md
+  cno "$T" "an approval of row B signed again: the use the charter took counts" \
+    "an earlier merge used row B of acme/app kb/plans/c.md @ ${C2:0:12} (1 of its PRs: 1)" file=.github/workflows/cbb.yml "$(c c.md#B)"
+  has "$OUT" "1 trust-layer change(s) not covered by approval $TA of row B, nor does a charter for P8 cover it: an owner merge" "[$T] …neither covers it"
+  has "$OUT" "charter $CP for P8: an earlier merge used row B of acme/app kb/plans/c.md (1 of its PRs: 1)" "[$T] …nor the charter, its use taken"
+}
+
+charter_outside() {  # [charter-outside] a touch outside the envelope, or no charter in force for the focus here: an owner merge
+  local T=charter-outside WT d
+  cno "$T" "a declared rbac object: a kind outside the charter's" "charter $CP for P8: rbac acme/app:deploy/r.yaml Role/app/reader (a finding of signing-rules): kind rbac is outside charter $CP's kinds (baton, workflow, script, test)" \
+    sr-red=rbac:deploy/r.yaml:Role/app/reader:- "$(c c.md#X)"
+  cno "$T" "a declared baton whose Stops (publish) go beyond max_stops" "charter $CP for P8: baton acme/app:batons/cp.sh Stops: publish (a denied path): Stops publish go beyond charter $CP's max_stops (secrets)" \
+    baton-head=batons/cp.sh:publish "$(c c.md#X)"
+  cno "$T" "a declared change in a repository the charter does not list" "charter $CP9 for P9: workflow acme/app:.github/workflows/k9.yml (a denied path): its repository acme/app is outside charter $CP9's repos (acme/plans)" \
+    file=.github/workflows/k9.yml "$(c c9.md#K acme/plans)"
+  cno "$T" "a change the row does not declare" "charter $CP for P8: workflow acme/app:.github/workflows/zz.yml (a denied path): not a touch of row X at the default branch's tip" \
+    file=.github/workflows/zz.yml "$(c c.md#X)"
+  cno "$T" "a row dropped at the tip" "charter $CP for P8: row D is dropped at the default branch's tip (not needed)" file=.github/workflows/cd.yml "$(c c.md#D)"
+  cno "$T" "a plan whose focus (P7) no charter holds, while P8's and P9's are in force" \
+    "1 trust-layer change(s), and no approval in force signed from this directory lists row A of acme/app kb/plans/c7.md, nor does a charter for P7 cover it: an owner merge" \
+    file=.github/workflows/c7.yml "$(c c7.md#A)"
+  has "$OUT" "no charter in force for P7 signed from this directory" "[$T] …named"
+  WT=$(fresh)/wt; git_ -C "$W" worktree add -q --detach "$WT" main; WT=$(cd "$WT" && pwd -P)
+  d=$(mkfx touch="$W" file=.github/workflows/ca2.yml "$(c c.md#A2)"); ( W=$WT; tg "$d"; printf '%s\n%s' "$RC" "$OUT" ) > "$TMP/wt.out"
+  eq "$(head -n 1 "$TMP/wt.out")" 1 "[$T] the guard run from another worktree of the project: rc 1"
+  has "$(cat "$TMP/wt.out")" "no charter in force for P8 signed from this directory; charter $CP was signed from $W, not from $WT" "[$T] …named"
+  eq "$(cd "$W" && cenv XDG_STATE_HOME="$TS" python3 "$PL/scripts/baton.py" grant revoke "$CP" >/dev/null 2>&1; echo $?)" 0 "[$T] the charter revoked"
+  cno "$T" "a revoked charter" "no charter in force for P8 signed from this directory; grant $CP was revoked" file=.github/workflows/ca2.yml "$(c c.md#A2)"
+}
+
+FAMILIES="fam_conditions fam_checks fam_files fam_behind fam_clean fam_boot fam_amend fam_floor fam_image fam_options fam_merge fam_baton fam_backmerge fam_auto fam_auto_stale fam_touches fam_charter"
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
-for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
+for f in ${ONLY:-$FAMILIES}; do echo "-- $f"; "$f" "$PL0"; done
 
 echo; summary

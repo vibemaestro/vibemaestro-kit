@@ -4,18 +4,20 @@ and backup; extensions).
 
     brain op add --kind now|next|trap|session|queue|fact --text T [--expires ISO] [--link L]… [--anchor A]… [--closes A]…
                  [--focus P1 (next)]
-    brain op add --kind focus --text T --owner-quote Q --where W --goal G1 [--anchor A]… [--link L]…
+    brain op add --kind focus --text T --owner-quote Q --where W --goal G1 [--done-when D] [--not-doing N]
+                 [--jira KEY] [--anchor A]… [--link L]…
     brain op add --kind request --text T --owner-quote Q --where W [--due YYYY-MM-DD] [--anchor A]… [--closes A]…
     brain op close ID --reason R [--pointer P] [--bulk]          (a request: --pointer required)
     brain op supersede ID --text T --reason R [--drop-anchor A]… [--anchor A]… [--closes A]… [--focus P1] [--due DAY]
-                       [--shorter] [--bulk]
+                       [--done-when D] [--not-doing N] [--shorter] [--bulk]
+    brain op words P1 [--done-when D] [--not-doing N]          (a live focus's words, in place; only where unset)
     brain op touch ID | brain op hit T5 [--pointer P] [--session S4]
     brain op held RULE --pointer P [--session S4] | brain op broke RULE --pointer P --differed D [--session S4]
     brain op progress G1 --measure M --pointer P
     brain op close-linked
     brain owner add --kind decision|window --text T --owner-quote Q --where W [--anchor A]… [--link L]… [--expires ISO]
                     [--scope global|project (decision)]
-    brain owner add --kind goal --text T --owner-quote Q --where W --done D --not-doing N --review YYYY-MM-DD
+    brain owner add --kind goal --text T --owner-quote Q --where W --done D --not-doing N --review YYYY-MM-DD [--jira KEY]
                     --scope global|project [--anchor A]… [--link L]…
     brain owner unpin ID | owner supersede ID [--text T] [--done D] [--not-doing N] [--review DAY] [--scope S]
     brain owner promote ID POINTER                         (a goal, decision or window moved out to a pointer)
@@ -29,7 +31,7 @@ and backup; extensions).
     brain claim [--take-over]
     brain render [--check]
     brain overflow
-    brain show ID
+    brain show ID [--json]
     brain ledger [RULE] | brain ledger --record [--days N]
     brain ext NAME [ARG…]                                  (what a plugin that extends the brain prints; it writes nothing)
     brain doctor [--path | --bundle FILE]
@@ -67,7 +69,7 @@ class Parser(argparse.ArgumentParser):
 CLOSES_HELP = ("owner/name#N or an issue or PR URL whose close means this item is done (not one it waits on, not a tracking "
                "issue); at most 2, all must be done; for now, next, session, queue and request")
 GOAL_OPTIONS = {"--done", "--not-doing", "--review", "--scope"}
-OWNER_OPTIONS = {"add": ({"--kind", "--text", "--owner-quote", "--where", "--expires"} | GOAL_OPTIONS, {"--anchor", "--link"}),
+OWNER_OPTIONS = {"add": ({"--kind", "--text", "--owner-quote", "--where", "--expires", "--jira"} | GOAL_OPTIONS, {"--anchor", "--link"}),
                  "supersede": ({"--text"} | GOAL_OPTIONS, set()), "unpin": (set(), set()), "promote": (set(), set()),
                  "import": (set(), set()), "backup": ({"--every"}, set()),
                  "batch": (set(), set())}
@@ -157,8 +159,11 @@ def parser():
     a.add_argument("--owner-quote", help="the owner's words, verbatim (focus, request): stored whole, never rewritten")
     a.add_argument("--where", help="where the owner said them (focus, request)")
     a.add_argument("--goal", help="the live goal a focus points to, like G1")
+    a.add_argument("--done-when", help="when the focus is done, in the owner's words (focus): stored whole; a charter needs it")
+    a.add_argument("--not-doing", help="what the focus leaves out, in the owner's words (focus): stored whole")
     a.add_argument("--focus", help="the live focus a Next item is tied to, like P1: it orders Next")
     a.add_argument("--due", help="a request's due day, YYYY-MM-DD: named from 7 days before")
+    a.add_argument("--jira", help="a Jira issue key like ABC-12 (focus): stored and shown, never synced")
     ext_options(a, "add")
     c = op.add_parser("close")
     c.add_argument("id")
@@ -175,9 +180,15 @@ def parser():
     u.add_argument("--closes", action="append", default=[], help=CLOSES_HELP + "; without it the item's own are carried over")
     u.add_argument("--focus", help="a Next item's focus; without it the item's own is carried over")
     u.add_argument("--due", help="a request's due day; without it the item's own is carried over")
+    u.add_argument("--done-when", help="a focus's done when; without it the focus's own is carried over")
+    u.add_argument("--not-doing", help="a focus's not doing; without it the focus's own is carried over")
     u.add_argument("--shorter", action="store_true")
     u.add_argument("--bulk", action="store_true")
     ext_options(u, "supersede")
+    w = op.add_parser("words", help="add a live focus's done when and not doing in place (same id); only where unset")
+    w.add_argument("id")
+    w.add_argument("--done-when", help="when the focus is done, in the owner's words: stored whole; a charter needs it")
+    w.add_argument("--not-doing", help="what the focus leaves out, in the owner's words: stored whole")
     op.add_parser("touch").add_argument("id")
     h = op.add_parser("hit", help="a trap met again: a held for it in the ledger, and its hits")
     h.add_argument("id")
@@ -210,6 +221,7 @@ def parser():
     a.add_argument("--expires")
     a.add_argument("--link", action="append", default=[])
     a.add_argument("--anchor", action="append", default=[])
+    a.add_argument("--jira", help="a goal: a Jira issue key like ABC-12, stored and shown, never synced")
     goal_options(a)
     ov.add_parser("unpin").add_argument("id")
     u = ov.add_parser("supersede")
@@ -254,7 +266,9 @@ def parser():
     sub.add_parser("claim").add_argument("--take-over", action="store_true")
     sub.add_parser("render").add_argument("--check", action="store_true")
     sub.add_parser("overflow", help="the overflow queue of each right-brain section, head first (not injected)")
-    sub.add_parser("show", help="every stored field of one item, live, queued or retired; the owner's words whole").add_argument("id")
+    sh = sub.add_parser("show", help="every stored field of one item, live, queued or retired; the owner's words whole")
+    sh.add_argument("id")
+    sh.add_argument("--json", action="store_true", help="the stored item as one JSON object (sdlc's intake reads a focus so)")
     lg = sub.add_parser("ledger", help="held and broke per rule, goals' progress; one rule's events; the record")
     lg.add_argument("rule", nargs="?")
     lg.add_argument("--record", action="store_true", help="the measurement record of the last --days days (logged; one of "
@@ -307,7 +321,7 @@ def main(argv):
     if ns.cmd == "overflow":
         return overflow()
     if ns.cmd == "show":
-        return s.show(ns.id)
+        return s.show(ns.id, ns.json)
     if ns.cmd == "ledger":
         return ledger(ns)
     if ns.cmd == "ext":
@@ -327,12 +341,14 @@ def write_cmd(argv, ns):
     if ns.cmd == "op":
         if ns.verb == "add":
             return s.op_add(ns.kind, ns.text, ns.link, ns.anchor, ns.expires, ns.closes, ns.owner_quote, ns.where, ns.goal,
-                            ns.focus, ns.due, ext_given(ns))
+                            ns.focus, ns.due, ext_given(ns), ns.done_when, ns.not_doing, ns.jira)
         if ns.verb == "close":
             return s.op_close(ns.id, ns.reason, ns.pointer, ns.bulk, ext_given(ns))
         if ns.verb == "supersede":
             return s.op_supersede(ns.id, ns.text, ns.reason, ns.drop_anchor, ns.anchor, ns.shorter, ns.bulk, ns.closes,
-                                  ns.focus, ns.due, ext_given(ns))
+                                  ns.focus, ns.due, ext_given(ns), ns.done_when, ns.not_doing)
+        if ns.verb == "words":
+            return s.op_words(ns.id, ns.done_when, ns.not_doing)
         if ns.verb in ("held", "broke"):
             return s.op_evidence(ns.rule, ns.verb, ns.pointer, getattr(ns, "differed", None), ns.session, extopts=ext_given(ns))
         if ns.verb == "hit":

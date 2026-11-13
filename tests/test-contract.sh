@@ -257,6 +257,7 @@ scripts/intent-branch.sh 5
 scripts/intent-branch.sh 6
 scripts/intent-branch.sh 7
 scripts/intent-branch.sh 8
+scripts/intent-branch.sh 9
 scripts/intent-branch.sh 64
 scripts/open-pr.sh 0
 scripts/open-pr.sh 1
@@ -264,6 +265,7 @@ scripts/open-pr.sh 2
 scripts/open-pr.sh 3
 scripts/open-pr.sh 4
 scripts/open-pr.sh 5
+scripts/open-pr.sh 6
 scripts/open-pr.sh 64
 scripts/open-pr.sh 66
 scripts/kb.py 0
@@ -289,6 +291,7 @@ scripts/baton.py 8
 scripts/baton.py 9
 scripts/baton.py 10
 scripts/baton.py 64
+scripts/baton.py 65
 scripts/baton.py 66
 gates/commit_discipline.py 0
 gates/commit_discipline.py 1
@@ -305,6 +308,11 @@ gates/pr_title.py 1
 gates/pr_title.py 2
 gates/pr_title.py 64
 gates/pr_title.py 65
+gates/signing_rules.py 0
+gates/signing_rules.py 1
+gates/signing_rules.py 2
+gates/signing_rules.py 64
+gates/signing_rules.py 65
 gates/merge_guard.py 0
 gates/merge_guard.py 1
 gates/merge_guard.py 2
@@ -436,6 +444,9 @@ trig() {
                                      "$(ib "$r" --cwd "$r" worker-branch --intent "$S" --name feat/t7s)";;
     "scripts/intent-branch.sh 8")  W=$(mk_origin); S=2026-01-01-eight; new_intent "$W" "$S"; wt=$(task_wt "$W" feat/t8 "$S" 2)
                                    ib "$wt" --cwd "$wt" integrate --intent "$S" --branch feat/t8 --to origin;;
+    "scripts/intent-branch.sh 9")  W=$(mk_origin); rec_ "$W" 2026-01-01-nine; mkdir -p "$W/.vibemaestro"
+                                   printf '{"schema": 1, "intake": {"focus": "required"}}\n' > "$W/.vibemaestro/sdlc.json"
+                                   ib "$W" --cwd "$W" create-intent --slug 2026-01-01-nine --no-issue;;
     "scripts/intent-branch.sh 64") ib "$(fresh)";;
     "scripts/open-pr.sh 0")        pr_wt
                                    all_rc 0 "$(op "$PT" "$GHB" --title "feat: x" --summary "$F/sum.md" --evidence "$F/ev.txt")" \
@@ -453,6 +464,10 @@ trig() {
                                    commit_in "$PT" watched/k.yaml k "feat: a watched change"
                                    op "$PT" "$GHB" --title "feat: x" --summary "$F/sum.md" --evidence "$F/ev.txt" --dry-run;;
     "scripts/open-pr.sh 5")        pr_wt; op "$PW" "$GHB" --title "feat: x" --summary "$F/sum.md" --evidence "$F/ev.txt";;
+    "scripts/open-pr.sh 6")        pr_wt; git_ -C "$PT" checkout -q -b intent/2026-01-01-story; mkdir -p "$PT/kb/intent" "$PT/kb/specs"
+                                   printf -- '---\ntype: story\nspec: kb/specs/2026-01-01-story.md\n---\n' > "$PT/kb/intent/2026-01-01-story.md"
+                                   printf 'not a spec\n' > "$PT/kb/specs/2026-01-01-story.md"
+                                   op "$PT" "$GHB" --title "feat: x" --summary "$F/sum.md" --evidence "$F/ev.txt" --dry-run;;
     "scripts/open-pr.sh 64")       pr_wt
                                    all_rc 64 "$(op "$PT" "$GHB" --summary "$F/sum.md" --evidence "$F/ev.txt")" \
                                      "$(put_cfg "$PT" '{"schema": 1, "pr": {"title": {"pattern": "^feat"}}}'; op "$PT" "$GHB" --title "fix: x" --summary "$F/sum.md" --evidence "$F/ev.txt" --dry-run)" \
@@ -478,7 +493,11 @@ trig() {
     "scripts/install_gates.py 64") W=$(mk_origin)
                                    all_rc 64 "$(py scripts/install_gates.py --root "$W" --only no-such-gate --dry-run)" \
                                      "$(py scripts/install_gates.py --root "$W" --runner-default 'bad label!' --dry-run)" "$(py scripts/install_gates.py --root "$(fresh)" --dry-run)";;
-    "scripts/install_gates.py 65") W=$(mk_origin); put_cfg "$W" "$BADCFG"; py scripts/install_gates.py --root "$W" --dry-run;;
+    "scripts/install_gates.py 65") W=$(mk_origin); C=$(fresh); D="$C/plugins/cache/vibemaestro/dep/1.0.0"; mkdir -p "$D/.claude-plugin" "$D/gates"
+                                   printf '{"name": "dep", "dependencies": ["vibemaestro-sdlc"]}' > "$D/.claude-plugin/plugin.json"; printf '{' > "$D/gates/install.json"
+                                   printf '{"plugins": {"dep@vibemaestro": [{"installPath": "%s", "version": "1.0.0"}]}}' "$D" > "$C/plugins/installed_plugins.json"
+                                   all_rc 65 "$(cenv env CLAUDE_CONFIG_DIR="$C" python3 "$P/scripts/install_gates.py" --root "$W" --dry-run >/dev/null 2>&1; echo $?)" \
+                                     "$(put_cfg "$W" "$BADCFG"; py scripts/install_gates.py --root "$W" --dry-run)";;
     "scripts/baton.py 0")          W=$(fresh); bat "$W" "$W/st" new act --dir "$W";;
     "scripts/baton.py 1")          W=$(fresh); S=$(bat_act "$W"); cp "$S" "$W/b.sh"; mutate "$W/b.sh" '# Undo: ' '# Undone: '
                                    mutate "$S" '# Expect: create *' '# Expect: delete *'
@@ -508,6 +527,15 @@ trig() {
                                    bat_sign "$W" "$W/st" owner "$S" "$W/out.txt" x >/dev/null; bat "$W" "$W/st" run "$S" "$W/out.txt" x >/dev/null
                                    all_rc 9 "$(bat "$W" "$W/st" log --wait-names act.sh --timeout 1)" "$(bat "$W" "$W/st" log --wait-names never.sh --timeout 1)";;
     "scripts/baton.py 64")         W=$(fresh); all_rc 64 "$(bat "$W" "$W/st")" "$(bat "$W" "$W/st" pack "$W/act.sh" act)";;
+    "scripts/baton.py 65")         W=$(fresh); [ -d "${P%/}.isolate" ] || baton_isolate "$P"   # a copy in a plugin cache, a brain beside it
+                                   V="$W/cfg/plugins/cache/vibemaestro/vibemaestro-sdlc/1"; mkdir -p "$(dirname "$V")" "$W/brain/scripts"; cp -r "$P" "$V"
+                                   printf 'import json\nprint(json.dumps({"kind": "focus", "status": "live", "text": "t", "done": "d"}))\n' > "$W/brain/scripts/brain.py"
+                                   printf '{"version": 2, "plugins": {"vibemaestro-sdlc@vibemaestro": [{"installPath": "%s"}], "vibemaestro-brain@vibemaestro": [{"installPath": "%s"}]}}' \
+                                     "$V" "$W/brain" > "$W/cfg/plugins/installed_plugins.json"
+                                   CH='import json, sys, time; json.dump({"focus": "P1", "repos": ["acme/app"], "kinds": ["test"], "max_stops": json.loads(sys.argv[2]), "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 86400))}, open(sys.argv[1], "w"))'
+                                   python3 -c "$CH" "$W/c.json" '[]'; owner_asked "$V" "$W" "$W/st" s-owner --by owner --charter "$W/c.json" >/dev/null
+                                   python3 -c "$CH" "$W/c.json" '["owner-acts"]'     # the spec the dialog showed, rewritten before the click
+                                   ( cd "$W" && cenv XDG_STATE_HOME="$W/st" CLAUDE_CODE_SESSION_ID=s-owner python3 "$V/scripts/baton.py" sign --by owner --charter "$W/c.json" ) >/dev/null 2>&1; echo $?;;
     "scripts/baton.py 10")         W=$(fresh); V="$W/cfg/plugins/cache/vibemaestro/vibemaestro-sdlc"; mkdir -p "$V"
                                    cp -r "$P" "$V/4dc7de6c9e01"; cp -r "$P" "$V/3dd2665ed242"
                                    printf '{"version": 2, "plugins": {"vibemaestro-sdlc@vibemaestro": [{"installPath": "%s", "lastUpdated": "2"}]}}' \
@@ -536,6 +564,13 @@ trig() {
     "gates/pr_title.py 2")         r=$(gate_repo "feat: x"); pyin '{"title":"feat: x"}' gates/pr_title.py --cwd "$r" --config-ref no-such-ref;;
     "gates/pr_title.py 64")        pyin '' gates/pr_title.py --no-such-flag;;
     "gates/pr_title.py 65")        r=$(gate_repo "feat: x"); put_cfg "$r" "$BADCFG"; pyin '{"title":"feat: x"}' gates/pr_title.py --cwd "$r";;
+    "gates/signing_rules.py 0")    r=$(gate_repo "feat: x"); commit_in "$r" l.json '{"baton_dirs": ["d"], "lists": {}, "files": []}' "list"
+                                   py gates/signing_rules.py HEAD HEAD --list l.json --cwd "$r";;
+    "gates/signing_rules.py 1")    r=$(gate_repo "feat: x"); commit_in "$r" l.json '{"baton_dirs": [], "lists": {}, "files": ["b.txt"]}' "list"
+                                   commit_in "$r" b.txt b "feat: b"; py gates/signing_rules.py HEAD~1 HEAD --list l.json --cwd "$r";;
+    "gates/signing_rules.py 2")    r=$(gate_repo "feat: x"); py gates/signing_rules.py main no-such-ref --cwd "$r";;
+    "gates/signing_rules.py 64")   py gates/signing_rules.py;;
+    "gates/signing_rules.py 65")   r=$(gate_repo "feat: x"); py gates/signing_rules.py main HEAD --list nope.json --cwd "$r";;
     "gates/dead_branches.sh 0")    W=$(mk_origin); cenv bash "$P/gates/dead_branches.sh" --repo "$W" >/dev/null 2>&1; echo $?;;
     "gates/dead_branches.sh 1")    W=$(mk_origin); git_ -C "$W" push -q origin main:feat/merged; git_ -C "$W" fetch -q origin
                                    cenv bash "$P/gates/dead_branches.sh" --repo "$W" >/dev/null 2>&1; echo $?;;

@@ -236,7 +236,8 @@ if method == "GET":
     if not rest:
         done(dict({"full_name": repo, "private": R["private"]}, **({"visibility": R["visibility"]} if "visibility" in R else {})))
     if rest[0] == "labels" and len(rest) == 2:
-        done({"name": rest[1]}) if rest[1] in R.get("labels", []) else nf()
+        hit = [x for x in R.get("labels", []) if x.lower() == rest[1].lower()]      # GitHub: case-insensitive, answers its own spelling
+        done({"name": hit[0]}) if hit else nf()
     if rest == ["issues"]:
         items = [issue_obj(repo, n, i) for n, i in sorted(R["issues"].items(), key=lambda kv: -int(kv[0]))
                  if n not in lag and (not qs.get("creator") or i.get("user") == qs["creator"])]

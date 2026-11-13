@@ -39,7 +39,7 @@ ASCII, alone in the Bash call. A wrapped or hidden call (`env`, `VAR=`, `bash -c
 fed to a shell, a script file, `!` in the prompt) gets no record: the call itself is refused (rc 3) and the mode is unchanged.
 The hook denies such a call where it sees one. After a `<<` in the same command (a heredoc's body line cannot be told from a
 call) or inside a double-quoted `$( … )` it gives no opinion; a dialog an ask rule shows there changes nothing. The
-record serves one attempt, lives 10 minutes, and the session's next Bash call voids it, as for `sign --by owner`; a sandbox, a
+record serves one attempt, lives 30 minutes, and the session's next Bash call voids it, as for `sign --by owner`; a sandbox, a
 call carrying an `agent_id` and a permission mode with no dialog get none. The change writes the record's id next to the value (`dialog <id>`), and
 a mode or remote list file without it reads as not chosen (manual, an empty list): what an older copy of `baton.py` writes (an
 old version left in the plugin cache, a checkout), through any wrapper, counts for nothing. So after the update to this version
@@ -59,7 +59,7 @@ launcher) by an absolute path that resolves to it, `sign --by owner --seal <seal
 printable ASCII with no quote or shell character. Anything else is denied. The plugin's PreToolUse hook answers `ask` for it, so Claude
 Code opens its dialog whatever the permission rules say, and writes a record for that session, those words, that directory and
 that Claude Code process. Only a process that Claude Code process starts after the ask may use it: the command the dialog runs,
-not one started before (a background loop) or under another session. It lives 10 minutes, the first `sign` that finds it uses it
+not one started before (a background loop) or under another session. It lives 30 minutes, the first `sign` that finds it uses it
 up whatever the outcome (an attempt from a process the Claude Code process did not start after the ask leaves it, checked
 first), and the session's next Bash call voids it (one carrying an `agent_id` too). The owner's click is the signature, and
 the signature names the record (a signature without one does not `run`). Never run the command unprompted, as a test, after a
@@ -81,7 +81,7 @@ record the item as pending and say so; never retry `sign` in a loop or read sile
 
 ### The owner's queue
 
-An open dialog freezes the session that asked until the owner clicks, and its record lives 10 minutes. When the owner is not
+An open dialog freezes the session that asked until the owner clicks, and its record lives 30 minutes. When the owner is not
 at the screen (or the session is busy with other work), queue the run instead of signing it:
 
 1. `go --queue <script> [args…]` in place of `go`: the same check, rehearse and seal; where `go` would stop at exit 8 it writes an
@@ -102,3 +102,19 @@ at the screen (or the session is busy with other work), queue the run instead of
 An item whose bytes changed after the dialog opened or after signing is `damaged` and never signed or run. `log --queue` shows
 every item as pending, signed, expired, used or damaged. Mode `manual` and `auto`, the stop list and a pod are unchanged.
 
+### Runs under the owner's plan approval
+
+When the owner has signed a plan (`sign --by owner --approve`: one dialog for every row) and a row declares a run in its
+`Trust touches` cell (`run <kit:name or project:name> Stops: <words> [runs: <n>]`), run that baton with
+`go --row [<owner/repo>:]kb/plans/<file>.md#<row> <baton> [args…]` in place of `go`, from the directory the plan was signed from.
+Where `go` would stop at exit 8, the call runs with no dialog and its one line ends with its signer,
+`go: ok — <n> writes — <run log> — plan:<approval>/<row>/<n>`. The plan never answers for the owner: a baton that asks the
+owner for a value, a file or the passphrase asks as in any run, and its use stays taken whatever the run's result.
+
+Exit 8 names the first part that did not match: a baton no run touch of the row names, Stops wider than the touch's, a
+`SIGN_AGAIN_STOPS` word, a touch marked `(signs again)`, a `secrets` run outside `PLAN_SECRETS_KITS`, a `project:` baton not
+reviewed on origin's default branch, the touch's runs used up, the row dropped or the plan changed at its default branch, or no
+approval in force from this directory (expired, revoked, signed elsewhere). That call is then the owner's, as any exit 8: bring
+the card, or queue it. Never reword the call, or the baton, to make it match. `go --row` is exit 64 in a sandbox and for a
+`user:` baton, a session file, a `kind:` or stdin. `log --digest --plan <approval>` lists the runs and merges under an approval
+and each row's runs left.

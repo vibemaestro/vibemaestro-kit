@@ -1104,10 +1104,11 @@ def sandbox_first_steps():
         return ("Sandbox session: " + "; ".join(steps) + ".") if steps else ""
     steps.append("CREATE A SPEC from the intent in `kb/specs/<date>-<slug>.md` in the spec shape — skill `%s:spec`" % PLUGIN_NAME)
     if shutil.which("session-ask"):
-        steps.append("ask the person to approve the spec with `session-ask \"<question>\"`, then end the turn")
+        steps.append("ask for the spec's approval with `session-ask \"<question>\"` (the coordinator answers; the owner only when "
+                     "an AC of the story changes), then end the turn")
     else:
         steps.append("ask the person to approve the spec: ask in words, then stop the turn and wait for a reply")
-    steps.append("edit code ONLY AFTER the person has approved")
+    steps.append("edit code ONLY AFTER the approval")
     return ("Sandbox session — first behaviour, in this order: " + "; ".join("(%d) %s" % (i, t) for i, t in enumerate(steps, 1))
             + ". Without an approval, no code edit: approval is the person's words, the machine has no \"approved\" mark, and silence is not approval.")
 

@@ -1,2 +1,2 @@
-kb: loại 'frob' không có — chỉ: intent, plan, spec
+kb: loại 'frob' không có — chỉ: intent, plan, real-run, spec
 rc=64

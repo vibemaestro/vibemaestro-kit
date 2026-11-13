@@ -89,6 +89,12 @@ CODE=$(printf '%s\n' "$FILES" | grep -E '^plugins/[^/]+/(scripts|skills|rules|ho
 eq "$(printf '%s\n' "$DOCS" | python3 "$PLAN" --paths | awk -F'\t' '$2 != ""')" "" "every document ($(printf '%s\n' "$DOCS" | grep -c .)) wakes no suite"
 eq "$(printf '%s\n' "$CODE" | python3 "$PLAN" --paths | awk -F'\t' '$2 == ""')" "" "every plugin script, skill, rule and hook file still wakes a suite"
 
+# fixture-pin's [S] scan reads every suite: a diff of one suite alone plans it (a $RANDOM name left in a suite once went unseen until
+# the full run), and a document still wakes nothing. The real map, through the merge guard's contract.
+eq "$(printf 'tests/test-gates.sh\0' | python3 "$PLAN" --suites --woken | tr '\n' ' ')" "capped-breaks fixture-pin gates " \
+   "a diff of only tests/test-gates.sh plans fixture-pin (the real map)"
+eq "$(printf 'README.md\0' | python3 "$PLAN" --suites --woken)" "" "a diff of only the root README plans no suite (the real map)"
+
 # capped.sh and plant.sh are not @full: lib.sh sources them, so a suite reaches them only by calling their functions. On a copy of
 # this tree, the guard is red when one user's line loses the file.
 echo "== the narrowed @full: capped.sh and plant.sh =="
@@ -115,7 +121,7 @@ PY
 }
 rplant "capped-breaks loses plant.sh" "$(grep '^capped-breaks' "$HERE/suites.map")" "$(grep '^capped-breaks' "$HERE/suites.map" | sed 's# tests/fixtures/plant.sh##')" \
   "suite \`capped-breaks\` calls \`plant_break\` (tests/fixtures/plant.sh), which reaches tests/fixtures/plant.sh"
-eq "$(printf 'tests/fixtures/plant.sh\0' | python3 "$PLAN" --suites --woken | tr '\n' ' ')" "capped-breaks plan " "plant.sh wakes capped-breaks and plan (its load check copies it), not @full"
+eq "$(printf 'tests/fixtures/plant.sh\0' | python3 "$PLAN" --suites --woken | tr '\n' ' ')" "capped-breaks fixture-pin plan " "plant.sh wakes capped-breaks, fixture-pin (its [S] scan) and plan (its load check copies it), not @full"
 CU=$(printf 'tests/fixtures/capped.sh\0' | python3 "$PLAN" --suites --woken)
 case "$CU" in @full*) bad "capped.sh is @full again: $CU";; *) [ "$(printf '%s\n' "$CU" | grep -c .)" -ge 40 ] && ok "capped.sh wakes the suites that run it ($(printf '%s\n' "$CU" | grep -c .)), not @full" || bad "capped.sh wakes only: $CU";; esac
 has "$(printf 'tests/fixtures/netguard.sh\0' | python3 "$PLAN" --suites)" "@full" "netguard.sh stays @full (clean_env installs its shims in every suite)"
@@ -464,6 +470,9 @@ sucase "--woken: an excluded file wakes nothing" "" --woken -- docs/x.md
 sucase "--woken: an @always suite a path wakes stays (its own file)" "plan" --woken -- tests/test-plan.sh
 sucase "--woken: an @always suite a path wakes stays (its line)" "plan" --woken -- plugins/pp/README.md
 sucase "--woken, no path: nothing" "" --woken --
+# an @always suite reads every tracked file: a PR that changes its checks under tests/ has not run them on the base's new files
+sucase "the PR's side: an @always suite's own file → @full" "@full \`tests/test-plan.sh\` changes @always suite plan, which reads every tracked file" -- tests/test-plan.sh
+sucase "the PR's side: a file outside tests/ on an @always line (code it tests): its plan" "plan" -- plugins/pp/README.md
 sucase "an @full path: one line @full" "@full \`tests/fixtures/lib.sh\` decides what runs (@full)" --woken -- src/a.txt tests/fixtures/lib.sh
 sucase "a path in no line and not excluded: @full" "@full \`other/z.txt\` matches no suite and no exclusion" --woken -- other/z.txt
 sucase "a path holding a newline is one path (NUL-separated)" "a" --woken -- "src/a

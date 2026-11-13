@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
-"""The delete of the kit baton kit:branch-delete: one branch of a github.com repository, deleted with a lease on its pinned SHA.
+"""The delete of the kit batons kit:branch-delete and kit:branch-delete-recoverable: one branch of a github.com repository,
+deleted with a lease on its pinned SHA.
 
     branch_delete.py --repo <owner/name> --branch <name> --head <sha40> --url <push url> --plan <plan line> --expect-plan <file>
 
 The kit proves the branch merged and builds the plan line; this gate is the only place its delete is written, run by the kit's
 del() inside write(), so the kit's own text holds no delete. Before anything is pushed it checks that the plan line is a whole
 line of the signed plan (--expect-plan, the BATON_PLAN baton hands the run) and that the line names exactly this delete:
-`delete merged branch <branch> at <head> (…) on <url>`. The URL is the repository's https or ssh github.com URL, the two forms
-the kit builds. The push runs from a new scratch bare repository, with the git settings and the allowlisted environment of
+`delete merged branch <branch> at <head> (…) on <url>` (kit:branch-delete), or `delete branch <branch> at <head> (kept in
+bundle <path>) on <url>` (kit:branch-delete-recoverable). For the second, the bundle must be the regular file the kit names
+under the baton state directory's bundles/ (no symlink), whose one head is `<head> refs/heads/<branch>` and which unbundles
+into an empty repository with every object of <head>: the delete is not pushed unless the commits it removes are kept. The
+URL is the repository's https or ssh github.com URL, the two forms the kit builds. The push runs from a new scratch bare repository, with the git settings and the allowlisted environment of
 the kit's sgit() and cleanenv() (a test holds them equal): no config, hook or variable of the clone or the user reaches it. It
 sends `:refs/heads/<branch>` with `--force-with-lease=refs/heads/<branch>:<head>`, so GitHub refuses it when the branch is not
 at the pinned SHA any more.
 
 Exit codes: 0 the push succeeded; 1 the push failed (the lease or the remote refused it, or its answer was lost: the caller
-reads the remote to tell which); 3 refused before any push (the signed plan cannot be read, the plan line is not in it, or it names another delete);
+reads the remote to tell which); 3 refused before any push (the signed plan cannot be read, the plan line is not in it, it names another
+delete, or its bundle does not hold the head);
 64 bad usage, nothing pushed. Standard library and git only, Python 3.8+.
 """
-import os, re, subprocess, sys, tempfile
+import os, re, stat, subprocess, sys, tempfile
 
 HOST = "github.com"
 # the kit's sgit() settings, in its order
@@ -31,6 +36,7 @@ ENV_FIXED = (("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), (
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 PLAN = re.compile(r"delete merged branch (\S+) at ([0-9a-f]{40}) \(.*\) on (\S+)\Z")
+KEPT = re.compile(r"delete branch (\S+) at ([0-9a-f]{40}) \(kept in bundle (/\S+)\) on (\S+)\Z")
 FLAGS = ("--repo", "--branch", "--head", "--url", "--plan", "--expect-plan")
 USAGE = "usage: branch_delete.py " + " ".join("%s <%s>" % (f, f[2:]) for f in FLAGS)
 
@@ -87,6 +93,38 @@ def parse(argv):
     return a
 
 
+def state_base():
+    """The baton state directory's base, as baton and the kits compute it."""
+    x = os.environ.get("XDG_STATE_HOME", "")
+    return x if x.startswith("/") else os.path.join(os.environ.get("HOME", ""), ".local", "state")
+
+
+def bundle_problem(path, branch, head, scratch):
+    """Why the bundle at path does not keep head as refs/heads/<branch>, or None."""
+    bundles = os.path.join(state_base(), "vibemaestro", "baton", "bundles")
+    want = "kit-branch-delete-recoverable-%s-%s.bundle"
+    name = os.path.basename(path)
+    if (os.path.normpath(os.path.dirname(path)) != os.path.normpath(bundles) or re.match(want % ("[0-9a-f]{16}", head) + r"\Z", name) is None
+            or os.path.realpath(os.path.dirname(path)) != os.path.realpath(bundles)):
+        return "%s is not a bundle of this head under %s" % (path, bundles)
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return "%s is not a regular file" % path
+    except OSError as e:
+        return "%s cannot be read (%s)" % (path, e.strerror)
+    v = os.path.join(scratch, "verify.git")
+    git(["init", "-q", "--bare", "--template=", v])
+    heads = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-C", v, "bundle", "list-heads", path], env=env(),
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if heads.returncode != 0 or heads.stdout != "%s refs/heads/%s\n" % (head, branch):
+        return "the bundle %s does not hold exactly %s refs/heads/%s" % (path, head, branch)
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if (git(["-c", "core.hooksPath=/dev/null", "-C", v, "bundle", "unbundle", path], **quiet) != 0
+            or git(["-C", v, "rev-list", "--objects", "--missing=error", head], **quiet) != 0):
+        return "the bundle %s does not hold every object of %s" % (path, head)
+    return None
+
+
 def main(argv):
     a = parse(argv)
     if a is None:
@@ -101,11 +139,15 @@ def main(argv):
     if plan not in signed:
         say("REFUSE the delete line is not in the signed plan (the branch or base moved since signing): nothing pushed")
         return 3
-    m = PLAN.match(plan)
-    if not m or m.group(1, 2, 3) != (a.branch, a.head, a.url):
+    m, k = PLAN.match(plan), KEPT.match(plan)
+    if not (m and m.group(1, 2, 3) == (a.branch, a.head, a.url) or k and k.group(1, 2, 4) == (a.branch, a.head, a.url)):
         say("REFUSE the signed line does not name this delete (%s at %s on %s): nothing pushed" % (a.branch, a.head, a.url))
         return 3
     with tempfile.TemporaryDirectory(prefix="kit-branch-delete-gate.") as d:
+        why = bundle_problem(k.group(3), a.branch, a.head, d) if k else None
+        if why:
+            say("REFUSE %s: nothing pushed" % why)
+            return 3
         repo = os.path.join(d, "repo.git")
         if git(["init", "-q", "--bare", "--template=", repo]) != 0:
             say("the scratch repository cannot be made: nothing pushed")

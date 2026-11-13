@@ -31,14 +31,14 @@ The process, by skill:
 intake → brainstorm (only if the request is vague) → spec → plan (only if the work must be split) → ship
 ```
 
-Every request for a change starts with `intake`. The person approves the spec before code. A privileged action (a merge, a push to a registry, a deletion) goes through `batonrun`.
+Every request for a change starts with `intake`. The owner approves the story; the spec is approved before code (by the coordinator, or by a solo person together with the story). A privileged action (a merge, a push to a registry, a deletion) goes through `batonrun`.
 
 ## One task or several
 
 The plugin is made for one person on one machine, with `vibemaestro-brain` beside it.
 
-- **One task** runs in the session you open, from `intake` to a draft pull request. You approve the spec and you merge the pull request.
-- **Several tasks at once:** the skill `local-parallel`. The main session starts one subagent per task, each in its own git worktree, from `intake` to a draft pull request, relays each spec to you, keeps the queue, post-checks each pull request and merges it with `kit:merge-pr`.
+- **One task** runs in the session you open, from `intake` to a draft pull request. You approve the story and the spec in one ask, and you merge the pull request.
+- **Several tasks at once:** the skill `local-parallel`. The main session starts one subagent per task, each in its own git worktree, from `intake` to a draft pull request, relays each story and spec to you, keeps the queue, post-checks each pull request and merges it with `kit:merge-pr`.
 
 The plugin needs no other plugin and reads no other repository.
 
@@ -98,13 +98,13 @@ Skills are called by name, `vibemaestro-sdlc:<name>`. They write into the `kb/` 
 | Skill | What it does | Triggers when |
 |---|---|---|
 | `init-kb` | Scaffolds a self-contained `kb/` and the per-repo config (`.vibemaestro/sdlc.json`, a rules directory). Safe to re-run; `--adopt` for a repository that already has process files. | the repository has no `kb/`, lacks one of its directories, or adopts the plugin |
-| `intake` | Records the request in the person's own words as `kb/intent/<date>-<slug>.md`, creates the branch `intent/<date>-<slug>` and the tracking issue. | the person gives a new piece of work |
-| `brainstorm` | Clarifies a vague request and writes a `Brainstorm result` section into the intent file. No separate spec file. | the request is vague or needs a direction chosen |
-| `spec` | Writes `kb/specs/<date>-<slug>.md` in five sections (context, goal, out of scope, inputs and failure cases, acceptance criteria) and asks the person to approve before any code. | the intent is recorded and no spec is approved yet |
-| `plan` | Writes `kb/plans/<date>-<slug>.md`, one row per PR with its acceptance command; links intents to rows; reads the live state with `kb.py plan status`. | a topic needs two or more PRs, or someone asks for its state |
+| `intake` | Records the request in the person's own words as `kb/intent/<date>-<slug>.md` (for a story, the story the owner approves, in the repository's language), creates the branch `intent/<date>-<slug>` and the tracking issue. | the person gives a new piece of work |
+| `brainstorm` | Clarifies a vague request. For a story it ends with the story itself in the intent (at most 3 questions, each with a recommendation); otherwise it writes a `Brainstorm result` section. No separate spec file. | the request is vague or needs a direction chosen |
+| `spec` | Writes `kb/specs/<date>-<slug>.md`, derived from the intent, in five sections (goal, constraints, behaviour-level criteria pointing to the story's AC, risks to cover, open points) with no implementation, and asks for approval before any code. | the intent is recorded and no spec is approved yet |
+| `plan` | Writes `kb/plans/<date>-<slug>.md`, one row per PR (how, the AC it delivers, what it depends on, what needs a signature), a living plan; links intents to rows; reads the live state with `kb.py plan status`. | a topic needs two or more PRs, or someone asks for its state |
 | `ship` | Overwrites `kb/current-state.md`, runs the acceptance commands, records the evidence, and opens a draft PR with `scripts/open-pr.sh`. | the work of an intent is done |
 | `release` | Cuts a release PR or a hotfix PR of a plugin marketplace repository with `scripts/release.py`; publishing the merged release is the repository's own step. | a plan's release row is due, or an installed plugin needs a hotfix |
-| `install-gates` | Installs the six process gates as GitHub workflows plus their scripts. Asks which gates and which runner. Never overwrites. | a repository wants the gates behind the rules |
+| `install-gates` | Installs the six process gates as GitHub workflows plus their scripts. Asks which gates and which runner. Never overwrites a file the repository owns; `--update` upgrades the plugin's own copies. | a repository wants the gates behind the rules |
 | `batonrun` | Runs an action that writes outside the session as one baton script: checked, rehearsed, signed, run, post-checked, logged. | a merge, a registry push, a deletion, a force-push, a change to the user's plugin config |
 | `bootstrap` | Sets up a machine for BatonRun in one owner-signed run: the launcher and the permission block. `coordinator-bootstrap` is its old name, which leaves in the next release. | a new machine, or the session-start permission check fails |
 | `local-parallel` | Runs several tasks at once on one machine: one subagent per task (its own worktree, `intake` to a draft PR, model `agents.worker_model`); the main session keeps the queue, relays spec approvals, post-checks each PR and merges it with `kit:merge-pr`. | the person wants several tasks done in parallel |
@@ -133,7 +133,7 @@ When they run:
 - A new commit cancels the runs of the head it replaces. No other event cancels a run, and none takes the place of a pending one.
 - A skipped run tested nothing: the merge guard keeps the verdict of the last real run on the head, and a required check with no real run is red.
 
-`install_gates.py` never overwrites a file: an existing file is kept, and `kept (differs)` marks one that is not what the plugin would write. It does not write `.vibemaestro/sdlc.json`; it prints which keys each gate reads. With `gh` it then checks, read-only, that the repository variable named by `ci.runner_var` is set, and prints one warning when it is not.
+`install_gates.py` never overwrites a file: an existing file is kept, and `kept (differs)` marks one that is not what the plugin would write. With `--update` it replaces the plugin's own copies under `.vibemaestro/gates/` (a workflow, the allowlist and the signing-rules list are the repository's and stay kept), and `--only` also installs the opt-in `signing-rules` gate or the gate a dependent plugin declares in its `gates/install.json`. It does not write `.vibemaestro/sdlc.json`; it prints which keys each gate reads. With `gh` it then checks, read-only, that the repository variable named by `ci.runner_var` is set, and prints one warning when it is not.
 
 Two more checks run inside the scripts you already call, not as workflows:
 
@@ -170,9 +170,9 @@ What each rule says in one line:
 - `commit-unit`: a commit is one task or one fix round, not one typing session; fold fix rounds before ready.
 - `pr-body-shape`: the body is the current state, overwritten each round, and short; round history goes in comments.
 - `pr-no-leaks`: no secret, public IP, account ID, e-mail or personal path in a PR body, comment or commit message.
-- `before-ready`: before ready, evidence run on the final version, a correct current state, a fresh-context review (briefed with [`skills/ship/reviewer-brief.md`](skills/ship/reviewer-brief.md)), a re-review of every fix round with the changed functions read whole, a class sweep for each defect fixed, a stop after the second fix of one class, and no self-merge.
+- `before-ready`: before ready, evidence run on the final version, a correct current state, a fresh-context review (briefed with [`skills/ship/reviewer-brief.md`](skills/ship/reviewer-brief.md)): one round, a second only after a correctness defect, reading the changed functions whole, a third only for security or passphrase-holder work; a class sweep for each defect fixed, a stop after the second fix of one class, and no self-merge.
 - `measurement-commands`: run a sure-positive control before you quote a count.
-- `test-quality`: each test names the break it catches, with literal expected values and a refusal case per rule; red on main and green after; no source-text or mock-only assertion; never revert the fix to see red; root cause before a fix.
+- `test-quality`: each test names the break it catches, with literal expected values and a refusal case per rule; red on main and green after; a test per risk the spec lists; no source-text, spec-wording or mock-only assertion; never revert the fix to see red; root cause before a fix.
 - `document-precedence`: when two documents disagree, an explicit supersession wins, then the binding level, then the date.
 - `public-tree`: in a repository that publishes its tree, every file outside `kb/` and `public.private` is public: nothing private, no pointer into `kb/`, no private issue number, and tests that run from that tree alone.
 - `current-state-shape`: the file holds only the present state, overwritten, with a size cap.
@@ -207,7 +207,7 @@ Rules of the format:
 - A problem is handled by the caller. Hooks warn once per session and carry on with the defaults. `kb.py` and the gates exit 65 and name the key. The branch and PR cores exit 64.
 - Read one effective value: `python3 "$SDLC/scripts/sdlc_config.py" get <dotted.key>`. Read the plugin default of a key whatever the file says: add `--default`.
 - Validate the file, and list warnings (for example a rules directory that does not exist): `python3 "$SDLC/scripts/kb.py" config check`.
-- `"language"` is `vi` or `en`. It sets the section names of a spec, the PR-body headings and the flow lines. The default is `vi`; set `en` for English. A key you set in `tokens` wins over the language.
+- `"language"` is `vi` or `en`. It is the language of the kb content (story, spec, plan, decisions), which every session, sandbox workers included, writes in it, and it sets the story card's labels, the section names of a spec, the PR-body headings and the flow lines. The default is `vi`; set `en` for English. A key you set in `tokens` wins over the language.
 
 A subagent runs on the model of its job. A skill reads `agents.<key>` and passes it as the `model` of the Agent tool. The value is one of the aliases `fable`, `opus`, `sonnet`, `haiku`.
 
@@ -217,7 +217,7 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 |---|---|---|
 | `schema` | `1` | Config schema number, the major version of the format. The plugin refuses a number above its own and names the update to run. |
 | `hooks` | `"auto"` | `"off"` silences every hook of the plugin. |
-| `language` | `"vi"` | `"vi"` or `"en"`: the language of the spec section names, PR-body headings and flow lines. `kb.py init` records it in every new config, `"en"` unless answered, so only a config made before has the default. |
+| `language` | `"vi"` | `"vi"` or `"en"`: the language of the kb content (every session writes in it) and of the story labels, spec section names, PR-body headings and flow lines. `kb.py init` records it in every new config, `"en"` unless answered, so only a config made before has the default. |
 | `update_check` | `true` | `false` turns off the update reminder of a public install in this repository, for vibemaestro-sdlc and vibemaestro-brain (see the kit README, Update). |
 | `branch.intent_prefix` | `"intent/"` | Prefix of an intent branch. |
 | `branch.protected` | `["main", "master"]` | Branches that are never a PR head and never counted as dead. |
@@ -277,6 +277,8 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | `merge.admin_bypass` | `false` | `true` allows `--admin` on the guarded merge. It changes no condition. |
 | `merge.required_checks` | `[]` | Check names that must be green. Empty asks for at least one green check run. |
 | `merge.planner` | `null` | `{"script", "inputs"}`: the repository's test planner, which the guarded merge runs with `--behind auto` to judge a pull request behind its base. |
+| `merge.touch_checks` | `[]` | Checks whose findings the guarded merge's `touches` judges: a denied path, or a red run of one of these checks, merges with no owner merge only when it is a touch the row the pull request names declares, under the owner's plan approval (`baton.py sign --by owner --approve`). Each needs a `merge.touch_inputs` entry. |
+| `merge.touch_inputs` | `{}` | Per touch check, `{"workflow", "paths"}`: the workflow file that runs it and every path its result depends on (its gate, what the gate imports, its list file). A change to one is never plan-approved. |
 | `merge.log` | `null` | File name of the merge log in the user state directory; `null` means `merge-log.jsonl`. |
 | `merge.image_bump.enabled` | `false` | Turns on the image-bump lane of the guarded merge. |
 | `merge.image_bump.tag_files` | `[]` | Files whose lines the lane may change, only to move the tag of the configured image. |
@@ -285,6 +287,8 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | `merge.image_bump.registry` | `null` | `{"backend": "ghcr", "host", "image"}`: the registry where the lane checks that the new tag exists. |
 | `rebase.identity` | `null` | `{"name", "email"}` used as the committer when `intent-branch.sh integrate` must rebase. It wins over the environment. |
 | `upstream_issues` | `true` | Accepted and validated; nothing in this plugin reads it. |
+| `intake.focus` | `"warn"` | An intent's `type:` (story, task, bug) and `focus:` (an open focus of the brain) at `intent-branch.sh create-intent` and in `kb.py check intent`: `"required"` refuses an intent without them (rc 9), `"warn"` prints one WARNING line and goes on, `"off"` reads neither. The next release makes `"required"` the default. |
+| `issue.code` | `null` | The repository's 3-letter code (3 capital letters, like `KIT`). Set: `intent-branch.sh create-intent` opens the issue first, writes the key `<code>-<issue number>` as the intent's `key:` and names the branch `intent/<key>-<slug>`; the intent file keeps its dated name, and `kb.py plan status` links a PR by either branch name. `null`: branches stay `intent/<date>-<slug>`, with no key. |
 | `agents.review_model` | `"opus"` | Model of the fresh-context review before ready (`ship`, `before-ready`). |
 | `agents.search_model` | `"haiku"` | Model of a read-only search (`brainstorm`). |
 | `agents.worker_model` | `"sonnet"` | Model of a worker that builds one task (`plan`, `batonrun`, `workflow-core`). |
@@ -306,7 +310,10 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | `tokens.spec.out_of_scope` | `"Ngoài phạm vi"` (`"Out of scope"`) | Heading of the third spec section. |
 | `tokens.spec.criteria` | `"Tiêu chí chấp nhận"` (`"Acceptance criteria"`) | Heading of the acceptance-criteria section, the last required one. |
 | `tokens.spec.design` | `"Thiết kế"` (`"Design"`) | Heading of the optional design section. |
-| `tokens.spec.evidence` | `"Bằng chứng chạy"` (`"Run evidence"`) | Heading the last criterion of a spec must name. |
+| `tokens.spec.constraints` | `"Ràng buộc"` (`"Constraints"`) | Heading of the hard constraints of a spec derived from a story. |
+| `tokens.spec.risks` | `"Rủi ro cần test phủ"` (`"Risks to cover"`) | Heading of the risks the tests cover, in a spec derived from a story. |
+| `tokens.spec.clarify` | `"Cần làm rõ"` (`"To clarify"`) | Heading of the open points of a spec derived from a story. |
+| `tokens.spec.evidence` | `"Bằng chứng chạy"` (`"Run evidence"`) | Heading the last criterion of a spec of the earlier shape must name. |
 | `tokens.spec.placeholder` | `"<ĐIỀN"` (`"<FILL"`) | Mark of a blank left in a skeleton; `kb.py check spec` rejects a spec that still has one. |
 
 ## Version policy
@@ -324,8 +331,8 @@ This section applies to a repository that publishes plugins, such as the kit its
   One line a user of the installed plugin understands: what changes for them.
   ```
 
-  `level` is `patch` for a fix, `minor` for a feature, `major` for a breaking change (for this plugin, a `CONTRACT.md` row removed or renamed). A 0.x plugin may break in a minor. `upgrade` is optional; a pending change file may be edited only to add or change it.
-- **A release pull request** (skill `release`, started by a plan's release row) turns every pending change file into one version step per plugin, writes the `CHANGELOG.md` entries (the `upgrade` lines under `### Upgrade notes`), and sets `Frozen at` in `CONTRACT.md` when its surface moved. `release.py notes <plugin> <version>` prints the body of that version's public release: its CHANGELOG section and how to update.
+  `level` is `patch` for a fix, `minor` for a feature, `major` for a breaking change (for this plugin, a `CONTRACT.md` row removed or renamed). A 0.x plugin may break in a minor. `upgrade` is optional; a pending change file may be edited only to add or change it. `supersedes:` and `cancels:` are optional too: the earlier change files, by their names without the leading date and `.md` (no two change files share that name), comma-separated, that this change replaces or undoes. A superseded change's line and upgrade note leave the next public release, so write this file's line as the final behaviour; a cancelled one leaves with the cancelling line, unless what it undoes was already published.
+- **A release pull request** (skill `release`, started by a plan's release row) turns every pending change file into one version step per plugin, writes the `CHANGELOG.md` entries (the `upgrade` lines under `### Upgrade notes`), and sets `Frozen at` in `CONTRACT.md` when its surface moved. Each section is the final state since the plugin's previous public version: a version cut and not published joins the next cut, and a line that a `supersedes:` or `cancels:` names, or one already published, is taken out. `release.py notes <plugin> <version>` prints the body of that version's public release: its CHANGELOG section and how to update.
 - **A fold** (`cut --fold --public <owner/name>`) is for a release that was cut but not published yet: the pending change files join that version's `CHANGELOG.md` sections instead of raising it. The public repository's tags `<plugin>--v<version>` tell whether it was published; when one exists, the fold is refused.
 - **A hotfix pull request** branches from the branch `release`, so unreleased features never ride it. It raises one patch. A back-merge pull request from `backmerge/<sha12>` brings it to main and merges with a merge commit, never a squash.
 - **After either merges**, a baton script you sign moves the branch `release` to the release commit, or, after a hotfix, pushes `backmerge/<sha12>` and opens its pull request; the repository publishes the release its own way. The kit's own public release writes each released version into its `plugin.json` and tags `<plugin>--v<version>`.
@@ -334,9 +341,9 @@ This section applies to a repository that publishes plugins, such as the kit its
 The commands, read-only unless noted:
 
 ```bash
-python3 "$SDLC/scripts/release.py" check          # is this change a valid ordinary, release, hotfix or back-merge change?
-python3 "$SDLC/scripts/release.py" plan           # what a cut would do here
-python3 "$SDLC/scripts/release.py" cut            # writes the working tree into a release
+python3 "$SDLC/scripts/release.py" check --public <owner/name>   # is this change a valid ordinary, release, hotfix or back-merge change?
+python3 "$SDLC/scripts/release.py" plan --public <owner/name>    # what a cut would do here (the public tags say what is published)
+python3 "$SDLC/scripts/release.py" cut --public <owner/name>     # writes the working tree into a release
 python3 "$SDLC/scripts/release.py" cut --hotfix   # the same for a hotfix
 python3 "$SDLC/scripts/release.py" cut --fold --public <owner/name>   # joins the pending change files to a version cut but not published
 ```
@@ -349,7 +356,7 @@ A write outside the session (a GitHub write such as a merge, a registry push, a 
 
 ## Troubleshooting
 
-Run these in the repository that has the problem. `$SDLC` is the plugin directory (see [Quick start](#quick-start)). Some script messages are in Vietnamese.
+Run these in the repository that has the problem. `$SDLC` is the plugin directory (see [Quick start](#quick-start)). Script messages follow the repository's `language`: Vietnamese unless `.vibemaestro/sdlc.json` sets `"language": "en"`; a few are English in both.
 
 | Symptom | Command | What it tells you |
 |---|---|---|

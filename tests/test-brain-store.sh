@@ -736,8 +736,176 @@ print(d.endswith(hashlib.sha1(os.fsencode(p)).hexdigest()[:12]))')" True "[P] th
   cd "$P" || return 1
 }
 
+case_focus_done_when() {  # a focus takes done when and not doing
+  newp
+  owner_ok add --kind goal --text "ship the layers" --owner-quote q --where chat --done "the PR merged" --not-doing "the ledger" \
+    --review "$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=30))')" --scope project
+  c_rc 0 "[focus-done-when] instrument: a goal G1 is pinned"
+  br op add --kind focus --text "capacity first" --owner-quote "làm capacity trước" --where chat --goal G1 \
+    --done-when "all 5 stories merged, \"one\" line à la owner" --not-doing "the ledger rewrite"
+  c_rc 0 "[focus-done-when] a focus with both fields: rc 0"
+  c_hasnt "$OUT" "warning" "[focus-done-when] no warning when done when is given"
+  br show P1 --json
+  R=$(printf '%s' "$OUT" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["done"], "|", d["not_doing"])')
+  c_eq "$R" 'all 5 stories merged, "one" line à la owner | the ledger rewrite' "[focus-done-when] show --json returns both, whole"
+  br op add --kind focus --text "second focus" --owner-quote "q2" --where chat --goal G1
+  c_rc 0 "[focus-done-when] a focus with no --done-when is stored"
+  c_has "$OUT" "warning: this focus has no --done-when; a charter for it will need one" "[focus-done-when] with the warning"
+  br show P2 --json
+  R=$(printf '%s' "$OUT" | python3 -c 'import json, sys; d = json.load(sys.stdin); print("done" in d, "not_doing" in d)')
+  c_eq "$R" "False False" "[focus-done-when] the fields are absent on it"
+  br op supersede P2 --text "second focus, said again" --reason "the owner gave it" --done-when "the page is live"
+  c_rc 0 "[focus-done-when] supersede adds done when"
+  c_hasnt "$OUT" "warning" "[focus-done-when] no warning on a supersede"
+  br show P3 --json
+  R=$(printf '%s' "$OUT" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["done"], "|", "not_doing" in d, "|", d["source"]["quote"])')
+  c_eq "$R" "the page is live | False | q2" "[focus-done-when] P3 holds it, and the owner's quote went over"
+  br op supersede P1 --text "capacity first, round 2" --reason "wording" --not-doing "the ledger rewrite and the docs"
+  br show P4 --json
+  R=$(printf '%s' "$OUT" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["done"], "|", d["not_doing"])')
+  c_eq "$R" 'all 5 stories merged, "one" line à la owner | the ledger rewrite and the docs' "[focus-done-when] a supersede keeps the field it was not asked to change"
+  br op add --kind focus --text "third" --owner-quote q3 --where chat --goal G1 --done-when "$TOKEN"
+  c_rc 1 "[focus-done-when] a token-shaped done when: refused"
+  c_hasnt "$OUT" "$TOKEN" "[focus-done-when] the token is not printed"
+  br op add --kind focus --text "third" --owner-quote q3 --where chat --goal G1 --done-when "a$(printf '\001')b"
+  c_rc 1 "[focus-done-when] a control character in done when: refused"
+  br op add --kind next --text "x" --done-when "when"; c_rc 64 "[focus-done-when] --done-when on a Next item: usage"
+  br doctor; c_rc 0 "[focus-done-when] doctor rc 0: the chain holds"
+}
+
+case_focus_words() {  # a live focus gets its done when and not doing in place: same id, only where unset
+  newp
+  owner_ok add --kind goal --text "ship the layers" --owner-quote q --where chat --done "the PR merged" --not-doing "the ledger" \
+    --review "$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=30))')" --scope project
+  c_rc 0 "[focus-words-in-place] instrument: a goal G1 is pinned"
+  br op add --kind focus --text "capacity first" --owner-quote "capacity first" --where chat --goal G1
+  c_rc 0 "[focus-words-in-place] instrument: a focus P1 with no words"
+  br op words P1 --done-when "all 5 stories merged" --not-doing "the ledger rewrite"
+  c_rc 0 "[focus-words-in-place] words on P1: rc 0"
+  c_eq "$OUT" "words P1: set done when, not doing" "[focus-words-in-place] the message"
+  br show P1 --json
+  R=$(printf '%s' "$OUT" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["id"], "|", d["status"], "|", d["done"], "|", d["not_doing"], "|", d["source"]["quote"])')
+  c_eq "$R" "P1 | live | all 5 stories merged | the ledger rewrite | capacity first" "[focus-words-in-place] same id, both words, the owner's quote kept"
+  br show P1; c_has "$OUT" $'\ndone: all 5 stories merged' "[focus-words-in-place] show prints the words as a line"
+  br show P2; c_rc 1 "[focus-words-in-place] no P2 was made"
+  br doctor; c_rc 0 "[focus-words-in-place] doctor rc 0: the chain holds"
+  br op words P1 --done-when "again"
+  c_rc 1 "[focus-words-present] a done when already set: refused"
+  c_has "$OUT" "P1 already has its done when; a change goes through \`brain op supersede\`" "[focus-words-present] it names the field and supersede"
+  br op add --kind focus --text "second focus" --owner-quote q2 --where chat --goal G1 --done-when "the page is live"
+  br op words P2 --done-when "other" --not-doing "the docs"
+  c_rc 1 "[focus-words-present] one field set, one free: still refused, nothing half written"
+  br show P2 --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["done"], "|", "not_doing" in d)')" "the page is live | False" "[focus-words-present] P2 kept its words, no not doing"
+  br op words P2 --not-doing "the docs"; c_rc 0 "[focus-words-present] the free field alone: rc 0"
+  br op words G1 --done-when "x"
+  c_rc 1 "[focus-words-not-focus] a goal: refused"
+  c_has "$OUT" "words are for a focus: G1 is not one" "[focus-words-not-focus] it says why"
+  br op add --kind next --text "a step"; br op words N1 --done-when "x"; c_rc 1 "[focus-words-not-focus] a Next item: refused"
+  br op words P9 --done-when "x"; c_rc 1 "[focus-words-not-focus] an unknown focus: refused"
+  c_has "$OUT" "P9 is not a live focus" "[focus-words-not-focus] it says why"
+  br op words P1; c_rc 1 "[focus-words-not-focus] no flag: refused"
+  c_has "$OUT" "words needs --done-when or --not-doing" "[focus-words-not-focus] it says why"
+  br op add --kind focus --text "third" --owner-quote q3 --where chat --goal G1
+  br op words P3 --done-when "$TOKEN"; c_rc 1 "[focus-words-not-focus] a token-shaped done when: refused"
+  c_hasnt "$OUT" "$TOKEN" "[focus-words-not-focus] the token is not printed"
+  br op words P3 --not-doing "a$(printf '\001')b"; c_rc 1 "[focus-words-not-focus] a control character: refused"
+  br op close P3 --reason "dropped"; c_rc 0 "[focus-words-not-focus] instrument: P3 closed"
+  br op words P3 --done-when "x"; c_rc 1 "[focus-words-not-focus] a closed focus: refused"
+  br doctor; c_rc 0 "[focus-words-not-focus] doctor rc 0 after the refusals"
+}
+
+case_jira() {  # a goal and a focus take a Jira key: stored, shown, refused when malformed
+  newp
+  local rv; rv=$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=30))')
+  local G=(add --kind goal --text "ship the layers" --owner-quote q --where chat --done "the PR merged" --not-doing "the ledger" --review "$rv" --scope project)
+  hk guard-owner "$(python3 -c 'import json, shlex, sys
+print(json.dumps({"session_id": sys.argv[1], "cwd": sys.argv[2], "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                  "permission_mode": "default", "tool_input": {"command": shlex.join(["brain", "owner"] + sys.argv[3:])}}))' "$SID" "$P" "${G[@]}" --jira ABC-12)"
+  c_eq "$(hfield permissionDecisionReason)" "Pin owner goal G1 (review $rv, scope project, jira ABC-12), from \"chat\", done when \"the PR merged\", not doing \"the ledger\": \"ship the layers\"" "[jira] the owner's dialog line shows the key"
+  owner_ok "${G[@]}" --jira ABC-12; c_rc 0 "[jira] a goal with --jira: pinned"
+  br show G1 --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "ABC-12" "[jira] show --json holds the key"
+  br show G1; c_has "$OUT" $'\njira: ABC-12' "[jira] show prints the key as a line"
+  owner_ok "${G[@]}"; c_rc 0 "[jira] a goal without --jira: pinned"
+  br show G2 --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print("jira" in json.load(sys.stdin))')" "False" "[jira] a goal without it stores no jira field"
+  br show G2; c_hasnt "$OUT" "jira" "[jira] and show prints no jira line"
+  owner_ok supersede G1 --text "ship the layers, said again"; c_rc 0 "[jira] a goal superseded: rc 0"
+  br show G3 --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "ABC-12" "[jira] the key goes over to the superseding goal"
+  br op add --kind focus --text "capacity first" --owner-quote q1 --where chat --goal G3 --jira KIT_X1-781
+  c_rc 0 "[jira] a focus with --jira: written"
+  br show P1 --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the focus holds the key"
+  br op supersede P1 --text "capacity first, again" --reason wording; c_rc 0 "[jira] a focus superseded"
+  br show P2 --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the key goes over to the superseding focus"
+  br op add --kind focus --text "second" --owner-quote q2 --where chat --goal G3
+  br show P3 --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print("jira" in json.load(sys.stdin))')" "False" "[jira] a focus without it stores no jira field"
+  # refused: the shape of an intent's jira: key, and the kinds that take it
+  local bad
+  for bad in abc-12 ABC-0 ABC-012 A-1 "ABC-12 " $'ABC-12\n' $'AB\001-1' $'AB​-1' "ABC-12-3" "" "$(printf 'A%.0s' $(seq 41))-1"; do
+    br op add --kind focus --text "bad key" --owner-quote q4 --where chat --goal G3 --jira "$bad"
+    c_rc 64 "[jira] a focus with --jira '${bad:0:12}': usage"; c_has "$OUT$ERR" "Jira issue key like ABC-12" "[jira] saying what a key is"
+    owner_ok "${G[@]}" --jira "$bad"; c_rc 64 "[jira] a goal with --jira '${bad:0:12}': usage"
+  done
+  br op add --kind next --text "x" --jira ABC-12; c_rc 64 "[jira] --jira on a Next item: usage"
+  c_has "$OUT$ERR" "--jira is for a focus" "[jira] saying which kind takes it"
+  owner_ok add --kind decision --text "a rule" --owner-quote q --where chat --jira ABC-12; c_rc 64 "[jira] --jira on a decision: usage"
+  c_has "$OUT$ERR" "--jira is for a goal" "[jira] saying which kind takes it (owner)"
+  br show G4 --json; c_rc 1 "[jira] none of the refused writes stored an item"
+  br doctor; c_rc 0 "[jira] doctor rc 0: the chain holds"
+}
+
+case_focus_counts() {  # the card prints each live focus's counts from kb.py focus's file
+  newp
+  owner_ok add --kind goal --text "ship the layers" --owner-quote q --where chat --done "the PR merged" --not-doing "the ledger" \
+    --review "$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=30))')" --scope project
+  br op add --kind focus --text "capacity first" --owner-quote q1 --where chat --goal G1
+  br op add --kind focus --text "second focus" --owner-quote q2 --where chat --goal G1
+  c_rc 0 "[focus-counts] instrument: two live focus P1 and P2"
+  local key dir
+  key=$(python3 -c 'import hashlib, os, subprocess, sys
+c = os.path.realpath(os.path.join(sys.argv[1], subprocess.check_output(["git", "-C", sys.argv[1], "rev-parse", "--git-common-dir"], text=True).strip()))
+print("project-" + hashlib.sha256(c.encode()).hexdigest()[:16])' "$P")
+  dir="$XDG_STATE_HOME/vibemaestro/focus/$key"
+  card() { bpy 'import time; print("\n".join(l for l in s.card_lines(s.load(s.state_dir())[1], time.time()) if l[:3] in ("P1:", "P2:")))'; }
+  c_eq "$(card)" "$(printf 'P1: not counted yet\nP2: not counted yet')" "[focus-counts] no file: not counted yet"
+  mkdir -p "$dir"
+  printf '%s' '{"focus": "P1", "time": "2026-11-08T14:20:31Z", "counts": {"gate 1": 2}, "line": "P1: gate 1 2 · gate 2 0 · in progress 1 · waiting for the owner 0 · done 3"}' > "$dir/P1.json"
+  c_eq "$(card)" "$(printf 'P1: gate 1 2 · gate 2 0 · in progress 1 · waiting for the owner 0 · done 3 (11-08 14:20)\nP2: not counted yet')" \
+    "[focus-counts] a file: its line with its time; the focus with none: not counted yet"
+  printf 'not json {' > "$dir/P2.json"
+  c_eq "$(card | tail -n 1)" "P2: not counted yet" "[focus-counts] a file that does not parse: not counted yet"
+  printf '%s' '["P2"]' > "$dir/P2.json"
+  c_eq "$(card | tail -n 1)" "P2: not counted yet" "[focus-counts] a JSON that is not an object: not counted yet"
+  printf '%s' '{"focus": "P1", "time": "2026-11-08T14:20:31Z", "line": "P1: gate 1 9"}' > "$dir/P2.json"
+  c_eq "$(card | tail -n 1)" "P2: not counted yet" "[focus-counts] a file that names another focus: not counted yet"
+  printf '%s' '{"focus": "P2", "time": "yesterday", "line": "P2: gate 1 9"}' > "$dir/P2.json"
+  c_eq "$(card | tail -n 1)" "P2: not counted yet" "[focus-counts] a time that is not one: not counted yet"
+  printf '{"focus": "P2", "time": "2026-11-08T14:20:31Z", "line": "P2: %s"}' "$(printf 'x%.0s' $(seq 400))" > "$dir/P2.json"
+  R=$(card | tail -n 1)
+  c_eq "${#R}|${R: -14}" "300| (11-08 14:20)" "[focus-counts] a line over the card's line cap is cut and still ends with its time"
+  rm "$dir/P2.json"; mkdir "$dir/P2.json"
+  c_eq "$(card | tail -n 1)" "P2: not counted yet" "[focus-counts] a directory in place of the file: not counted yet"
+  # SessionStart:compact carries the line, and never a traceback
+  hk session-start "$(hin session_id=sA cwd="$P" hook_event_name=SessionStart source=compact)"
+  c_has "$(hfield additionalContext)" "- P1: gate 1 2 · gate 2 0 · in progress 1 · waiting for the owner 0 · done 3 (11-08 14:20)" "[focus-counts] the compact card carries the line"
+  c_hasnt "$(hfield additionalContext)$ERR" "Traceback" "[focus-counts] no traceback with a broken file beside it"
+  R=$(bpy 's.use_project("/tmp/a\0b"); print(s.focus_counts(["P1"])[0])' 2>&1)
+  c_eq "$R" "P1: not counted yet" "[focus-counts] a project path with a NUL: not counted yet, no crash"
+  # another directory's counts are not shown here: the same state base, a second project
+  newp; export XDG_STATE_HOME="$TMP/state$((NP-1))"
+  owner_ok add --kind goal --text "ship the layers" --owner-quote q --where chat --done "the PR merged" --not-doing "the ledger" \
+    --review "$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=30))')" --scope project
+  br op add --kind focus --text "capacity first" --owner-quote q1 --where chat --goal G1
+  c_eq "$(card | head -n 1)" "P1: not counted yet" "[focus-counts] another directory's file (same state base): not counted yet"
+}
+
 echo "== cases =="
-for c in case_paths case_where case_joiners case_selbits case_mdlinks case_selectors case_timeleft case_ignorable case_mdtail case_flap case_cachefail case_blank case_nonchar case_abbrev case_repair case_reset case_wipe case_hotmd case_damage case_chars2 case_modes case_fold case_supersede case_shrink case_dw case_budget case_cap case_sensitive case_nofilter case_writer case_edit \
+for c in case_focus_words case_jira case_focus_counts case_focus_done_when case_paths case_where case_joiners case_selbits case_mdlinks case_selectors case_timeleft case_ignorable case_mdtail case_flap case_cachefail case_blank case_nonchar case_abbrev case_repair case_reset case_wipe case_hotmd case_damage case_chars2 case_modes case_fold case_supersede case_shrink case_dw case_budget case_cap case_sensitive case_nofilter case_writer case_edit \
          case_tail case_cache case_control case_archive case_render case_lock case_record; do run_case $c; done
 cd "$TMP" || exit 1
 

@@ -29,6 +29,9 @@ Condition: you stand in a worktree, on the branch `intent/<date>-<slug>`; all ch
    changed fails; `open-pr.sh` adds the `Plan row:` line itself when the intent has `plan:`), and
    `git grep -nF '<FILL' -- kb` must come out empty (the mark is `tokens.spec.placeholder`: `<FILL` in a
    repo with `"language": "en"`; a repo on the default `vi` language greps for the Vietnamese mark that `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get tokens.spec.placeholder` prints).
+   **The spec and the plan say what the code taught:** if the work found something they did not know, they are updated in this
+   PR (no new approval) and the PR body says so. An AC of the story changes only by the owner's word, recorded as a decision of
+   the story with the owner's words quoted: `kb.py check intent` and `kb.py check links` are red on a story already on the base whose AC changed without one.
 3. **Acceptance with the repo's commands** (the test/build the app repo declares). Write the **commands and the real output** into an
    evidence file outside the repo (the session's temp directory). If it cannot run, the first line of the file says
    `NOT RUN: <concrete reason>` (token `tokens.not_run`: `NOT RUN:` with `"language": "en"`; a repo on the default `vi` language uses the Vietnamese token that `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get tokens.not_run` prints). Write one more file, a summary: what changed, why.
@@ -64,8 +67,8 @@ Condition: you stand in a worktree, on the branch `intent/<date>-<slug>`; all ch
    Spawn the review agent on the configured review model: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get agents.review_model`
    prints it, and it goes into the Agent tool's `model`. Give the agent the PR and the head SHA it reviews, not your conclusion:
    brief it with the template `reviewer-brief.md` next to this skill (spec verdict first, then quality; your report as claims to
-   check; files expected versus changed; the spec's `## Inputs and failure cases` table; a "declined to judge" list).
-   Every fix round ends with its own re-review of the changed functions read whole, and a class sweep per defect fixed
+   check; files expected versus changed; the spec's risks to cover; a "declined to judge" list).
+   A second round follows only a correctness defect and re-reads the changed functions whole; a class sweep per defect fixed
    (`before-ready` items 9 to 11). Tests follow rule `test-quality` (`rules/test-quality.instructions.md`): a new test is red on
    the base and green on the head; never revert the fix to see it red.
    If the read fails, use the plugin default (the same command with `--default`), tell the person what
@@ -105,7 +108,7 @@ that is a named exemption, not a back door for a change that has code.
 
 1. Which command did I run on the **last pushed version**, and what was the exit code?
 2. Is that output in the PR body, in the `## Run evidence` section?
-3. Which acceptance criterion has **no** command proving it yet? Name it in the report — do not leave the reader to find out.
+3. Which criterion or risk of the spec has **no** test or command proving it yet? Name it in the report — do not leave the reader to find out.
 
 The report states **the measured result** (`PR #N · <k> files · <command> exit 0`), not a feeling like "fully completed".
 

@@ -457,7 +457,7 @@ eq "$(grep -cF 'Brainstorm result' "$PLUGIN/skills/ship/SKILL.md" || true)" 0 "�
 has "$(cat "$PLUGIN/skills/intake/SKILL.md")" 'vibemaestro-sdlc:brainstorm' "intake gợi brainstorm khi yêu cầu mơ hồ"
 has "$(cat "$PLUGIN/skills/intake/SKILL.md")" 'do not brainstorm again' "intake không brainstorm lại khi gói đã có kết quả"
 has "$(cat "$PLUGIN/skills/spec/SKILL.md")" '## Brainstorm result' "spec lấy từ mục '## Kết quả brainstorm' của intent"
-has "$(cat "$PLUGIN/skills/spec/SKILL.md")" '`## Context`, `## Goal`, `## Out of scope`' "spec vẫn nêu ba mục đầu của khuôn theo thứ tự"
+has "$(cat "$PLUGIN/skills/spec/SKILL.md")" '`## Goal`, `## Constraints`, `## Acceptance criteria`' "spec nêu năm mục của khuôn suy ra từ story"
 hasnt "$(cat "$BS")" 'kb.py new spec' "brainstorm không tạo file spec"
 has "$(cat "$BS")" '**Do not create a separate spec file and do not write into the default output directory of the third-party process plugin (under `docs/`).**' "brainstorm: câu cấm tạo spec riêng / viết vào thư mục đầu ra của plugin bên thứ ba còn nguyên"
 BS_NODOCS=$(cat "$BS"); BS_NODOCS=${BS_NODOCS//'(under `docs/`)'/}
@@ -470,8 +470,9 @@ has "$BSB" 'docs/specs' "đối chứng dụng cụ: bản brainstorm bị phá 
 has "$(cat "$BS")" 'with no intent, do `vibemaestro-sdlc:intake` first' "brainstorm: chưa có intent thì làm intake trước"
 # Đích ghi (điểm thiết kế cốt lõi): CHÍNH file intent, không phải spec — nguyên văn bước 6 và dòng git add.
 BST=$(cat "$BS")
-B6='6. **Write the result into the intent file ITSELF** — add a `## Brainstorm result` section at the **end** of `kb/intent/<date>-<slug>.md`,'
-has "$BST" "$B6" "brainstorm bước 6: ghi vào CHÍNH file intent, mục '## Kết quả brainstorm' ở cuối (nguyên văn)"
+B6='7. **Write the result into the intent file ITSELF** — add a `## Brainstorm result` section at the **end** of `kb/intent/<date>-<slug>.md`,'
+has "$BST" "$B6" "brainstorm bước 7 (task, bug): ghi vào CHÍNH file intent, mục '## Kết quả brainstorm' ở cuối (nguyên văn)"
+has "$BST" '6. **A story: the result is the story itself.**' "brainstorm bước 6: với story, kết quả là chính story trong intent"
 has "$BST" 'git add kb/intent/<date>-<slug>.md' "brainstorm: git add file intent"
 hasnt "$BST" 'kb/specs/<date>-<slug>.md' "brainstorm không trỏ tới file spec làm đích ghi"
 hasnt "$BST" 'Write the result into the spec file' "brainstorm không có câu 'ghi kết quả vào file spec'"
@@ -494,7 +495,7 @@ for w in 'bash -n' 'py_compile' 'git diff --stat' 're-read the code' 'should pas
 done
 for w in 'Which command did I run on the **last pushed version**, and what was the exit code?' \
          'Is that output in the PR body, in the `## Run evidence` section?' \
-         'Which acceptance criterion has **no** command proving it yet? Name it in the report' \
+         'Which criterion or risk of the spec has **no** test or command proving it yet? Name it in the report' \
          'puts `NOT RUN: <concrete reason>`' 'a named exemption, not a back door for a change that has code'; do
   has "$SH" "$w" "ship nêu nguyên văn: ${w:0:50}…"
 done
@@ -517,8 +518,8 @@ done
 hasnt "$SH" 'enough to prove it runs' "ship không nói bash -n đủ để chứng minh chạy được"
 mut_lacks "$SH" 'says only that the syntax is right, not that it runs' 'enough to prove it runs' '| `bash -n` / `python -m py_compile` | says only that the syntax is right, not that it runs |' "đối chứng dụng cụ: đảo lý do hàng bash -n (tên còn) → hàng nguyên văn vắng"
 mut_has "$SH" 'says only that the syntax is right, not that it runs' 'enough to prove it runs' 'enough to prove it runs' "đối chứng dụng cụ: cùng phép phá → câu cấm xuất hiện (hasnt bắt được)"
-SHB=${SH//'3. Which acceptance criterion has **no**'/'3. xx **no**'}
-hasnt "$SHB" 'Which acceptance criterion has **no** command proving it yet' "đối chứng dụng cụ: câu 3 bị sửa → literal câu 3 vắng"
+SHB=${SH//'3. Which criterion or risk of the spec has **no**'/'3. xx **no**'}
+hasnt "$SHB" 'Which criterion or risk of the spec has **no** test or command proving it yet' "đối chứng dụng cụ: câu 3 bị sửa → literal câu 3 vắng"
 eq "$(printf '%s' "$SH" | grep -cE '_kanban_open_pr|kanban' || true)" 0 "ship không còn gọi kanban"
 [ "$(printf 'gọi _kanban_open_pr rồi kanban\n' | grep -cE '_kanban_open_pr|kanban' || true)" -ge 1 ] && ok "đối chứng dương: mẫu grep thấy 'kanban' trên chuỗi thử" || bad "mẫu grep không bắt được ca dương"
 

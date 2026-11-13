@@ -95,8 +95,8 @@ description: "Use when: a long-running session must keep a goal, a decision, a d
 | `brain op broke RULE --pointer P --differed D [--session S4]` | a rule did not hold: always, in the turn |
 | `brain op progress G1 --measure M --pointer P` | a goal's progress measure (≤ 80) |
 | `brain op add --kind request --text T --owner-quote Q --where W [--due YYYY-MM-DD] [--closes A]…` | what the owner asked (≤ 20); due days are named from 7 days before |
-| `brain op add --kind focus --text T --owner-quote Q --where W --goal G1` | the wave's focus (≤ 5); `--focus P1` on a Next item ties it |
-| `brain owner add --kind goal --text T --owner-quote Q --where W --done D --not-doing N --review YYYY-MM-DD --scope global\|project` | the owner set a goal (≤ 5) |
+| `brain op add --kind focus --text T --owner-quote Q --where W --goal G1 [--done-when D] [--not-doing N] [--jira KEY]` | the wave's focus (≤ 5), `D` and `N` the owner's words (a charter needs `D`; `op words P1 --done-when D` adds it in place), `KEY` a Jira issue key like ABC-12 (stored, shown, never synced); `--focus P1` on a Next item ties it |
+| `brain owner add --kind goal --text T --owner-quote Q --where W --done D --not-doing N --review YYYY-MM-DD --scope global\|project [--jira KEY]` | the owner set a goal (≤ 5); `KEY` a Jira issue key like ABC-12, shown in the dialog line |
 | `brain owner add --kind decision --text T --owner-quote Q --where W [--anchor A]… [--scope global]` | the owner decided (`global`: valid in every project; none is the project's) |
 | `brain owner add --kind window --text T --owner-quote Q --where W --expires 2026-10-17T22:00:00Z` | the owner delegated until a time |
 | `brain owner unpin ID`, `owner supersede ID [--text T]`, `owner promote ID POINTER` | the owner retires or replaces one (a goal's supersede may change `--done`, `--not-doing`, `--review`, `--scope`; a decision's `--scope`; without `--text` the words carry over), or moves it out of hot memory to a pointer |

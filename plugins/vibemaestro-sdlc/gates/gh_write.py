@@ -19,6 +19,7 @@ kind:
   issue-comment  issue (a number, or "@<id>" of an earlier issue-create in the same repo), body, marker [closed_ok]
   comment-edit   comment (its id), body
   issue-edit     issue, title and/or body
+  issue-labels   issue (an issue or a pull request number), add and/or remove (each at most 10 distinct names)
   pr-body-edit   pr, body
   issue-reopen   issue
   issue-close    issue, reason (completed | not_planned) [comment, or comment_file with sha256, and marker: a closing comment]
@@ -57,6 +58,15 @@ An issue-close with a `comment` (read like a body, pinned the same way) and its 
 in one op: the plan line carries the comment's digest, the post-check reads both, and the undo retracts the comment (an edit, as
 for issue-comment, never a deletion) and reopens the issue, only while the comment holds the posted body (or its retraction) and
 the issue is closed as the run closed it (or already open); if either changed since the run, both are left alone (rc 5).
+
+issue-labels sets the labels of an existing issue or pull request to the live set less `remove` plus `add`, in one PATCH of
+`labels` alone (the issues-labels endpoints would be a POST and a DELETE per name: two writes, and the engine has no DELETE).
+Every name in `add` must exist in the repository (this op never creates a label, as issue-create never does), and the plan
+refuses an op that changes nothing. The plan line names the before set and the after set, so a signature binds both and a
+label someone changed since refuses the run. Its undo puts the before set back only while the live set is still the after
+set, and only when each label it would put back is still in the repository; otherwise it names the labels it leaves (rc 5).
+The one PATCH replaces the set, so a label someone adds between the run step's read and the PATCH is lost: the same few
+milliseconds as any read-then-write here, and the plan line has refused every earlier change.
 
 The scope fence: a deletion (`refuse-delete`), a repository creation (`refuse-repo-create`), an unknown kind or key, and a spec
 that breaks the rules above are misuse (rc 64), refused before any call. A repository that is not private, or is internal
@@ -111,6 +121,7 @@ KINDS = {
     "issue-comment": ({"issue", "marker"}, {"closed_ok"}, True),
     "comment-edit": ({"comment"}, set(), True),
     "issue-edit": ({"issue"}, {"title"}, None),
+    "issue-labels": ({"issue"}, {"add", "remove"}, False),
     "pr-body-edit": ({"pr"}, set(), True),
     "issue-reopen": ({"issue"}, set(), False),
     "issue-close": ({"issue", "reason"}, {"marker"}, None),     # its body keys are `comment`, `comment_file` (BODY_KEYS_CLOSE)
@@ -171,7 +182,7 @@ _R = r"repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 WRITES = (
     ("POST", re.compile(r"%s/issues" % _R), {"title", "body", "labels"}),
     ("POST", re.compile(r"%s/issues/[0-9]+/comments" % _R), {"body"}),
-    ("PATCH", re.compile(r"%s/issues/[0-9]+" % _R), {"title", "body", "state", "state_reason"}),
+    ("PATCH", re.compile(r"%s/issues/[0-9]+" % _R), {"title", "body", "state", "state_reason", "labels"}),
     ("PATCH", re.compile(r"%s/issues/comments/[0-9]+" % _R), {"body"}),
     ("PATCH", re.compile(r"%s/pulls/[0-9]+" % _R), {"body", "state"}),
     ("POST", re.compile(r"%s/pulls" % _R), {"title", "body", "head", "base", "draft"}),
@@ -213,7 +224,9 @@ def allowed(method, path, payload):
 def values_ok(path, payload):
     """The values the spec checks, checked again at the door (defence in depth for a kit a session signs itself): a branch ref
     and a PR head are branch names of the same repository, a tree gets one regular file outside the fenced directories, a
-    commit's author and committer are a GitHub noreply address."""
+    commit's author and committer are a GitHub noreply address, labels are a list of names."""
+    if "labels" in payload and not (isinstance(payload["labels"], list) and all(isinstance(x, str) and x for x in payload["labels"])):
+        return False
     if path.endswith("/git/refs"):
         return branch_ok(payload["ref"][len("refs/heads/"):])
     if path.endswith("/pulls"):
@@ -331,6 +344,33 @@ def same_repo(a, b):
     return a.lower() == b.lower()
 
 
+def label_list(i, key, names):
+    """A list of at most 10 distinct label names, 1 to 50 characters each: issue-create's `labels`, issue-labels' `add` and `remove`."""
+    if not isinstance(names, list) or len(names) > 10 or any(
+            not isinstance(x, str) or not 1 <= len(x) <= 50 or CONTROL.search(x) for x in names) or len(set(names)) != len(names):
+        raise Refuse("refuse-spec", "op %d: %s is a list of at most 10 distinct names, 1 to 50 characters each" % (i, key))
+    return names
+
+
+def label_names(obj):
+    """The names of an issue's labels, sorted. A label this cannot read would be dropped from the PATCH, so it stops the op."""
+    got = obj.get("labels") or []
+    if not all(isinstance(x, dict) and isinstance(x.get("name"), str) for x in got):
+        raise G.Infra("a label of the issue has no name")
+    return sorted(x["name"] for x in got)
+
+
+def label_sets(op, obj, canon):
+    """(before, after), both sorted: the issue's live labels, and those less `remove` plus `add` (GitHub names a label whatever the
+    case; `canon` maps each `add` name to the repository's own spelling)."""
+    before = label_names(obj)
+    gone = {x.lower() for x in op.remove}
+    after = {x.lower(): x for x in before if x.lower() not in gone}
+    for x in op.add:
+        after.setdefault(x.lower(), canon.get(x, x))
+    return before, sorted(after.values())
+
+
 class Op:
     def __init__(self, i, d, spec_dir, creates):
         self.i, self.raw = i, d
@@ -367,11 +407,13 @@ class Op:
         if self.title is not None and (not isinstance(self.title, str) or not 1 <= len(self.title) <= 256
                                        or CONTROL.search(self.title)):
             raise Refuse("refuse-spec", "op %d: a title is 1 to 256 characters with no control character" % i)
-        self.labels = d.get("labels", [])
-        if not isinstance(self.labels, list) or len(self.labels) > 10 or any(
-                not isinstance(x, str) or not 1 <= len(x) <= 50 or CONTROL.search(x) for x in self.labels) \
-                or len(set(self.labels)) != len(self.labels):
-            raise Refuse("refuse-spec", "op %d: labels is a list of at most 10 distinct names, 1 to 50 characters each" % i)
+        self.labels, self.add, self.remove = (label_list(i, k, d.get(k, [])) for k in ("labels", "add", "remove"))
+        if kind == "issue-labels":
+            if not (self.add or self.remove):
+                raise Refuse("refuse-spec", "op %d (issue-labels) changes nothing: give names in add or remove" % i)
+            both = {x.lower() for x in self.add} & {x.lower() for x in self.remove}
+            if both:
+                raise Refuse("refuse-spec", "op %d (issue-labels): %s is in add and in remove" % (i, ", ".join(sorted(both))))
         self.marker = d.get("marker")
         if self.marker is not None and (not isinstance(self.marker, str) or not 4 <= len(self.marker) <= 200
                                         or CONTROL.search(self.marker)):
@@ -857,6 +899,7 @@ class Plan:
         self.spec, self.w, self.journal = spec, world, journal
         self.conds, self.lines = [], {}
         self.files = {}                                 # file-pr: op -> (base tip, its tree, mode, replaces, author e-mail, login)
+        self.sets = {}                                  # issue-labels: op -> (before, after)
         self.only = only
 
     def cond(self, name, good, detail):
@@ -976,6 +1019,8 @@ class Plan:
         if not self.cond("exists", obj is not None, "%s: %s%s%s" % (tag, op.repo, "#%d" % num, " is not a pull request (an issue, or no such number)" if
                                                                      obj is None and op.kind in ("pr-close", "pr-ready") else "")):
             return None
+        if op.kind == "issue-labels":                   # an issue or a pull request, open or closed
+            return self.issue_labels(op, tag, head, obj, target)
         if op.kind in ("issue-edit", "issue-reopen", "issue-close"):
             pr = obj.get("pull_request") is not None
             self.cond("not-pr", not pr, "%s: %s#%d is %s" % (tag, op.repo, num, "a pull request: an issue op does not act on "
@@ -1014,6 +1059,17 @@ class Plan:
             change = change or text != was
         self.cond("changes", change, "%s: the edit %s" % (tag, "changes something" if change else "changes nothing"))
         return "%s %s%s %s" % (head, op.repo, target, " ".join(parts))
+
+    def issue_labels(self, op, tag, head, obj, target):
+        canon = {}
+        for lab in op.add:
+            got = self.w.read("repos/%s/labels/%s" % (op.repo, q(lab)))
+            real = isinstance(got, dict) and isinstance(got.get("name"), str) and got["name"].lower() == lab.lower()
+            self.cond("labels", real, "%s: label %s in %s" % (tag, json.dumps(lab), op.repo))
+            canon[lab] = got["name"] if real else lab
+        before, after = self.sets[op.i] = label_sets(op, obj, canon)
+        self.cond("changes", before != after, "%s: the labels %s" % (tag, "change" if before != after else "stay the same"))
+        return "%s %s%s labels before %s after %s" % (head, op.repo, target, json.dumps(before), json.dumps(after))
 
     def branch_tip(self, repo, branch):
         return ref_tip(self.w, repo, branch)
@@ -1167,6 +1223,10 @@ def mode_do(spec, i, plan_file):
         path, method = "repos/%s/pulls" % op.repo, "POST"
     elif op.kind == "file-pr":
         return file_pr_do(p, op, e, j, text)
+    elif op.kind == "issue-labels":
+        before, after = p.sets[i]
+        e.update(number=op.number, before={"labels": before}, after=after)
+        payload, path, method = {"labels": after}, "repos/%s/issues/%d" % (op.repo, op.number), "PATCH"
     else:
         obj = w.read("repos/%s/issues/%d" % (op.repo, op.number))
         e.update(number=op.number, before={"body": body_of(obj), "title": obj.get("title"), "state": obj.get("state"),
@@ -1394,6 +1454,8 @@ def mode_postcheck(spec_path):
                         problems.append("closed as %s, not %s" % (obj.get("state_reason"), e["reason"]))
                     if k == "issue-close" and e.get("comment_posted") is not None:
                         problems.extend(close_comment_problems(w, e))
+                    if k == "issue-labels" and label_names(obj) != e["after"]:
+                        problems.append("labels are %s, not %s" % (json.dumps(label_names(obj)), json.dumps(e["after"])))
                     if k == "issue-create":
                         have = set(x.get("name") for x in obj.get("labels") or [] if isinstance(x, dict))
                         if not set(e.get("labels") or []) <= have:
@@ -1420,6 +1482,7 @@ def describe_undo(e):
             "comment-edit": "put back the body of comment %s in %s" % (e.get("comment"), repo),
             "issue-edit": "put back the title and body of %s" % num,
             "pr-body-edit": "put back the body of %s" % num,
+            "issue-labels": "put the labels of %s back to %s" % (num, json.dumps((e.get("before") or {}).get("labels"))),
             "issue-reopen": "close %s again" % num,
             "issue-close": ("retract comment %s on %s, then reopen it (closed by op %d)" % (e.get("comment") or "?", num, e["op"])
                             if e.get("comment_posted") is not None else "reopen %s" % num),
@@ -1547,6 +1610,8 @@ def undo_entry(j, i):
         return "%s#%d is gone: left alone" % (repo, e["number"])
     if k == "issue-close" and e.get("comment_posted") is not None:
         return undo_close_comment(w, e, obj, path)
+    if k == "issue-labels":
+        return undo_labels(w, e, obj, path)
     if k == "issue-edit":
         mine = (e.get("title") is None or obj.get("title") == e["title"]) and ("posted" not in e or body_of(obj) == e["posted"])
         if obj.get("title") == b["title"] and body_of(obj) == b["body"]:
@@ -1571,6 +1636,21 @@ def undo_entry(j, i):
     if obj.get("state_reason") != e["reason"]:
         return "closed as %s since the run: left alone" % obj.get("state_reason")
     api("PATCH", path, {"state": "open"})
+    return "undone"
+
+
+def undo_labels(w, e, obj, path):
+    """Put the before set back while the issue holds the after set. A label the run took off and the repository no longer has
+    would be created by the write: that stops the undo, which names it."""
+    live, was, ran = label_names(obj), e["before"]["labels"], e["after"]
+    if live == was:
+        return "untouched"
+    if live != ran:
+        return "the labels changed since the run (now %s, the run left %s): left alone" % (json.dumps(live), json.dumps(ran))
+    lost = [x for x in was if x not in ran and w.read("repos/%s/labels/%s" % (e["repo"], q(x))) is None]
+    if lost:
+        return "label %s is not in %s any more, the undo would create it: left alone" % (json.dumps(lost), e["repo"])
+    api("PATCH", path, {"labels": was})
     return "undone"
 
 

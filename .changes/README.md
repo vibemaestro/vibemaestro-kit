@@ -17,6 +17,14 @@ One line a user of the installed plugin understands: what changes for them.
   break in a minor.
 - `upgrade:` is optional; leave it out when an existing user has nothing to do and notices nothing. A release writes these lines
   under `### Upgrade notes` in the version's CHANGELOG section.
+- `supersedes:` and `cancels:` are optional: the earlier change files this one replaces or undoes, by their name without the
+  leading date and `.md` (`kit-x` for `.changes/2026-10-20-kit-x.md`; exactly one file may match, so no two change files share their name
+  without the date), comma-separated (pending or
+  already consumed). A public release describes the final state since the previous public version,
+  so a superseded change's line and upgrade note leave it (write this file's line as the final behaviour), and a cancelled one
+  leaves with this file's own line, unless what it cancels was already published (then the line tells users what they lose).
+  Name every earlier change your change makes untrue, in the plugins this file names; a named file names one of them too, and
+  a `cancels:` never names a file that has marks of its own (write what holds now instead).
 - The pull request writes no version anywhere (the private repo carries none: no `version` in a `plugin.json` or
   `marketplace.json`, none in a kb page), edits no change file already on main except to add or change its `upgrade:` line, and
   never deletes this README. The files here

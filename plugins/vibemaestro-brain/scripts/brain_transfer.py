@@ -534,6 +534,12 @@ def vet_item(it):
             s.check_text(field, it[key])
         if s.parse_day(it.get("review")) is None or it.get("scope") not in s.SCOPES:
             raise s.Refused(1, "its review day or scope is not a goal's")
+    if letter == "P":                               # a focus's words: a text of the largest quote a store allows, or none
+        for field, key in (("done", "done"), ("not-doing", "not_doing")):
+            if it.get(key) is not None and not isinstance(it[key], str):
+                raise s.Refused(1, "its %s is not a text" % field)
+            if it.get(key) is not None:             # a store never writes an empty word
+                s.check_text(field, it[key], cap=s.RANGES["quote_max"][1])
     if letter == "D" and it.get("scope") is not None and it.get("scope") not in s.SCOPES:
         raise s.Refused(1, "its scope is not global or project")
     for key, want in (("goal", "G"), ("focus", "P")):
@@ -544,6 +550,10 @@ def vet_item(it):
         raise s.Refused(1, "a focus without its goal")
     if it.get("due") is not None and s.parse_day(it.get("due")) is None:
         raise s.Refused(1, "its due day is not a day")
+    jira = it.get("jira")
+    if jira is not None and not (isinstance(jira, str) and letter in ("G", "P") and len(jira) <= s.JIRA_MAX
+                                 and s.JIRA_RX.fullmatch(jira)):
+        raise s.Refused(1, "its jira is not a Jira issue key of a goal or a focus")
     if it.get("no_goal") is not None:
         if not isinstance(it["no_goal"], str):
             raise s.Refused(1, "its reason for no goal is not a text")
@@ -739,7 +749,9 @@ def over_caps(it, words=None):
     if s.units(it["text"]) > s.text_max(letter):
         return "its text is %d units, over this brain's cap of %d" % (s.units(it["text"]), s.text_max(letter))
     for what, x in (("the owner's words are", q if letter in s.QUOTED else None),
-                    ("the owner's words of its chain are", (words or {}).get("quote"))):
+                    ("the owner's words of its chain are", (words or {}).get("quote")),
+                    ("its done when is", it.get("done") if letter == "P" else None),
+                    ("its not doing is", it.get("not_doing") if letter == "P" else None)):
         if isinstance(x, str) and s.units(x) > s.quote_max():
             return "%s %d units, over this brain's cap of %d" % (what, s.units(x), s.quote_max())
     return None
@@ -751,6 +763,9 @@ def blocked(ctx, st, items, it, words=None):
     src, carried = ctx["st"], ctx["carried"]
     if ctx["wrote"].get(it["id"]) in carried or (words and ctx["wrote"].get(words["id"]) in carried):
         return "its line carries a placeholder: the chain does not vouch for it; re-add it by hand if it holds"
+    if it["id"][0] == "P" and any(op.get("op") == "words" and op.get("id") == it["id"] and op.get("seq") in carried
+                                  for op in ctx["ops"]):   # a `words` line is no item writer; an earlier item's words went into the supersede line
+        return "its words line carries a placeholder: the chain does not vouch for it; re-add it by hand if it holds"
     x, seen = it, set()
     while isinstance(x.get("supersedes"), str) and x["id"] not in seen:
         seen.add(x["id"])
@@ -885,8 +900,8 @@ def import_lines(item, sid, words):
     w = src.get("where")
     frm = 'from "%s"%s' % (w, " (an id at the source)" if SUPERSEDES.fullmatch(w or "") else "")
     if letter == "G":
-        head = 'Pin owner goal %s (review %s, scope %s), %s, done when "%s", not doing "%s": "%s"' % (
-            iid, item["review"], item["scope"], frm, item["done"], item["not_doing"], item["text"])
+        head = 'Pin owner goal %s (review %s, scope %s%s), %s, done when "%s", not doing "%s": "%s"' % (
+            iid, item["review"], item["scope"], ", jira %s" % item["jira"] if item.get("jira") else "", frm, item["done"], item["not_doing"], item["text"])
     elif letter == "D":
         head = 'Pin owner decision %s (%s)%s, %s: "%s"' % (iid, s.DECISION_KIND, " (scope %s)" % item["scope"]
                                                            if item.get("scope") else "", frm, item["text"])
@@ -933,6 +948,8 @@ def plan_owner(ctx, st, raw, ops, now, confirm=None):
                     "anchors": list(it.get("anchors") or []), "supersedes": None}
             if letter == "G":
                 item.update({k: it[k] for k in s.GOAL_FIELDS})
+                if it.get("jira") is not None:
+                    item["jira"] = it["jira"]
             elif letter == "D" and it.get("scope") is not None:
                 item["scope"] = it["scope"]
             prov = provenance(ctx, sid, now)
@@ -1087,7 +1104,8 @@ def plan_right(ctx, st, ops, raw, letters, now):
                     "anchors": list(it.get("anchors") or []), "supersedes": None}
             if it.get("closes"):
                 item["closes"] = list(it["closes"])
-            item.update({k: it[k] for k in ("due", "no_goal") if it.get(k) is not None})
+            item.update({k: it[k] for k in ("due", "no_goal", "jira") + (("done", "not_doing") if letter == "P" else ())
+                         if it.get(k) is not None})
             item.update(refs)
             item["import"] = provenance(ctx, sid, now)
             op = {"op": name, "item": item, "t": source_time(it, now), "by": s.by()}

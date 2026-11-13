@@ -1,3 +1,4 @@
+intent_branch: WARNING (intake.focus: warn): kb/intent/2026-01-01-g3.md has no `type:` (story, task or bug) and no `focus:` (an open focus of the brain, like P1) in its frontmatter: kb.py new intent <slug> --type <t> --focus <P> writes both
 intent_branch: could not create the tracking issue (best-effort, does NOT block the branch): không đọc được số issue từ output `gh issue create`: 'created'
        branch intent/2026-01-01-g3 is created; add `issue: N` to kb/intent/2026-01-01-g3.md by hand if needed.
        NO TRACKING ISSUE WAS RECORDED. Check `gh issue list --label intent` first (a call that timed out may still have created one), then retry once the cause is fixed: intent-branch.sh retry-issue --slug 2026-01-01-g3

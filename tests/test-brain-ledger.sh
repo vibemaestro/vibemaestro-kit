@@ -410,7 +410,8 @@ case_card() {
        "G1
 G2
 dormant
-ledger" "[g] the ledger lines in order: one line per goal, dormant, the record due, and nothing else"
+ledger
+- P1: not counted yet" "[g] the ledger lines in order: one line per goal, dormant, the record due, then the focus counts, and nothing else"
   c_has "$card" "- G1 review in 12 d · focus P1 · progress \"2 of 4 rows merged\" (" "[g] a goal's line: its review, focus and progress"
   c_has "$card" "- G2 review in 40 d · no focus · no progress yet" "[g] a goal with none of them"
   c_hasnt "$card" "sessions" "[g] no sessions part: counting a goal's sessions is an extension's"

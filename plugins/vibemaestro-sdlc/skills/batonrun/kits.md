@@ -27,8 +27,8 @@ planner, main's files must all be docs). On `FAIL  behind` main is merged into t
 `??  behind` (a test merge still stale) rehearse again a minute later. Do not merge main into a queued PR before the guard has refused it: that
 costs a full CI cycle for nothing.
 
-`kit:gh-write` is for the small GitHub writes: open an issue, comment, edit your comment, an issue's title or body, a PR body,
-reopen or close an issue, close a PR, mark a draft PR ready, open a PR from a pushed branch, propose one file as a PR. Do not
+`kit:gh-write` is for the small GitHub writes: open an issue, comment, edit your comment, an issue's title or body, the labels of an issue or a PR (`issue-labels`: `add` and `remove`, labels the
+repository already has), a PR body, reopen or close an issue, close a PR, mark a draft PR ready, open a PR from a pushed branch, propose one file as a PR. Do not
 hand-write a baton for these; one of them alone (a comment, a ticket) is a simple write, made directly. Write one JSON spec (`gates/gh_write.py --help` gives the format)
 with the Write tool to a fresh path and, in the same response, run:
 
@@ -89,7 +89,7 @@ The pull-request ops pin what they act on:
   that tip, then the branch, then the PR. Undo closes the PR. The branch stays, because this baton never deletes, so the undo
   names the branch and the run ends with exit 5; once the owner has deleted the branch, `--recover` closes the run.
 
-Deletions (but a merged branch: `kit:branch-delete` below), public repositories and anything outside these kinds stay
+Deletions (but a merged branch, or one a local clone holds whole: `kit:branch-delete` and `kit:branch-delete-recoverable` below), public repositories and anything outside these kinds stay
 hand-written batons, signed by the owner.
 
 `kit:bootstrap` sets up BatonRun on a machine (the launcher, the permission block, attribution off where a key is
@@ -105,11 +105,13 @@ undo puts the file back byte for byte while it holds what the run wrote. A file 
 rehearse (`nothing to do`); an old pattern in another settings scope is named, and the owner removes it there. Its card says
 the cost of this version: an owner in auto confirms the mode once more (one dialog) and trusts the remote list again.
 
-`kit:branch-push` pushes one local branch as a new branch of its private GitHub repository. Run it from the clone:
+`kit:branch-push` pushes one local branch as a new branch of its private GitHub repository. Run it from any directory, naming
+the clone by its absolute path (`--clone`; the directory you stand in is never read, so the owner's `sign` works from anywhere):
 
-    <launcher> go kit:branch-push --branch <name> --head <full sha> --repo <owner/name> [--remote <name>]
+    <launcher> go kit:branch-push --branch <name> --head <full sha> --repo <owner/name> --clone <absolute path> [--remote <name>]
 
-The remote's URL must name github.com/`--repo` over https or ssh; the kit then talks to that repository from a scratch
+A call without `--clone` is refused (exit 64), and so is a clone that is not an absolute path, not a directory, or not the top
+of a git work tree (exit 3), before anything is written. The remote's URL must name github.com/`--repo` over https or ssh; the kit then talks to that repository from a scratch
 repository with no config of its own and none of the user's, reading the clone's objects. So nothing in the clone's config or
 hooks (a `pushurl`, an `insteadOf` rule, `core.sshCommand`, a proxy, `push.followTags`, a hook) changes where the push goes
 or runs during it. Its git calls also get an allowlisted environment (PATH, HOME, the locale, `SSH_AUTH_SOCK`, `GIT_SSH_COMMAND`,
@@ -165,8 +167,30 @@ at the pinned SHA through the API, and a branch there again at another SHA is le
 while the branch is gone (an answer lost, or someone else deleted it) is an unknown outcome: undo puts the branch back when
 its proof no longer holds or a read of the proof fails, so no commit is lost, and leaves it for the owner (exit 5) when the
 proof still holds, the record names no proof, or the repository no longer reads as private or cannot be listed; a branch there again at another
-SHA is left and named (exit 5). Tags and unmerged branches stay
-hand-written batons the owner signs.
+SHA is left and named (exit 5). Tags stay hand-written batons the owner signs; an unmerged branch a local clone holds whole
+goes through `kit:branch-delete-recoverable`.
+
+`kit:branch-delete-recoverable` deletes one branch of a private GitHub repository at a pinned head, merged or not, after
+keeping it in a bundle. It declares `Stops: recoverable-delete`, so the owner signs each run; only a `kit:` baton may declare
+that word (`check` refuses it elsewhere). The clone is a value:
+
+    <launcher> go kit:branch-delete-recoverable repo='<owner/name>' branch='<name>' head='<full sha>' clone='<absolute path>'
+
+Rehearse refuses all that `kit:branch-delete` refuses except an unmerged branch, and a clone that does not hold the head
+whole: its `.git` not a directory (a worktree, a submodule, no repository), shallow, partial (`extensions.partialClone`, a
+promisor remote or a `.promisor` pack), using alternates, with grafts, or lacking an object of the head. That last proof is
+`rev-list --objects --missing=error <head>` in the kit's scratch repository with the clone's object directory as its
+alternate: no git command runs inside the clone, and its config file is only read, as a file, for `origin`. The run's
+first write bundles the head as `refs/heads/<branch>` into
+`<state-dir>/bundles/kit-branch-delete-recoverable-<16 hex>-<head>.bundle` and verifies it in an empty repository (that one
+head, every object of it). The delete is the same gate, with the plan line `delete branch <b> at <sha> (kept in bundle
+<path>) on <url>`: before it pushes, it checks that the bundle at that path, a regular file under `bundles/`, holds that one
+head and every object of it. The post-check wants the branch gone and the bundle still whole. Undo reads only the run record
+(the head, the delete's state, the push URL) and the bundle: when the branch is gone it unbundles into a scratch repository
+and pushes the head back create-only; a branch there again at another SHA is left and named. Bundles are kept as run logs
+are, the newest 200 of the kit's exact name shape (the bundle's plan line says so); until then the owner can push a deleted
+branch back from its bundle. `check` refuses any other baton whose code holds the literal path `baton/bundles` (a text check: a glob, a variable
+or a parent directory gets past it); like the signature records, the bundle guards against slips, not against a process of the same user.
 
 `kit:plugin-update` updates every plugin of this machine's `vibemaestro` marketplace (user scope), through Claude Code's own
 `claude plugin marketplace update` and `claude plugin update`, with no owner signature (`Stops: none`):
@@ -174,6 +198,13 @@ hand-written batons the owner signs.
 - each marketplace-local plugin, an entry whose source is `./plugins/<its name>`, to the marketplace's own main.
 
     <launcher> go kit:plugin-update <full kit sha>
+
+A signature binds a kit baton to its plugin's versioned directory, which an update moves: another session's signed run that has not
+started, or a queued item (pending or signed), of a plugin this update moves would stop matching, and the owner would sign it again.
+So at rehearse and again in run, before any write, the kit refuses while one is waiting and names it (the baton or the queued item's
+id, its time and its directory, as the log records them). `--wait <seconds>` (1 to 300, for each of the two checks) checks again every
+second until none is waiting, then goes on, and refuses when the seconds pass first; a run that has begun is not waited for, nor is this
+run's own signature. What a signature binds is the owner's design choice and is not changed by this kit.
 
 The claude directory is `CLAUDE_CONFIG_DIR` when set (a relative one is refused), else `~/.claude`. The kit reads the
 marketplace layout from the `vibemaestro` clone instead of assuming one, and knows two:
@@ -265,7 +296,46 @@ post-check wants it at the pinned head (gh starts it by branch name, so a branch
 and undo cancels that run). Undo cancels the run only when the record says `sent`, and only for its own record; two new
 matches, a new match without `sent`, or `sent` with no run showing, are left for the owner (exit 5).
 
+A workflow that uses secrets runs only on the repository's default branch: on any other ref the kit refuses (exit 3, nothing planned or
+started) when the workflow file at the ref's head holds a `secrets` reference (`secrets.X`, `secrets['X']`, `secrets: inherit`,
+`toJSON(secrets)`), a job `environment:`, or a local reusable workflow (`uses: ./.github/workflows/<file>`) that does. The check reads the
+branch's file at the pinned head, not main's, and fails closed: a file it cannot read (API error, a called workflow missing, a call to a
+workflow of another repository, a default branch it cannot read) refuses and says why. The line names the workflow, the ref and the first
+reference found: merge the workflow to the default branch and run it there, or the owner acts. A workflow with no secret still runs on any
+branch, and the default branch is unchanged. The scan is by line, not a YAML parser: a comment, a job input named `environment:` or
+`secrets.yaml` on its own refuses too, and `secrets` at the end of a line is not seen. gh starts a run by branch name, so a push between the
+scan and the start is caught only by the post-check, which cancels that run.
+
 In a sandbox session (`VIBEMAESTRO_ROLE=worker`, or `SEAT` and `INTENT_SLUG` both set, deprecated) it refuses at rehearse, before any gh call: the pod's token has no `actions:write`, so ask whoever briefed the session to start the workflow run.
+
+`kit:owner-merge` merges, under one owner signature, 1 to 8 pull requests the guarded merge refuses by design (a deny glob, a
+new baton, a `signing-rules` red the plan marks `(signs again)`). Post-check each pull request first (head, CI, changed files), then
+one call for the whole sitting:
+
+    <launcher> go kit:owner-merge <owner/repo> <pr> <head sha40> [--accept-red <check>]... [--require-image <ref>] [--no-checks] [--admin] [<owner/repo> <pr> <head sha40> [options]]...
+
+A word that is not an option starts the next pull request; each option belongs to the pull request before it. A check name is
+percent-encoded (`internal-term%20scan`, `build%20%28linux%29`): the owner's dialog takes plain words only. `go` exits 8 with one
+card, one plan line per pull request (head, files count and hash, checks, accepted reds, admin); the owner signs one `sign --by
+owner --seal …` dialog and one `run` merges them in order, each read again just before its merge and pinned with
+`--match-head-commit`. Rehearse refuses (exit 3, naming the pull request) when any one is not open, a draft, at another head, not
+mergeable, has a red check run or commit status it does not accept (read as the guarded merge reads them: every run, the latest
+per workflow and name), no check run that passed (only skipped runs or statuses), an accepted red that is absent or not red, a check run under `--no-checks`, or a
+required image missing. A later pull request of the same repository merges once GitHub reports it mergeable again (it waits while
+GitHub answers UNKNOWN). A conflict, a moved head or a refused merge stops the run there: the merges before it stay, the run and its
+undo name each (a merge GitHub only queued too), the result says the state is unknown, and the way back is a revert PR each, told to the owner.
+
+`kit:label-create` creates new labels in one repository (`kit:gh-write`'s `issue-labels` only sets labels the repository already
+has). One call for 1 to 20 names, in mode auto it runs with no dialog (`Stops: none`):
+
+    <launcher> go kit:label-create <owner/repo> <name> [<name>]...
+
+A name is 1 to 50 of `A-Z a-z 0-9 : . _ / + -`, starting with a letter or digit; it gets GitHub's default colour and no
+description. One plan line per name (`label-create <owner/repo> <name>`). Rehearse refuses the whole call (exit 3) when any name is
+already a label of the repository, its case ignored as GitHub compares them; run reads the labels again right before each create
+and stops at the first that exists by then or that GitHub refuses: the labels before it stay, the run and its undo name them, and
+the result says the state is unknown. Undo deletes nothing: deleting a label removes it from every issue that carries it, so it
+names each label of the call the repository holds, for the owner to delete.
 
 ## A kit from a dependent plugin
 

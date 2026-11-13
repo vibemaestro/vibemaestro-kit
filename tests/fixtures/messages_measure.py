@@ -24,7 +24,7 @@ VI = re.compile(r"[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽê
 PARSING = {   # file → the top-level names whose strings read both languages (never printed as a message)
     "current_state.py": {"_W", "_COUNT_AFTER", "_COUNT_BEFORE", "_RANK_BEFORE", "HISTORY", "HEADING_HISTORY", "_OVER_TEXT"},
     "kb_plan.py": {"COLUMNS", "DECISIONS_RX", "DROPPED_RX", "NONE_CELL"},
-    "kb.py": {"INPUTS_NONE_RX"},
+    "kb.py": {"INPUTS_NONE_RX", "NOT_DOING_NONE", "STORY_PARTS", "STORY_LINE_RX", "STORY_RECOMMEND", "STORY_REASON", "WHEN_THEN_RX"},
     "kb_index.py": {"fold"},
     "pr_evidence.py": {"E2E_SKIP"},
 }

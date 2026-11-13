@@ -36,6 +36,7 @@ ignored for one minor version after this one, so an old adapter does not die wit
 
 rc: 0 done · 64 bad arguments (also a title that violates `pr.title`, an invalid config) · 66 unreadable file · 67 no `gh` on the
     machine · 1 `gh` refused · 2 body cannot be built (an empty summary, or a body over `pr.body.*`: see `gates/pr_body.py`) · 3 evidence missing · 4 current-state gate · 5 not in a worktree
+    · 6 a story's kb check refused (`kb.py check spec --strict`, and `check intent --strict` where kb.py has it)
 65 is RETIRED (it was "transport not declared") and reserved: never reused for config errors (those are 64 in a core; 65 is
 only for `kb.py` and the gates).
 """
@@ -150,12 +151,13 @@ def worktree_why(lang="vi"):
 # Thân PR — khuôn 4 mục, dựng ở ĐÚNG MỘT chỗ
 # ---------------------------------------------------------------------------
 def plan_row_line(root, head, slug=""):
-    """The one `Plan row:` line for the PR of `intent/<stem>` when `kb/intent/<stem>.md` has `plan: <file>#<row>`, else "". It is
-    for people: `kb.py plan status` finds the PR by its branch, never by this line."""
-    if not head.startswith("intent/"):
+    """The one `Plan row:` line for the PR of `intent/<stem>` (or the key branch `intent/<key>-<slug>`) when its intent has
+    `plan: <file>#<row>`, else "". It is for people: `kb.py plan status` finds the PR by its branch, never by this line."""
+    rel = kb_plan.intent_of_branch(root, head[len("intent/"):]) if head.startswith("intent/") else None
+    if not rel:
         return ""
     try:
-        with open(os.path.join(root, "kb", "intent", head[len("intent/"):] + ".md"), encoding="utf-8") as f:
+        with open(os.path.join(root, rel), encoding="utf-8") as f:
             fm = kb_index.front_block(f.read().split("\n"))[0]
     except (OSError, UnicodeDecodeError):
         return ""
@@ -165,6 +167,32 @@ def plan_row_line(root, head, slug=""):
     if slug:
         return "Plan row: [%s of %s](https://%s/%s/blob/%s/%s)" % (ref[1], ref[0], os.environ.get("GH_HOST") or "github.com", slug, head, ref[0])
     return "Plan row: `%s` of `%s`" % (ref[1], ref[0])
+
+
+def story_gate(root, head):
+    """(rc, msg) of the kb checks a story's PR passes under `--strict` (`intent/<stem>` or the key branch `intent/<key>-<slug>`,
+    whose intent says `type: story`): its intent, then the spec its `spec:` names. rc 0 for any other branch; 6 with the check's
+    output when one is red."""
+    rel = kb_plan.intent_of_branch(root, head[len("intent/"):]) if head.startswith("intent/") else None
+    if not rel:
+        return 0, ""
+    try:
+        with open(os.path.join(root, rel), encoding="utf-8") as f:
+            fm = kb_index.front_block(f.read().split("\n"))[0]
+    except (OSError, UnicodeDecodeError):
+        return 0, ""
+    if fm.get("type") != "story":
+        return 0, ""
+    kb = os.path.join(os.path.dirname(os.path.realpath(__file__)), "kb.py")
+    for what, target in (("intent", rel), ("spec", fm.get("spec"))):
+        if not target:
+            continue
+        r = subprocess.run([sys.executable, kb, "check", what, target, "--strict"], cwd=root, capture_output=True, text=True)
+        if what == "intent" and r.returncode == 64:
+            continue        # shortcut: rc 64 = this kb.py has no `check intent` yet; drop the skip once it has one
+        if r.returncode:
+            return 6, (r.stdout + r.stderr).strip()
+    return 0, ""
 
 
 def build_body(summary, evidence, crit="", fixes="", root="", closes="", cfg=None, plan=""):
@@ -506,6 +534,10 @@ def main(argv):
         err("the current-state gate refuses: the PR is NOT opened.\n" + cs_msg)
         return 4
     print("current-state gate: %s" % cs_msg, file=sys.stderr)
+    st_rc, st_msg = story_gate(top or cwd, head)
+    if st_rc:
+        err("a story's kb check refuses (--strict): the PR is NOT opened.\n" + st_msg)
+        return st_rc
 
     payload = {"title": a.title, "head": head, "base": a.base, "body": body}
     if a.draft or cfg["pr"]["draft"]:

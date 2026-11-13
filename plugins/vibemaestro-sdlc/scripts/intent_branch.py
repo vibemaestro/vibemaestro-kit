@@ -6,6 +6,7 @@ The usage `--help` prints (the model, the decisions (a) to (g) this core enforce
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -16,16 +17,20 @@ import sys
 # worktree chỉ có MỘT bản — kể cả phần gỡ GIT_DIR/GIT_WORK_TREE khỏi env.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from open_pr import in_linked_worktree, worktree_hint, worktree_why  # noqa: E402
+import kb_plan  # noqa: E402
 import messages  # noqa: E402
 import sdlc_config  # noqa: E402
 
 RC_ENV, RC_INTENT_FILE, RC_BLOCK, RC_TARGET, RC_EXISTS, RC_USAGE = 2, 3, 4, 5, 6, 64
 RC_WRONG_TREE = 7
+RC_INTAKE = 9                    # under intake.focus required: no `type:`/`focus:`, or a focus not open; nothing was created
 
 # Defaults of `branch.protected` and `branch.intent_prefix`; `main()` replaces them from `.vibemaestro/sdlc.json` of the repo.
 PROTECTED = ("main", "master")
 
 PREFIX = "intent/"
+
+ISSUE_CODE = None   # `issue.code`: the repository's 3-letter code, or None (branches keep `intent/<date>-<slug>`)
 
 LANG = "vi"     # the language of the messages (messages.py): `main` sets it from the repo at `--cwd`
 
@@ -38,7 +43,7 @@ def M(key, *args):
 def apply_config(cwd):
     """Load the repo's config into PREFIX and PROTECTED. rc 0, or RC_USAGE (64) naming the key of an invalid config.
     A directory that is not a git repo keeps the defaults: the command reports that itself."""
-    global PREFIX, PROTECTED, REBASE_IDENTITY
+    global PREFIX, PROTECTED, REBASE_IDENTITY, INTAKE_FOCUS, ISSUE_CODE
     rc, top = git("rev-parse", "--show-toplevel", cwd=cwd)
     if rc != 0:
         return 0
@@ -49,6 +54,8 @@ def apply_config(cwd):
     PREFIX = cfg["branch"]["intent_prefix"]
     PROTECTED = tuple(cfg["branch"]["protected"])
     REBASE_IDENTITY = cfg["rebase"]["identity"]
+    INTAKE_FOCUS = cfg["intake"]["focus"]
+    ISSUE_CODE = cfg["issue"]["code"]
     return 0
 
 
@@ -194,8 +201,10 @@ def branch_held_elsewhere(branch, cwd):
 # `intent/<ngày>-<slug>` ↔ `kb/intent/<ngày>-<slug>.md`. Đọc cây làm việc chứ
 # không đọc `origin/main`: PM ghi file rồi mới tạo branch, nên lúc cổng chạy
 # file thường còn chưa commit.
+# A key branch `intent/<KEY>-<slug>` (`issue.code`) is the intent whose frontmatter says `key: <KEY>` (kb_plan.intent_of_branch).
 def intent_doc_path(root, intent_branch):
-    return os.path.join(root, "kb", "intent", slug_of(intent_branch) + ".md")
+    rel = kb_plan.intent_of_branch(root, slug_of(intent_branch)) or "kb/intent/%s.md" % slug_of(intent_branch)
+    return os.path.join(root, rel)
 
 
 # ---------------------------------------------------------------------------
@@ -238,17 +247,74 @@ def set_doc_issue(doc_path, number):
     frontmatter) — khi đó không dòng nào khớp để sửa, và hồ sơ ĐƯỢC GIỮ NGUYÊN
     thay vì âm thầm không đổi gì trong khi người gọi tưởng đã ghi xong.
     """
-    text = open(doc_path, encoding="utf-8").read()
-    line = "issue: %d" % number
-    if FRONTMATTER_ISSUE_RX.search(text):
-        new = FRONTMATTER_ISSUE_RX.sub(line, text, count=1)
-    elif re.match(r"^---[ \t]*\r?\n", text):
-        new = re.sub(r"^---[ \t]*\r?\n", "---\n%s\n" % line, text, count=1)
-    else:
+    return set_front_line(doc_path, FRONTMATTER_ISSUE_RX, "issue: %d" % number)
+
+
+def set_front_line(doc_path, rx, line):
+    """Replace the frontmatter line `rx` matches with `line`, or add `line` right under the opening `---`; a line of the same
+    shape in the body is never touched. False (nothing written) when the file has no closed `---` block (kb_index.front_block)."""
+    import kb_index
+    lines = open(doc_path, encoding="utf-8").read().split("\n")
+    n = kb_index.front_block(lines)[1]
+    if not n:
         return False
+    at = next((i for i in range(1, n - 1) if rx.match(lines[i])), None)
+    if at is None:
+        lines.insert(1, line)
+    else:
+        lines[at] = line
     with open(doc_path, "w", encoding="utf-8") as f:
-        f.write(new)
+        f.write("\n".join(lines))
     return True
+
+
+def front_issue(doc_path):
+    """The `issue:` value of the intent's frontmatter, stripped ("" when there is none); never a body line."""
+    return str(doc_front(doc_path).get("issue") or "").strip()
+
+
+def set_doc_key(doc_path, key):
+    """Write `key: <key>` into the intent's frontmatter (set_front_line). Idempotent."""
+    return set_front_line(doc_path, re.compile(r"^key:"), "key: %s" % key)
+
+
+def keyed_intent(a, doc, root):
+    """(rc, branch) under `issue.code`: the branch `intent/<CODE>-<issue>-<slug>` of the intent at `doc`, its key written as `key:`.
+    The branch needs the issue number, so the issue is opened first, unless the intent's frontmatter names one (a worker's, or a
+    retry); rc 1 when it cannot be: no branch is created without its key."""
+    rel = os.path.relpath(doc, root)
+    stem = os.path.basename(doc)[:-len(".md")]
+    import kb_index
+    if not kb_index.front_block(open(doc, encoding="utf-8").read().split("\n"))[1]:
+        err("issue.code is %s: the key goes into the intent's frontmatter, and %s has none (a `---` block at its top); nothing "
+            "was created" % (ISSUE_CODE, rel))
+        return 1, None
+    issue = front_issue(doc)
+    if issue and not re.match(r"^[1-9][0-9]*$", issue):
+        err("issue.code is %s: `issue: %s` in %s is not an issue number; nothing was created" % (ISSUE_CODE, issue, rel))
+        return 1, None
+    if not issue and not getattr(a, "issue", False):
+        err("issue.code is %s: the branch is named after the issue, and %s has no `issue: N` and --no-issue opens none; nothing "
+            "was created (run without --no-issue, or add `issue: N` by hand)" % (ISSUE_CODE, rel))
+        return 1, None
+    if not ref_exists(a.base, a.cwd):
+        err(M("ib.no_base", a.base))
+        return RC_TARGET, None
+    if issue:
+        number = int(issue)
+    else:
+        number, issue_err = create_tracking_issue(doc, PREFIX + stem, root, a.cwd)
+        if number is None:
+            err("could not create the tracking issue: %s\n"
+                "       issue.code is %s, so the branch needs its number: NO BRANCH WAS CREATED. Check `gh issue list --label "
+                "intent` first (a call that timed out may still have created one: add `issue: N` to %s), then run create-intent "
+                "again once the cause is fixed" % (issue_err, ISSUE_CODE, rel))
+            return 1, None
+        report_issue_created(doc, root, number)
+    key = "%s-%d" % (ISSUE_CODE, number)
+    set_doc_key(doc, key)
+    err("key %s recorded in %s" % (key, rel))
+    return 0, PREFIX + kb_plan.branch_names("kb/intent/%s.md" % stem, {"key": key})[1]
 
 
 def create_tracking_issue(doc_path, intent_branch, root, cwd):
@@ -260,17 +326,20 @@ def create_tracking_issue(doc_path, intent_branch, root, cwd):
     rel = os.path.relpath(doc_path, root)
     desc = doc_description(doc_path) or slug
     body = M("ib.issue_body", desc, rel)
-    try:
-        subprocess.run(
-            [gh, "label", "create", ISSUE_LABEL, "--description", ISSUE_LABEL_DESC,
-             "--color", ISSUE_LABEL_COLOR],
-            cwd=cwd, capture_output=True, text=True, timeout=60)
-    except Exception:
-        pass                                     # the issue call below reports what is really wrong
+    fm = doc_front(doc_path)
+    valid = {"type": fm.get("type") in INTENT_TYPES, "focus": bool(FOCUS_RX.match(fm.get("focus", "")))}
+    labels = [(ISSUE_LABEL, ISSUE_LABEL_DESC, ISSUE_LABEL_COLOR)] + [
+        ("%s:%s" % (k, fm[k]), "The intent's %s" % k, CARD_LABEL_COLOR) for k in ("type", "focus") if valid[k]]
+    for name, ldesc, color in labels:
+        try:
+            subprocess.run([gh, "label", "create", name, "--description", ldesc, "--color", color],
+                           cwd=cwd, capture_output=True, text=True, timeout=60)
+        except Exception:
+            pass                                 # the issue call below reports what is really wrong
     try:
         r = subprocess.run(
             [gh, "issue", "create", "--title", "intent: %s" % slug,
-             "--body", body, "--label", ISSUE_LABEL],
+             "--body", body] + [x for name, _d, _c in labels for x in ("--label", name)],
             cwd=cwd, capture_output=True, text=True, timeout=60)
     except Exception as e:
         return None, str(e)
@@ -280,6 +349,124 @@ def create_tracking_issue(doc_path, intent_branch, root, cwd):
     if not m:
         return None, M("ib.issue_number", r.stdout.strip()[:200])
     return int(m.group(1)), None
+
+
+# ---------------------------------------------------------------------------
+# Intake: an intent says its type and its focus (the story process, AC1)
+# ---------------------------------------------------------------------------
+# `create-intent` judges an intent with no `type:` or `focus:`, or whose focus is not an open one, by `intake.focus`: `required`
+# refuses (RC_INTAKE, nothing created), `warn` (the default) prints one WARNING line and goes on, `off` reads nothing.
+# Where the focus is read: (a) where a brain answers, `brain show <P> --json` of the vibemaestro-brain installed beside this sdlc
+# copy (the registry baton.py reads for a dependent's kits, brain_script); (b) in a worker, where the brain keeps no memory, the `type:<t>` and
+# `focus:<P>` labels the gate-1 session set on the issue the intent's `issue: N` names; (c) neither: refused, naming both.
+INTAKE_FOCUS = "warn"
+INTENT_TYPES = ("story", "task", "bug")
+FOCUS_RX = re.compile(r"^P[1-9][0-9]*$")
+CARD_LABEL_COLOR = "0e8a16"
+
+
+def doc_front(doc_path):
+    """{key: value} of the intent's frontmatter (kb_index.front_block), {} when it cannot be read."""
+    import kb_index
+    try:
+        return kb_index.front_block(open(doc_path, encoding="utf-8").read().splitlines())[0]
+    except OSError:
+        return {}
+
+
+def brain_script():
+    """The brain.py of the vibemaestro-brain installed beside this sdlc copy, or None. As baton.py's installed_sdlc reads it: this
+    copy is <plugins>/cache/<marketplace>/vibemaestro-sdlc/<version>, and <plugins>/installed_plugins.json (version 2) lists
+    vibemaestro-brain@<marketplace> and this copy as vibemaestro-sdlc@<marketplace>; the brain's latest `lastUpdated` entry wins."""
+    me = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    market_dir = os.path.dirname(os.path.dirname(me))
+    if os.path.basename(os.path.dirname(me)) != "vibemaestro-sdlc" or os.path.basename(os.path.dirname(market_dir)) != "cache":
+        return None
+    try:
+        reg = json.load(open(os.path.join(os.path.dirname(os.path.dirname(market_dir)), "installed_plugins.json"), encoding="utf-8"))
+        ids, market = (reg["plugins"] if reg.get("version") == 2 else {}), os.path.basename(market_dir)
+        if not any(isinstance(x.get("installPath"), str) and os.path.isabs(x["installPath"]) and os.path.realpath(x["installPath"]) == me
+                   for x in ids.get("vibemaestro-sdlc@%s" % market, [])):
+            return None                          # a cache-shaped directory the registry does not list as this copy
+        entries = ids["vibemaestro-brain@%s" % market]
+        e = max((x for x in entries if isinstance(x.get("installPath"), str) and os.path.isabs(x["installPath"])),
+                key=lambda x: str(x.get("lastUpdated") or ""))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    p = os.path.join(os.path.realpath(e["installPath"]), "scripts", "brain.py")
+    return p if os.path.isfile(p) else None
+
+
+def worker():
+    """vsdlc.in_sandbox, read here so the core imports no hook library: VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and SEAT both set."""
+    return os.environ.get("VIBEMAESTRO_ROLE") == "worker" or bool(os.environ.get("INTENT_SLUG") and os.environ.get("SEAT"))
+
+
+def focus_from_brain(brain, focus, root):
+    """None when `focus` is a live focus of the brain of `root`, else why not."""
+    try:
+        r = subprocess.run([sys.executable, brain, "show", focus, "--json"], cwd=root, capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return "the brain did not answer: %s" % e
+    try:
+        it = json.loads(r.stdout) if r.returncode == 0 else None
+    except ValueError:
+        it = None
+    if not isinstance(it, dict):
+        return "%s is not an open focus of this brain (brain show: %s)" % (focus, (r.stderr or r.stdout).strip()[:200] or "rc %d" % r.returncode)
+    if it.get("kind") != "focus" or it.get("status") != "live":
+        return "%s is not an open focus of this brain (it is a %s item, %s)" % (focus, it.get("kind"), it.get("status"))
+    return None
+
+
+def labels_of_issue(number, cwd):
+    """(set of label names, None) of issue #number, or (None, why)."""
+    gh = shutil.which("gh")
+    if not gh:
+        return None, M("ib.no_gh")
+    try:
+        r = subprocess.run([gh, "issue", "view", str(number), "--json", "labels"], cwd=cwd, capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return None, str(e)
+    try:
+        return {l["name"] for l in json.loads(r.stdout)["labels"]}, None
+    except (ValueError, KeyError, TypeError):
+        return None, "gh issue view %d: rc %d %s" % (number, r.returncode, (r.stderr or r.stdout).strip()[:200])
+
+
+def intake_refusal(doc, root, cwd):
+    """None when the intent may be created, else the refusal naming what is missing (AC1)."""
+    if INTAKE_FOCUS == "off":
+        return None
+    fm = doc_front(doc)
+    t, f = fm.get("type", ""), fm.get("focus", "")
+    missing = [] if t in INTENT_TYPES else ["`type:` (story, task or bug)"]
+    if not FOCUS_RX.match(f):
+        missing.append("`focus:` (an open focus of the brain, like P1)")
+    if missing:
+        return "%s has no %s in its frontmatter: kb.py new intent <slug> --type <t> --focus <P> writes both" % (
+            os.path.relpath(doc, root), " and no ".join(missing))
+    if worker():
+        issue = front_issue(doc)
+        want = ["type:%s" % t, "focus:%s" % f]
+        if not issue.isdigit():
+            return ("a worker reads the focus from the labels %s of the intent's issue, and %s has no `issue: N`: the gate-1 "
+                    "session, where the brain answers, sets them" % (" and ".join(want), os.path.relpath(doc, root)))
+        number = int(issue)
+        have, why = labels_of_issue(number, cwd)
+        if have is None:
+            return "a worker reads the focus from the labels of issue #%d, and they cannot be read: %s" % (number, why)
+        gone = [w for w in want if w not in have]
+        if gone:
+            return ("issue #%d has no label %s: the gate-1 session, where the brain answers, sets %s on it"
+                    % (number, " and no ".join(gone), " and ".join(want)))
+        return None
+    brain = brain_script()
+    if brain is None:
+        return ("no way to read whether %s is an open focus: no brain answers here (vibemaestro-brain is not installed beside "
+                "this sdlc copy) and this is not a worker reading the issue's type:/focus: labels; install the brain, run from a "
+                "worker whose issue carries the labels, or set intake.focus to \"warn\" or \"off\" in %s" % (f, sdlc_config.CONFIG_REL))
+    return focus_from_brain(brain, f, root)
 
 
 def report_issue_created(doc, root, number):
@@ -319,7 +506,7 @@ def cmd_retry_issue(a):
     if not os.path.isfile(doc):
         err(M("ib.retry_no_doc", os.path.relpath(doc, root)))
         return RC_INTENT_FILE
-    if FRONTMATTER_ISSUE_RX.search(open(doc, encoding="utf-8").read()):
+    if front_issue(doc).isdigit():
         err(M("ib.retry_has_issue", os.path.relpath(doc, root)))
         return 0
     number, issue_err = create_tracking_issue(doc, intent, root, a.cwd)
@@ -350,6 +537,18 @@ def cmd_create_intent(a):
         err(M("ib.empty_doc", os.path.relpath(doc, root)))
         return RC_INTENT_FILE
 
+    why = intake_refusal(doc, root, a.cwd)
+    if why and INTAKE_FOCUS == "required":
+        err("refused, no branch or issue created: " + why)
+        return RC_INTAKE
+    if why:
+        err("WARNING (intake.focus: warn): " + why)
+
+    if ISSUE_CODE:
+        rc, intent = keyed_intent(a, doc, root)
+        if rc:
+            return rc
+
     if ref_exists(intent, a.cwd) or ref_exists("origin/" + intent, a.cwd):
         err(M("ib.exists", intent))
         return RC_EXISTS
@@ -370,7 +569,11 @@ def cmd_create_intent(a):
     # tiếp (test, dùng tay) không bất ngờ đụng mạng/gh. Adapter
     # (`scripts/intent-branch.sh`) tiêm cờ này mặc định cho `create-intent` —
     # quyết định "máy tạo issue" thuộc về adapter, không thuộc lõi.
-    if getattr(a, "issue", False):
+    if ISSUE_CODE:
+        pass                                     # keyed_intent handled the issue before the branch
+    elif getattr(a, "issue", False) and worker() and front_issue(doc).isdigit():
+        err("a worker's intent already names its issue (the one gate 1 labelled): no new issue is opened")
+    elif getattr(a, "issue", False):
         number, issue_err = create_tracking_issue(doc, intent, root, a.cwd)
         if number is None:
             err("could not create the tracking issue (best-effort, does NOT block the branch): %s\n"

@@ -3,8 +3,8 @@
 Read this when you need to know what baton does not guard, or which patterns the stop lint flags. Also printed by `<launcher> help limits`.
 
 baton guards an honest but fallible session: a forgotten step, an edit after approval, other arguments, a changed world, a
-second run. It does not stop a session that sets out to deceive (it could write a record by hand, or run a script with plain
-`bash`): that is the job of read-only tools and the owner's deny rules. The rule `batonrun` reminds before a privileged command
+second run. It does not stop a session that sets out to deceive (it could write a record by hand, an approval file and `log.tsv`
+edited together among them, or run a script with plain `bash`): that is the job of read-only tools and the owner's deny rules. The rule `batonrun` reminds before a privileged command
 run directly, once per session; it does not block. Separately, its hook warns on EVERY launcher command (`sign`, `run` or
 `go`) that is not bare: a pipe, a chain (`&&`, `||`, `;`, `&`, a newline), a redirect, a command substitution or a comment
 outside quotes, a prefix (`VAR=…`, `time`, `env`, `timeout`, `!` …) or a shell wrapper (`bash -c`, `eval`): the allow rules

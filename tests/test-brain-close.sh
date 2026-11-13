@@ -640,7 +640,7 @@ for sid in ('reloaded-one', 'stale-two'):
   br doctor
   c_hasnt "$OUT" "session reloaded" "[t] the reloaded session's brain command clears its warning"
   c_has "$OUT" "warn     session stale-tw… last started on an older brain (log format 3" "[t] a session that ran no brain command keeps it"
-  c_has "$(eplines session-format)" '"format":6' "[t] the hook logged the session's format"
+  c_has "$(eplines session-format)" '"format":7' "[t] the hook logged the session's format"
   hk note-format "$(bash_in reloaded-one "$P" "brain render")"
   c_eq "$(eplines session-format | grep -c reloaded-one)" 1 "[t] once per format per session"
   hk note-format "$(bash_in sA "$P" "brain doctor")"
@@ -708,7 +708,7 @@ case_argv() {
   start compact; br doctor; pr 'acme/app¤10' open; br op add --kind next --text t --closes acme/app¤10
   c_eq "$(nissues) $(npulls)" "4 1" "[p] instrument: issues and pulls lookups by SessionStart, doctor and a write"
   c_eq "$(grep -v -c -F -e '--hostname github.com' "$STUB/calls" || true)" 0 "[p] every gh argv carries --hostname github.com"
-  c_has "$(eplines session-start)" '"format":6' "[p] the session-start line carries format 6"
+  c_has "$(eplines session-start)" '"format":7' "[p] the session-start line carries format 7"
   bpy "import json; d = s.state_dir(); f = open(d + '/episodes.jsonl', 'a')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'old-one-session'}) + '\n')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'older-two', 'format': 1}) + '\n')

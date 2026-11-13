@@ -79,7 +79,10 @@ if [ -z "$CLOSES" ]; then
     PFX=$(python3 "$HERE/sdlc_config.py" get branch.intent_prefix 2>&1) || die "$PFX" 64
     case "$BR" in
         "$PFX"?*)
-            DOC="$TOP/kb/intent/${BR#"$PFX"}.md"
+            # the intent of `<prefix><stem>`, or of the key branch `<prefix><key>-<slug>` through its `key:` (kb_plan.intent_of_branch)
+            DOC=$(python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import kb_plan; print(kb_plan.intent_of_branch(sys.argv[2], sys.argv[3]) or "")' \
+                "$HERE" "$TOP" "${BR#"$PFX"}" 2>/dev/null) || DOC=""
+            DOC="$TOP/${DOC:-kb/intent/${BR#"$PFX"}.md}"
             if [ -n "$TOP" ] && [ -r "$DOC" ] && N=$(grep -m1 -E '^issue:[[:space:]]*[0-9]+[[:space:]]*$' "$DOC" 2>/dev/null); then
                 CLOSES="${N#issue:}"; CLOSES="${CLOSES// /}"
                 echo "open-pr: --closes $CLOSES read from $DOC (branch $BR)" >&2

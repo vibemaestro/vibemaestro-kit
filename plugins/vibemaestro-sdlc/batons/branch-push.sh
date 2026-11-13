@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Purpose: push one local branch of the clone this runs in as a new branch of its private GitHub repository, pinned to the local tip, create-only, from a scratch repository no clone config reaches
-# Targets: github.com/<--repo>, the repository the clone's remote (--remote, default origin) names; one new branch ref there
+# Purpose: push one local branch of the clone --clone names as a new branch of its private GitHub repository, pinned to the local tip, create-only, from a scratch repository no clone config reaches
+# Targets: github.com/<--repo>, the repository the remote (--remote, default origin) of the clone --clone names; one new branch ref there
 # Blast: one new branch on that repository holding the commits only this clone had; nothing else (no force, no other ref, no tag)
 # Undo: none by this script: deleting a branch is an act the owner signs; while the branch is there, undo names it and exits non-zero (a remote it cannot read: non-zero too)
 # Pre: the clone's remote URL names https or ssh github.com/<--repo>; the local branch is at --head; the repository reads private (not internal, not public), can be read and has no branch of that name; no commit it lacks changes a path under .github/workflows or .github/actions; at the push, its plan line is in the signed plan
@@ -8,11 +8,17 @@
 #   Why none: the push adds one branch to a private repository and moves nothing that exists. A public or internal repository
 #   (publish) and a new commit that changes a workflow (it would run on push with the repository's secrets) are refused at
 #   rehearse, so they are never escalated to a signature: those stay hand-written batons the owner signs.
-# Usage: --branch <name> --head <sha40> --repo <owner/name> [--remote <name>]  (run it from the clone that holds the branch)
+# Usage: --branch <name> --head <sha40> --repo <owner/name> --clone <absolute path> [--remote <name>]
 # Expect: push new branch * at * to *
 #
-# The kit baton kit:branch-push. Run it from the clone, only through the baton runner:
-#   <launcher> go kit:branch-push --branch <name> --head <full sha> --repo <owner/name> [--remote <name>]
+# The kit baton kit:branch-push. Run it from any directory, naming the clone that holds the branch by its absolute path (--clone;
+# the directory it starts in is never read for the repository, so rehearse, `sign --by owner` and run give the same plan wherever
+# the session stands), only through the baton runner:
+#   <launcher> go kit:branch-push --branch <name> --head <full sha> --repo <owner/name> --clone <absolute path> [--remote <name>]
+# The clone is the top of a git work tree; every git call that reads it is `git -C <clone>`. Before any read, GIT_DIR, GIT_WORK_TREE,
+# GIT_INDEX_FILE, GIT_COMMON_DIR, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES and GIT_NAMESPACE are unset (they would
+# beat -C), and a clone that is not an absolute path, not a directory, not enterable or not the top of a work tree is refused (rc 3).
+# A call without --clone, the old shape that read the current directory, is refused (rc 64).
 # Where the push goes: the clone only says which repository and which transport (its remote URL must name https or ssh
 # github.com/<--repo>); the URL used is built from --repo (https://github.com/<repo>.git or the ssh form). Every git call that
 # talks to the remote or reads commits runs in a scratch bare repository made for this phase (`git init --template=`), with no
@@ -59,11 +65,11 @@ write() {
 }
 
 # ── arguments and reads: every phase runs them ──
-usage() { echo "usage: baton rehearse|run kit:branch-push --branch <name> --head <full sha> --repo <owner/name> [--remote <name>]" >&2; }
-BR="" TIP="" REPO="" REMOTE=origin
+usage() { echo "usage: baton rehearse|run kit:branch-push --branch <name> --head <full sha> --repo <owner/name> --clone <absolute path> [--remote <name>]" >&2; }
+BR="" TIP="" REPO="" CLONE="" REMOTE=origin
 while [ $# -gt 0 ]; do
   case "$1" in
-    --branch | --head | --repo | --remote)
+    --branch | --head | --repo | --clone | --remote)
       if [ $# -lt 2 ]; then
         usage
         exit 64
@@ -72,6 +78,7 @@ while [ $# -gt 0 ]; do
         --branch) BR=$2 ;;
         --head) TIP=$2 ;;
         --repo) REPO=$2 ;;
+        --clone) CLONE=$2 ;;
         --remote) REMOTE=$2 ;;
       esac
       shift 2
@@ -82,18 +89,36 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+if [ -z "$CLONE" ]; then
+  echo "REFUSE --clone is required: the clone is named by an absolute path, never read from the current directory: nothing done" >&2
+  usage
+  exit 64
+fi
 if [ -z "$BR" ] || ! [[ "$TIP" =~ ^[0-9a-f]{40}$ ]] || ! [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
   || ! [[ "$REMOTE" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   usage
   exit 64
 fi
+# the clone --clone names, checked before any read or write; git -C on it from here on (GIT_DIR and its kin beat -C)
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
+refuse_clone() {
+  echo "REFUSE clone $CLONE $1: nothing done" >&2
+  exit 3
+}
+case "$CLONE" in
+  /*) ;;
+  *) refuse_clone "is not an absolute path" ;;
+esac
+[ -d "$CLONE" ] || refuse_clone "is not a directory"
+TOP=$(cd -P "$CLONE" 2> /dev/null && pwd -P) || refuse_clone "cannot be entered"
+[ "$(git -C "$CLONE" rev-parse --show-toplevel 2> /dev/null)" = "$TOP" ] || refuse_clone "is not the top of a git work tree"
 FIRST=${BR%%/*}
-if ! git check-ref-format "refs/heads/$BR" > /dev/null 2>&1 || [[ "$BR" == -* ]] || [[ "$BR" =~ ^(HEAD|[A-Z_]+_HEAD|AUTO_MERGE|BISECT_EXPECTED_REV)$ ]] \
+if ! git -C "$CLONE" check-ref-format "refs/heads/$BR" > /dev/null 2>&1 || [[ "$BR" == -* ]] || [[ "$BR" =~ ^(HEAD|[A-Z_]+_HEAD|AUTO_MERGE|BISECT_EXPECTED_REV)$ ]] \
   || [ "$FIRST" = refs ] || [ "$FIRST" = heads ] || [ "$FIRST" = tags ] || [ "$FIRST" = remotes ] || [[ "$BR" =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo "REFUSE branch $BR: not a branch name this kit pushes (git refuses it, or resolves it first as another ref)" >&2
   exit 64
 fi
-URL=$(git config --get "remote.$REMOTE.url" || true)
+URL=$(git -C "$CLONE" config --get "remote.$REMOTE.url" || true)
 # the repository the URL names, lower-cased, and its transport, or nothing when it is not github.com over https or ssh
 url_repo() {
   local u=$1 r="" host=github.com
@@ -117,7 +142,7 @@ esac
 # the scratch repository: no config but these settings, no hooks, the clone's objects through alternates
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/kit-branch-push.XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
-OBJECTS=$(git rev-parse --path-format=absolute --git-common-dir)/objects
+OBJECTS=$(git -C "$CLONE" rev-parse --path-format=absolute --git-common-dir)/objects
 # cleanenv <command> [args...] — the command with the allowlisted environment only, and no git config but its own
 cleanenv() {
   local v keep=()
@@ -172,7 +197,7 @@ act() {
     echo "REFUSE $REPO does not read private (private, visibility: $vis): this kit pushes to private repositories only" >&2
     return 3
   fi
-  local_tip=$(git rev-parse --verify -q "refs/heads/$BR" || true)
+  local_tip=$(git -C "$CLONE" rev-parse --verify -q "refs/heads/$BR" || true)
   if [ "$local_tip" != "$TIP" ]; then
     echo "REFUSE local branch $BR is at ${local_tip:-nothing}, not $TIP" >&2
     return 3

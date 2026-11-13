@@ -2,7 +2,83 @@
 
 # vibemaestro-kit
 
-Các plugin Claude Code giúp phiên lập trình của bạn có quy trình viết sẵn, luật tới đúng lúc cần, hành động đặc quyền an toàn và bộ nhớ sống sót qua compaction.
+**Claude Code có bộ não: nó chỉ dừng lại trước điều nó không hoàn tác được.**
+
+Quyết định của bạn sống qua `/compact`, spec được ghi vào repo của bạn để bạn duyệt trước khi có dòng code nào, mọi pull request nó mở đều kèm output test thật, và một lần ghi nó không lấy lại được thì chờ chữ ký của bạn.
+
+Nếu Claude Code từng merge thứ bạn chưa duyệt, xoá thứ không nên xoá, hay quên quyết định của bạn sau `/compact`, kit này dành cho bạn.
+
+## Thử ngay
+
+Với Claude Code 2.1.292 trở lên, một lệnh thêm marketplace và cài cả hai plugin (`vibemaestro-brain` kéo theo `vibemaestro-sdlc`, plugin nó cần):
+
+```bash
+claude plugin install vibemaestro-brain --marketplace vibemaestro/vibemaestro-kit
+```
+
+Rồi mở Claude Code trong repo của bạn và bảo nó dựng `kb/` ([Dùng lần đầu](#dùng-lần-đầu-trong-repo-của-bạn)). Claude Code cũ hơn: xem [Cài đặt](#cài-đặt).
+
+## Một thay đổi trông thế nào
+
+```mermaid
+flowchart LR
+  A["Bạn mô tả thay đổi"] --> B["Intent ghi nguyên văn"]
+  B --> C["Spec: bạn duyệt"]
+  C --> D["PR kèm bằng chứng, review ngữ cảnh mới"]
+  D --> E["Bạn merge"]
+```
+
+## Dùng được cả khi không có kit
+
+Ba luật của kit, dán thẳng vào `CLAUDE.md` của bạn. Văn bản luật giữ tiếng Anh như trong kit.
+
+<details>
+<summary><b>Brief là hợp đồng</b>: cho việc giao cho subagent</summary>
+
+```markdown
+- Your brief is your contract. Outside it, stop and say so in your reply; do not decide for the person.
+- Evidence, not claims. Run the command that proves your change on its final version; report the command, its exit code and its real output.
+- Check the instrument. An all-yes or all-no result: suspect the command first. A number needs a sure-positive control.
+- Root cause before a fix. Reproduce, read the failing path, name the cause.
+```
+
+Bản đầy đủ: [subagent-core.md](plugins/vibemaestro-sdlc/templates/subagent-core.md)
+</details>
+
+<details>
+<summary><b>Một con số chưa phải câu trả lời</b>: biết lệnh đã trả lời câu hỏi nào</summary>
+
+```markdown
+- `gh pr list`, `gh issue list` return the first page only (`--limit` defaults to 30): pass `--limit` above the count you expect.
+- `git log A..B` is empty once B is merged into A: for a merged PR's commits use `gh pr view <n> --json commits`.
+- `grep -c <string>` counts lines holding that exact string, not the concept: first run it on one case that is certainly positive.
+- A count with no control is unchecked: say so.
+```
+
+Bản đầy đủ: [measurement-commands.instructions.md](plugins/vibemaestro-sdlc/rules/measurement-commands.instructions.md)
+</details>
+
+<details>
+<summary><b>Test gọi tên lỗi nó bắt</b>: test xanh trên code hỏng bị đọc như bằng chứng</summary>
+
+```markdown
+- Each test names the break it catches, in its name or message: "an empty list is refused with rc 65", not "works".
+- Expected values are literal: a value computed by the code under test agrees with the bug.
+- At least one refusal case per rule: the empty, the hostile, the oversized, the one that fails half way.
+- A new test is red before the change and green after it; never revert or mutate the fix to see red.
+```
+
+Bản đầy đủ: [test-quality.instructions.md](plugins/vibemaestro-sdlc/rules/test-quality.instructions.md)
+</details>
+
+## Khác ở đâu
+
+- **Bộ nhớ sống qua compaction.** Brain đặt lại quyết định bạn đã ghim, việc đang làm và các bước tiếp theo sau mỗi lần compaction; quyết định của bạn chỉ đổi qua một hộp thoại cấp quyền bạn duyệt.
+- **Lần ghi rủi ro là một script.** Merge, force-push hay xoá chạy thành một baton script: được kiểm, diễn tập, ký, hậu kiểm và hoàn tác khi kết quả sai.
+- **Luật tới đúng lúc.** Một luật tới phiên khi nó sửa file khớp hoặc chạy lệnh khớp, không phải tất cả cùng lúc từ đầu.
+- **Cổng CI và merge có bảo vệ.** GitHub workflow tuỳ chọn kiểm commit, nội dung pull request và bằng chứng review; merge có bảo vệ cần một check xanh.
+
+Nếu kit giúp được bạn, hãy gắn sao cho repo; để biết mỗi bản phát hành, theo dõi repo với **Custom → Releases**.
 
 ## Đây là gì
 
@@ -26,7 +102,7 @@ Cài `vibemaestro-brain` thì `vibemaestro-sdlc` được cài theo.
 
 | Cần | Dùng cho |
 |---|---|
-| Claude Code (CLI `claude`); đã thử với 2.1.290 | mọi thứ; mục quyết định của brain cần 2.1.211 trở lên ở chế độ `auto` |
+| Claude Code (CLI `claude`); đã thử với 2.1.290; lệnh cài duy nhất ở [Thử ngay](#thử-ngay) cần 2.1.292 trở lên | mọi thứ; mục quyết định của brain cần 2.1.211 trở lên ở chế độ `auto` |
 | `python3` 3.8 trở lên, `git`, `bash` | hook và script; đã thử trên Linux và macOS, chưa thử trên Windows; brain cần hệ POSIX |
 | `gh`, đã đăng nhập (`gh auth login`) | issue theo dõi lúc intake, pull request lúc ship, ghi lên GitHub trong BatonRun |
 | Một repo GitHub cho dự án của bạn | issue và pull request; không có remote thì intake vẫn ghi intent và branch, bỏ qua issue |
@@ -35,7 +111,7 @@ Lúc chạy, các plugin không phụ thuộc repo nào khác.
 
 ## Cài đặt
 
-Thêm marketplace, rồi cài cả hai plugin. Chọn một trong hai cách.
+Thêm marketplace, rồi cài cả hai plugin. Chọn một trong hai cách. Với Claude Code 2.1.292 trở lên, lệnh duy nhất ở [Thử ngay](#thử-ngay) làm đúng như cách thứ nhất.
 
 ### Từ GitHub
 
@@ -95,8 +171,8 @@ Rồi chạy `/reload-plugins` trong phiên đang chạy, hoặc mở phiên m�
 
 Làm một lần. Mở một phiên Claude Code mới trong repo ứng dụng của bạn.
 
-1. **Dựng `kb/`.** Bảo Claude chạy skill `vibemaestro-sdlc:init-kb`. Skill hỏi vài câu, rồi ghi thư mục `kb` (intent, spec, plan, quyết định và file hiện trạng) cùng một file cấu hình nhỏ `.vibemaestro/sdlc.json`, và không ghi đè gì. Một câu hỏi là ngôn ngữ của tài liệu `kb` và nội dung pull request: skill đề xuất tiếng Anh (`en`), hoặc tiếng Việt (`vi`) nếu bạn viết cho nó bằng tiếng Việt, và ghi câu trả lời vào cấu hình. Skill commit kết quả trên branch `chore/kb-init` và push lên: hãy mở pull request của nó và merge. Dù chọn ngôn ngữ nào, một số thông báo lỗi của script vẫn bằng tiếng Việt.
-2. **Thiết lập BatonRun trên máy này (nên làm).** Một lần ghi đơn giản ra ngoài phiên (một bước, hoàn tác được bằng một lệnh trực tiếp, như một comment trên issue) là một lời gọi trực tiếp; một luồng ghi, hoặc một lần ghi không hoàn tác được hay cần bạn ký (merge, force-push), chạy thành một baton script, được giữ và gọi theo tên khi gặp lại. Push branch thường và mở pull request không phải baton. Không thiết lập thì mọi lệnh baton đều hỏi bạn; `local-parallel` merge qua baton. Bảo Claude thiết lập BatonRun trên máy này (skill `vibemaestro-sdlc:batonrun`, phần tham chiếu setup). Nó cài một launcher nhỏ và in ra một khối luật quyền; bạn thêm khối đó vào user settings của Claude Code (`/permissions`, hoặc `~/.claude/settings.json`). Plugin không bao giờ ghi settings của bạn. Skill `vibemaestro-sdlc:coordinator-bootstrap` làm cùng việc thiết lập đó trong một run bạn ký. Có khối này, các lệnh baton thường ngày chạy không cần hỏi, còn chữ ký của bạn và việc đổi chế độ thì luôn hỏi bạn. Chi tiết: [BatonRun, cài đặt quyền](plugins/vibemaestro-sdlc/docs/batonrun.vi.md#9-cài-đặt-quyền).
+1. **Dựng `kb/`.** Bảo Claude chạy skill `vibemaestro-sdlc:init-kb`. Skill hỏi vài câu, rồi ghi thư mục `kb` (intent, spec, plan, quyết định và file hiện trạng) cùng một file cấu hình nhỏ `.vibemaestro/sdlc.json`, và không ghi đè gì. Một câu hỏi là ngôn ngữ của tài liệu `kb` và nội dung pull request: skill đề xuất tiếng Anh (`en`), hoặc tiếng Việt (`vi`) nếu bạn viết cho nó bằng tiếng Việt, và ghi câu trả lời vào cấu hình. Skill commit kết quả trên branch `chore/kb-init` và push lên: hãy mở pull request của nó và merge.
+2. **Thiết lập BatonRun trên máy này (nên làm).** Một lần ghi đơn giản ra ngoài phiên (một bước, hoàn tác được bằng một lệnh trực tiếp, như một comment trên issue) là một lời gọi trực tiếp; một luồng ghi, hoặc một lần ghi không hoàn tác được hay cần bạn ký (merge, force-push), chạy thành một baton script, được giữ và gọi theo tên khi gặp lại. Push branch thường và mở pull request không phải baton. Không thiết lập thì mọi lệnh baton đều hỏi bạn; `local-parallel` merge qua baton. Bảo Claude thiết lập BatonRun trên máy này (skill `vibemaestro-sdlc:batonrun`, phần tham chiếu setup). Nó cài một launcher nhỏ và in ra một khối luật quyền; bạn thêm khối đó vào user settings của Claude Code (`/permissions`, hoặc `~/.claude/settings.json`). Plugin không bao giờ ghi settings của bạn. Skill `vibemaestro-sdlc:bootstrap` làm cùng việc thiết lập đó trong một run bạn ký. Có khối này, các lệnh baton thường ngày chạy không cần hỏi, còn chữ ký của bạn và việc đổi chế độ thì luôn hỏi bạn. Chi tiết: [BatonRun, cài đặt quyền](plugins/vibemaestro-sdlc/docs/batonrun.vi.md#9-cài-đặt-quyền).
 3. **Thêm một CI check (tuỳ chọn).** Merge có bảo vệ cần ít nhất một check xanh trên pull request. Skill `vibemaestro-sdlc:install-gates` thêm các cổng quy trình thành GitHub workflow; nó hỏi cổng nào và runner nào, và không bao giờ ghi đè file.
 
 ## Luồng làm việc
@@ -105,13 +181,13 @@ Mô tả một thay đổi bằng lời thường. Lời nhắc lúc mở phiên
 
 1. **Intake.** Claude ghi nguyên văn yêu cầu của bạn thành `kb/intent/<date>-<slug>.md`, tạo branch `intent/<date>-<slug>` trong một git worktree riêng, và mở một issue theo dõi.
 2. **Brainstorm**, chỉ khi yêu cầu còn mơ hồ. Claude hỏi những câu chọn ra hướng đi và ghi câu trả lời vào intent.
-3. **Spec.** Claude viết `kb/specs/<date>-<slug>.md` theo năm mục: bối cảnh, mục tiêu, ngoài phạm vi, đầu vào và tình huống hỏng (các đầu vào xấu, lạ hay hỏng giữa chừng mà nó phải chịu được, mỗi dòng kèm test), tiêu chí chấp nhận, trong đó mỗi tiêu chí là một lệnh và kết quả mong đợi. **Bạn duyệt spec trước khi sửa bất kỳ dòng code nào**, hoặc nói cần đổi gì.
+3. **Spec.** Claude viết `kb/specs/<date>-<slug>.md` từ intent theo năm mục: mục tiêu, ràng buộc, tiêu chí theo hành vi ("khi … thì …") mỗi tiêu chí trỏ về một AC của story, rủi ro mà test phải phủ (các đầu vào xấu, lạ hay hỏng giữa chừng), và điểm cần làm rõ; không có cách làm. **Bạn duyệt spec (cùng story, khi làm một mình) trước khi sửa bất kỳ dòng code nào**, hoặc nói cần đổi gì.
 4. **Plan**, chỉ khi việc cần nhiều pull request: một file plan, mỗi pull request một dòng.
 5. **Ship.** Claude làm việc, cập nhật `kb/current-state.md`, chạy các lệnh nghiệm thu và mở một pull request nháp kèm output thật của chúng làm bằng chứng.
 6. **Review.** Trước khi pull request rời trạng thái nháp, một subagent có ngữ cảnh mới review diff cuối; phiên sửa những gì nó tìm ra, rồi chuyển pull request sang ready (`gh pr ready`) và báo bạn. Chuyển sang ready khởi động các cổng CI, nếu bạn đã cài.
 7. **Merge.** Phiên đã viết thay đổi không tự merge nó. **Bạn merge pull request đã ready** trên GitHub, sau khi đọc.
 
-Muốn làm nhiều việc cùng lúc, hãy gọi skill `vibemaestro-sdlc:local-parallel`. Phiên chính chia việc, mở một subagent cho mỗi việc (mỗi subagent trong worktree riêng, từ intake tới pull request nháp), chuyển từng spec cho bạn duyệt, kiểm lại từng pull request và merge nó qua merge có bảo vệ `kit:merge-pr`, vốn cần một CI check xanh (bước 3 của phần dùng lần đầu). Ở chế độ `manual`, mặc định, mỗi lần merge đó cần chữ ký của bạn.
+Muốn làm nhiều việc cùng lúc, hãy gọi skill `vibemaestro-sdlc:local-parallel`. Phiên chính chia việc, mở một subagent cho mỗi việc (mỗi subagent trong worktree riêng, từ intake tới pull request nháp), chuyển từng story và spec cho bạn duyệt, kiểm lại từng pull request và merge nó qua merge có bảo vệ `kit:merge-pr`, vốn cần một CI check xanh (bước 3 của phần dùng lần đầu). Ở chế độ `manual`, mặc định, mỗi lần merge đó cần chữ ký của bạn.
 
 Duyệt spec và review là luật phiên làm theo, không phải cổng chặn. Hook fail-open: lỗi không bao giờ chặn việc của bạn. Các cổng CI, nếu bạn cài, kiểm hình thức commit, văn bản nhạy cảm, tiêu đề, nội dung pull request, bằng chứng review và branch chết. Bức tranh đầy đủ, theo từng giai đoạn và so với hướng dẫn của Anthropic: [docs/ai-native-sdlc.vi.md](docs/ai-native-sdlc.vi.md).
 

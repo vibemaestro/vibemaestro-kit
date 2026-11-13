@@ -92,7 +92,14 @@ fam_owner_record() {  # [A] the record: none, one, used once, voided by the next
   eq "$(sign "$P")" 3 "[A] a record asked from another directory: rc 3"
   rm -f "$ST"/vibemaestro/baton/asked/*.json; hook "$P" >/dev/null; rec=$(find "$ST/vibemaestro/baton/asked" -name '*.json')
   python3 -c 'import json, sys; p = sys.argv[1]; r = json.load(open(p)); r["t"] -= 601; open(p, "w").write(json.dumps(r))' "$rec"
-  eq "$(sign "$P")" 3 "[A] an expired record (601 s): rc 3"
+  eq "$(sign "$P")/$(signed_n)/$(asked_n)" "0/1/0" "[A] a slow click (record 601 s old, the old 600 s window): sign rc 0, signed, the record used up"
+  rm -f "$ST"/vibemaestro/baton/asked/*.json; hook "$P" >/dev/null; rec=$(find "$ST/vibemaestro/baton/asked" -name '*.json')
+  python3 -c 'import json, sys; p = sys.argv[1]; r = json.load(open(p)); r["t"] -= 1801; open(p, "w").write(json.dumps(r))' "$rec"
+  eq "$(sign "$P")" 3 "[A] an expired record (1801 s, just over the 1800 s window): rc 3"
+  has "$(cat "$BT_OUT")" "(1800 s)" "[A] …the refusal names the window, 1800 s"
+  rm -f "$ST"/vibemaestro/baton/asked/*.json; hook "$P" >/dev/null; rec=$(find "$ST/vibemaestro/baton/asked" -name '*.json')
+  python3 -c 'import json, sys; p = sys.argv[1]; r = json.load(open(p)); r["t"] -= 1100; open(p, "w").write(json.dumps(r))' "$rec"
+  eq "$(CMD="ls -la" hook "$P")/$(asked_n)/$(sign "$P")" "none/0/3" "[A] a record 1100 s old (inside the window) is still voided by the session's next Bash call: rc 3"
   rm -f "$ST"/vibemaestro/baton/asked/*.json; hook "$P" >/dev/null; rec=$(find "$ST/vibemaestro/baton/asked" -name '*.json')
   python3 -c 'import json, sys; p = sys.argv[1]; r = json.load(open(p)); r["mode"] = "bypassPermissions"; open(p, "w").write(json.dumps(r))' "$rec"
   eq "$(sign "$P")" 3 "[A] a record whose mode shows no dialog: rc 3"

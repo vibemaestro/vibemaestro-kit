@@ -21,10 +21,11 @@ until then a release can be cut and merged, but `release` cannot move).
 
 1. **A worktree of its own from the tip of main**, on a branch for the row (`vibemaestro-sdlc:intake` gives the intent branch):
    the release ships what main holds now, every group's pending change files, finished or not (main stays shippable).
-2. **See what it will do**, read-only:
+2. **See what it will do**, read-only (`REPO` is the public repository, its `owner/name` on GitHub or a git URL: its tags
+   `<plugin>--v<version>` say what is published):
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" plan
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" plan --public REPO
    ```
 
    One line per plugin, `old -> new (level)`: each plugin named by a change file goes up one step at the highest level naming it
@@ -34,24 +35,33 @@ until then a release can be cut and merged, but `release` cannot move).
    <version>, …` (every one of them, raised or not) and, per raised plugin that depends on such a sibling, `needs <sibling>
    >=<version> (was >=<version>)`: the floor the export will write on that dependency. A version that is not what the plan row expects means a change file says another level: fix that change file in an
    ordinary PR first, never the numbers.
+   A release's notes are the final state since each plugin's previous **public** version: a section cut and not published
+   joins the new one (`joins its unpublished ## X.Y.Z section`), and a line a change file's `supersedes:` or `cancels:` names,
+   or a line already published, is taken out (`takes out (<why>): <line>`). Read the result as a user of the previous public
+   version would: a line that a later line contradicts and no change file marked (an add then a removal, a behaviour replaced)
+   is fixed in an ordinary PR first, with a change file that names it in `supersedes:` or `cancels:`, never by editing the
+   CHANGELOG by hand; the machine only checks what was marked. A plugin name or an internal name that must not be public is
+   reworded the same way.
 3. **Cut, check, commit** (cut writes the working tree only: the `CHANGELOG.md` sections, each starting with that
    `Released together:` line when two or more plugins are released, with the change files' `upgrade:` lines under `### Upgrade notes`, the change files removed, `Frozen at`; no manifest and no kb page):
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" cut
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" check      # kind: release, rc 0
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" cut --public REPO
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" check --public REPO      # kind: release, rc 0
    git add -A -- plugins .changes && git commit -m "chore(release): <plugin> <version>, …"
    ```
 
    cut refuses (rc 1, the reason printed) a dirty tree, a detached HEAD, the branch `main` or `release`, a HEAD that lacks main's
-   tip, a `release` that holds a hotfix main lacks (merge its back-merge PR first), nothing pending, or a surface change named
-   below `minor`. When main moves before the PR merges, merge main and cut again: CI is red while a pending change file is not shipped.
+   tip, a `release` that holds a hotfix main lacks (merge its back-merge PR first), nothing pending, no `--public` or a tag list
+   it cannot read, a named line it cannot find as written, or a surface change named below `minor`. check is red when a section
+   below the new one is still cut and not published, or a line taken out is still there. When main moves before the PR merges, merge main and cut again: CI is red while a pending change file is not shipped.
 4. **Open the PR into main** with `vibemaestro-sdlc:ship`; the PR body names the versions. It merges through `kit:merge-pr` like any PR.
 
 ## A fold (the top version is cut but not published)
 
 When a release was cut and merged but never published, and the changes merged since must ship under that same version, fold
-them into it instead of cutting the next one. Whether a version is published is read from the public repository's tags
+them into it instead of cutting the next one (a plain cut joins it into the next version instead). A section cut and not
+published below the top one (left by a cut from before this rule) joins the top one too, which keeps its version. Whether a version is published is read from the public repository's tags
 `<plugin>--v<version>` (`REPO` is its `owner/name` on GitHub, or a git URL): the branch `release` cannot tell it, because it moves
 before anything is published.
 
@@ -59,16 +69,17 @@ before anything is published.
 2. `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/release.py" plan --fold --public REPO`: each plugin a change file names reads
    `X.Y.Z -> X.Y.Z (fold, <level>)`.
 3. `release.py cut --fold --public REPO`, then `release.py check --public REPO` (kind: fold, rc 0), then commit as for a release.
-   The cut adds each change file's line after the lines of the plugin's top section and its `upgrade:` line under that section's
-   `### Upgrade notes`. A line the section already holds is not written again, and no `Released together:` line is written: the
-   section keeps the one its cut wrote. It refuses when a version's tag already exists
+   The cut rewrites the plugin's top section as its next public section: the lines of the unpublished sections it joins (oldest
+   first), then each change file's line, and the upgrade lines under `### Upgrade notes`, less what is taken out (as for a
+   release). A line the section already holds is not written again, and no `Released together:` line is written: the section
+   keeps the one its cut wrote. It refuses when a version's tag already exists
    (published: cut the next version without `--fold`), when the tags cannot be read, when a plugin was never released, and when
    the folded levels ask another version than the section carries (a minor into a patch section). In those cases a plain cut is
    the way.
 4. A line the section already held may be reworded in the same PR (one fix commit after the cut), since the version is not
    published: it keeps its `- <level>:`, and the section keeps its count of entries and notes. `check --public REPO` then says
    how many lines it rewords. A published section and every older section stay frozen.
-5. Open the PR and, after it merges, move `release` to it, as for a release. The check in CI needs `--public REPO` to pass a fold.
+5. Open the PR and, after it merges, move `release` to it, as for a release. The check in CI needs `--public REPO` to pass a release or a fold.
 
 ## A hotfix
 
@@ -102,6 +113,6 @@ exported `plugin.json`; on each dependency on a released sibling, the floor `>=`
 together:` line of the plugin's own released section, the sibling it was released with (`>=0.1.0` for a section with no line), so a
 plugin whose version does not move keeps its manifest bytes; and tags `<plugin>--v<version>`, the form Claude Code resolves a
 dependency range against. The body of a public release (a GitHub Release on each new tag) is what
-`release.py notes <plugin> <version> [--repo DIR]` prints: that version's CHANGELOG section, so the plugins released together
-come first, then `### Updating`, which starts by telling the user to update a sibling too when the plugin's floor on it moved
+`release.py notes <plugin> <version> [--repo DIR]` prints: that version's CHANGELOG section, the final state since the previous
+public version, so the plugins released together come first, then `### Updating`, which starts by telling the user to update a sibling too when the plugin's floor on it moved
 since its previous release (rc 1 when the CHANGELOG has no such section).

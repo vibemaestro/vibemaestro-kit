@@ -465,6 +465,100 @@ case_import() {
   c_has "$OUT" "holds a double quote" "[d] … saying so"
 }
 
+# --- [jira-roundtrip] a goal's and a focus's Jira key through export and import ---------------------------------------------------
+case_jira_roundtrip() {
+  np; local f="$TMP/jr-$NP.json" rv; rv=$(dplus 30)
+  must owner_ok add --kind goal --text "ship the bundle" --owner-quote q --where chat --done "the PR merged" --not-doing "the fleet" \
+    --review "$rv" --scope project --jira ABC-7
+  must br op add --kind focus --text "bundle first" --owner-quote q1 --where chat --goal G1 --jira ABC-8
+  must br export --out "$f"
+  np
+  asked import "$f"
+  c_has "$(hfield permissionDecisionReason)" $'\n''1. Pin owner goal G1 (review '"$rv"', scope project, jira ABC-7), from "chat", done when "the PR merged", not doing "the fleet": "ship the bundle" [was G1]' \
+    "[jira-roundtrip] the import dialog line shows the key"
+  br "$OWN" import "$f"; c_rc 0 "[jira-roundtrip] the owner's half lands"
+  br import "$f"; c_rc 0 "[jira-roundtrip] the right brain lands"
+  br show G1 --json; c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" ABC-7 "[jira-roundtrip] the goal holds its key in B"
+  br show P1 --json; c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" ABC-8 "[jira-roundtrip] the focus holds its key in B"
+  # a bundle holding a malformed key is refused whole (a bad input for the import, not a break)
+  local s; s=$(jq_ "$f" '[e["seq"] for e in b["log"] if "owner-add" in e["line"] and "\"G1\"" in e["line"]][0]')
+  forge "$f" "$TMP/jr-bad.json" 'o["item"]["jira"] = "abc-7"' "$s"
+  np; bad_in import "$TMP/jr-bad.json"; c_rc 1 "[jira-roundtrip] a malformed goal key refuses the bundle whole"
+  c_has "$OUT" "its jira is not a Jira issue key" "[jira-roundtrip] … saying so"
+  c_eq "$([ -e "$(sdir)/hot.jsonl" ] && echo written || echo none)" none "[jira-roundtrip] … nothing is written"
+  s=$(jq_ "$f" '[e["seq"] for e in b["log"] if "\"P1\"" in e["line"] and "\"add\"" in e["line"]][0]')
+  forge "$f" "$TMP/jr-badp.json" 'o["item"]["jira"] = "abc-8"' "$s"
+  np; bad_in import "$TMP/jr-badp.json"; c_rc 1 "[jira-roundtrip] a malformed focus key refuses the bundle whole"
+  c_has "$OUT" "its jira is not a Jira issue key" "[jira-roundtrip] … saying so (focus)"
+}
+
+# --- [words-roundtrip] a focus's done when and not doing through export and import ----------------------------------------------
+case_words_roundtrip() {
+  np; local f="$TMP/wr-$NP.json" g="$TMP/wr-old-$NP.json" h="$TMP/wr-f6-$NP.json" k="$TMP/wr-more.json" show='import json, sys; i = json.load(sys.stdin); print(i.get("done"), "|", i.get("not_doing"))'
+  must owner_ok add --kind goal --text "ship the bundle" --owner-quote q --where chat --done "the PR merged" --not-doing "the fleet" \
+    --review "$(dplus 30)" --scope project
+  must br op add --kind focus --text "bundle first" --owner-quote q1 --where chat --goal G1 --done-when "xong khi \"bundle\" đã nhập" --not-doing "the fleet part"
+  must br op add --kind focus --text "then the drill" --owner-quote q2 --where chat --goal G1
+  must br op words P2 --done-when "the drill ran" --not-doing "a second drill"
+  must br op add --kind focus --text "no words yet" --owner-quote q3 --where chat --goal G1
+  must br export --out "$f"
+  np; must owner_import "$f"; br import "$f"; c_rc 0 "[words-roundtrip] the right brain lands"
+  br show P1 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" 'xong khi "bundle" đã nhập | the fleet part' "[words-roundtrip] a focus added with its words holds both in B, byte for byte"
+  br show P2 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" 'the drill ran | a second drill' "[words-roundtrip] a focus whose words were set in place holds both in B"
+  br show P3 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" 'None | None' "[words-roundtrip] a focus with no words lands with none"
+  # a bundle as a brain of log format 6 wrote it: a focus with its words set at add, no words op (a header set to make the input, not a break)
+  np; must owner_ok add --kind goal --text "ship the bundle" --owner-quote q --where chat --done "the PR merged" --not-doing "the fleet" \
+    --review "$(dplus 30)" --scope project
+  must br op add --kind focus --text "bundle first" --owner-quote q1 --where chat --goal G1 --done-when "the PR merged" --not-doing "the fleet part"
+  must br export --out "$g"
+  forge "$g" "$h" 'b["format"] = 6' 1
+  np; must owner_import "$h"; br import "$h"; c_rc 0 "[words-roundtrip] a bundle of format 6 imports"
+  br show P1 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" 'the PR merged | the fleet part' "[words-roundtrip] … its focus keeps the words it had at the source"
+  # a focus whose done when is not a text is refused whole (a bad input for the import, not a break)
+  local s; s=$(jq_ "$g" '[e["seq"] for e in b["log"] if "\"P1\"" in e["line"] and "\"add\"" in e["line"]][0]')
+  forge "$g" "$TMP/wr-bad.json" 'o["item"]["done"] = 5' "$s"
+  np; bad_in import "$TMP/wr-bad.json"; c_rc 1 "[words-roundtrip] a focus whose done when is not a text refuses the bundle whole"
+  c_has "$OUT" "its done is not a text" "[words-roundtrip] … saying so"
+  c_eq "$([ -e "$(sdir)/hot.jsonl" ] && echo written || echo none)" none "[words-roundtrip] … nothing is written"
+  # more bad inputs for the import: an empty word, a word past any store's cap, a word on a trap, a placeholder in a words line,
+  # and a brain with a smaller quote cap (not breaks: the bundles are built with forge and carry)
+  forge "$g" "$TMP/wr-empty.json" 'o["item"]["not_doing"] = ""' "$s"
+  np; bad_in import "$TMP/wr-empty.json"; c_rc 1 "[words-roundtrip] a focus whose not doing is empty refuses the bundle whole"
+  c_has "$OUT" "not-doing is empty" "[words-roundtrip] … saying so"
+  forge "$g" "$TMP/wr-long.json" 'o["item"]["not_doing"] = "x" * 5000' "$s"
+  np; bad_in import "$TMP/wr-long.json"; c_rc 1 "[words-roundtrip] a focus whose not doing is past any store's cap refuses the bundle whole"
+  c_has "$OUT" "over its cap of 2000" "[words-roundtrip] … at the largest cap a store allows"
+  forge "$g" "$TMP/wr-edge.json" 'o["item"]["not_doing"] = "x" * 2000' "$s"
+  np; must owner_import "$TMP/wr-edge.json"; br import "$TMP/wr-edge.json"; c_rc 0 "[words-roundtrip] a word of 2000 units passes the check"
+  np; must owner_ok add --kind goal --text "ship the bundle" --owner-quote q --where chat --done "the PR merged" --not-doing "the fleet" \
+    --review "$(dplus 30)" --scope project
+  must br op add --kind focus --text "bundle first" --owner-quote q1 --where chat --goal G1
+  must br op words P1 --done-when "$(rep w 150)" --not-doing "the fleet part"
+  must br op add --kind trap --text "a trap"
+  must br export --out "$k"
+  s=$(jq_ "$k" '[e["seq"] for e in b["log"] if "\"T1\"" in e["line"] and "\"add\"" in e["line"]][0]')
+  forge "$k" "$TMP/wr-trap.json" 'o["item"]["done"] = "x" * 3000' "$s"
+  np; must owner_import "$TMP/wr-trap.json"; br import "$TMP/wr-trap.json"; c_rc 0 "[words-roundtrip] a bundle with a word on a trap imports"
+  br show T1 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" 'None | None' "[words-roundtrip] … and the trap holds no word"
+  s=$(jq_ "$k" '[e["seq"] for e in b["log"] if "\"words\"" in e["line"]][0]')
+  carry "$k" "$TMP/wr-carried.json" 'o["done"] = "~ words nobody vouches for"' "$s"
+  np; must owner_import "$TMP/wr-carried.json"; br import "$TMP/wr-carried.json"; c_rc 0 "[words-roundtrip] a bundle whose words line carries a placeholder imports"
+  c_has "$OUT" "P1 (its words line carries a placeholder: the chain does not vouch for it" "[words-roundtrip] … skips the focus, naming why"
+  # a supersede whose earlier item had a carried words line: the supersede line holds the words and is not carried, so it lands
+  np; must owner_ok add --kind goal --text "ship the bundle" --owner-quote q --where chat --done "the PR merged" --not-doing "the fleet" \
+    --review "$(dplus 30)" --scope project
+  must br op add --kind focus --text "bundle first" --owner-quote q1 --where chat --goal G1
+  must br op words P1 --done-when "first done" --not-doing "first not"
+  must br op supersede P1 --text "bundle first, again" --reason clearer --done-when "clean done" --not-doing "clean not"
+  must br export --out "$TMP/wr-chain.json"
+  s=$(jq_ "$TMP/wr-chain.json" '[e["seq"] for e in b["log"] if "\"words\"" in e["line"]][0]')
+  carry "$TMP/wr-chain.json" "$TMP/wr-chain-c.json" 'o["done"] = "~ words nobody vouches for"' "$s"
+  np; must owner_import "$TMP/wr-chain-c.json"; br import "$TMP/wr-chain-c.json"; c_rc 0 "[words-roundtrip] a bundle whose superseded focus had a carried words line imports"
+  br show P2 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" 'clean done | clean not' "[words-roundtrip] … and its successor lands with its own words"
+  np; conf '{"quote_max": 100}'; must owner_import "$k"; br import "$k"; c_rc 0 "[words-roundtrip] a brain with a quote cap of 100 imports"
+  c_has "$OUT" "P1 (its done when is 150 units, over this brain's cap of 100)" "[words-roundtrip] … skips a focus whose word is over its cap"
+}
+
 # --- [e] brain owner import -------------------------------------------------------------------------------------------------------
 case_owner() {
   np; fill; must owner_ok supersede D2 --text "hold the release until the drill, then ship"
@@ -921,7 +1015,7 @@ st, ops, led = L.snapshot(s.state_dir()); print(L.dormant(st, ops, led, time.tim
 }
 
 echo "== cases =="
-for c in case_export case_doctor case_scope case_import case_owner case_ledger case_refuse case_drill case_backup case_lock case_compat case_hookpath case_forged case_fidelity; do
+for c in case_export case_doctor case_scope case_import case_jira_roundtrip case_words_roundtrip case_owner case_ledger case_refuse case_drill case_backup case_lock case_compat case_hookpath case_forged case_fidelity; do
   run_case $c
 done
 cd "$TMP" || exit 1

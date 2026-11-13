@@ -11,6 +11,8 @@
 #   [R] refusals at rehearse: a public or internal repository, no such branch, no workflow file, no workflow_dispatch (one
 #       only in a comment too), a bad input key or workflow name; no dispatch
 #   [M] the world moved after signing (the head): run refuses before the dispatch
+#   [S] a workflow that uses secrets runs only on the default branch: refused on any other ref when its file at that head holds a
+#       secret reference, an environment, `secrets: inherit` or a called workflow that does; fail closed when a file cannot be read
 #   [U] undo cancels only the run this dispatch made: not a run that matched before, not another actor's, not a finished one;
 #       two new runs of the viewer are left alone (rc 5); a later run's undo leaves an earlier run's record
 # =============================================================================
@@ -44,9 +46,9 @@ wf = {".github/workflows/ci.yml": {"sha": B1, "text": "name: CI\non:\n  push:\n 
       ".github/workflows/nightly.yml": {"sha": "c3" * 20, "text": "on:\n  schedule:\n    - cron: '0 3 * * *'\n  # workflow_dispatch: later\n"},
       ".github/workflows/deploy.yml": {"sha": "c4" * 20, "text": "on: push\njobs:\n  a:\n    if: github.event_name == 'workflow_dispatch'\n"}}
 W = {"viewer": "bot", "next_run": 9000, "faults": {},
-     "repos": {"acme/app": {"private": True, "visibility": "private", "branches": {"main": H1, "a/b": H1}, "files": {H1: wf}, "runs": []},
-               "acme/pub": {"private": False, "visibility": "public", "branches": {"main": H1}, "files": {H1: wf}, "runs": []},
-               "acme/int": {"private": True, "visibility": "internal", "branches": {"main": H1}, "files": {H1: wf}, "runs": []}}}
+     "repos": {"acme/app": {"private": True, "visibility": "private", "default_branch": "main", "branches": {"main": H1, "a/b": H1}, "files": {H1: wf}, "runs": []},
+               "acme/pub": {"private": False, "visibility": "public", "default_branch": "main", "branches": {"main": H1}, "files": {H1: wf}, "runs": []},
+               "acme/int": {"private": True, "visibility": "internal", "default_branch": "main", "branches": {"main": H1}, "files": {H1: wf}, "runs": []}}}
 exec(sys.argv[2])
 json.dump(W, open(sys.argv[1], "w"))
 PY
@@ -143,6 +145,109 @@ PY
   eq "$?:$(ndispatch "$W")" "3:0" "[M] a run phase whose dispatch line is not in the signed plan: refused before the dispatch"
 }
 
+# kitrc <plugin> <dir> <kit args...> — rc of the kit script itself at rehearse (no baton in between), its output in $BT_OUT
+kitrc() { local P=$1 W=$2; shift 2; ( cd "$W" && XDG_STATE_HOME="$ST" FAKE_LOG="$W/fake.log" FAKE_GH_WORLD="$W/gh.json" BATON_PHASE=rehearse BATON_PLUGIN_ROOT="$P" \
+  bash "$P/batons/workflow-dispatch.sh" "$@" ) > "$BT_OUT" 2>&1; echo $?; }
+# secworld <dir> <main's ci.yml> <branch feat's ci.yml> [python on W] — acme/app: main at H1 and feat at H2, each with its own ci.yml
+secworld() { MAINTXT=$2 FEATTXT=$3 world "$1" 'import os
+R = W["repos"]["acme/app"]; H2 = "2b" * 20
+R["files"][H1] = {".github/workflows/ci.yml": {"sha": B1, "text": os.environ["MAINTXT"]}}
+R["branches"]["feat"] = H2
+R["files"][H2] = {".github/workflows/ci.yml": {"sha": "b2" * 20, "text": os.environ["FEATTXT"]}}
+'"${4:-}"; }
+
+fam_secrets() {
+  local P=$1 W NOSEC SEC HEAD JOB
+  HEAD=$'name: CI\non:\n  workflow_dispatch:\n'
+  NOSEC="${HEAD}jobs:"$'\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n'
+  SEC="${HEAD}jobs:"$'\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./deploy.sh\n        env:\n          KEY: ${{ secrets.DEPLOY_KEY }}\n'
+  # shellcheck disable=SC2086
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$SEC" "$SEC"
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a workflow that uses a secret, dispatched on a feature branch: refused (rc 3)"
+  has "$(cat "$BT_OUT")" "REFUSE workflow ci.yml on acme/app ref feat uses secrets (first: secrets.DEPLOY_KEY in ci.yml) and feat is not the default branch (main): merge the workflow to main and dispatch there, or the owner acts" "[S] …the line names the workflow, the ref, the first reference and the way forward"
+  hasnt "$(cat "$BT_OUT")" "PLAN" "[S] …nothing is planned"
+  eq "$(ndispatch "$W")" 0 "[S] …nothing dispatched"
+  eq "$(bt "$P" "$W" mode auto >/dev/null; bt "$P" "$W" go $K --repo acme/app --workflow ci.yml --ref feat)" 1 "[S] …go on that branch: refused too"
+  eq "$(ndispatch "$W")" 0 "[S] …still nothing dispatched"
+  eq "$(bt "$P" "$W" go $K --repo acme/app --workflow ci.yml --ref main)" 0 "[S] the same workflow on the default branch: dispatched (go rc 0)"
+  has "$(cat "$BT_OUT")" "go: ok — 2 writes" "[S] …the record and the dispatch"
+  eq "$(grep -c "^gh workflow run ci.yml --repo acme/app --ref main$" "$W/fake.log")" 1 "[S] …one dispatch, on main"
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref main)" 0 "[S] …its rehearse is not refused"
+  has "$(cat "$BT_OUT")" "PLAN dispatch workflow ci.yml on acme/app ref main at $H1 blob $B1 inputs none" "[S] …the plan line is the unchanged one"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${NOSEC}# a branch with no secret"
+  eq "$(bt "$P" "$W" mode auto >/dev/null; bt "$P" "$W" go $K --repo acme/app --workflow ci.yml --ref feat)" 0 "[S] a workflow with no secret, dispatched on a feature branch: dispatched"
+  eq "$(grep -c "^gh workflow run ci.yml --repo acme/app --ref feat$" "$W/fake.log")" 1 "[S] …one dispatch, on feat"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "${HEAD}jobs:"$'\n  a:\n    name: Rotate secrets weekly\n    steps:\n      - run: echo no secret here\n' "${HEAD}jobs:"$'\n  a:\n    name: Rotate secrets weekly\n    steps:\n      - run: echo no secret here\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 0 "[S] the word secrets in a name, no reference: not refused"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "$SEC"
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a branch whose copy adds a secret that main's copy lacks: refused (rc 3)"
+  has "$(cat "$BT_OUT")" "first: secrets.DEPLOY_KEY in ci.yml" "[S] …the branch's file was read"
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref main)" 0 "[S] …while main's own copy dispatches"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "$NOSEC" 'W["faults"]["raw_read_fails"] = [".github/workflows/ci.yml"]'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a workflow file that cannot be read (HTTP 502): refused (rc 3)"
+  has "$(cat "$BT_OUT")" "REFUSE cannot read .github/workflows/ci.yml at $(printf '2b%.0s' $(seq 20))" "[S] …and says why"
+  eq "$(ndispatch "$W")" 0 "[S] …nothing dispatched"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  a:\n    environment: prod\n    steps:\n      - run: ./deploy.sh\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a job with an environment (its secrets): refused on a branch"
+  has "$(cat "$BT_OUT")" "first: environment: prod in ci.yml" "[S] …the line names the environment"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" $'name: CI\non:\n  workflow_dispatch:\n    inputs:\n      environment:\n        description: where\n'"jobs:"$'\n  a:\n    steps:\n      - run: echo hi\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 0 "[S] an input named environment is not an environment: not refused"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  call:\n    uses: ./.github/workflows/lib.yml\n    secrets: inherit\n' \
+    'R["files"]["2b" * 20][".github/workflows/lib.yml"] = {"sha": "c5" * 20, "text": "on: workflow_call\n"}'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a job that calls a workflow with secrets: inherit: refused on a branch"
+  has "$(cat "$BT_OUT")" "first: secrets: in ci.yml" "[S] …the line names it"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  call:\n    uses: ./.github/workflows/lib.yml\n' \
+    'R["files"]["2b" * 20][".github/workflows/lib.yml"] = {"sha": "c5" * 20, "text": "on: workflow_call\njobs:\n  b:\n    environment: prod\n    steps: []\n"}'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a called workflow that holds an environment: refused on a branch"
+  has "$(cat "$BT_OUT")" "first: environment: prod in lib.yml" "[S] …the line names the called file"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  call:\n    uses: ./.github/workflows/lib.yml\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a called workflow that is not on the branch: refused (cannot read it)"
+  has "$(cat "$BT_OUT")" "REFUSE cannot read .github/workflows/lib.yml, which ci.yml calls" "[S] …and says which"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  call:\n    uses: other/repo/.github/workflows/x.yml@v1\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a call to a workflow of another repository (unreadable here): refused on a branch"
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref main)" 0 "[S] …and not on the default branch"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  a:\n    steps:\n      - run: echo ${{ toJSON(Secrets) }}\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] toJSON(Secrets), any letter case: refused on a branch"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  a:\n    "environment": prod\n    steps: []\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a quoted \"environment\" key: refused on a branch"
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs :"$'\n  a:\n    environment: prod\n    steps: []\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a key written \`jobs :\`: its environment is still seen, refused on a branch"
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" $'  name: CI\n  on:\n    workflow_dispatch:\n  jobs:\n    a:\n      environment: prod\n      steps: []\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a file indented as a whole: its environment is still seen, refused on a branch"
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  call:\n    "uses": ./.github/workflows/lib.yml\n' \
+    'R["files"]["2b" * 20][".github/workflows/lib.yml"] = {"sha": "c5" * 20, "text": "on: workflow_call\njobs:\n  b:\n    environment: prod\n"}'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a quoted \"uses\" key still reaches the called workflow: refused on a branch"
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  a:\n    steps:\n      - run: echo ${{ secrets || 1 }}\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] \`secrets || 1\` in an expression: refused on a branch"
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  a:\n    steps:\n      - run: echo ${{ join(secrets.*, \',\') }}\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] \`secrets.*\` (every secret at once): refused on a branch"
+  has "$(cat "$BT_OUT")" "first: secrets.* in ci.yml" "[S] …the line names it"
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  a:\n    name: Never log secrets! Rotate secrets | weekly\n    steps:\n      - run: echo "secrets > out"\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 0 "[S] prose that only says secrets (! | >) is no reference: not refused"
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  a:\n    name: Scan for secrets.\n    steps:\n      - run: sops -d config/secrets.yaml\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 0 "[S] a sentence ending \"secrets.\" and a path config/secrets.yaml are no reference: not refused"
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$NOSEC" "${HEAD}jobs:"$'\n  a:\n    steps:\n      - run: echo ${{ secrets[\'x\xc2\x9b2J\xe2\x80\xaeevil\'] }}\n'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 3 "[S] a secret reference with control characters in its name: refused"
+  hasnt "$(cat "$BT_OUT")" $'\xc2\x9b' "[S] …the C1 control character (CSI) of the branch's file is not printed"
+  hasnt "$(cat "$BT_OUT")" $'\xe2\x80\xae' "[S] …nor a bidi override"
+
+  ST="$(fresh)/state"; W=$(fresh); secworld "$W" "$SEC" "$SEC" 'W["repos"]["acme/app"]["default_branch"] = "feat"'
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref feat)" 0 "[S] the repository's default branch is not main: the secret workflow dispatches on it"
+  eq "$(kitrc "$P" "$W" --repo acme/app --workflow ci.yml --ref main)" 3 "[S] …and main is then refused"
+}
+
 # failing_copy <plugin> <dir> — a copy of that plugin whose kit post-check fails, so run undoes
 failing_copy() { cp -r "$1" "$2"; mutate "$2/batons/workflow-dispatch.sh" '
 postcheck() {
@@ -196,7 +301,7 @@ PY
   has "$(cat "$BT_OUT")" "no run record" "[U] …it finds no record of its own (records are kept per runner process)"
 }
 
-FAMILIES="fam_dispatch fam_refuse fam_moved fam_undo"
+FAMILIES="fam_dispatch fam_refuse fam_moved fam_secrets fam_undo"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
 
 echo "== nothing written outside the scratch tree =="

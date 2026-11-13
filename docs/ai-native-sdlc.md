@@ -39,10 +39,10 @@ The kit has two plugins, for one person with one Claude seat on one machine:
 | Stage | Anthropic recommends | The kit | Status |
 |---|---|---|---|
 | Plan | Capture the intent in the requester's words as a committed file; a person accepts it [S1] | `intake` skill writes `kb/intent/<date>-<slug>.md` before the branch exists; `brainstorm` skill | shipped |
-| Specify | A spec written from the intent, reviewed by a person before code [S1], [S3] | `spec` skill: five sections, criteria are commands, a table of inputs and failure cases; approval asked before code | shipped (approval is discipline, not a gate) |
+| Specify | A spec written from the intent, reviewed by a person before code [S1], [S3] | `spec` skill: five sections derived from the story, criteria as behaviour pointing to its AC, a list of risks to cover; approval asked before code | shipped (approval is discipline, not a gate) |
 | Build | Short CLAUDE.md, skills for policy, hooks for guarantees, worktrees and subagents [S1], [S5] | Rules delivered by hooks at the moment of action; one worktree per intent; per-job subagent models | shipped |
 | Review | Review in a fresh context; the agent that wrote the code cannot approve it [S1], [S3] | `before-ready` rule; review model from config; the author never merges its own PR; the person merges, or the main session of `local-parallel` through a guarded merge | shipped (review is discipline, not a gate) |
-| Test | Give the agent a check it can run; show evidence; evals for the agent's configuration [S1], [S3] | Spec criteria are commands; `open-pr.sh` refuses a PR without run evidence | shipped; evals are a gap |
+| Test | Give the agent a check it can run; show evidence; evals for the agent's configuration [S1], [S3] | Tests cover the AC's behaviour and the spec's risks; `open-pr.sh` refuses a PR without run evidence | shipped; evals are a gap |
 | Release | Hooks as approval gates; the agent acts up to the production gate [S1] | BatonRun for every privileged write; change files and a release script | shipped |
 | Operate | Deterministic detection; findings return as a new intent; least-privilege agent identities [S1], [S2] | Writes to a live system go through BatonRun | gap: no monitoring loop, no agent identity |
 | All stages | Manage context; keep state in files; sandbox and permissions [S3], [S18], [S16] | `kb/` as the repository's memory; the brain plugin; baton permission rules | shipped |
@@ -100,20 +100,23 @@ The kit has two plugins, for one person with one Claude seat on one machine:
 
 ### What the kit does
 
-- The skill [`spec`](../plugins/vibemaestro-sdlc/skills/spec/SKILL.md) writes `kb/specs/<date>-<slug>.md` in five sections
-  (context, goal, out of scope, inputs and failure cases, acceptance criteria). Each acceptance criterion is **one command and its
-  expected result**. The last criterion always asks for a run-evidence section in the pull request. `## Inputs and failure cases`
-  lists, by risk, the hostile, odd, empty, oversized, concurrent or half-failed inputs the change must survive, each with the test
-  that proves it.
-- `kb.py check spec` checks the shape: sections present and in order, no unfilled blank, a command in every criterion
+- The skill [`spec`](../plugins/vibemaestro-sdlc/skills/spec/SKILL.md) writes `kb/specs/<date>-<slug>.md`, derived from the
+  intent (for a story, the story the owner approved), in five sections: the goal, the hard constraints, criteria written as
+  behaviour ("when … then …") each pointing to an AC of the story, the risks the tests must cover (the hostile, odd, empty,
+  oversized, concurrent or half-failed inputs), and the open points. It holds no implementation: the how belongs to the plan.
+- `kb.py check spec` checks the shape: the five sections present, no unfilled blank, every AC of the story named by a criterion;
+  a criterion not written as "when … then", a code block or a long spec only warns
   ([`kb.py`](../plugins/vibemaestro-sdlc/scripts/kb.py)).
-- The skill asks the person to approve the spec before any code is edited. A subagent of `local-parallel` ends its turn with
-  the spec path instead, and the main session relays the spec to the person.
+- The skill asks for the spec's approval before any code is edited: the coordinator approves it, and the owner is asked only when
+  it would change an AC of the story; a person working alone approves the story and the spec in one ask. A subagent of
+  `local-parallel` ends its turn with the spec path instead, and the main session relays the story and the spec to the person.
+- New kb content (story, spec, plan, decisions) is written in the repository's language (an older file keeps its own): the key `language` of
+  `.vibemaestro/sdlc.json`, `vi` when it is unset. Everything else is in English.
 
 ### Where the kit differs
 
-- **Further:** criteria as commands make the sprint contract [S22] executable. The same commands become the evidence at the
-  Test stage.
+- **Further:** criteria written as behaviour, each pointing to an AC of the story, with the risks the tests must cover, make the
+  sprint contract [S22] checkable; the tests that cover them become the evidence at the Test stage.
 - **Gap:** spec approval is discipline, not a gate. The shape check does not know whether a person approved. The playbook
   notes that plan mode enforces its own gate: “Plan mode enforces this itself, since Claude cannot edit files until the engineer
   accepts the plan.” [S1] The kit has no hook that blocks edits before approval.
@@ -226,7 +229,7 @@ The kit has two plugins, for one person with one Claude seat on one machine:
 
 ### What the kit does
 
-- Spec criteria are commands with expected results (Specify), so the test plan exists before code.
+- The spec lists the risks the tests must cover (Specify), so the test plan exists before code.
 - The skill [`ship`](../plugins/vibemaestro-sdlc/skills/ship/SKILL.md) runs the acceptance commands and writes their real
   output to an evidence file. `open-pr.sh` refuses to open a pull request when that file is missing or empty (exit code 3,
   [`open_pr.py`](../plugins/vibemaestro-sdlc/scripts/open_pr.py)); a run that could not happen must say why in its first line.
@@ -429,9 +432,9 @@ review.
 - **guarded merge**: the merge command that merges only when the guards pass (head SHA, latest checks, conflicts, a deny list, the brief's scope) and is a dry run by default.
 - **intent**: `kb/intent/<date>-<slug>.md`, the requester's own words, recorded before the branch exists. One intent is one branch is one draft pull request.
 - **kb**: the `kb/` directory of a repository: intents, specs, plans, decisions and the current-state file.
-- **main session**: in `local-parallel`, the session the person talks to: it splits the work, briefs one subagent per task, relays spec approvals, post-checks and merges. It edits no file of a task.
+- **main session**: in `local-parallel`, the session the person talks to: it splits the work, briefs one subagent per task, relays story and spec approvals, post-checks and merges. It edits no file of a task.
 - **planted break**: a test that copies code, breaks the copy in one place on purpose, and requires the suite to go red.
-- **spec**: `kb/specs/<date>-<slug>.md`: five sections in order, with criteria that are commands, approved by a person before code.
+- **spec**: `kb/specs/<date>-<slug>.md`: five sections derived from the story (goal, constraints, criteria as behaviour pointing to its AC, risks to cover, open points), approved before code.
 - **worker**: a subagent that builds one task against a brief, from intake to a draft pull request. Its result is a claim; the main session re-runs the acceptance command before believing it.
 
 ## Sources

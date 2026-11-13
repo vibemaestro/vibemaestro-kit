@@ -9,10 +9,13 @@ files (`src/app.py`, `docs/x.md`), two green checks of workflow `test`, not behi
 would widen everything (no deny glob, admin bypass on), which must have no effect. Each mutation changes one thing; `fx_*`
 below, one per name.
 """
+import base64
+import io
 import json
 import os
 import re
 import sys
+import zipfile
 
 REPO, PR = "acme/app", 7
 H = "a1b2c3d4e5f60718293a4b5c6d7e8f9001122334"
@@ -131,6 +134,7 @@ def fx_mergeable_late(fx, _a): fx["pr"]["mergeable_seq"] = ["UNKNOWN", "MERGEABL
 def fx_mergeable_unknown(fx, _a): fx["pr"]["mergeable_seq"] = ["UNKNOWN"]
 def fx_moved_head(fx, _a): fx["pr"]["merge_head"] = H2
 def fx_pr_view_fail(fx, _a): fx.setdefault("fail", {})["pr view"] = "boom"
+def fx_fail_path(fx, a): fx.setdefault("fail", {})[a] = "boom"      # that api path answers HTTP 500
 def fx_after_merge_head(fx, _a): fx["pr"]["after_merge_head"] = H2
 def fx_merge_mode(fx, a): fx["pr"]["merge_mode"] = a
 def fx_view_fails_after_merge(fx, _a): fx["fail_after_merge"] = {"pr view": "boom"}
@@ -224,6 +228,12 @@ def fx_backmerge(fx, a):
     fx["pr"]["headRefName"] = "backmerge/" + H[:12]
     if a != "none":
         release_at(fx, {"on": "ahead", "identical": "identical", "off": "diverged"}[a])
+
+
+def fx_release_flaky(fx, a):
+    """after backmerge=...: the comparison of the head with release fails `a` times with HTTP 500, then answers as it did."""
+    key = R + "compare/%s...%s" % (H, RT)
+    fx["api"][key] = {"__seq__": [{"__die__": "gh: Server Error (HTTP 500)"}] * int(a) + [fx["api"][key]]}
 
 
 def fx_on_release(fx, a):
@@ -363,6 +373,19 @@ def fx_behind(fx, a):
                                                  "files": [{"filename": f, "status": "modified"} for f in a.split(",")]}
 
 
+def fx_compare_seq(fx, a):
+    """`<status>,<status>,...` (500, 404, ok, drop, eof, 422-body5xx): what the base comparison answers on each call, the last one repeated; ok is
+    the diverged answer fx_behind gives. A number is that HTTP error, drop a connection that fails."""
+    ok = {"status": "diverged", "ahead_by": 2, "behind_by": 1, "files": [{"filename": "docs/other.md", "status": "modified"}]}
+    die = {"drop": {"__die__": 'Get "https://api.github.com/x": dial tcp: lookup api.github.com: no such host'}}
+    msg = {"eof": 'Get "https://api.github.com/x": EOF',
+           "422-body5xx": '{"message":"Validation Failed","note":"upstream said HTTP 500"}\ngh: Validation Failed (HTTP 422)',
+           "500": "gh: Server Error (HTTP 500)", "502": "gh: Bad Gateway (HTTP 502)", "404": "gh: Not Found (HTTP 404)",
+           "403": "gh: Forbidden (HTTP 403)"}
+    fx["api"][R + "compare/%s...%s" % (H, B)] = {"__seq__": [ok if s == "ok" else die.get(s) or {"__die__": msg[s]}
+                                                              for s in a.split(",")]}
+
+
 MB = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0"     # the merge base of head and base
 TM = "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0"     # GitHub's test merge of the PR
 
@@ -434,6 +457,7 @@ def base_tree_add(fx, path, mode):
 TM_OLD = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"  # a test merge GitHub made against an older base
 PLAN_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "plan.py")  # the kit's real planner
 PLANNER = {"script": "tests/plan.py", "inputs": ["tests/suites.map", "tests/map-exclusions.txt"]}
+REPO_CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, ".vibemaestro", "sdlc.json")  # not in an export
 # the PR's files: src/app.py wakes app, docs/x.md wakes docs-check
 MAP = """@full tests/plan.py tests/map-exclusions.txt
 @always plan
@@ -473,14 +497,20 @@ if bad:
 
 def fx_planner(fx, a):
     """merge.planner in the base config: the kit's real tests/plan.py, MAP and EXCL, served at the base B and in its trees. `a`:
-    link (the map is a symlink at the base), missing (the exclusion list is not at the base), probe (the planner is PROBE)."""
+    link (the map is a symlink at the base), missing (the exclusion list is not at the base), probe (the planner is PROBE), repo
+    (the planner this repository's own config names, or none when it names none: only the files it names are served)."""
     cfg = cfg_of(fx)
-    cfg["merge"]["planner"] = PLANNER
+    planner = PLANNER
+    if a == "repo":
+        with open(REPO_CFG, encoding="utf-8") as f:
+            planner = json.load(f)["merge"].get("planner")
+    cfg["merge"]["planner"] = planner
     set_cfg(fx, cfg)
     with open(PLAN_PY, encoding="utf-8") as f:
         texts = {"tests/plan.py": PROBE if a == "probe" else f.read(), "tests/suites.map": MAP, "tests/map-exclusions.txt": EXCL}
+    named = [planner["script"]] + planner["inputs"] if planner else []
     for rel, t in texts.items():
-        if a == "missing" and rel == "tests/map-exclusions.txt":
+        if a == "missing" and rel == "tests/map-exclusions.txt" or a == "repo" and rel not in named:
             continue
         fx["api"][R + "contents/%s?ref=%s" % (rel, B)] = fx["api"][R + "contents/%s?ref=%s" % (rel, MB)] = t
         base_tree_add(fx, rel, "120000" if a == "link" and rel == "tests/suites.map" else "100644")
@@ -564,12 +594,14 @@ def fx_bootstrap(fx, a):
     on) and a rules file under .vibemaestro/. `a`: empty-deny (the added config denies nothing), modified (the
     PR modifies the config instead of adding it), external (the added config names an external CI adapter), no-deny (it sets
     no merge.deny_globs), workflow (the PR also adds a workflow, which the added deny globs refuse), policies (the rules
-    directory is .vibemaestro/policies, with its README as the scaffold)."""
+    directory is .vibemaestro/policies, with its README as the scaffold), plugin-rules (the rules directory is
+    .vibemaestro/.claude-plugin, its README the scaffold: a `.claude-plugin` path)."""
     head = cfg_of(fx)                               # the base's rules, and a forged grant: admin bypass and the image lane on
     del fx["api"][CFG + B]
     head["merge"]["admin_bypass"] = True
     head["merge"]["image_bump"]["enabled"] = True
-    head["rules"] = {"dirs": [".vibemaestro/policies" if a == "policies" else ".vibemaestro/rules"]}
+    rules = {"policies": "policies", "plugin-rules": ".claude-plugin"}.get(a, "rules")
+    head["rules"] = {"dirs": [".vibemaestro/" + rules]}
     if a == "empty-deny":
         head["merge"]["deny_globs"] = []
     if a == "external":
@@ -578,7 +610,7 @@ def fx_bootstrap(fx, a):
         head = {"schema": 1}
     fx["api"][CFG + H] = json.dumps(head)
     add_file(fx, ".vibemaestro/sdlc.json", status="modified" if a == "modified" else "added")
-    add_file(fx, ".vibemaestro/%s/README.md" % ("policies" if a == "policies" else "rules"))
+    add_file(fx, ".vibemaestro/%s/README.md" % rules)
     if a == "workflow":
         add_file(fx, ".github/workflows/ci.yml")
 
@@ -732,6 +764,149 @@ def fx_lane(fx, a):
                 f["filename"], f["status"], f["previous_filename"] = "image/image.yml", "renamed", REV_FILE
     if a == "revision-other":
         fx["api"][R + "contents/%s?ref=%s" % (REV_FILE, H)] = 'env:\n  IMAGE_REVISION: "r18"\n'
+
+
+# ── touches: plan-approved merges ──────────────────────────────────────────────────────────────────────────────────────────────
+SR, SR_RUN, SR_ART = ".github/workflows/signing-rules.yml", 14, 501
+ARTS = R + "actions/runs/%d/artifacts?name=trust-touches&per_page=100" % SR_RUN
+
+
+def block_zip(text):
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("trust-touches.txt", text)
+    return base64.b64encode(b.getvalue()).decode("ascii")
+
+
+def fx_touch(fx, a):
+    """merge.touch_checks [signing-rules] at the base, its touch_inputs (the workflow SR and the gate file), signing-rules the
+    required check, `batons/**` denied too, and a green signing-rules job of workflow run SR_RUN (SR). `a`: a git directory the
+    fake gh serves as acme/app and as acme/plans (the plan the approval pins, in this repository or another one)."""
+    cfg = cfg_of(fx)
+    cfg["merge"].update(touch_checks=["signing-rules"], required_checks=["signing-rules"],
+                        touch_inputs={"signing-rules": {"workflow": SR, "paths": ["gates/signing_rules.py"]}})
+    cfg["merge"]["deny_globs"].append("batons/**")
+    set_cfg(fx, cfg)
+    wr = fx["api"][R + "actions/runs?head_sha=%s&per_page=100" % H]
+    wr["workflow_runs"].append({"id": SR_RUN, "name": "signing-rules", "workflow_id": 9004, "check_suite_id": 104, "path": SR,
+                                "status": "completed", "conclusion": "success"})
+    wr["total_count"] += 1
+    add_runs(fx, run(220, "signing-rules", "success", "2026-10-16T10:00:00Z", suite=104))
+    if a:
+        fx["git"] = {REPO: a, "acme/plans": a}
+        fx["git_refs"] = {H: "main"}                 # the PR's head: W's main, unless touch-head names another branch
+
+
+def fx_touch_head(fx, a):
+    """the PR's head, as the fake gh serves files of acme/app at H: the branch `a` of the touch repository."""
+    fx["git_refs"][H] = a
+
+
+def fx_touch_name(fx, a):
+    """the touch check is named `a`, made by the workflow .github/workflows/<a>.yml (the job signing-rules otherwise)."""
+    cfg = cfg_of(fx)
+    wf = ".github/workflows/%s.yml" % a
+    cfg["merge"].update(touch_checks=[a], required_checks=[a], touch_inputs={a: {"workflow": wf, "paths": []}})
+    set_cfg(fx, cfg)
+    for r in fx["api"][R + "actions/runs?head_sha=%s&per_page=100" % H]["workflow_runs"]:
+        if r["id"] == SR_RUN:
+            r["name"], r["path"] = a, wf
+    for c in checks(fx):
+        if c["name"] == "signing-rules":
+            c["name"] = a
+
+
+def fx_touch_no_inputs(fx, _a):
+    """merge.touch_checks names signing-rules and merge.touch_inputs is empty."""
+    cfg = cfg_of(fx)
+    cfg["merge"]["touch_inputs"] = {}
+    set_cfg(fx, cfg)
+
+
+def fx_body(fx, a):
+    """the PR body: `a`, its lines split at `|`."""
+    fx["pr"]["body"] = a.replace("|", "\n")
+
+
+def sr_red(fx, block, check="failure", n=1):
+    """the signing-rules job red, by its workflow run (and its check run's own conclusion `check`), with n artifacts named
+    trust-touches holding `block` (none when block is None)."""
+    for r in fx["api"][R + "actions/runs?head_sha=%s&per_page=100" % H]["workflow_runs"]:
+        if r["id"] == SR_RUN:
+            r["conclusion"] = "failure"
+    for c in checks(fx):
+        if c["name"] == "signing-rules":
+            c["conclusion"] = check
+    data = block or ""
+    fx["api"][ARTS] = {"total_count": n if block is not None else 0, "artifacts": [
+        {"id": SR_ART + i, "name": "trust-touches", "size_in_bytes": len(data), "expired": False} for i in range(n if block is not None else 0)]}
+    fx["api"][R + "actions/artifacts/%d/zip" % SR_ART] = {"__b64__": block_zip(data)}
+
+
+def fx_sr_red(fx, a):
+    """signing-rules red, its artifact one finding per `;`-separated `kind:path:object:stops`, then `end <n>`."""
+    lines = [json.dumps(f.split(":")) + "\n" for f in a.split(";") if f]
+    sr_red(fx, "trust-touches v1\n" + "".join(lines) + "end %d\n" % len(lines))
+
+
+def fx_sr_red2(fx, a):
+    """the touch check red, its artifact a `trust-touches v2` block: one finding per `;`-separated `kind:path:object:stops`."""
+    lines = [json.dumps(f.split(":")) + "\n" for f in a.split(";") if f]
+    sr_red(fx, "trust-touches v2\n" + "".join(lines) + "end %d\n" % len(lines))
+
+
+def fx_sr_block(fx, a):
+    """signing-rules red with a faulty block: noend (no end line), count (end 2 over one line), end0 (no finding), none (no
+    artifact), two (two artifacts), flip (the check run says success, the workflow run failure; one undeclared baton finding)."""
+    one = '["baton", "batons/q.sh", "-", "none"]\n'
+    if a == "flip":
+        sr_red(fx, "trust-touches v1\n" + one + "end 1\n", check="success")
+    else:
+        sr_red(fx, {"noend": "trust-touches v1\n" + one, "count": "trust-touches v1\n" + one + "end 2\n",
+                    "end0": "trust-touches v1\nend 0\n", "none": None, "two": "trust-touches v1\n" + one + "end 1\n"}[a],
+               n=2 if a == "two" else 1)
+
+
+def fx_sr_run(fx, a):
+    """`<status>:<conclusion>`: the signing-rules workflow run is so (cancelled, or in_progress with no conclusion) while its check
+    run says success (a token with checks: write rewrote it); its artifact holds one undeclared baton finding."""
+    status, _sep, concl = a.partition(":")
+    sr_red(fx, 'trust-touches v1\n["baton", "batons/q.sh", "-", "none"]\nend 1\n', check="success")
+    for r in fx["api"][R + "actions/runs?head_sha=%s&per_page=100" % H]["workflow_runs"]:
+        if r["id"] == SR_RUN:
+            r["status"], r["conclusion"] = status, concl or None
+
+
+def fx_sr_foreign(fx, _a):
+    """a second job named signing-rules, green, made by another workflow file (.github/workflows/evil.yml)."""
+    wr = fx["api"][R + "actions/runs?head_sha=%s&per_page=100" % H]
+    wr["workflow_runs"].append({"id": 15, "name": "evil", "workflow_id": 9005, "check_suite_id": 105, "path": ".github/workflows/evil.yml",
+                                "status": "completed", "conclusion": "success"})
+    add_runs(fx, run(221, "signing-rules", "success", "2026-10-16T10:00:00Z", suite=105))
+
+
+def fx_sr_skipped(fx, _a):
+    for c in checks(fx):
+        if c["name"] == "signing-rules":
+            c["conclusion"] = "skipped"
+
+
+def fx_sr_missing(fx, _a):
+    fx["api"][CHECKS]["check_runs"] = [c for c in checks(fx) if c["name"] != "signing-rules"]
+    fx["api"][CHECKS]["total_count"] = len(checks(fx))
+
+
+def fx_baton_head(fx, a):
+    """`<path>:<stops>`: the PR modifies the baton <path>, whose Stops line at the head says <stops>."""
+    path, _sep, stops = a.partition(":")
+    add_file(fx, path, status="modified")
+    fx["api"][R + "contents/%s?ref=%s" % (path, H)] = "#!/usr/bin/env bash\n# Purpose: a baton\n# Stops: %s\necho hi\n" % stops
+
+
+def fx_baton_base(fx, a):
+    """`<path>:<stops>`: the baton <path> at the base tip B has that Stops line."""
+    path, _sep, stops = a.partition(":")
+    fx["api"][R + "contents/%s?ref=%s" % (path, B)] = "#!/usr/bin/env bash\n# Purpose: a baton\n# Stops: %s\necho hi\n" % stops
 
 
 def fx_lane_off(fx, _a):

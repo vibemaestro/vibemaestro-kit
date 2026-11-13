@@ -75,7 +75,7 @@ _cap_tree() {
       } while (grew)
       for (i=1; i<=n; i++) if (pid[i] in in_set) { s+=rss[i]; list=list " " pid[i] }
       print s+0 list
-    }'
+    }' 2>/dev/null   # the watchdog's broken-pipe message must not reach the caller's output
 }
 
 # _cap_kill <root pid> <token> — kill the group, the descendants and the token carriers; repeat until nothing of them is left

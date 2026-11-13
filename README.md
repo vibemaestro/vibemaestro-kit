@@ -2,7 +2,83 @@ English | [Tiếng Việt](README.vi.md)
 
 # vibemaestro-kit
 
-Claude Code plugins that give your coding sessions a written process, rules that arrive when they matter, safe privileged actions and a memory that survives compaction.
+**Claude Code with a brain: it stops only for what it can't undo.**
+
+Your decisions survive `/compact`, the spec is written into your repo for your approval before any code, every pull request it opens carries the real test output, and a write it can't take back waits for your signature.
+
+If Claude Code ever merged something you didn't approve, deleted what it shouldn't, or forgot your decision after `/compact`, this is for you.
+
+## Try it
+
+With Claude Code 2.1.292 or later, one command adds the marketplace and installs both plugins (`vibemaestro-brain` brings `vibemaestro-sdlc`, which it needs):
+
+```bash
+claude plugin install vibemaestro-brain --marketplace vibemaestro/vibemaestro-kit
+```
+
+Then open Claude Code in your repository and ask it to set up `kb/` ([First use](#first-use-in-your-repository)). An older Claude Code: see [Install](#install).
+
+## What a change looks like
+
+```mermaid
+flowchart LR
+  A["You describe a change"] --> B["Intent recorded word for word"]
+  B --> C["Spec: you approve"]
+  C --> D["PR with evidence, fresh-context review"]
+  D --> E["You merge"]
+```
+
+## Use these even without the kit
+
+Three rules from the kit, ready to paste into your `CLAUDE.md`.
+
+<details>
+<summary><b>A brief is a contract</b>: for work handed to a subagent</summary>
+
+```markdown
+- Your brief is your contract. Outside it, stop and say so in your reply; do not decide for the person.
+- Evidence, not claims. Run the command that proves your change on its final version; report the command, its exit code and its real output.
+- Check the instrument. An all-yes or all-no result: suspect the command first. A number needs a sure-positive control.
+- Root cause before a fix. Reproduce, read the failing path, name the cause.
+```
+
+Full text: [subagent-core.md](plugins/vibemaestro-sdlc/templates/subagent-core.md)
+</details>
+
+<details>
+<summary><b>A count is not an answer</b>: know which question the command answered</summary>
+
+```markdown
+- `gh pr list`, `gh issue list` return the first page only (`--limit` defaults to 30): pass `--limit` above the count you expect.
+- `git log A..B` is empty once B is merged into A: for a merged PR's commits use `gh pr view <n> --json commits`.
+- `grep -c <string>` counts lines holding that exact string, not the concept: first run it on one case that is certainly positive.
+- A count with no control is unchecked: say so.
+```
+
+Full text: [measurement-commands.instructions.md](plugins/vibemaestro-sdlc/rules/measurement-commands.instructions.md)
+</details>
+
+<details>
+<summary><b>A test names the break it catches</b>: a passing test on broken code is read as proof</summary>
+
+```markdown
+- Each test names the break it catches, in its name or message: "an empty list is refused with rc 65", not "works".
+- Expected values are literal: a value computed by the code under test agrees with the bug.
+- At least one refusal case per rule: the empty, the hostile, the oversized, the one that fails half way.
+- A new test is red before the change and green after it; never revert or mutate the fix to see red.
+```
+
+Full text: [test-quality.instructions.md](plugins/vibemaestro-sdlc/rules/test-quality.instructions.md)
+</details>
+
+## Why it is different
+
+- **Memory that survives compaction.** The brain puts your pinned decisions, the task in hand and the next steps back after every compaction; a decision of yours changes only through a permission dialog you approve.
+- **Risky writes as one script.** A merge, a force-push or a deletion runs as one baton script: checked, rehearsed, signed, post-checked and undone when the result is wrong.
+- **Rules that arrive when they matter.** A rule reaches the session when it edits a matching file or runs a matching command, not all at once at the start.
+- **Gates in CI and a guarded merge.** Optional GitHub workflows check commits, pull request text and review evidence; the guarded merge needs a green check.
+
+If the kit helps you, star the repo; to hear of each release, watch it with **Custom → Releases**.
 
 ## What it is
 
@@ -26,7 +102,7 @@ Installing `vibemaestro-brain` installs `vibemaestro-sdlc` with it.
 
 | Needed | For |
 |---|---|
-| Claude Code (`claude` CLI); tested with 2.1.290 | everything; the brain's decision items need 2.1.211 or later in `auto` mode |
+| Claude Code (`claude` CLI); tested with 2.1.290; the one-command install in [Try it](#try-it) needs 2.1.292 or later | everything; the brain's decision items need 2.1.211 or later in `auto` mode |
 | `python3` 3.8 or later, `git`, `bash` | the hooks and scripts; tested on Linux and macOS, not on Windows; the brain needs a POSIX system |
 | `gh`, signed in (`gh auth login`) | the tracking issue at intake, the pull request at ship, GitHub writes in BatonRun |
 | A GitHub repository for your project | issues and pull requests; without a remote, intake records the intent and branch and skips the issue |
@@ -35,7 +111,7 @@ The plugins do not depend on any other repository at run time.
 
 ## Install
 
-Add the marketplace, then install both plugins. Pick one of the two ways.
+Add the marketplace, then install both plugins. Pick one of the two ways. With Claude Code 2.1.292 or later, the one command in [Try it](#try-it) does the same as the first way.
 
 ### From GitHub
 
@@ -95,8 +171,8 @@ Then run `/reload-plugins` in a running session, or open a new one.
 
 Do these once. Open a new Claude Code session in your application repository.
 
-1. **Set up `kb/`.** Ask Claude to run the skill `vibemaestro-sdlc:init-kb`. It asks a few questions, then writes a `kb` folder (intents, specs, plans, decisions and a current-state file) and a small config file `.vibemaestro/sdlc.json`, and overwrites nothing. One question is the language of the `kb` documents and pull request bodies: the skill recommends English (`en`), or Vietnamese (`vi`) if you write to it in Vietnamese, and records the answer in the config. The skill commits the result on the branch `chore/kb-init` and pushes it: open its pull request and merge it. Some error messages of the scripts are still in Vietnamese whatever you choose.
-2. **Set up BatonRun on this machine (recommended).** A simple write outside the session (one step, undone by one direct call, such as a comment on an issue) is a direct call; a write flow, or a write that cannot be undone or that you sign (a merge, a force-push), runs as one baton script, kept and called by name when it comes back. A normal branch push and opening a pull request are not batons. Without this setup every baton command asks you; `local-parallel` merges through batons. Ask Claude to set up BatonRun on this machine (skill `vibemaestro-sdlc:batonrun`, its setup reference). It installs a small launcher and prints a block of permission rules; you add that block to your Claude Code user settings (`/permissions`, or `~/.claude/settings.json`). The plugin never writes your settings. The skill `vibemaestro-sdlc:coordinator-bootstrap` does the same setup in one run you sign. With the block, the routine baton commands run without a prompt, while your signature and a change of mode always ask you. Details: [BatonRun, permission setup](plugins/vibemaestro-sdlc/docs/batonrun.md#9-permission-setup).
+1. **Set up `kb/`.** Ask Claude to run the skill `vibemaestro-sdlc:init-kb`. It asks a few questions, then writes a `kb` folder (intents, specs, plans, decisions and a current-state file) and a small config file `.vibemaestro/sdlc.json`, and overwrites nothing. One question is the language of the `kb` documents and pull request bodies: the skill recommends English (`en`), or Vietnamese (`vi`) if you write to it in Vietnamese, and records the answer in the config. The skill commits the result on the branch `chore/kb-init` and pushes it: open its pull request and merge it.
+2. **Set up BatonRun on this machine (recommended).** A simple write outside the session (one step, undone by one direct call, such as a comment on an issue) is a direct call; a write flow, or a write that cannot be undone or that you sign (a merge, a force-push), runs as one baton script, kept and called by name when it comes back. A normal branch push and opening a pull request are not batons. Without this setup every baton command asks you; `local-parallel` merges through batons. Ask Claude to set up BatonRun on this machine (skill `vibemaestro-sdlc:batonrun`, its setup reference). It installs a small launcher and prints a block of permission rules; you add that block to your Claude Code user settings (`/permissions`, or `~/.claude/settings.json`). The plugin never writes your settings. The skill `vibemaestro-sdlc:bootstrap` does the same setup in one run you sign. With the block, the routine baton commands run without a prompt, while your signature and a change of mode always ask you. Details: [BatonRun, permission setup](plugins/vibemaestro-sdlc/docs/batonrun.md#9-permission-setup).
 3. **Add a CI check (optional).** The guarded merge needs at least one green check on a pull request. The skill `vibemaestro-sdlc:install-gates` adds the process gates as GitHub workflows; it asks which gates and which runner, and never overwrites a file.
 
 ## The flow
@@ -105,13 +181,13 @@ Describe a change in plain words. The session-start reminder points Claude to `v
 
 1. **Intake.** Claude records your request word for word as `kb/intent/<date>-<slug>.md`, creates the branch `intent/<date>-<slug>` in a git worktree of its own, and opens a tracking issue.
 2. **Brainstorm**, only when the request is vague. Claude asks the questions that pick a direction and writes the answers into the intent.
-3. **Spec.** Claude writes `kb/specs/<date>-<slug>.md` in five sections: context, goal, out of scope, inputs and failure cases (the hostile, odd or half-failed inputs it must survive, each with its test), acceptance criteria, where each criterion is a command and its expected result. **You approve it before any code is edited**, or say what to change.
+3. **Spec.** Claude writes `kb/specs/<date>-<slug>.md` from the intent in five sections: goal, constraints, criteria written as behaviour ("when … then …") each pointing to an AC of the story, the risks the tests must cover (the hostile, odd or half-failed inputs), and open points; no implementation. **You approve it (with the story, when you work alone) before any code is edited**, or say what to change.
 4. **Plan**, only when the work needs several pull requests: one plan file, one row per pull request.
 5. **Ship.** Claude does the work, updates `kb/current-state.md`, runs the acceptance commands and opens a draft pull request with their real output as evidence.
 6. **Review.** Before the pull request leaves draft, a subagent with a fresh context reviews the final diff; the session fixes what it finds, then marks the pull request ready (`gh pr ready`) and tells you. Going ready starts the CI gates, if you installed them.
 7. **Merge.** The session that wrote a change does not merge it. **You merge the ready pull request** on GitHub, after reading it.
 
-For several tasks at once, ask for the skill `vibemaestro-sdlc:local-parallel`. The main session splits the work, starts one subagent per task (each in its own worktree, intake to draft pull request), relays each spec to you for approval, checks each pull request again and merges it through the guarded merge `kit:merge-pr`, which needs a green CI check (step 3 of first use). In mode `manual`, the default, each of those merges asks for your signature.
+For several tasks at once, ask for the skill `vibemaestro-sdlc:local-parallel`. The main session splits the work, starts one subagent per task (each in its own worktree, intake to draft pull request), relays each story and spec to you for approval, checks each pull request again and merges it through the guarded merge `kit:merge-pr`, which needs a green CI check (step 3 of first use). In mode `manual`, the default, each of those merges asks for your signature.
 
 Spec approval and review are rules the session follows, not gates that block. Hooks fail open: an error never blocks your work. The CI gates, if you install them, cover commit form, sensitive text, titles, pull request bodies, review evidence and dead branches. The full picture, stage by stage and compared with Anthropic's guidance: [docs/ai-native-sdlc.md](docs/ai-native-sdlc.md).
 

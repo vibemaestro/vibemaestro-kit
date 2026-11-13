@@ -263,6 +263,89 @@ O=$(capped run --base "$BASE"); rc=$?
 eq "$rc" 2 "an allow line for the term class is refused (rc $rc)"
 git_ -C "$R" rm -q src/d.txt scripts/public-tree.allow; cm "$R" "rm allow"
 
+echo "== the test-data allow file (tests/public-tree.allow) =="
+TA="$R/tests/public-tree.allow"
+rows() {  # rows <file> <path> <class> <string> […] — writes the allow file anew, one row per triple
+  local f=$1; shift; : > "$f"
+  while [ $# -ge 3 ]; do printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$f"; shift 3; done
+}
+IS="iss""ue #1""87"
+mkdir -p "$R/tests"; printf '%s\n' "$ISSUE" > "$R/tests/t.txt"
+rows "$TA" tests/t.txt ref "$IS"; cm "$R" "tests allow"
+O=$(run --base "$BASE"); rc=$?
+eq "$rc" 0 "[tests-allow-applies] a ref row for a tests/ path covers its invented number (rc $rc)"
+has "$O" "hits: 0 baselined, 1 allowed, 0 new" "[tests-allow-applies] …counted as allowed, its own row no hit"
+rows "$R/scripts/public-tree.allow" tests/t.txt ref "$IS"; cm "$R" "the row in both files"
+O=$(run --base "$BASE"); rc=$?
+eq "$rc" 0 "[tests-allow-applies] the same row in both files: both used, green (rc $rc)"
+hasnt "$O" "stale-allow" "[tests-allow-applies] …no stale-allow"
+git_ -C "$R" rm -q scripts/public-tree.allow; cm "$R" "rm scripts allow"
+{ printf '# %s; %s; %s\n' "$KBPATH" "$ISSUE" "$OWNER"; printf 'tests/t.txt\tref\t%s\n' "$IS"; } > "$TA"; cm "$R" "refs in a comment"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 1 "[tests-allow-applies] only a row's own string is excused: a kb path, a ref and a dated decision in a comment are hits (rc $rc)"
+has "$O" "new tests/public-tree.allow:1 kb,ref,diary" "[tests-allow-applies] …named with their classes"
+has "$O" "hits: 0 baselined, 1 allowed, 1 new" "[tests-allow-applies] …while the row under it still applies"
+
+for p in src/clean.txt tests/../src/clean.txt ./tests/t.txt Tests/t.txt tests//t.txt /tests/t.txt; do
+  rows "$TA" tests/t.txt ref "$IS" "$p" ref plain; cm "$R" "row for $p"
+  O=$(capped run --base "$BASE"); rc=$?
+  eq "$rc" 2 "[tests-allow-path-outside-refused] a row for $p is a broken instrument (rc $rc)"
+  has "$O" "public-tree: tests/public-tree.allow:2: the path is not a path under tests/ in git's form" \
+    "[tests-allow-path-outside-refused] …named by file and line ($p)"
+done
+printf 'tests/t.txt\tref\t%s\n' "$IS" > "$R/tests/elsewhere.allow"; rm -f "$TA"; ln -s elsewhere.allow "$TA"; cm "$R" "a symlink"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 2 "[tests-allow-path-outside-refused] the file as a symlink is a broken instrument, its rows unread (rc $rc)"
+has "$O" "public-tree: tests/public-tree.allow is a symlink or below one: it must be a regular file of the tree" \
+  "[tests-allow-path-outside-refused] …and says so"
+git_ -C "$R" rm -q tests/elsewhere.allow tests/public-tree.allow; cm "$R" "rm symlink"
+rows "$TA" tests/t.txt ref "$IS"; cm "$R" "an allow file"
+git_ -C "$R" rm -q --cached tests/public-tree.allow; git_ -C "$R" commit -qm "untracked, still on disk"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 2 "[tests-allow-path-outside-refused] an untracked file (never scanned, never published) is a broken instrument, its rows unread (rc $rc)"
+has "$O" "public-tree: tests/public-tree.allow is not tracked: the scan would not read the rows it applies (git add it)" \
+  "[tests-allow-path-outside-refused] …and says so"
+rm -f "$TA"
+
+printf '%s\n' "$MAIL" > "$R/tests/m.txt"; rows "$TA" tests/m.txt mail "jane""@corp-mail.io"; cm "$R" "a mail row"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 2 "[tests-allow-mail-refused] a mail row is a broken instrument (rc $rc)"
+has "$O" "public-tree: tests/public-tree.allow:1: class 'mail' belongs in scripts/public-tree.allow (an owner merge); this file takes kb, ref, diary" \
+  "[tests-allow-mail-refused] …named by file and line"
+git_ -C "$R" rm -q tests/m.txt
+{ printf '# ask %s\n' "jane""@corp-mail.io"; printf 'tests/t.txt\tref\t%s\n' "$IS"; } > "$TA"; cm "$R" "an address in a comment"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 1 "[tests-allow-mail-refused] an address written in the file's comment is a hit (rc $rc)"
+has "$O" "new tests/public-tree.allow:1 mail" "[tests-allow-mail-refused] …named"
+has "$O" "hits: 0 baselined, 1 allowed, 1 new" "[tests-allow-mail-refused] …and its ref row still applies, no hit of its own"
+
+rows "$TA" tests/t.txt home "/ho""me/alice"; cm "$R" "a home row"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 2 "[tests-allow-home-refused] a home row is a broken instrument (rc $rc)"
+has "$O" "public-tree: tests/public-tree.allow:1: class 'home' belongs in scripts/public-tree.allow (an owner merge); this file takes kb, ref, diary" \
+  "[tests-allow-home-refused] …named by file and line"
+printf '%s %s\n' "$ISSUE" "$HOMEP" > "$R/tests/t.txt"; rows "$TA" tests/t.txt ref "$ISSUE $HOMEP"; cm "$R" "a home path in a ref row"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 1 "[tests-allow-home-refused] a home path inside a ref row's string covers nothing (rc $rc)"
+has "$O" "new tests/public-tree.allow:1 home" "[tests-allow-home-refused] …the row itself is a home hit"
+has "$O" "new tests/t.txt:1 home" "[tests-allow-home-refused] …and so is the line it names"
+has "$O" "hits: 0 baselined, 0 allowed, 2 new" "[tests-allow-home-refused] …only those two"
+
+printf '%s\n' "$ISSUE" > "$R/tests/t.txt"; rows "$TA" tests/t.txt ref "$IS" tests/t.txt ref "not on that line"; cm "$R" "a stale row"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 1 "[tests-allow-stale] a row of the tests file that covers no hit is red (rc $rc)"
+has "$O" "stale-allow tests/public-tree.allow:2" "[tests-allow-stale] …named by its file and line"
+hasnt "$O" "stale-allow tests/public-tree.allow:1" "[tests-allow-stale] …the used row is not"
+{ printf '# a note\r# more\n'; printf 'tests/t.txt\tref\t%s\n' "$IS"; printf 'tests/t.txt\tref\tnot on that line\n'; } > "$TA"; cm "$R" "a lone CR"
+O=$(capped run --base "$BASE"); rc=$?
+has "$O" "stale-allow tests/public-tree.allow:3" "[tests-allow-stale] a lone CR is inside a line, as the scan reads it: the stale row keeps its line (rc $rc)"
+hasnt "$O" "stale-allow tests/public-tree.allow:4" "[tests-allow-stale] …not one line further"
+printf 'tests/t.txt\tref\t%s\r# see %s\n' "$IS" "row ""C9 of the plan" > "$TA"; cm "$R" "a row and a comment glued by a lone CR"
+O=$(capped run --base "$BASE"); rc=$?
+eq "$rc" 1 "[tests-allow-stale] a row glued to a comment by a lone CR is one row, whose string is on no line: red (rc $rc)"
+has "$O" "stale-allow tests/public-tree.allow:1" "[tests-allow-stale] …named stale, its ref not excused through a covered row"
+git_ -C "$R" rm -q -r tests; cm "$R" "rm tests"
+
 echo "== output, inputs and refusals =="
 MARK="unique$RANDOM""marker"
 printf '%s %s\n' "$MARK" "$ISSUE" > "$R/src/m.txt"; cm "$R" "marker"

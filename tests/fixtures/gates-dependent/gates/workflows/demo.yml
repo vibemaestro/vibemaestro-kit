@@ -1,0 +1,9 @@
+# A dependent plugin's gate template (tests/test-gates.sh [D]): install-gates renders its runner markers.
+name: demo
+on:
+  pull_request:
+jobs:
+  demo:
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    steps:
+      - run: python3 .vibemaestro/gates/demo_gate.py

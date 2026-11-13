@@ -9,7 +9,8 @@
 # Families:
 #   [vi]      a repo with no `language` key: every printing path of tests/fixtures/messages_drive.sh prints exactly the bytes
 #             recorded from kit main b8d2683 (tests/fixtures/messages-vi/), and no case is missing or new; kb-check-spec-fail
-#             carries the WARNING line of `## Inputs and failure cases`, added on purpose
+#             carries the WARNING line of `## Inputs and failure cases`, and ib-exists, ib-nobase and ib-issue-* the intake WARNING
+#             of a plain intent under the default `intake.focus: warn` (the story process), both added on purpose
 #   [en]      `"language": "en"`: the same paths end with the same exit code as the recorded ones and print no Vietnamese
 #             letter outside the user's own words a message quotes (<case>.data of the driver); positive control: the vi run
 #             of the same plugin prints them in most cases

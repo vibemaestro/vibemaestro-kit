@@ -356,7 +356,213 @@ PY
   hasnt "$OUT" "still holds Vietnamese text" "[L] en: …and no warning telling the repo to delete it"
 }
 
-FAMILIES="fam_each fam_invalid fam_base fam_install fam_english"
+# ig <args…> — the installer of the plugin under test, with the registry of $CC (unset: the test HOME's, which has none)
+ig() { cenv env ${CC:+CLAUDE_CONFIG_DIR="$CC"} python3 "$PLUGIN/scripts/install_gates.py" "$@"; }
+# sr <repo> <head> — the vendored signing-rules gate as the installed workflow runs it: from a checkout of the base (main), the repo
+# alone (no plugin anywhere), the head only as data
+sr() { G -C "$1" checkout -q main && (cd "$1" && env -i PATH="$PATH" HOME="$HOME" python3 .vibemaestro/gates/signing_rules.py main "$2" --list .vibemaestro/signing-rules.json); }
+
+fam_signing() {
+  local r OUT RC
+  r=$(mk_repo sr1); RC=0; OUT=$(ig --root "$r" --only signing-rules 2>&1) || RC=$?
+  want 0 "[S] --only signing-rules: rc 0" "install-gates: wrote 7"
+  eq "$(printf '%s\n' "$OUT" | grep -E '^wrote ' | awk '{print $2}' | tr '\n' ' ')" \
+    ".github/workflows/signing-rules.yml .vibemaestro/gates/gate_common.py .vibemaestro/gates/signing_rules.py .vibemaestro/gates/baton.py .vibemaestro/gates/sdlc_config.py .vibemaestro/gates/messages.py .vibemaestro/signing-rules.json " \
+    "[S] …the workflow, the gate with everything it loads, and the list"
+  eq "$(tr -d ' \n' < "$r/.vibemaestro/signing-rules.json")" \
+    '{"baton_dirs":["batons","templates/baton-kinds",".vibemaestro/gates"],"lists":{},"files":[".github/workflows/signing-rules.yml",".vibemaestro/gates/signing_rules.py",".vibemaestro/gates/gate_common.py",".vibemaestro/gates/sdlc_config.py",".vibemaestro/gates/baton.py"]}' \
+    "[S] …the starter list names the gate, every file it loads and its job"
+  has "$(cat "$r/.github/workflows/signing-rules.yml")" 'python3 .vibemaestro/gates/signing_rules.py "origin/$BASE_REF" "$HEAD_SHA" --list .vibemaestro/signing-rules.json --touches "$RUNNER_TEMP/trust-touches.txt"' \
+    "[S] …the workflow runs the vendored gate with the repo's list and writes the findings"
+  mkdir -p "$r/batons"; printf '#!/bin/bash\n# Stops: none\necho hi\n' > "$r/batons/x.sh"
+  G -C "$r" add -A; G -C "$r" commit -qm "chore: signing-rules and a baton"
+  G -C "$r" checkout -qb stops; printf '#!/bin/bash\n# Stops: delete\necho hi\n' > "$r/batons/x.sh"; G -C "$r" commit -qam "feat: stops"
+  RC=0; OUT=$(capped sr "$r" stops 2>&1) || RC=$?
+  want 1 "[S] a PR that changes a baton's Stops: red from the vendored copy alone" "RED batons/x.sh: Stops 'none' → 'delete'"
+  G -C "$r" checkout -q main; G -C "$r" checkout -qb readme; cm "$r" README.md "docs: readme"
+  RC=0; OUT=$(sr "$r" readme 2>&1) || RC=$?
+  want 0 "[S] a PR that changes only a README: green" "signing-rules: green (0 names, 0 baton files changed)"
+  G -C "$r" checkout -q main; G -C "$r" checkout -qb gate; printf '# a line\n' >> "$r/.vibemaestro/gates/baton.py"; G -C "$r" commit -qam "chore: baton copy"
+  RC=0; OUT=$(capped sr "$r" gate 2>&1) || RC=$?
+  want 1 "[S] a PR that changes the vendored baton.py: red, judged by the base's list" "RED .vibemaestro/gates/baton.py: the gate or its list changed"
+  G -C "$r" checkout -q main; G -C "$r" checkout -qb newcopy; printf 'import sys\nsys.exit(0)\n' > "$r/.vibemaestro/gates/keyword.py"; G -C "$r" add -A; G -C "$r" commit -qm "chore: a module"
+  RC=0; OUT=$(capped sr "$r" newcopy 2>&1) || RC=$?
+  want 1 "[S] a PR that adds a file beside the vendored gate (it would shadow a module the gate imports): red" "RED .vibemaestro/gates/keyword.py: a new file under a baton directory"
+  G -C "$r" checkout -q main; G -C "$r" checkout -qb list; printf '{"baton_dirs": [], "lists": {}, "files": []}\n' > "$r/.vibemaestro/signing-rules.json"; G -C "$r" commit -qam "chore: list"
+  RC=0; OUT=$(capped sr "$r" list 2>&1) || RC=$?
+  want 1 "[S] a PR that empties the list: red, judged by the list at the base" "RED .vibemaestro/signing-rules.json: the gate or its list changed"
+  G -C "$r" checkout -q main
+  r=$(mk_repo sr2); ig --root "$r" >/dev/null 2>&1
+  [ ! -e "$r/.github/workflows/signing-rules.yml" ] && [ ! -e "$r/.vibemaestro/gates/baton.py" ] && ok "[S] a run with no --only does not install signing-rules (opt-in)" || bad "[S] a default run installed signing-rules"
+}
+
+fam_update() {
+  local r OUT RC OUTSIDE
+  r=$(mk_repo up1); ig --root "$r" >/dev/null 2>&1
+  printf '# an older copy\n' > "$r/.vibemaestro/gates/gate_common.py"; printf 'name: mine\non: push\n' > "$r/.github/workflows/pr-title.yml"
+  printf '%s  # kept\n' "$(shaof x)" > "$r/.pr-sensitive-allow"
+  RC=0; OUT=$(ig --root "$r" 2>&1) || RC=$?
+  want 0 "[U] without --update a stale copy is only reported, as before" "kept (differs)   .vibemaestro/gates/gate_common.py"
+  eq "$(cat "$r/.vibemaestro/gates/gate_common.py")" "# an older copy" "[U] …and stays as it was"
+  RC=0; OUT=$(ig --root "$r" --update --dry-run 2>&1) || RC=$?
+  want 0 "[U] --update --dry-run: the replacement is planned" "would replace    .vibemaestro/gates/gate_common.py"
+  eq "$(cat "$r/.vibemaestro/gates/gate_common.py")" "# an older copy" "[U] …and nothing is written"
+  RC=0; OUT=$(ig --root "$r" --update 2>&1) || RC=$?
+  want 0 "[U] --update replaces the stale plugin copy, printing it" "replaced         .vibemaestro/gates/gate_common.py"
+  cmp -s "$r/.vibemaestro/gates/gate_common.py" "$PLUGIN/gates/gate_common.py" && ok "[U] …which is now the plugin's own" || bad "[U] the copy was not replaced"
+  has "$OUT" "kept (differs)   .github/workflows/pr-title.yml" "[U] …a changed workflow is still kept (differs)"
+  eq "$(cat "$r/.github/workflows/pr-title.yml")" "name: mine
+on: push" "[U] …byte for byte"
+  has "$OUT" "kept (differs)   .pr-sensitive-allow" "[U] …and the allowlist with entries is kept"
+  has "$OUT" "install-gates: kept 13, kept (differs) 2, replaced 1" "[U] …the counts"
+  OUTSIDE=$(mktemp -d "$TMP/outside.XXXXXX"); printf 'outside\n' > "$OUTSIDE/f"
+  rm "$r/.vibemaestro/gates/pr_title.py"; ln -s "$OUTSIDE/f" "$r/.vibemaestro/gates/pr_title.py"
+  RC=0; OUT=$(ig --root "$r" --update 2>&1) || RC=$?
+  want 0 "[U] a vendored copy that is a link to a file outside the repo: replaced" "replaced         .vibemaestro/gates/pr_title.py"
+  [ ! -L "$r/.vibemaestro/gates/pr_title.py" ] && cmp -s "$r/.vibemaestro/gates/pr_title.py" "$PLUGIN/gates/pr_title.py" && ok "[U] …by a regular file, the plugin's" || bad "[U] the link was not replaced"
+  eq "$(cat "$OUTSIDE/f")" "outside" "[U] …and the file outside is unchanged"
+  r=$(mk_repo up2); mkdir -p "$r/src/lib" "$r/.vibemaestro"; printf '# the repo'"'"'s own module\n' > "$r/src/lib/messages.py"; ln -s ../src/lib "$r/.vibemaestro/gates"
+  RC=0; OUT=$(capped ig --root "$r" --only pr-title --update 2>&1) || RC=$?
+  want 64 "[U] --update where .vibemaestro/gates is a link to another directory of the repo: rc 64" ".vibemaestro/gates/gate_common.py: a parent directory is a link"
+  eq "$(cat "$r/src/lib/messages.py")" "# the repo's own module" "[U] …the repo's file behind the link is unchanged"
+  [ ! -e "$r/src/lib/gate_common.py" ] && [ ! -e "$r/.github" ] && ok "[U] …and nothing was written" || bad "[U] files were written through the link"
+}
+
+# cc <dir> <name>=<plugin source dir>… — a Claude config dir whose registry lists each plugin at version 1.0.0 in the vibemaestro cache;
+# a source with no manifest gets one that depends on vibemaestro-sdlc (the fixture ships none: suites that read every manifest skip it)
+cc() {
+  local d=$1 kv p; shift; mkdir -p "$d/plugins"
+  for kv in "$@"; do
+    p="$d/plugins/cache/vibemaestro/${kv%%=*}/1.0.0"; mkdir -p "${p%/*}"; cp -R "${kv#*=}" "$p"
+    [ -f "$p/.claude-plugin/plugin.json" ] || { mkdir -p "$p/.claude-plugin"; printf '{"name": "%s", "dependencies": ["vibemaestro-sdlc"]}\n' "${kv%%=*}" > "$p/.claude-plugin/plugin.json"; }
+  done
+  python3 -c '
+import json, sys
+d = sys.argv[1]
+reg = {"version": 2, "plugins": {}}
+for kv in sys.argv[2:]:
+    n = kv.split("=", 1)[0]
+    reg["plugins"][n + "@vibemaestro"] = [{"scope": "user", "installPath": "%s/plugins/cache/vibemaestro/%s/1.0.0" % (d, n),
+                                           "version": "1.0.0", "lastUpdated": "2026-11-05T00:00:00.000Z"}]
+json.dump(reg, open(d + "/plugins/installed_plugins.json", "w"))' "$d" "$@"
+}
+DEPFX="$HERE/fixtures/gates-dependent"
+
+fam_dependent() {
+  local r OUT RC CC t1 P2
+  CC=$(mktemp -d "$TMP/cc.XXXXXX"); cc "$CC" demo-gates="$DEPFX"
+  r=$(mk_repo dep1); RC=0; OUT=$(ig --root "$r" --only demo 2>&1) || RC=$?
+  want 0 "[D] --only demo installs the dependent plugin's gate" "dependent plugin demo-gates 1.0.0: demo"
+  has "$OUT" "wrote            .github/workflows/demo.yml" "[D] …its workflow"
+  has "$OUT" "wrote            .vibemaestro/gates/demo_gate.py" "[D] …its gate copy"
+  has "$OUT" "  demo: demo.key" "[D] …and the keys it declares"
+  grep -qxF "    runs-on: \${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}" "$r/.github/workflows/demo.yml" && ok "[D] …the runner markers rendered" || bad "[D] demo.yml runs-on not rendered"
+  [ -x "$r/.vibemaestro/gates/demo_gate.py" ] && cmp -s "$r/.vibemaestro/gates/demo_gate.py" "$DEPFX/gates/demo_gate.py" && ok "[D] …the copy byte for byte, executable" || bad "[D] demo_gate.py is not the plugin's, executable"
+  printf '# old\n' > "$r/.vibemaestro/gates/demo_gate.py"
+  RC=0; OUT=$(ig --root "$r" --only demo --update 2>&1) || RC=$?
+  want 0 "[D] --update replaces a stale copy of the dependent's gate" "replaced         .vibemaestro/gates/demo_gate.py"
+  has "$OUT" "kept             .github/workflows/demo.yml" "[D] …and keeps its workflow"
+  RC=0; OUT=$(ig --root "$r" --only nope 2>&1) || RC=$?
+  want 64 "[D] an unknown gate names the dependent's among the known" "commit-discipline, pr-sensitive, pr-title, pr-body, pr-evidence, dead-branches, signing-rules, demo)"
+  # refusals: each bad declaration is rc 65, before anything is written, whatever --only names
+  local P d2
+  decl() {  # decl <label> <needle> <install.json text> [more registry entries] — a copy of the fixture with that declaration
+    P=$(mktemp -d "$TMP/decl.XXXXXX"); cp -R "$DEPFX/." "$P/"; printf '%s\n' "$3" > "$P/gates/install.json"   # an input, not a break
+    CC=$(mktemp -d "$TMP/cc.XXXXXX"); cc "$CC" demo-gates="$P" "${@:4}"
+    r=$(mk_repo decl); t1=$(tree_hash "$r")
+    RC=0; OUT=$(capped ig --root "$r" --only pr-title 2>&1) || RC=$?
+    want 65 "[D] $1: rc 65" "$2"; eq "$(tree_hash "$r")" "$t1" "[D] …nothing written"
+  }
+  F='{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/demo_gate.py"}'
+  g1() { printf '{"format": 1, "gates": {"%s": {"keys": "k", "files": [%s]}}}' "$1" "$2"; }
+  decl "from with .." "from '../README.md' is not a plain file inside the plugin" "$(g1 demo '{"from": "../README.md", "to": ".vibemaestro/gates/x.py"}')"
+  decl "from absolute" "from '/etc/hostname' is not a plain file inside the plugin" "$(g1 demo '{"from": "/etc/hostname", "to": ".vibemaestro/gates/x.py"}')"
+  decl "from missing" "from 'gates/none.py' is not a plain file inside the plugin" "$(g1 demo '{"from": "gates/none.py", "to": ".vibemaestro/gates/x.py"}')"
+  P2=$(mktemp -d "$TMP/link.XXXXXX"); cp -R "$DEPFX/." "$P2/"; printf 'print(1)\n' > "$TMP/outside.py"; ln -s "$TMP/outside.py" "$P2/gates/link.py"; g1 demo '{"from": "gates/link.py", "to": ".vibemaestro/gates/x.py"}' > "$P2/gates/install.json"
+  CC=$(mktemp -d "$TMP/cc.XXXXXX"); cc "$CC" demo-gates="$P2"; r=$(mk_repo decl); t1=$(tree_hash "$r")
+  RC=0; OUT=$(capped ig --root "$r" --only pr-title 2>&1) || RC=$?
+  want 65 "[D] from a link to a file outside the plugin: rc 65" "from 'gates/link.py' is not a plain file inside the plugin"; eq "$(tree_hash "$r")" "$t1" "[D] …nothing written"
+  decl "to .github/actions/" "to '.github/actions/x.yml' is neither" "$(g1 demo '{"from": "gates/workflows/demo.yml", "to": ".github/actions/x.yml"}')"
+  decl "to .vibemaestro/sdlc.json" "to '.vibemaestro/sdlc.json' is neither" "$(g1 demo '{"from": "gates/demo_gate.py", "to": ".vibemaestro/sdlc.json"}')"
+  decl "to a subdirectory of .vibemaestro/gates/" "to '.vibemaestro/gates/sub/x.py' is neither" "$(g1 demo '{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/sub/x.py"}')"
+  decl "to a workflow that is not .yml" "to '.github/workflows/x.sh' is neither" "$(g1 demo '{"from": "gates/demo_gate.py", "to": ".github/workflows/x.sh"}')"
+  decl "a kit gate's name" "gate name pr-title is already a gate of this plugin" "$(g1 pr-title "$F")"
+  decl "a kit copy's path, another case" "to .vibemaestro/gates/GATE_COMMON.py is already a path of this plugin" "$(g1 demo '{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/GATE_COMMON.py"}')"
+  decl "a kit workflow's path" "to .github/workflows/signing-rules.yml is already a path of this plugin" "$(g1 demo '{"from": "gates/workflows/demo.yml", "to": ".github/workflows/signing-rules.yml"}')"
+  d2=$(mktemp -d "$TMP/dep2.XXXXXX"); cp -R "$DEPFX/." "$d2/"; mkdir -p "$d2/.claude-plugin"; printf '{"name": "other-gates", "dependencies": [{"name": "vibemaestro-sdlc"}]}\n' > "$d2/.claude-plugin/plugin.json"
+  decl "two plugins, one gate name" "gate name demo is already declared by plugin demo-gates" "$(g1 demo "$F")" other-gates="$d2"
+  g1 other '{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/demo_gate.py"}' > "$d2/gates/install.json"
+  decl "two plugins, one target" "to .vibemaestro/gates/demo_gate.py is already declared by plugin demo-gates (gate demo)" "$(g1 demo "$F")" other-gates="$d2"
+  decl "not JSON" "not readable as JSON (JSONDecodeError)" '{"format": 1,'
+  decl "an unknown key" 'an object with exactly the keys "format" and "gates"' '{"format": 1, "gates": {}, "run": "x"}'
+  decl "format 2" "format must be 1" '{"format": 2, "gates": {}}'
+  decl "a gate name with a slash" "gate name '../x' is not [a-z0-9][a-z0-9-]*" "$(g1 ../x "$F")"
+  decl "a stdlib module name, which every vendored gate would import" "to '.vibemaestro/gates/json.py' would shadow the module json" "$(g1 demo '{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/json.py"}')"
+  decl "a kit module name under another suffix" "to '.vibemaestro/gates/baton.pyc' would shadow the module baton" "$(g1 demo '{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/baton.pyc"}')"
+  decl "sitecustomize" "to '.vibemaestro/gates/sitecustomize.py' would shadow the module sitecustomize" "$(g1 demo '{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/sitecustomize.py"}')"
+  decl "a name that ends in a dot" "to '.vibemaestro/gates/x.py.' is neither" "$(g1 demo '{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/x.py."}')"
+  decl "nested past the parser's depth" "not readable as JSON (RecursionError)" "$(python3 -c 'print("[" * 100000)')"
+  # the repo's allowlist named with a `.` segment is still the repo's
+  P=$(mktemp -d "$TMP/decl.XXXXXX"); cp -R "$DEPFX/." "$P/"; g1 demo '{"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/allow.txt"}' > "$P/gates/install.json"
+  CC=$(mktemp -d "$TMP/cc.XXXXXX"); cc "$CC" demo-gates="$P"; r=$(mk_repo decl); put_cfg "$r" '{"sensitive": {"allowlist": "./.vibemaestro/gates/allow.txt"}}'; t1=$(tree_hash "$r")
+  RC=0; OUT=$(capped ig --root "$r" --only demo 2>&1) || RC=$?
+  want 65 "[D] to the repo's allowlist, configured as ./.vibemaestro/gates/allow.txt: rc 65" "to .vibemaestro/gates/allow.txt is already a path of this plugin"; eq "$(tree_hash "$r")" "$t1" "[D] …nothing written"
+  # a dependent's copy through a .vibemaestro/gates that is a link (to .git/hooks): refused, nothing written there
+  CC=$(mktemp -d "$TMP/cc.XXXXXX"); cc "$CC" demo-gates="$DEPFX"; r=$(mk_repo decl); mkdir -p "$r/.vibemaestro"; ln -s ../.git/hooks "$r/.vibemaestro/gates"
+  RC=0; OUT=$(capped ig --root "$r" --only demo 2>&1) || RC=$?
+  want 64 "[D] .vibemaestro/gates is a link into .git/hooks: rc 64" "a parent directory is a link"
+  [ ! -e "$r/.git/hooks/demo_gate.py" ] && [ ! -e "$r/.git/hooks/gate_common.py" ] && ok "[D] …nothing written into .git/hooks" || bad "[D] a file was written into .git/hooks"
+  # the en check holds a dependent's copy too
+  P=$(mktemp -d "$TMP/decl.XXXXXX"); cp -R "$DEPFX/." "$P/"; printf '# t\xe1\xbb\x91i\n' >> "$P/gates/demo_gate.py"   # the dependent's file, an input, not a break
+  CC=$(mktemp -d "$TMP/cc.XXXXXX"); cc "$CC" demo-gates="$P"; r=$(mk_repo decl); put_cfg "$r" '{"language": "en"}'; t1=$(tree_hash "$r")
+  RC=0; OUT=$(capped ig --root "$r" --only demo 2>&1) || RC=$?
+  want 65 "[D] language en, a Vietnamese letter in the dependent's copy: rc 65" ".vibemaestro/gates/demo_gate.py: language is en"; eq "$(tree_hash "$r")" "$t1" "[D] …nothing written"
+}
+
+# today's output of a default run (main at 8287e13), with no dependent plugin and with one installed: a dependent's gate is opt-in
+NOW_DEFAULT='wrote            .github/workflows/commit-discipline.yml
+wrote            .github/workflows/pr-sensitive.yml
+wrote            .github/workflows/pr-title.yml
+wrote            .github/workflows/pr-body.yml
+wrote            .github/workflows/pr-evidence.yml
+wrote            .github/workflows/dead-branches.yml
+wrote            .vibemaestro/gates/gate_common.py
+wrote            .vibemaestro/gates/commit_discipline.py
+wrote            .vibemaestro/gates/pr_sensitive.py
+wrote            .vibemaestro/gates/pr_title.py
+wrote            .vibemaestro/gates/pr_body.py
+wrote            .vibemaestro/gates/pr_evidence.py
+wrote            .vibemaestro/gates/dead_branches.sh
+wrote            .vibemaestro/gates/sdlc_config.py
+wrote            .vibemaestro/gates/messages.py
+wrote            .pr-sensitive-allow
+install-gates: wrote 16
+runs-on in the workflows: ${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || '"'"'ubuntu-latest'"'"' }}  (set it in ci.runner_var / ci.runner_default of .vibemaestro/sdlc.json to keep it there)
+@@RUNNER_CHECK@@
+config keys the gates read:
+  commit-discipline: commits.max_per_pr, commits.max_touches, commits.round_pattern, tokens.commit_exception
+  pr-sensitive: sensitive.scan, sensitive.allowlist
+  pr-title: pr.title.pattern, pr.title.max_len, pr.title.intent_form, branch.pattern, branch.intent_prefix
+  pr-body: pr.body.max_chars, pr.body.summary_max_lines, pr.body.evidence_max_lines, tokens.summary_heading, tokens.evidence_heading
+  pr-evidence: evidence.ui_paths, tokens.round_comment_prefix, commits.round_pattern
+  dead-branches: dead_branches.max_merged_on_remote, branch.protected, branch.intent_prefix
+a gate judges a PR by the scripts and the config of its BASE branch: merge this change first, then it applies to later PRs'
+
+fam_nodep() {
+  local r OUT RC CC
+  r=$(mk_repo nd1); RC=0; OUT=$(ig --root "$r" 2>&1) || RC=$?
+  want 0 "[N] no dependent plugin: a default run, rc 0"
+  # the runner-variable line depends on the gh this machine has; every other line is today's, byte for byte
+  local CHECK; CHECK=$(printf '%s\n' "$OUT" | grep -E '^(install-gates: runner variable check skipped|runner variable |WARNING runner variable )')
+  eq "$(printf '%s\n' "$CHECK" | grep -c .)" 1 "[N] instrument: exactly one runner-variable line"
+  eq "$OUT" "${NOW_DEFAULT/@@RUNNER_CHECK@@/"$CHECK"}" "[N] …the output is today's, byte for byte"
+  CC=$(mktemp -d "$TMP/cc.XXXXXX"); cc "$CC" demo-gates="$DEPFX"
+  r=$(mk_repo nd2); RC=0; OUT=$(ig --root "$r" 2>&1) || RC=$?
+  eq "$OUT" "${NOW_DEFAULT/@@RUNNER_CHECK@@/"$CHECK"}" "[N] a dependent plugin with a gate installed: a default run's output is still today's"
+  [ ! -e "$r/.github/workflows/demo.yml" ] && [ ! -e "$r/.vibemaestro/gates/demo_gate.py" ] && ok "[N] …and its gate is not installed" || bad "[N] a default run installed the dependent's gate"
+}
+
+FAMILIES="fam_each fam_invalid fam_base fam_install fam_english fam_signing fam_update fam_dependent fam_nodep"
 for f in $FAMILIES; do "$f" "$PLUGIN"; done
 
 echo; summary

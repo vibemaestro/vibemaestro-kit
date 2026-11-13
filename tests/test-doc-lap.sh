@@ -45,21 +45,36 @@ echo "== 1. quét tĩnh: mã hook, skill, luật, adapter không nhắc tới hu
 # and `_KGW_GIT` through. Internal organisation and product names are not listed here: the term list is private and
 # `scripts/scan-internal-terms.sh` owns it.
 FORBID='VIBEMAESTRO_HUB|hub_path|hub-run|resolve_hub|sandbox-session|gitops|\.github/hooks|\.github/instructions|kubeconfig|claude-config|kanban|_kgw_'
-# Không còn ngoại lệ: hai lõi (open_pr.py, intent_branch.py) được quét như mọi file khác — chúng không còn mang gì của hub hay của kênh kanban.
+# Hai lõi (open_pr.py, intent_branch.py) được quét như mọi file khác — chúng không còn mang gì của hub hay của kênh kanban.
 # scan_tree <root> — các dòng của cây plugin tại <root> khớp mẫu cấm hoặc chữ 'hub' (mỗi dòng một vấn đề); rỗng = sạch
 # Every plugin under plugins/ is scanned with the whole pattern.
-scan_tree() {  # scan_tree <root> — one line per problem in every plugin directory, empty when clean
+# The exceptions, each one exact line of one file (`<file>|<the line>`), none a glob: a kit baton the kit names by its own name.
+#   baton.py: PLAN_SECRETS_KITS lists the kit batons whose secrets runs a plan covers, kit:kubeconfig-install among them;
+#   docs/batonrun.md and its twin: the docs state that list, on a line of its own;
+#   kb_plan.py: the test-data path rule it shares with risk-tier never takes a kubeconfig-named file for test data.
+SCAN_ALLOW='plugins/vibemaestro-sdlc/scripts/baton.py|PLAN_SECRETS_KITS = ("vault-put-text", "vault-put-file", "credential-import", "credential-upload", "kubeconfig-install", "script-run",
+plugins/vibemaestro-sdlc/docs/batonrun.md|`PLAN_SECRETS_KITS`, the kit batons whose `secrets` runs a plan covers (each asks the owner on the passphrase holder'\''s page in its run, or runs only reviewed code): `vault-put-text`, `vault-put-file`, `credential-import`, `credential-upload`, `kubeconfig-install`, `script-run`, `script-run-upload`.
+plugins/vibemaestro-sdlc/docs/batonrun.vi.md|`PLAN_SECRETS_KITS`, các baton của kit mà một kế hoạch phủ lần chạy `secrets` của chúng (mỗi baton hỏi owner trên trang của passphrase holder trong lần chạy của nó, hoặc chỉ chạy code đã review): `vault-put-text`, `vault-put-file`, `credential-import`, `credential-upload`, `kubeconfig-install`, `script-run`, `script-run-upload`.
+plugins/vibemaestro-sdlc/scripts/kb_plan.py|            and not any(".sops." in s or s.endswith(".sops") or "kubeconfig" in s for s in low))'
+scan_tree() {  # scan_tree <root> — one line per problem in every plugin directory, empty when clean (an exact SCAN_ALLOW line is none)
   local root=$1 files f
   files=$(cd "$root" && find plugins -type f ! -name '*.pyc' | sort)
   for f in $files; do
     ( cd "$root" && { grep -InEi "$FORBID" "$f"; grep -Inw -i 'hub' "$f"; } | sed "s|^|$f:|" )
-  done
+  done | awk -v allow="$SCAN_ALLOW" 'BEGIN { n = split(allow, a, "\n"); for (i = 1; i <= n; i++) ok[a[i]] = 1 }
+    { f = $0; sub(/:.*/, "", f); x = $0; sub(/^[^:]*:[0-9]+:/, "", x); if (!((f "|" x) in ok)) print }'
 }
 SCAN_FILES=$(cd "$SRC_ROOT" && find plugins -type f ! -name '*.pyc' | sort)
 nonempty "$SCAN_FILES" "đối chứng dụng cụ: danh sách file quét không rỗng"
 case "$SCAN_FILES" in *plugins/vibemaestro-sdlc/scripts/open_pr.py*intent_branch.py*|*plugins/vibemaestro-sdlc/scripts/intent_branch.py*open_pr.py*) ok "hai lõi nằm trong danh sách quét (không còn ngoại lệ)";; *) bad "hai lõi không nằm trong danh sách quét";; esac
 empty "$(scan_tree "$SRC_ROOT")" "plugin (kể cả hai lõi): 0 dòng khớp '$FORBID' và không một chữ 'hub'"
 case "$SCAN_FILES" in *plugins/vibemaestro-brain/bin/brain*) ok "the brain plugin is in the scan list";; *) bad "the brain plugin is not scanned";; esac
+# control of the exceptions: in a tree built here (an input, not a break), an allowed line is no hit, while the same line with one
+# character more, and another line of that file naming the word, are
+SA="$TMP/scan-allow"; mkdir -p "$SA/plugins/vibemaestro-sdlc/scripts"
+{ printf '%s\n' "${SCAN_ALLOW%%$'\n'*}" | cut -d'|' -f2-; printf '%s \n' "${SCAN_ALLOW%%$'\n'*}" | cut -d'|' -f2-; printf 'K = "kubeconfig"\n'; } \
+  > "$SA/plugins/vibemaestro-sdlc/scripts/baton.py"
+eq "$(scan_tree "$SA" | cut -d: -f2 | tr '\n' ' ')" "2 3 " "control: an exact SCAN_ALLOW line is no hit; the same line with a space more, and another line, are"
 # đối chứng dương cho phép quét: một dòng thử bị bắt
 printf 'x ~/gitops/y\nVIBEMAESTRO_HUB=z\nhub-run.py\nKanban\nkanban\n_KGW_GIT\nHUB_PATH\nKUBECONFIG\n' | grep -ciE "$FORBID" | { read -r c; eq "$c" 8 "instrument control: the scan pattern catches all eight probe strings, in any case"; }
 # bộ test cũng không với tay ra ngoài repo: không đường dẫn ~/gitops, không đọc cây cha của repo

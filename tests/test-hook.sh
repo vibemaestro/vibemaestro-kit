@@ -45,6 +45,10 @@ vncount() { printf '%s' "$1" | python3 -c 'import re, sys; rx = re.compile(sys.a
 novn() { eq "$(vncount "$1")" 0 "$2: the hook output has no Vietnamese letter"; }
 eq "$(vncount 'Bối cảnh')" 1 "instrument: the Vietnamese-letter class sees a Vietnamese word"
 eq "$(vncount '⚠ WARNING — plain English → ≤')" 0 "instrument: …and neither English nor its symbols"
+# The once-per-session marker is keyed by the session id: two cases that draw the same id hide the second reminder.
+SIDS=$(for _ in $(seq 1 5000); do echo "$(sid)"; done | LC_ALL=C sort)
+eq "$(printf '%s\n' "$SIDS" | uniq -d | wc -l | tr -d ' ')" 0 "instrument: 5000 draws of \$(sid) never repeat an id"
+eq "$(printf '%s\n' "$SIDS" | grep -c -E '^s[0-9a-f]{16}$')" 5000 "instrument: every id is s and 16 hex digits"
 
 echo "== dây: hooks.json khai đúng ba hook =="
 eq "$(hook_cmds "$HOOKS" SessionStart '' | grep -c .)" 4 "[I0] SessionStart: 4 command (lõi quy trình / danh mục+nhắc / current-state index, mỗi cái một trần 10.000 ký tự riêng; the update reminder, tests/test-update-check.sh)"
@@ -146,7 +150,7 @@ import sys
 t, *ks = sys.argv[1:]
 pos = [t.find(k) for k in ks]
 sys.exit(0 if all(p >= 0 for p in pos) and pos == sorted(pos) else 1)' "$@"; }
-order_ok "$LINE" 'vibemaestro-sdlc:intake' 'vibemaestro-sdlc:spec' 'session-ask' 'ONLY AFTER the person has approved' && ok "…đúng thứ tự: intake → spec → session-ask → code" || bad "lời nhắc sai thứ tự"
+order_ok "$LINE" 'vibemaestro-sdlc:intake' 'vibemaestro-sdlc:spec' 'session-ask' 'ONLY AFTER the approval' && ok "…đúng thứ tự: intake → spec → session-ask → code" || bad "lời nhắc sai thứ tự"
 order_ok "$LINE" 'vibemaestro-sdlc:spec' 'vibemaestro-sdlc:intake' && bad "dụng cụ order_ok không nhận ra thứ tự ngược" || ok "đối chứng dụng cụ: order_ok từ chối thứ tự ngược"
 [ "$(nchars "$C")" -lt 9000 ] && ok "sandbox, luật giả: hook danh mục $(nchars "$C") < 9000 ký tự" || bad "sandbox: hook danh mục $(nchars "$C") ≥ 9000"
 O=$(sbx $SBX_ID PATH="$NOASK_PATH"); C=$(ctx "$O")

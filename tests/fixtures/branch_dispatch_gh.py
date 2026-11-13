@@ -4,7 +4,7 @@ a JSON world, offline. It answers exactly the calls the two kits make; `--jq` is
 its text: a kit that changes one fails here loudly), anything else exits 2.
 
     FAKE_GH_WORLD  {"viewer": login,
-                    "repos": {"<owner/name>": {"private", "visibility",
+                    "repos": {"<owner/name>": {"private", "visibility", "default_branch" (default "main"),
                                                "branches": {name: head sha},
                                                "files": {head sha: {path: {"sha": blob sha, "text": file text}}},
                                                "runs": [{"id", "workflow", "event", "branch", "head_sha", "actor", "status",
@@ -15,7 +15,8 @@ its text: a kit that changes one fails here loudly), anything else exits 2.
                                "dispatch_moves_head": sha     the branch head moves to sha right before the run is made,
                                "dispatch_fails": true         `gh workflow run` exits 1 and makes nothing,
                                "dispatch_fails_after": true   it makes its run(s), then exits 1 (an answer lost),
-                               "repo_read_fails_in_run": true  the repository read fails (HTTP 502) when BATON_PHASE is run}}
+                               "repo_read_fails_in_run": true  the repository read fails (HTTP 502) when BATON_PHASE is run,
+                               "raw_read_fails": [path, ...]   the raw read (Accept: ...raw) of each of those files fails (HTTP 502)}}
     FAKE_LOG       each call is appended as one line `gh <args>`
 """
 import json
@@ -60,6 +61,8 @@ def repo_of(p):
 def jq(expr, v):
     if expr == '"\\(.private) \\(.visibility)"':
         return "%s %s" % (str(v["private"]).lower(), v["visibility"])
+    if expr == '"\\(.private) \\(.visibility) \\(.default_branch)"':
+        return "%s %s %s" % (str(v["private"]).lower(), v["visibility"], v["default_branch"])
     if expr in (".object.sha", ".sha"):
         return v["object"]["sha"] if expr == ".object.sha" else v["sha"]
     if expr == ".data.viewer.login":
@@ -112,7 +115,7 @@ if a[:1] == ["api"]:
     if not sub:
         if F.get("repo_read_fails_in_run") and os.environ.get("BATON_PHASE") == "run":
             die("gh: HTTP 502: injected failure of the repository read in the run phase")
-        found({"full_name": name, "private": R["private"], "visibility": R["visibility"]})
+        found({"full_name": name, "private": R["private"], "visibility": R["visibility"], "default_branch": R.get("default_branch", "main")})
     if sub[:3] == ["git", "ref", "heads"] and len(sub) > 3:
         b = "/".join(sub[3:])
         found({"ref": "refs/heads/" + b, "object": {"sha": R["branches"][b]}}) if b in R.get("branches", {}) else missing()
@@ -122,6 +125,8 @@ if a[:1] == ["api"]:
         if f is None:
             missing()
         if accept == "Accept: application/vnd.github.raw":
+            if fp in F.get("raw_read_fails", []):
+                die("gh: HTTP 502: injected failure of the raw read of " + fp)
             sys.stdout.write(f["text"])
             save()
             sys.exit(0)

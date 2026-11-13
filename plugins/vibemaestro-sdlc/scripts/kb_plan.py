@@ -18,7 +18,7 @@ markdown table whose header names a row column and a link column (any other tabl
 
 The row is written before its PR is dispatched and is never edited for status. The work links ITSELF to the row: its intent (and
 spec) carry `plan: kb/plans/<file>.md#<row id>` in the frontmatter, and its PR is the one whose head branch is
-`intent/<intent file stem>`. A PR is linked to a row only by that or by the row's own Link cell, never by a mention of the row id in
+`intent/<intent file stem>`, or `intent/<key>-<slug>` when the intent's frontmatter says `key: <key>` (`issue.code`). A PR is linked to a row only by that or by the row's own Link cell, never by a mention of the row id in
 its title or body. So parallel PRs of one plan never touch the plan file, and the status is read, not written.
 
 plan status <plan> [--json]
@@ -54,6 +54,7 @@ import sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kb_index  # noqa: E402
+import sdlc_config  # noqa: E402
 
 COLUMNS = {                                   # header words (lower case, parentheses dropped) → the column
     "row": "row", "pr": "row", "hàng": "row",
@@ -64,6 +65,7 @@ COLUMNS = {                                   # header words (lower case, parent
     "model": "model",
     "current state": "current", "hiện trạng": "current",
     "shared files": "shared", "file chung": "shared",
+    "trust touches": "touches",
     "link": "link", "liên kết": "link",
 }
 DECISIONS_RX = re.compile(r"\b(decisions?|quyết định)\b", re.I)   # a `## …` heading of owner decisions ("Decisions", "Owner decisions")
@@ -82,6 +84,8 @@ DROPPED_RX = re.compile(r"^(?:dropped|bỏ)\b\s*:?\s*(.*)$", re.I)
 NONE_CELL = ("", "—", "–", "-", "none", "không")
 GH_TIMEOUT = 60
 PR_LIMIT = 1000
+PR_ARGS = ["pr", "list", "--state", "all", "--limit", str(PR_LIMIT), "--json",
+           "number,state,headRefName,headRefOid,mergeCommit,isDraft,url,title,labels"]
 CI_FAIL = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
 
 
@@ -152,16 +156,23 @@ def _shared(cell):
 
 def read_plan(root, rel):
     """{path, rows, problems, decision_lines} of a plan, or None when the file cannot be read. A row: {id, line, must, acceptance,
-    depends, versions, model, link, cells, cols, current_cell, current, shared, merge_main}; `current` is {sha, text} or None, `cols`
-    the column kinds its table has; problems: [(line, message)] of the table itself."""
+    depends, versions, model, link, cells, cols, current_cell, current, shared, merge_main, touches, header, link_col}; `current`
+    is {sha, text} or None, `cols` the column kinds its table has, `touches` the Trust touches cell as written (None without the
+    column), `header` its table's header cells, `link_col` the index of its Link cell; problems: [(line, message)] of the table
+    itself; focus: its frontmatter's `focus:` (None without one)."""
     try:
         with open(os.path.join(root, *rel.split("/")), encoding="utf-8") as f:
-            lines = f.read().split("\n")
+            return read_plan_text(f.read(), rel)
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def read_plan_text(text, rel):
+    """read_plan of a plan's text (as read at a commit through the API)."""
+    lines = text.split("\n")
     rows, probs, decision_lines, head_lines, tables = [], [], [], [], 0
     fence, in_decisions, in_comment, seen_h2 = None, False, False, False
-    flen = kb_index.front_block(lines)[1]
+    front, flen = kb_index.front_block(lines)
     i = flen
     while i < len(lines):
         ln = lines[i]
@@ -189,7 +200,8 @@ def read_plan(root, rel):
             head_lines.append((i + 1, ln))
         nxt = lines[i + 1] if i + 1 < len(lines) else ""
         if ln.lstrip().startswith("|") and re.match(r"^\s*\|?\s*:?-{3,}", nxt):
-            keys = [_header_key(c) for c in _cells(ln)]
+            header = _cells(ln)
+            keys = [_header_key(c) for c in header]
             j = i + 2
             if "row" in keys and "link" in keys:
                 tables += 1
@@ -212,7 +224,9 @@ def read_plan(root, rel):
                                      "model": _plain(get("model")), "link": parse_link(get("link"), rel), "cells": cells,
                                      "cols": set(col), "current_cell": cur,
                                      "current": {"sha": sha.group(1), "text": cur} if sha else None,
-                                     "shared": shared, "merge_main": mm})
+                                     "shared": shared, "merge_main": mm,
+                                     "touches": get("touches") if "touches" in col else None,
+                                     "header": header, "link_col": col["link"]})
                     j += 1
             else:
                 while j < len(lines) and lines[j].lstrip().startswith("|"):
@@ -226,7 +240,8 @@ def read_plan(root, rel):
             probs.append((r["line"], "row id '%s' is used twice (first on line %d)" % (r["id"], seen[r["id"]])))
         else:
             seen[r["id"]] = r["line"]
-    return {"path": rel, "rows": rows, "problems": probs, "decision_lines": decision_lines, "head_lines": head_lines, "tables": tables}
+    return {"path": rel, "rows": rows, "problems": probs, "decision_lines": decision_lines, "head_lines": head_lines, "tables": tables,
+            "focus": front.get("focus") or None}
 
 
 def parse_plan_ref(value):
@@ -237,6 +252,225 @@ def parse_plan_ref(value):
 
 def _front(text):
     return kb_index.front_block(text.split("\n"))[0]
+
+
+# ── trust touches: what a row declares it changes in the trust layer (plan-approved merges, gates/merge_guard.py `touches`) ──
+# the kinds a path touch may name: `other` is one exact path (and object) no gate judged otherwise, `test` test data by its path
+TOUCH_KINDS = ("script", "baton", "workflow", "rbac", "admission", "vault-policy", "config", "other", "test")
+TOUCH_OBJECT_KINDS = ("rbac", "admission", "vault-policy")     # these name the rendered object <Kind>/<namespace or ->/<name>
+# what judges a later PR, whatever a repository's config adds (judges): the floor, never covered by a plan signature
+TOUCH_JUDGES = (".vibemaestro/sdlc.json", ".vibemaestro/risk-tier.yaml")
+TOUCH_JUDGE_DIRS = (".vibemaestro/gates/",)
+TOUCH_REPO_RX = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+):(.+)$")
+TOUCH_PATH_RX = re.compile(r"^[^\x00-\x20\x7f*?\[\]{}\\:]+$")             # exact: no glob, space, control or backslash
+TOUCH_OBJECT_RX = re.compile(r"^[A-Za-z][A-Za-z0-9]*/(?:-|[a-z0-9][a-z0-9.-]*)/[A-Za-z0-9][A-Za-z0-9.:_-]*$")
+TOUCH_OTHER_OBJECT_RX = re.compile(r"^[^\x00-\x20\x7f]+(?: [^\x00-\x20\x7f]+)?$")   # risk-tier's label `<group/Kind> <ns/name>` or a key
+TOUCH_WORD_RX = re.compile(r"^[a-z][a-z-]*$")
+TOUCH_RUN_RX = re.compile(r"^(?:kit|project):[a-z0-9][a-z0-9._-]*$")      # a reviewed baton: never user:, a session file or a kind:
+TOUCH_RUNS_RX = re.compile(r"\sruns:\s*(\S*)\s*$")
+TOUCH_PRS_RX = re.compile(r"^PRs:\s*(\S*)$")
+TOUCH_AGAIN = "(signs again)"
+TOUCH_COUNT_MAX = 20                                           # `PRs: <n>` and `runs: <n>`: 1 to this, 1 when absent
+PLUGIN_DIR = ".claude-plugin"
+# test data by its path (risk-tier's rule less what reads the content): no agent instruction file or directory, no secret-file name
+TEST_DIRS = ("tests", "test")
+TEST_AGENT_MD = ("claude", "agents", "agent", "gemini", "qwen", "crush", "skill")
+TEST_AGENT_DIRS = ("skills", "agents", "commands", "rules", "prompts", "hooks")
+
+
+def plugin_path(path):
+    """True when a path has a `.claude-plugin` segment at any depth, its case ignored (and the trailing dots and spaces a Windows
+    disk drops): a marketplace or plugin manifest, which chooses the code every machine installs. The floor."""
+    return any(s.rstrip(" .").casefold() == PLUGIN_DIR for s in path.split("/"))
+
+
+def test_data_path(path):
+    """True when `path` is test data by its path alone: a directory segment exactly `tests` or `test`, no `templates` or `batons`
+    one above it, no dot segment, not `*.sh`, Markdown or an agent file, not under an agent directory, not a secret-file name
+    (as risk-tier's rule names them). Other test code is test data too, as risk-tier reads it. A path ending in `/` is a
+    directory, read as a file directly inside it."""
+    segs = (path + "x" if path.endswith("/") else path).split("/")
+    low = [s.casefold() for s in segs]
+    return (any(s in TEST_DIRS for s in segs[:-1]) and "templates" not in low[:-1] and "batons" not in low[:-1]
+            and not any(s.startswith(".") for s in segs) and not low[-1].endswith((".sh", ".md", ".markdown", ".mdx"))
+            and low[-1].split(".")[0] not in TEST_AGENT_MD and not any(s in TEST_AGENT_DIRS for s in low[:-1])
+            and not any(".sops." in s or s.endswith(".sops") or "kubeconfig" in s for s in low))
+
+
+def _count(text, what):
+    """(n, problem) of a `PRs:` or `runs:` value: 1 to TOUCH_COUNT_MAX."""
+    ok = re.fullmatch(r"[1-9][0-9]?", text or "") and int(text) <= TOUCH_COUNT_MAX
+    return (int(text), None) if ok else (None, "%s: a count of 1 to %d" % (what, TOUCH_COUNT_MAX))
+
+
+def parse_cell(cell, repo):
+    """({touches, prs}, problems) of a Trust touches cell: None for no cell (empty or `—`); {[], 1} for `none`; else one item per
+    `;`, each a touch `<kind> [<owner/repo>:]<path> [<object>] [Stops: <words>]`, `run <kit:name or project:name> Stops: <words>
+    [runs: <n>]` or `PRs: <n>` (the row's PRs, 1 when absent); a touch may end in `(signs again)`. A touch is {kind, repo, path,
+    object, stops, runs, again}: repo defaults to the plan's `repo`; stops None or the words as baton's stops_of joins them (sorted,
+    `, `); object None, <Kind>/<namespace or ->/<name>, or for `other` the exact object of its finding; runs the count of a run
+    touch, else None; a `test` path may end in `/` (every file under that directory). A path with a `.claude-plugin` segment is
+    refused unless marked `(signs again)`. Which Stops words exist, and the rest of the floor, are baton's to judge."""
+    p = (cell or "").replace("`", "").strip()                         # not _plain: a `*` is a glob here, never emphasis
+    if p in ("", "—", "–", "-"):
+        return None, []
+    if p.lower() == "none":
+        return {"touches": [], "prs": 1}, []
+    out, probs, prs = [], [], None
+    for raw in p.split(";"):
+        t = raw.strip()
+        again = t.endswith(TOUCH_AGAIN)
+        t = t[:-len(TOUCH_AGAIN)].strip() if again else t
+        pm = TOUCH_PRS_RX.match(t)
+        if pm:
+            n, why = _count(pm.group(1), "PRs")
+            why = why or ("PRs is given twice" if prs is not None else "PRs takes no mark" if again else None)
+            if why:
+                probs.append("%s: %s" % (raw.strip(), why))
+            prs = prs or n
+            continue
+        rm = TOUCH_RUNS_RX.search(t)
+        if rm:
+            t = t[:rm.start()]
+        head, sep, words = t.partition("Stops:")
+        ws = head.split()
+        if not ws:
+            probs.append("an empty touch in %r" % p)
+            continue
+        kind = ws[0]
+        if kind not in TOUCH_KINDS + ("run",):
+            probs.append("%s: the kind is none of %s" % (raw.strip(), ", ".join(TOUCH_KINDS + ("run",))))
+            continue
+        m = TOUCH_REPO_RX.match(ws[1]) if len(ws) > 1 and kind != "run" else None
+        where, path = (m.group(1), m.group(2)) if m else (repo, ws[1] if len(ws) > 1 else "")
+        obj = " ".join(ws[2:]) or None
+        stops = sorted(set(w.strip() for w in words.split(",") if w.strip())) if sep else None
+        runs, why = None, []
+        if kind == "run":
+            if not TOUCH_RUN_RX.match(path):
+                why.append("a run touch names one kit: or project: baton, never a user: baton, a session file or a kind:")
+            runs, w = _count(rm.group(1), "runs") if rm else (1, None)
+            why += [w] if w else []
+        elif rm:
+            why.append("only a run touch names runs")
+        segs = (path[:-1] if kind == "test" and path.endswith("/") else path).split("/")
+        if kind != "run" and (not path or not TOUCH_PATH_RX.match(path) or path.startswith("/") or path == "-"
+                              or any(s in ("", ".", "..") for s in segs)):
+            why.append("the path is exact and relative: no glob, space, `:`, `.` or `..` part, never `-`")
+        elif kind == "test" and not test_data_path(path):
+            why.append("test names test data: a path under a `tests` or `test` directory (no templates, batons, dot or agent "
+                       "directory above it; not *.sh, Markdown, an agent or a secret-file name), or such a directory ending in `/`")
+        if kind in TOUCH_OBJECT_KINDS:
+            if obj is None or not TOUCH_OBJECT_RX.match(obj):
+                why.append("%s names one object <Kind>/<namespace or ->/<name>" % kind)
+        elif kind == "other":
+            if obj is not None and not TOUCH_OTHER_OBJECT_RX.match(obj):
+                why.append("other names one path and at most one object (a rendered object's `<group/Kind> <ns/name>`, a key)")
+        elif obj is not None:
+            why.append("only %s and other name an object" % ", ".join(TOUCH_OBJECT_KINDS))
+        if (kind in ("baton", "run")) != (stops is not None) or (stops is not None and not (stops and all(TOUCH_WORD_RX.match(w) for w in stops))):
+            why.append("a %s touch names its Stops: <words> (stop words, none%s)" % (kind, " or removed" if kind == "baton" else "")
+                       if kind in ("baton", "run") else "only a baton or run touch names Stops")
+        if kind != "run" and plugin_path(path) and not again:
+            why.append("a .claude-plugin path is the floor (it chooses the code every machine installs): mark it %s" % TOUCH_AGAIN)
+        if why:
+            probs.append("%s: %s" % (raw.strip(), "; ".join(why)))
+        else:
+            out.append({"kind": kind, "repo": where, "path": path, "object": obj, "stops": ", ".join(stops) if stops else None,
+                        "runs": runs, "again": again})
+    return {"touches": out, "prs": prs or 1}, probs
+
+
+def parse_touches(cell, repo):
+    """(touches, problems) of a Trust touches cell, as parse_cell reads it: touches None for no cell."""
+    c, probs = parse_cell(cell, repo)
+    return (c["touches"] if c is not None else None), probs
+
+
+def row_cells(row):
+    """A plan row's cells but its Link cell, each [its column's header, the cell]: what a plan signature binds of the row."""
+    head = row["header"]
+    return [[head[i] if i < len(head) else "", c] for i, c in enumerate(row["cells"]) if i != row["link_col"]]
+
+
+def plan_refs(doc):
+    """((intent path, spec path), problems) of a parsed plan: the one `kb/intent/` path after `Intent:` and the one `kb/specs/`
+    path after `Spec:` on its preamble line(s)."""
+    text = " ".join(ln for _n, ln in doc.get("head_lines") or [])
+    out, probs = [], []
+    for key, d in (("Intent", "kb/intent/"), ("Spec", "kb/specs/")):
+        m = re.search(r"\b%s:([^·]*)" % key, text)
+        got = list(dict.fromkeys(q for q, _a in kb_paths(m.group(1), doc.get("path") or "") if q.startswith(d))) if m else []
+        if len(got) != 1:
+            probs.append("the plan's preamble names %d %s path(s) after `%s:`, not one" % (len(got), d, key))
+        out.append(got[0] if len(got) == 1 else None)
+    return tuple(out), probs
+
+
+# a spec's acceptance criteria: the `## ` section `kb.py check spec` requires, by the name each language preset gives it
+# shortcut: not a repo's own tokens.spec.criteria; read the plan repository's config when one renames it
+CRITERIA_HEADINGS = tuple(sdlc_config.effective({"language": lang})["tokens"]["spec"]["criteria"] for lang in sdlc_config.LANGUAGES)
+
+
+def criteria(text):
+    """The numbered items of a spec's acceptance criteria section, each item's lines joined by one space; [] when none."""
+    items, inside, fence = [], False, False
+    for ln in text.split("\n"):
+        if re.match(r"^\s*(```|~~~)", ln):                         # a heading inside a fence, anywhere, is an example
+            fence = not fence
+        h = None if fence else re.match(r"^##?\s+(.*?)(?:\s+#+)?\s*$", ln)
+        if h:
+            inside = ln.startswith("## ") and h.group(1).strip().casefold() in [c.casefold() for c in CRITERIA_HEADINGS]
+            continue
+        if not inside:
+            continue
+        m = None if fence else re.match(r"^ {0,3}\d+[.)]\s+(.*)$", ln)
+        if m:
+            items.append(m.group(1).strip())
+        elif items and ln.strip():
+            items[-1] += " " + ln.strip()
+    return items
+
+
+def touch_kind(path):
+    """The kind of a changed path the merge guard denies, by a fixed table; `judges` and a `.claude-plugin` segment come first
+    (the floor, whatever this says), and rbac, admission and vault-policy come only from a touch check's findings."""
+    parents = [s.casefold() for s in path.split("/")[:-1]]          # a baton directory as signing-rules finds one
+    if "batons" in parents or any(parents[i:i + 2] == ["templates", "baton-kinds"] for i in range(len(parents))):
+        return "baton"
+    if path.startswith((".github/workflows/", ".github/actions/")):
+        return "workflow"
+    if path.startswith(".vibemaestro/"):
+        return "config"
+    if path.endswith(".sh"):
+        return "script"
+    return "test" if test_data_path(path) else "other"
+
+
+def judges(cfg):
+    """The paths that judge a later PR under a repository's config (parsed, effective or as written; None for none): the config,
+    each `external:` adapter, the planner's script and inputs, every merge.touch_inputs workflow and path, and TOUCH_JUDGES."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    m = cfg.get("merge") if isinstance(cfg.get("merge"), dict) else {}
+    reg = (m.get("image_bump") or {}).get("registry") if isinstance(m.get("image_bump"), dict) else None
+    out = set(TOUCH_JUDGES)
+    for spec in ((cfg.get("ci") or {}).get("backend") if isinstance(cfg.get("ci"), dict) else None,
+                 reg.get("backend") if isinstance(reg, dict) else None):
+        if isinstance(spec, str) and spec.startswith("external:"):
+            out.add(spec[len("external:"):])
+    pl = m.get("planner") if isinstance(m.get("planner"), dict) else {}
+    named = [pl.get("script")] + list(pl.get("inputs") or [])
+    for v in (m.get("touch_inputs") or {}).values() if isinstance(m.get("touch_inputs"), dict) else ():
+        if isinstance(v, dict):
+            named += [v.get("workflow")] + list(v.get("paths") or [])
+    return set(posixpath.normpath(p) for p in out.union(x for x in named if isinstance(x, str) and x))
+
+
+def is_judge(path, judged):
+    """True when `path` judges a later PR, its case ignored: a deny glob matches whatever the case, and a checkout on a
+    case-insensitive disk reads `.vibemaestro/SDLC.json` as the config."""
+    p = path.casefold()
+    return p in set(j.casefold() for j in judged) or p.startswith(tuple(d.casefold() for d in TOUCH_JUDGE_DIRS))
 
 
 # ── git and gh, read-only ───────────────────────────────────────────────────────────────────────────
@@ -277,10 +511,12 @@ def git_has(root, sha):
 
 class GitHub:
     """The read-only calls `plan status` makes. `reason` is set when GitHub cannot be read at all (no gh, or the PR list failed);
-    `errors` lists every later call that failed, so a status read in part says so instead of passing for checked."""
+    `errors` lists every later call that failed, so a status read in part says so instead of passing for checked. `repo`
+    (owner/name) reads that repository instead of the one at `root`; a JSON answer is read once per set of arguments."""
 
-    def __init__(self, root):
+    def __init__(self, root, repo=None):
         self.root, self.reason, self.errors, self.calls, self.down = root, None, [], 0, False
+        self.repo, self.memo = repo, {}
         self.gh = shutil.which("gh")
         if not self.gh:
             self.reason = "no gh on PATH"
@@ -288,6 +524,8 @@ class GitHub:
     def _run(self, args):
         if self.reason or self.down:
             return None
+        if self.repo:
+            args = [a.replace("{owner}/{repo}", self.repo) for a in args] if args[0] == "api" else args[:2] + ["-R", self.repo] + args[2:]
         self.calls += 1
         env = {k: v for k, v in os.environ.items() if k not in ("GH_PAGER", "PAGER")}
         env["GH_PAGER"], env["NO_COLOR"] = "cat", "1"
@@ -304,6 +542,12 @@ class GitHub:
 
     def json(self, args):
         """The parsed answer, or None with the failure in `errors`."""
+        key = tuple(args)
+        if key not in self.memo:
+            self.memo[key] = self._json(args)
+        return self.memo[key]
+
+    def _json(self, args):
         r = self._run(args)
         if r is None:
             return None
@@ -328,6 +572,21 @@ class GitHub:
             return None, True
         self.errors.append("gh api %s at %s: %s" % (path, sha[:7], self._last(r)))
         return None, False
+
+    def tree(self, *dirs):
+        """{path: text} of the files of each directory at the head of `repo`'s default branch, in one GraphQL call; None when it
+        fails. A directory that does not exist reads as empty."""
+        owner, name = self.repo.split("/", 1)
+        q = "query($o:String!,$n:String!){repository(owner:$o,name:$n){%s}}" % " ".join(
+            'd%d:object(expression:"HEAD:%s"){...on Tree{entries{name object{...on Blob{text}}}}}' % (i, d) for i, d in enumerate(dirs))
+        got = self.json(["api", "graphql", "-f", "query=" + q, "-f", "o=" + owner, "-f", "n=" + name])
+        repo = ((got or {}).get("data") or {}).get("repository")
+        if repo is None:
+            if got is not None:
+                self.errors.append("gh api graphql: %s has no repository %s" % (" ".join(dirs), self.repo))
+            return None
+        return {"%s/%s" % (d, e["name"]): (e.get("object") or {}).get("text")
+                for i, d in enumerate(dirs) for e in ((repo.get("d%d" % i) or {}).get("entries") or [])}
 
 
 # ── plan status ─────────────────────────────────────────────────────────────────────────────────────
@@ -362,6 +621,52 @@ def local_intents(root):
     return out
 
 
+# ── key branches (`issue.code`): `intent/<key>-<slug>` is the intent kb/intent/<date>-<slug>.md whose frontmatter says `key: <key>` ──
+KEY_RX = re.compile(r"^[A-Z]{3}-[1-9][0-9]*$")
+KEY_BRANCH_RX = re.compile(r"^([A-Z]{3}-[1-9][0-9]*)-(.+)$")
+DATE_STEM_RX = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+
+def branch_names(path, fm):
+    """The branch names (after `intent/`) of the intent at `path`: its stem, and `<key>-<slug>` when its `key:` is a key."""
+    stem = path[len("kb/intent/"):-len(".md")]
+    key = str(fm.get("key") or "").strip()
+    return [stem] + (["%s-%s" % (key, DATE_STEM_RX.sub("", stem, count=1))] if KEY_RX.match(key) else [])
+
+
+def key_candidates(names, rest):
+    """The kb/intent paths among `names` whose stem, less its date, is the slug of the key branch `rest` (`<key>-<slug>`); [] when
+    `rest` is not one. A candidate is that intent only when its `key:` says the same key (branch_names)."""
+    m = KEY_BRANCH_RX.match(rest)
+    return [n for n in names if n.startswith("kb/intent/") and n.endswith(".md")
+            and DATE_STEM_RX.sub("", n[len("kb/intent/"):-3], count=1) == m.group(2)] if m else []
+
+
+def intent_of_branch(root, rest):
+    """The kb/intent path in the working tree of the branch `intent/<rest>` (any prefix): `kb/intent/<rest>.md`, else the intent
+    whose `key:` names the branch; None when neither."""
+    if os.path.isfile(os.path.join(root, "kb", "intent", rest + ".md")):
+        return "kb/intent/%s.md" % rest
+    d = os.path.join(root, "kb", "intent")
+    for p in key_candidates(["kb/intent/" + n for n in sorted(os.listdir(d))] if os.path.isdir(d) else [], rest):
+        try:
+            with open(os.path.join(root, p), encoding="utf-8") as f:
+                if rest in branch_names(p, _front(f.read())):
+                    return p
+        except (OSError, UnicodeDecodeError):
+            continue
+    return None
+
+
+def intent_names_at(root, gh, rev):
+    """The kb/intent/ paths at commit `rev`: `git ls-tree` when it is local, else the contents API."""
+    if git_has(root, rev):
+        rc, out = _git(root, "ls-tree", "--name-only", rev, "--", "kb/intent/")
+        return out.decode("utf-8", "replace").split("\n") if rc == 0 else []
+    got = gh.json(["api", "repos/{owner}/{repo}/contents/kb/intent?ref=%s" % rev])
+    return ["kb/intent/" + x["name"] for x in got if isinstance(x, dict) and isinstance(x.get("name"), str)] if isinstance(got, list) else []
+
+
 def manifest_version(root, gh, sha, name):
     """The version `name` has at commit `sha`: its manifest's `version`, else (a manifest with none: the private kit) the released
     version its CHANGELOG.md records (the first `## ` heading when it is X.Y.Z); None when neither can be read."""
@@ -394,17 +699,60 @@ def manifest_version(root, gh, sha, name):
     return released if found else None
 
 
-def status(root, rel, gh=None):
-    """The status of the plan at `rel` as a dict (what `--json` prints), or None when it cannot be read."""
-    plan = read_plan(root, rel)
+def gather_intents(root, gh, prs, src=None):
+    """{path: frontmatter + path, source (+ pr)} of every intent: in the working tree (`src`, {path: text} read from another
+    repository's default branch, in its place), at each PR head (open) or merge commit (merged) of an `intent/` branch, then on
+    origin/intent/* refs (this repository only)."""
+    base = local_intents(root) if src is None else {p: _front(t or "") for p, t in src.items()
+                                                    if p.startswith("kb/intent/") and p.endswith(".md")}
+    intents = {p: dict(fm, path=p, source="working tree" if src is None else "default branch") for p, fm in base.items()}
+    named = lambda: {b: p for p, fm in sorted(intents.items()) for b in branch_names(p, fm)}  # noqa: E731
+    # a key branch's intent is found by listing kb/intent/ at that commit (key_candidates) and reading the one whose `key:` names it
+    if prs is not None:
+        want, local_named = [], named()
+        for p in prs:
+            b = p.get("headRefName") or ""
+            if not b.startswith("intent/") or p["state"] == "CLOSED":
+                continue
+            rest = b[len("intent/"):]
+            if rest in local_named:
+                intents[local_named[rest]].setdefault("pr", p["number"])
+                continue
+            sha = p["headRefOid"] if p["state"] == "OPEN" else (p.get("mergeCommit") or {}).get("oid")
+            if sha:
+                keyed = key_candidates(intent_names_at(root, gh, sha), rest) if KEY_BRANCH_RX.match(rest) else []
+                want.extend((p, rest, path, sha) for path in ["kb/intent/%s.md" % rest] + keyed)
+        local = git_read_many(root, ["%s:%s" % (sha, path) for _p, _r, path, sha in want if git_has(root, sha)])
+        for p, rest, path, sha in want:
+            key = "%s:%s" % (sha, path)
+            text = local.get(key) if key in local else gh.file_at(sha, path)[0]
+            fm = _front(text) if text is not None else None
+            if fm is not None and path not in intents and rest in branch_names(path, fm):
+                intents[path] = dict(fm, path=path, pr=p["number"],
+                                     source="PR #%d %s" % (p["number"], "head" if p["state"] == "OPEN" else "merge commit"))
+    if src is not None:
+        return intents
+    rc, out = _git(root, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/intent/")
+    refs = [r for r in out.decode().split() if r.startswith("origin/intent/")] if rc == 0 else []
+    known = named()
+    missing = [(r, rest, p) for r in refs for rest in [r[len("origin/intent/"):]] if rest not in known
+               for p in ["kb/intent/%s.md" % rest] + (key_candidates(intent_names_at(root, gh, r), rest) if KEY_BRANCH_RX.match(rest) else [])]
+    for (r, rest, p), text in zip(missing, git_read_many(root, ["%s:%s" % (r, p) for r, _rest, p in missing]).values()):
+        fm = _front(text) if text is not None else None
+        if fm is not None and p not in intents and rest in branch_names(p, fm):
+            intents[p] = dict(fm, path=p, source="%s (last fetch)" % r)
+    return intents
+
+
+def status(root, rel, gh=None, src=None):
+    """The status of the plan at `rel` as a dict (what `--json` prints), or None when it cannot be read. `src`: {path: text} of
+    another repository's kb at its default branch (gh then reads that repository), in place of the working tree."""
+    plan = read_plan(root, rel) if src is None else read_plan_text(src[rel], rel) if src.get(rel) is not None else None
     if plan is None:
         return None
     gh = gh or GitHub(root)
-    ref_of = lambda r: "%s#%s" % (rel, r["id"])  # noqa: E731
-    intents = {p: dict(fm, path=p, source="working tree") for p, fm in local_intents(root).items()}
 
-    prs = gh.json(["pr", "list", "--state", "all", "--limit", str(PR_LIMIT), "--json",
-                   "number,state,headRefName,headRefOid,mergeCommit,isDraft,url,title"])
+    prs = gh.json(PR_ARGS)
     if prs is None:
         gh.reason = gh.reason or (gh.errors[-1] if gh.errors else "gh pr list failed")
     elif len(prs) >= PR_LIMIT:
@@ -425,34 +773,7 @@ def status(root, rel, gh=None):
         for c in got or []:
             ci[c["number"]] = ci_state(c.get("statusCheckRollup"))
 
-    # intents that are not in the working tree: at each PR head (open) or merge commit (merged), then on origin/intent/* refs
-    if prs is not None:
-        want = []
-        for p in prs:
-            b = p.get("headRefName") or ""
-            if not b.startswith("intent/") or p["state"] == "CLOSED":
-                continue
-            path = "kb/intent/%s.md" % b[len("intent/"):]
-            if path in intents:
-                intents[path].setdefault("pr", p["number"])
-                continue
-            sha = p["headRefOid"] if p["state"] == "OPEN" else (p.get("mergeCommit") or {}).get("oid")
-            if sha:
-                want.append((p, path, sha))
-        local = git_read_many(root, ["%s:%s" % (sha, path) for _p, path, sha in want if git_has(root, sha)])
-        for p, path, sha in want:
-            key = "%s:%s" % (sha, path)
-            text = local.get(key) if key in local else gh.file_at(sha, path)[0]
-            if text is not None and path not in intents:
-                intents[path] = dict(_front(text), path=path, pr=p["number"],
-                                     source="PR #%d %s" % (p["number"], "head" if p["state"] == "OPEN" else "merge commit"))
-    rc, out = _git(root, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/intent/")
-    refs = [r for r in out.decode().split() if r.startswith("origin/intent/")] if rc == 0 else []
-    missing = [(r, "kb/intent/%s.md" % r[len("origin/intent/"):]) for r in refs]
-    missing = [(r, p) for r, p in missing if p not in intents]
-    for (r, p), text in zip(missing, git_read_many(root, ["%s:%s" % (r, p) for r, p in missing]).values()):
-        if text is not None:
-            intents[p] = dict(_front(text), path=p, source="%s (last fetch)" % r)
+    intents = gather_intents(root, gh, prs, src)
 
     back = {}
     for p, fm in intents.items():
@@ -462,14 +783,16 @@ def status(root, rel, gh=None):
 
     checked = prs is not None
     res_rows, drift, notes, issue_cache = [], [], [], {}
+    intent_of = {b: p for p, fm in sorted(intents.items()) for b in branch_names(p, fm)}
     for r in plan["rows"]:
         link = r["link"]
-        linked = list(dict.fromkeys(link["intents"] + ["kb/intent/%s.md" % b[len("intent/"):] for b in link["branches"]]
-                                    + back.get(r["id"], [])))
+        linked = list(dict.fromkeys(link["intents"] + [intent_of.get(b[len("intent/"):], "kb/intent/%s.md" % b[len("intent/"):])
+                                                       for b in link["branches"]] + back.get(r["id"], [])))
         row = {"id": r["id"], "line": r["line"], "must": r["must"], "depends": r["depends"],
                "version": ", ".join("%s %s" % v for v in r["versions"]), "model": r["model"],
                "intents": linked, "prs": [], "state": None, "notes": [],
-               "current": r["current"], "shared": r["shared"], "merge_main": r["merge_main"]}
+               "current": r["current"], "shared": r["shared"], "merge_main": r["merge_main"],
+               "jira": next((str(intents[p]["jira"]) for p in linked if p in intents and intents[p].get("jira")), None)}   # shown, never synced
         if not checked:
             row["state"] = "dropped" if link["dropped"] else "not checked"
             if link["dropped"]:
@@ -489,8 +812,9 @@ def status(root, rel, gh=None):
             else:
                 row["notes"].append("#%d is not a PR of this repository" % n)
         for p in linked:
-            for pr in by_branch.get("intent/" + p[len("kb/intent/"):-3], []):
-                cands[pr["number"]] = pr
+            for b in branch_names(p, intents.get(p, {})):
+                for pr in by_branch.get("intent/" + b, []):
+                    cands[pr["number"]] = pr
         for p in back.get(r["id"], []):
             n = intents[p].get("pr")
             if n in by_num:
@@ -597,6 +921,7 @@ def render(st):
         else:
             detail = " · ".join(([("depends on " + ", ".join(r["depends"]))] if r["depends"] else [])
                                 + (["@" + r["current"]["sha"][:7]] if r.get("current") else []))
+        detail += " · jira %s" % r["jira"] if r.get("jira") else ""
         what = kb_index.cut(r["must"], 60)
         out.append("  %-*s  %-11s  %s%s" % (w, r["id"], s, detail, ("  — " + what) if what else ""))
         for n in r["notes"]:
@@ -787,7 +1112,10 @@ def changed_files(root, base):
     return set(diff.decode().split("\n")) | set(new.decode().split("\n")) - {""}, "%s (merge base %s)" % (ref, mb[:7])
 
 
-def check_links(root, base=None, all_=False):
+def check_links(root, base=None, all_=False, trace=None, guard=None):
+    """`trace(plan path, base)` → ([(line, message)], story): the AC trace of a changed plan, red for a story plan; any other plan only
+    warns, once, so an older plan on main never turns red. `guard(intent path, base)` → [message]: red lines of an intent changed
+    in the change (kb.py: an AC of a story changed without the owner's word)."""
     probs = link_problems(root)
     changed, label = (None, "--all") if all_ else changed_files(root, base)
     fails = olds = 0
@@ -796,15 +1124,27 @@ def check_links(root, base=None, all_=False):
         fails += hard
         olds += not hard
         sys.stdout.write("%s %s:%d: %s\n" % ("FAIL" if hard else "OLD ", src, ln, msg))
+    for p in _docs(root, "plans") if trace else ():
+        found, story = trace(p, base) if changed is None or p in changed else ([], False)
+        for ln, msg in found if story else ():
+            sys.stdout.write("FAIL %s:%d: plan trace: %s\n" % (p, ln, msg))
+            fails += 1
+        if found and not story:
+            sys.stdout.write("WARNING %s:%d: plan trace: %d finding(s), the first: %s (not a story plan: nothing red; "
+                             "kb.py check plan lists them)\n" % (p, found[0][0], len(found), found[0][1]))
+    for p in _docs(root, "intent") if guard and changed is not None else ():
+        for msg in guard(p, base) if p in changed else ():
+            sys.stdout.write("FAIL %s:1: %s\n" % (p, msg))
+            fails += 1
     sys.stdout.write("links: %d failing, %d in unchanged files · base: %s\n" % (fails, olds, label))
     return 65 if fails else 0
 
 
 # ── command line (called by kb.py) ──────────────────────────────────────────────────────────────────
-USAGE = "kb.py plan status <plan file> [--json] | kb.py check links [--base REF | --all]"
+USAGE = "kb.py plan status <plan file> [--json] | kb.py check plan <plan file> | kb.py check links [--base REF | --all]"
 
 
-def main(root, cmd, args):
+def main(root, cmd, args, trace=None, guard=None):
     if cmd == "plan":
         if not args or args[0] != "status":
             return kb_index._die("usage: " + USAGE, 64)
@@ -831,5 +1171,5 @@ def main(root, cmd, args):
                 return kb_index._die("usage: " + USAGE, 64)
         if all_ and base:
             return kb_index._die("--base and --all exclude each other (usage: %s)" % USAGE, 64)
-        return check_links(root, base, all_)
+        return check_links(root, base, all_, trace, guard)
     return kb_index._die("usage: " + USAGE, 64)

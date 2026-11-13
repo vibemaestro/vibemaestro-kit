@@ -25,6 +25,8 @@
 #   [J] the run: found by the spec file's path, so an edit of the spec during the run is undone; the same bytes elsewhere do not
 #       touch it; the signed plan's count and prefix; --recover undoes a run left open
 #   [B] the seal: a body file edited after signing, the spec re-pinned, the world moved before a step, a repository made public
+#   [labels-*] issue-labels: one PATCH of the issue's or PR's labels to the after set; a label the repository lacks, a no-op and a
+#       spec of the wrong shape refused; undo puts the before set back, and leaves labels someone changed since (rc 5)
 #   [I] injection: a title, a label and a body holding shell text arrive verbatim, and nothing runs
 # =============================================================================
 set -uo pipefail
@@ -437,6 +439,76 @@ fam_prclose() {
   spec "$d" "[$PRC, $NEW]"; full "$PL" "$d"
   eq "$RC" 5 "[W] a pull request someone else closed after the run: not reopened, rc 5"
   eq "$(wq "$d" 'R["issues"]["7"]["state"]')" closed "[W] …their close stays"
+}
+
+fam_labels() {
+  PL=$1; local d lbw sets patch
+  lbw='R=W["repos"]["acme/app"]; R["labels"] += ["waiting:owner", "old"]; R["issues"]["61"]["labels"] = ["kit", "old"]'
+  patch() { python3 - "$1/gh.log" <<'PY'
+import json, sys
+for ln in open(sys.argv[1]):
+    c = json.loads(ln)
+    if c["method"] == "PATCH":
+        print(json.dumps(c["payload"]))
+PY
+  }
+  sets='{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["waiting:owner"], "remove": ["old"]}'
+  d=$(mkw "$lbw"); spec "$d" '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["waiting:owner"]}]'; eng "$PL" "$d" --spec spec.json
+  eq "$RC" 0 "[labels-add] control: an add of a label the repository has plans (rc 0)"
+  has "$OUT" 'issue-labels acme/app#61 labels before ["kit", "old"] after ["kit", "old", "waiting:owner"]' "[labels-add] …the plan line names the before set and the after set"
+  full "$PL" "$d"
+  eq "$RC" 0 "[labels-add] an add run: rc 0"
+  eq "$(writes "$d" | tr '\n' ';')" "PATCH repos/acme/app/issues/61;" "[labels-add] …one PATCH of the issue"
+  eq "$(patch "$d")" '{"labels": ["kit", "old", "waiting:owner"]}' "[labels-add] …its payload is the labels alone, the after set"
+  eq "$(wq "$d" 'R["issues"]["61"]["labels"], R["issues"]["61"]["title"], R["issues"]["61"]["body"], R["issues"]["61"]["state"]')" \
+     "(['kit', 'old', 'waiting:owner'], 'Sixty-one', 'sixty-one', 'open')" "[labels-add] …the labels changed, the title, body and state did not"
+  d=$(mkw "$lbw"); spec "$d" '[{"op": "issue-labels", "repo": "acme/app", "issue": 7, "add": ["kit"]}]'; full "$PL" "$d"
+  eq "$RC:$(wq "$d" 'R["issues"]["7"]["labels"]')" "0:['kit']" "[labels-add] a pull request's number: the label lands, rc 0"
+  d=$(mkw "$lbw"); spec "$d" '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "remove": ["old"]}]'; eng "$PL" "$d" --spec spec.json
+  has "$OUT" 'issue-labels acme/app#61 labels before ["kit", "old"] after ["kit"]' "[labels-remove] the plan line names the before set and the after set"
+  full "$PL" "$d"
+  eq "$RC:$(patch "$d")" '0:{"labels": ["kit"]}' "[labels-remove] a remove run: rc 0, one PATCH to the after set"
+  eq "$(wq "$d" "R['labels']"):$(ndeletes "$d")" "['kit', 'a\`b;c', 'waiting:owner', 'old']:0" "[labels-remove] …the label stays in the repository, no DELETE"
+  d=$(mkw "$lbw"); spec "$d" "[$sets]"; full "$PL" "$d"
+  eq "$RC:$(wq "$d" 'R["issues"]["61"]["labels"]')" "0:['kit', 'waiting:owner']" "[labels-remove] an add and a remove in one op: both land"
+  d=$(mkw "$lbw"); spec "$d" '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["WAITING:OWNER"], "remove": ["OLD"]}]'; full "$PL" "$d"
+  eq "$RC:$(patch "$d")" '0:{"labels": ["kit", "waiting:owner"]}' "[labels-add] a name in other case: the repository's spelling is written, a remove matches in any case"
+  alone "[labels-noop-refused] an add of a label the issue has, in other case" changes "$lbw" '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["KIT"]}]'
+  alone "[labels-unknown-refused] an add of a label the repository does not have" labels "$lbw" '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["nope"]}]'
+  alone "[labels-noop-refused] an add of a label the issue already has" changes "$lbw" '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["kit"]}]'
+  alone "[labels-noop-refused] a remove of a label the issue does not have" changes "$lbw" '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "remove": ["waiting:owner"]}]'
+  refuse "[labels-noop-refused] neither add nor remove" refuse-spec '[{"op": "issue-labels", "repo": "acme/app", "issue": 61}]'
+  refuse "[labels-noop-refused] empty add and remove" refuse-spec '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": [], "remove": []}]'
+  refuse "[labels-spec] a name in add and in remove" refuse-spec '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["kit"], "remove": ["KIT"]}]'
+  refuse "[labels-spec] eleven names" refuse-spec '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["a","b","c","d","e","f","g","h","i","j","k"]}]'
+  refuse "[labels-spec] a repeated name" refuse-spec '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "remove": ["old", "old"]}]'
+  refuse "[labels-spec] a title key" refuse-unknown-key '[{"op": "issue-labels", "repo": "acme/app", "issue": 61, "add": ["kit"], "title": "x"}]'
+  refuse "[labels-spec] an issue that is not a number" refuse-spec '[{"op": "issue-labels", "repo": "acme/app", "issue": "@x", "add": ["kit"]}]'
+  alone "[labels-spec] an issue that does not exist" exists "$lbw" '[{"op": "issue-labels", "repo": "acme/app", "issue": 999, "add": ["kit"]}]'
+  OUT=$(cd "$PL/gates" && python3 -B -c 'import gh_write as g
+u = "repos/a/b/issues/%d" % 1
+print(g.allowed("PATCH", u, {"labels": [1]}), g.allowed("PATCH", u, {"labels": "x"}), g.allowed("PATCH", u, {"labels": [""]}),
+      g.allowed("PATCH", u, {"labels": ["x"]}), g.allowed("PATCH", "repos/a/b/pulls/1", {"labels": ["x"]}),
+      g.allowed("POST", u + "/comments", {"body": "x", "labels": ["x"]}))' 2>&1)
+  eq "$OUT" "False False False True False False" "[labels-spec] the call allowlist: labels are a list of names on an issue PATCH, and nowhere else but the issue create"
+  d=$(mkw "$lbw"'; W["faults"]["fail_write"] = 1'); spec "$d" "[$sets]"; full "$PL" "$d"
+  eq "$RC:$(wq "$d" 'R["issues"]["61"]["labels"]')" "4:['kit', 'old']" "[labels-undo] a labels PATCH GitHub refuses: nothing landed, the labels are as they were (rc 4)"
+  d=$(mkw "$lbw"'; W["faults"]["land_then_fail"] = 1'); spec "$d" "[$sets]"; full "$PL" "$d"
+  eq "$RC:$(wq "$d" 'R["issues"]["61"]["labels"]')" "4:['kit', 'old']" "[labels-undo] a labels PATCH that landed and looked lost: the undo reads the live set and puts the before set back (rc 4)"
+  d=$(mkw "$lbw"'; W["faults"].update(swap_after_write=1, swap=[["acme/app", "issues", "61", {"labels": ["kit", "waiting:owner", "extra"]}]])')
+  spec "$d" "[$sets]"; full "$PL" "$d"
+  has "$OUT" 'labels are ["extra", "kit", "waiting:owner"], not ["kit", "waiting:owner"]' "[labels-add] labels changed after the write: the post-check names both sets"
+  d=$(mkw "$lbw"'; W["faults"]["fail_write"] = 2'); spec "$d" "[$sets, $NEW]"; full "$PL" "$d"
+  has "$OUT" 'undo-step: 1 put the labels of acme/app#61 back to ["kit", "old"]' "[labels-undo] the undo plan line names the set it puts back"
+  eq "$RC:$(wq "$d" 'R["issues"]["61"]["labels"]')" "4:['kit', 'old']" "[labels-undo] a create that fails after the labels op: the undo puts the before set back (rc 4)"
+  d=$(mkw "$lbw"'; W["faults"].update(fail_write=2, swap_after_write=1, swap=[["acme/app", "issues", "61", {"labels": ["kit", "waiting:owner", "extra"]}]])')
+  spec "$d" "[$sets, $NEW]"; full "$PL" "$d"
+  eq "$RC:$(wq "$d" 'R["issues"]["61"]["labels"]')" "5:['kit', 'waiting:owner', 'extra']" "[labels-undo] labels someone changed after the run: left alone, rc 5"
+  has "$OUT" 'the labels changed since the run (now ["extra", "kit", "waiting:owner"], the run left ["kit", "waiting:owner"]): left alone' "[labels-undo] …the refusal names the labels it leaves"
+  d=$(mkw "$lbw"'; W["faults"].update(fail_write=2, swap_after_write=1, swap=[["acme/app", "repo", {"labels": ["kit", "waiting:owner"]}]])')
+  spec "$d" "[$sets, $NEW]"; full "$PL" "$d"
+  eq "$RC:$(wq "$d" 'R["issues"]["61"]["labels"]'):$(wq "$d" "R['labels']")" "5:['kit', 'waiting:owner']:['kit', 'waiting:owner']" "[labels-undo] a label deleted from the repository since: the undo does not recreate it, rc 5"
+  has "$OUT" 'label ["old"] is not in acme/app any more, the undo would create it: left alone' "[labels-undo] …the refusal names the label"
 }
 
 fam_lag() {
@@ -988,7 +1060,7 @@ fam_cost() {
   eq "$RC" 0 "[C2] the separate commands do not look at the spec's age (rehearse: rc 0)"
 }
 
-FAMILIES="fam_journal fam_spec fam_conditions fam_closed_ok fam_rehearse fam_run fam_closec fam_prclose fam_prs fam_lag fam_newline fam_fence fam_trap4 fam_ref fam_undo fam_seal fam_inject fam_cost"
+FAMILIES="fam_journal fam_spec fam_conditions fam_closed_ok fam_rehearse fam_run fam_closec fam_prclose fam_labels fam_prs fam_lag fam_newline fam_fence fam_trap4 fam_ref fam_undo fam_seal fam_inject fam_cost"
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 

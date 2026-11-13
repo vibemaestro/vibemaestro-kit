@@ -1,12 +1,13 @@
 ---
 name: plan
-description: "Use when: a topic needs two or more PRs (or a new PR is decided for a topic that has a plan), or someone asks what the state of a topic is — after a shallow recon of the current state, write or extend kb/plans/<date>-<slug>.md (one row per PR: must be true, current state @SHA, shared files, acceptance, depends on, version on a group's release row only, model, link; the owner's decisions verbatim), link each dispatched intent to its row, and read the live state with kb.py plan status instead of collecting it from issues, PRs and specs."
+description: "Use when: a topic needs two or more PRs (or a new PR is decided for a topic that has a plan), or someone asks what the state of a topic is — after a shallow recon of the current state, write or extend kb/plans/<date>-<slug>.md (one row per PR: how, the AC it delivers, depends on, trust touches, link, a version on a group's release row only; the owner's decisions verbatim; a living plan), link each dispatched intent to its row, and read the live state with kb.py plan status instead of collecting it from issues, PRs and specs."
 ---
 
 # plan — the plan of a topic that takes several PRs
 
 One intent = one branch = one PR = one session. A topic too big for one PR is split across PRs, and the plan is the one place that
-split lives: what each PR must make true, how it is accepted, what it waits for, which release row ships it, and what the owner decided.
+split lives: how each PR builds it, which AC of the story it delivers, what it waits for, what needs a signature, which release row
+ships it, and what the owner decided. The what and the acceptance live in the spec; the plan holds the how.
 Its state is read from GitHub by a command, never written into the plan, so a later session answers "where is this topic?" from one
 file and one command instead of re-reading issues, PRs, comments and specs.
 
@@ -23,8 +24,8 @@ A row written from the spec alone, when the code has drifted, misleads the worke
 hand one read-only subagent (`agents.search_model`) the spec, `kb/current-state.md`, the open PRs (`gh pr list`) and the SHA of
 `origin/main`. For each row it answers, as facts at that SHA: does this exist already? where is the seam (the existing file and
 function the row meets)? is the data or interface the row needs there? which files does it share with other rows or open PRs? It
-reads only enough code to answer and decides no implementation: no design, no steps, no "should". A finding longer than one line goes
-to `kb/records/<date>-<slug>-recon.md`, facts only. Check what it returns yourself before you write it down (its answer is a claim).
+reads only enough code to answer and decides no implementation: no design, no steps, no "should". Its facts feed each row's How; a
+finding longer than one line goes to `kb/records/<date>-<slug>-recon.md`, facts only. Check what it returns yourself before you write it down (its answer is a claim).
 
 ## Write the plan
 
@@ -34,34 +35,45 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" new plan <slug>
 
 Fill every `<FILL: …>` (`<ĐIỀN: …>` in a Vietnamese repo). The file has:
 
-- **Frontmatter** `description` and `issue` (the topic's issue), and a line naming the topic's intent, spec and issue when they exist.
-- **`## Rows`**, one row per PR, in a table with the header
-  `| Row | Must be true | Current state @SHA | Shared files | Acceptance | Depends on | Version | Model | Link |` (a plan written without the two
-  recon columns is read and checked as before):
+- **Frontmatter** `description`, `issue` (the topic's issue) and `focus` (its focus, `P<n>`), and a line naming the topic's intent, spec and issue when they exist.
+- **`## Rows`**, one row per PR, in a table with the header `| Row | How | Delivers | Depends on | Trust touches | Link |`, and a
+  `Version` column when a release row needs one. A plan of the earlier columns (Must be true, Current state @SHA, Shared files,
+  Acceptance, Model) is still read and checked as before; a story's plan new, or whose row cells change (a Link cell and the Decisions do not count), takes the lean columns (`kb.py check plan`).
   - **Row:** a short id (`A`, `B1.2`, `13a`), never reused.
-  - **Must be true:** one line, said as a result; a spec or decision that holds the detail is named here or in the Link cell.
-  - **Current state @SHA** (the header keeps `@`)**:** the recon's facts in one short line ending in `@<sha>` (the `origin/main` it read), with a link to the
-    recon note when longer; `—` for none. `kb.py check links` fails a cell that is not `—` and has no `@<sha>`.
-  - **Shared files:** existing files, as repo-root paths, that this row and another row or an open PR both touch, or `—`.
-  - **Acceptance:** the command and what it must print. The session that does the row runs it; whoever checks the PR runs it again.
+  - **How:** the approach of this PR in a few lines: what it builds on (the recon's facts), what it changes, what it touches.
+  - **Delivers:** the AC of the story this PR delivers, `AC1, AC2`, with the spec's criteria numbers when they help
+    (`AC4 (criteria 7–9)`), or `enabling: <reason>` for a row that delivers no AC itself. Every AC is delivered by a row that is not dropped.
+  - **Trust touches:** what the row's PRs change in the trust layer and run, so the owner signs it with the plan: `none`, or
+    `;`-separated items. A touch: `<kind> [<owner/repo>:]<path> [<object>] [Stops: <words>]` (the repository defaults to the
+    plan's), kinds `script`, `baton` (with its `Stops:`, `removed` for a deleted baton), `workflow`, `rbac`, `admission`,
+    `vault-policy` (these three name the rendered object `<Kind>/<namespace or ->/<name>`), `config` (under `.vibemaestro/`),
+    `other <exact path> [<object>]` (one file or one object no other kind fits; never `-`) and `test <path>` or
+    `test <directory>/` (test data under a `tests` or `test` directory). `run <kit:name or project:name> Stops: <words>
+    [runs: <n>]` declares a baton run, `PRs: <n>` how many PRs use the row (1 to 20, 1 when absent). Exact paths, no glob. End a
+    touch in `(signs again)` to keep it the owner's; the floor must carry it, or the owner's dialog refuses the plan: what judges a
+    later PR (the config, an adapter, the planner, a touch check's inputs, `.vibemaestro/risk-tier.yaml`, `.vibemaestro/gates/`), a
+    `.claude-plugin` path, a baton whose Stops drop a word of `SIGN_AGAIN_STOPS`, a run with one, and a `secrets` run outside
+    `PLAN_SECRETS_KITS`. `—` (no cell) cannot be signed. The plan's preamble names one intent and one spec (`Intent: … · Spec: …`)
+    and the spec has numbered acceptance criteria. The owner signs the whole plan with `baton.py sign --by owner --approve <spec>`
+    (`{plan: [{repo, path, commit}], expires}`, at most 30 days); `kit:merge-pr` then merges up to each row's PRs whose every
+    trust-layer change is one of its touches, where the base's `merge.touch_checks` is set, while the intent, the spec and the
+    row's cells are as signed (`docs/batonrun.md`, section 6). A change to any of them, a row's Link and the Decisions apart, is
+    outside the signature until the owner signs again; a new row is not signed.
   - **Depends on:** row ids of this plan, or `—`. Two rows may run in parallel only when neither depends on the other and they share no
-    file. Rows that share a file are sequenced here, or one writes `(merge main)` in its Shared files: it runs in parallel with
-    every row it shares with and merges main before it is ready. `kb.py check links` fails two rows that share a file with neither.
-  - **Version:** `—` on every row, unless the repo publishes versioned plugins (skill `release`): then a feature group's
-    **release row**, the row that runs the release once the group's other rows have merged (it depends on them), carries
-    `<plugin> x.y.z`, comma-separated when it raises several, and a hotfix row may carry a patch.
-  - **Model:** model and effort for the session that does the row (rubric: design or risky → Opus xhigh; clear implementation → Opus high or
-    Sonnet high; mechanical → Sonnet medium).
+    file; rows that share a file are sequenced here.
+  - **Version** (a release row only): when the repo publishes versioned plugins (skill `release`), a feature group's **release row**,
+    the row that runs the release once the group's other rows have merged (it depends on them), carries `<plugin> x.y.z`,
+    comma-separated when it raises several, and a hotfix row may carry a patch.
   - **Link:** `—` until the row's work links itself (next section); `#N` or `intent/<slug>` only for work that cannot (a PR merged
     before its intent had `plan:`, a branch that differs from its intent's file name); `dropped: <reason>` for a dropped row (a `#N` there is read as the row's own PR, so name a PR that absorbed the work as
     "row C", not as its number).
 - **`## Decisions`:** one bullet per owner decision: date and time, the words verbatim (not translated), a link to where they were
   given (issue comment, PR, kb file). An open proposal the owner has not decided is written as open.
 
-A row must give a fresh session everything it needs when its brief is only the plan file and the row id: what must be true, the
-acceptance, the spec and decision links, the dependencies, and on a release row the version. What the plan says is *what must be true*, not which file or
-line to change. A brief built from a row starts with one quick step: check the row's Current state facts at the current
-`origin/main` before coding, and stop and ask (`session-ask` in a sandbox) when one no longer holds. When the row's spec is already approved (as that section defines it), the session does not run the `spec` skill: at its first code step it sends the `code` stage as the section "An intent whose spec is already approved" of that skill says. A plan may hold several row tables (one per level); any table with `Row` and `Link` columns is a row table.
+A row must give a fresh session everything it needs when its brief is only the plan file and the row id: the how, the AC it
+delivers (their criteria and risks are in the spec), the dependencies, the touches, and on a release row the version. A brief built
+from a row starts with one quick step: check that what the row's How builds on still holds at the current `origin/main`, and stop
+and ask (`session-ask` in a sandbox) when it no longer does. When the row's spec is already approved (as that section defines it), the session does not run the `spec` skill: at its first code step it sends the `code` stage as the section "An intent whose spec is already approved" of that skill says. A plan may hold several row tables (one per level); any table with `Row` and `Link` columns is a row table.
 
 Commit the plan in a PR of its own topic (the first PR, or a docs-only PR), then check its links (below).
 
@@ -75,8 +87,10 @@ plan never conflict on it:
 - `open-pr.sh` puts one line `Plan row: …` above the summary of the PR body by itself, from the intent's `plan:`. It is for people:
   `plan status` finds the PR by its branch `intent/<intent file stem>`, never by this line or by a mention of the row id.
 
-A row's own PR does not edit the plan, with one exception: a release row's PR corrects its Version cell when another release merged
-first and the release took the next number.
+**The plan is living.** When the code teaches something, the row's PR updates its own row (and the spec) in the same PR and says
+so in its body, with no new approval; a change to an AC of the story needs the owner's word (`kb.py check intent` and `kb.py check links` refuse a
+story whose AC changed without a new quoted decision). Edit only your own row, so parallel PRs rarely meet in the file, and merge main
+when they do. A row whose cells change after the owner signed the plan is outside that signature until the owner signs again.
 
 ## Read the state
 

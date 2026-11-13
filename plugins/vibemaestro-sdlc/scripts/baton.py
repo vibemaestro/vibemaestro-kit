@@ -12,13 +12,20 @@ the reference files of the skill batonrun (`help <topic>`).
   baton.py check <script>                                          static checks of a baton script
   baton.py rehearse <script> [args...]                             check, then the rehearse phase; the plan against Expect
   baton.py sign --by W --seal S <script> [args...]               check, mode policy, rehearse, seal, then the signature record
+  baton.py sign --by owner --approve <spec>                        the owner's signature of a plan, the same dialog: kit:merge-pr
+                                                                   merges what a row declared, up to the row's PRs
+  baton.py sign --by owner --charter <spec>                        the owner's charter for a focus of the brain, the same dialog:
+                                                                   its repositories, kinds, maximum Stops and expiry
   baton.py run <script> [args...]                                  signed run: rehearse again, run, post-check, undo on failure;
                                                                    one line `run: ok — <n> writes — <run log>` when it holds
   baton.py go [--by coordinator-auto] [--reuse] <script> [args...] check, rehearse, seal, sign, run, post-check and log in one
                                                                    command, one line when it all holds; a baton the session
                                                                    may not sign stops after rehearse with the owner's decision
                                                                    card (exit 8)
-  baton.py go [--by coordinator-auto] - [args...]                  the same, the script read from stdin and stored under
+  baton.py go --row <plan line> [--reuse] <baton> [args...]       the same for a kit: or project: baton; where go would exit 8, a
+                                                                   run touch of that row of the owner's plan approval, else of
+                                                                   a plan of the focus of the owner's charter, covers it
+  baton.py go [--by coordinator-auto] - [args...]                 the same, the script read from stdin and stored under
                                                                    <state>/stdin first; not for a baton: Claude Code blocks a
                                                                    heredoc that holds the skeleton, so Write a file and go it
   baton.py list [<keyword>...]                                     one line per baton (kit:, kind:, project:, user:), at most 25;
@@ -29,6 +36,17 @@ the reference files of the skill batonrun (`help <topic>`).
   baton.py pack --retire <project|user>:<name> <sha256>            unpin one sha; the file stays
   baton.py log [--tail N]                                          the last N lines of the log (default 20)
   baton.py log --last                                              the path of the newest run log (set before the script runs: a killed run is found here)
+  baton.py log --grants                                            each approval or charter: in force, expired, revoked or
+                                                                   damaged, an approval's rows and whether each merged (a plan
+                                                                   grant left from before the grants were removed: not in force)
+  baton.py log --digest [--since <N>h|<N>d|<UTC time>] [--plan <id>]  what was done since then (default 24h) not signed by the
+                                                                   owner, grouped by approval with each row's PRs and runs used,
+                                                                   and by charter, then the owner's own signatures by kind;
+                                                                   --plan: one approval or charter
+  baton.py grant revoke <id>                                       end an approval or a charter at once (no dialog: a narrowing)
+  baton.py grant revoke --focus <P>                                end each charter in force for that focus signed from this
+                                                                   project (what the brain's `op close` or `op supersede` of the
+                                                                   focus runs)
   baton.py log --wait-names N1,N2,... [--timeout S] [--since T]   wait (S 1-580 s) until the latest run line since T (default:
                                                                    300 s before the wait) of each named script is ok
   baton.py help [<topic>]                                          this text, or one reference file of the batonrun skill:
@@ -76,12 +94,43 @@ directory (settings_value). This guards an honest but fallible session, not one 
 `go --queue` leaves a run that needs the owner in the queue instead of a dialog: the owner signs it later from a Claude Code session
 of their own (`sign --by owner --queued <id>`, never from the session or Claude Code process that queued it), and `run --queued
 <id>` runs it once within 24 h while its plan is the sealed one; `log --queue` lists the items, `log --wait-queued <id>` waits.
+A plan approval is the owner's one signature of a plan: the session writes a spec (1 to 20 plans pinned by commit, an expiry at
+most 30 days ahead; a spec that still lists `rows` signs those rows only) and runs `sign --by owner --approve <spec>`; the dialog
+reads each plan at its commit through `gh api` with the intent and the spec its `Intent:` and `Spec:` line names, and shows their
+sha256, the spec's acceptance criteria, every row with its touches, what signs again and what the owner types; the record (`kind:
+approval`, v 2, under `grants/`) binds all of it, no code, to the project directory. It runs no step: kit:merge-pr's guard
+(`touches`) reads it, and merges a PR whose body names a signed row when every trust-layer change is one of that row's touches, up
+to the row's `PRs: <n>` (a `touches used` log line and a marker under `touches/` per use, whatever commit or approval names the
+row), while the intent, the spec and the row's cells are as signed. A floor touch (what judges a later PR, a `.claude-plugin` path,
+a baton narrowed off SIGN_AGAIN_STOPS, a run with one of them or a `secrets` run outside PLAN_SECRETS_KITS) and a touch marked
+`(signs again)` are never covered: the dialog refuses a floor touch the plan does not mark, and the guard merges none of them.
+`go --row [<owner/repo>:]kb/plans/<file>.md#<row> <baton> <args>` checks and rehearses as `go`; where `go` would exit 8 it runs
+the baton when an approval in force signed from this project directory holds the row (of the one repository whose plan holds
+it, when the line names none) with a run touch naming the baton, not marked and not the floor, the baton's Stops (its header's,
+read at run time) within the touch's and holding no floor word, a project: baton reviewed on origin's default branch, a run left
+of the touch's `runs: <n>`, and the plan as signed at its repository's default branch's tip. The match is signed in that process
+only, plan:<approval>/<row>/<n> (n counts that baton's runs under the row), matched again right before the run phase, where use n
+is taken (a marker under touches/ created with O_EXCL and a `touches used` line, keyed by the row and the baton, never the
+commit) and the spent record is left in used/ as an owner-signed run's is, with `approval` (its id) in place of a dialog. A
+user: baton, a session file, a kind: and a sandbox session are refused (exit 64); anything else that does not match exits 8,
+naming the first part that did not.
+A focus charter is the owner's one signature for a focus of the brain (P<n>): the session writes a spec (focus, repos, kinds,
+max_stops, expires at most CHARTER_LIFE_MAX ahead) and runs `sign --by owner --charter <spec>`; the dialog reads the focus through
+the brain installed beside this copy (`brain show <P> --json`) and shows its words, its `done when` and the envelope; the record
+(`kind: charter`, v 1, under `grants/`) binds them to the project directory, one in force per focus and directory. An approval
+reader never takes it for an approval; after the approvals, kit:merge-pr's guard and `go --row` read it for a plan whose
+frontmatter says `focus: <P>` in a repository of its `repos`: the row the same at the default branch's tip and the PR's head, its
+touches inside the envelope (repos, kinds, Stops within max_stops), never the floor or a marked touch, the uses counted with an
+approval's. A run under it is signed plan:<charter>/<row>/<n>, its spent record naming `charter` and the matched `touch`; `go --row`
+reads it only for a plan line that names its repository. `grant revoke --focus <P>` ends a focus's charters.
 
 State, outside every repository: $XDG_STATE_HOME/vibemaestro/baton (a relative XDG_STATE_HOME is ignored), else
 ~/.local/state/vibemaestro/baton: `mode`, `signatures/`, `used/`, `log.tsv`, `runs/` (the newest 200 run outputs are kept; `runs/LAST` names the newest, written before the script runs),
 `stdin/` (the scripts `go -` read), `inputs/` (file values' copies: a call that never reaches its run phase removes its own,
 the copies runs used are kept, the newest 200, until a call of the same bytes that never runs ends), `records/` (a script's run records and backups), `kept/` (keep records `pack` writes),
-`queue/` (the owner's queue; `queue/used/` the items that ran; both removed 7 days after their expiry).
+`queue/` (the owner's queue; `queue/used/` the items that ran; both removed 7 days after their expiry), `grants/` (the owner's
+approvals and charters and `<id>.revoked` files; a plan grant left from before the grants were removed stays there, never in force),
+`touches/` (one marker per use a merge or a `go --row` run took of a plan row).
 
 Exit codes:
   0   done
@@ -93,20 +142,30 @@ Exit codes:
       that very call (the plugin's hook baton-guard.py writes it when it opens the dialog), or it stopped before the run phase
       (an interrupt or an error); the signature stays unused; a kept baton not pinned on this machine, a loose project root;
       pack: no ok run of these bytes here, the bytes kept under another name, another Stops; a queued item absent, unsigned,
-      expired, used, damaged, signed by the session that queued it, or run elsewhere; log --wait-queued: never signable
+      expired, used, damaged, signed by the session that queued it, or run elsewhere; log --wait-queued: never signable;
+      sign --by owner --approve: the approval (the spec, a plan's rows, the directory) changed since the dialog showed it;
+      sign --by owner --charter: the charter (the spec, the focus's words, the directory) changed since the dialog showed it
   4   the run or its post-check failed, and undo put the state back
   5   the state is unknown: undo failed too, or the run phase or a later one was interrupted or hit an error; pack interrupted
   6   new: the file already exists
   7   permissions --check: a rule is missing, stale or unsafe (each one is printed)
-  8   go: the baton needs the owner's signature (a Stops item, or mode manual); nothing was signed, nothing ran
+  8   go: the baton needs the owner's signature (a Stops item, or mode manual); nothing was signed, nothing ran; go --row: the
+      same, and no approval or charter covers it (the first part that did not match is named)
   9   log --wait-names: at the deadline a named script's latest run line since --since is not ok, or it has none (each is named);
       log --wait-queued: the item is not signed by the deadline
   10  permissions --check, or --install-launcher without --force: the registry no longer lists this installed copy and the
       launcher runs another (the session started before a plugin update); restart Claude Code; nothing written
   64  bad usage, a call that does not fit the Params, an unknown prefix or a bare name; pack: no place, a kit, kind or copy name;
       go --queue in a sandbox, with no session id, with --by, or on a baton the session may sign itself; --queued with a
-      malformed id, another signer, or a word after the id
-  66  the script cannot be read: no such kept baton, no project root; retire: no record of the sha
+      malformed id, another signer, or a word after the id; --approve with another signer, a relative path or a word after
+      it, or a spec that breaks its rules (each named); --charter with another signer, a relative path or a word after it;
+      grant revoke with a malformed id or focus; go --grant and sign --by owner
+      --grant (the grants were removed); go --row with a malformed plan line, with --by or --queue, in a sandbox, or for a user:
+      baton, a session file, a kind: or stdin; log --digest --plan with a malformed id
+  65  sign --by owner --charter: a charter spec that breaks its rules, a focus closed, unknown or with no `done when`, or a
+      charter in force for that focus and directory (each named)
+  66  the script cannot be read: no such kept baton, no project root; retire: no record of the sha; grant revoke and log
+      --digest --plan: no such approval
 
 Python 3.8+, standard library only.
 """
@@ -117,8 +176,10 @@ import fcntl
 import fnmatch
 import glob
 import hashlib
+import importlib.util
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -129,16 +190,18 @@ import sys
 import tempfile
 import time
 import unicodedata
+import urllib.parse
 
 sys.dont_write_bytecode = True
 
 OK, BAD_SCRIPT, ENV, REFUSED, UNDONE, UNKNOWN, EXISTS, PERMS, OWNER, USAGE, NOINPUT = 0, 1, 2, 3, 4, 5, 6, 7, 8, 64, 66
 WAIT_UNMET = 9
 OTHER_SDLC = 10
+DATAERR = 65                                           # sign --charter: a charter spec that breaks its rules
 
 HEADER_FIELDS = ("Purpose", "Targets", "Blast", "Undo", "Pre", "Stops", "Each", "Expect")
 STOP_WORDS = ("irreversible-delete", "secrets", "security-boundary", "cluster-lane", "history-rewrite", "money-org", "publish",
-              "no-way-back", "owner-acts")
+              "no-way-back", "owner-acts", "recoverable-delete")
 SIGNERS = ("owner", "coordinator-auto")
 MODES = ("manual", "auto")
 PHASES = ("rehearse", "run", "postcheck", "undo")
@@ -301,7 +364,8 @@ BRANCH_DELETE_LABELS = ("git push --delete|-d|:<ref>", "git update-ref -d|--dele
                         "git -C|--git-dir|--work-tree|GIT_DIR=<dir> branch -d|-f|-M|-C|--delete|--force")
 BRANCH_KIT_HINT = ("; a branch of a private GitHub repository (not a tag, not a rename) merged into its default branch at a "
                    "pinned head (the head in the default branch, or the head of its merged PR into it): "
-                   "`kit:branch-delete repo= branch= head=` deletes it with no owner signature")
+                   "`kit:branch-delete repo= branch= head=` deletes it with no owner signature; one a local clone holds whole, "
+                   "merged or not: `kit:branch-delete-recoverable repo= branch= head= clone=` (Stops recoverable-delete)")
 # A Claude Code settings file: settings*.json (managed-settings.json) right under .claude, $CLAUDE_CONFIG_DIR or the managed
 # directory, joined by `/` or written as path parts (`".claude", "settings.json"`, `".claude" / "settings.json"`). The guard
 # (scripts/settings-guard.py) denies a plain-tool write that widens one; a baton's writes run where no hook sees them.
@@ -2993,10 +3057,20 @@ def check_script(s):
             probs.append((0, "header: no %s field" % key))
         elif not s.fields[key][1]:
             probs.append((s.fields[key][0], "header: empty %s" % key))
-    _stops, unknown = s.stops()
+    stops, unknown = s.stops()
     if unknown:
         probs.append((s.fields.get("Stops", (0,))[0], "header: Stops holds %s; use `none` or a comma list of: %s"
                       % (", ".join(unknown), ", ".join(STOP_WORDS))))
+    if "recoverable-delete" in stops and not s.kit:
+        probs.append((s.fields["Stops"][0], "header: Stops recoverable-delete is for kit batons shipped in a plugin (kit:<name>) "
+                                            "only: their reviewed code keeps what they delete; a delete this baton cannot "
+                                            "put back is irreversible-delete"))
+    if not s.kit:                       # the only copy of what a recoverable delete removed: a baton that names it may end that
+        for n, line in enumerate(s.text.split("\n"), 1):              # recovery, so only a kit names it (as text: a heuristic)
+            if not line.lstrip().startswith("#") and re.search(r"\bbaton/bundles\b", line):
+                probs.append((n, "names the baton state directory's bundles/, which holds the only copy of what a recoverable "
+                                 "delete removed: only a kit: baton (Stops recoverable-delete) touches it"))
+                break
     probs += interface_problems(s)
 
     heredoc_bodies = []
@@ -3509,9 +3583,10 @@ def log_event(d, **kw):
         v = "-" if v is None or v == "" else (json.dumps(v) if isinstance(v, list) else str(v))
         vals.append(log_value(v))
     data = "\t".join(vals).encode("utf-8", "backslashreplace")
-    fd = os.open(os.path.join(d, "log.tsv"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(os.path.join(d, "log.tsv"), os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(fd, data + b"\n")
+        size = os.fstat(fd).st_size                     # a line left unended (a crash, a hand edit) never glues onto this one
+        os.write(fd, (b"\n" if size and os.pread(fd, 1, size - 1) != b"\n" else b"") + data + b"\n")
     finally:
         os.close(fd)
     return data.decode("utf-8")                         # the line as it stands in the file
@@ -3608,7 +3683,7 @@ def allowed(signer, mode, stops, value=None):
 # that lineage uses it up, and the session's next Bash call voids it (a rejected dialog leaves one). The guard denies, and writes none, where
 # no human sees the dialog or the human is not the owner. The design is vibemaestro-brain's `brain owner` (guard-owner), ported:
 # sdlc does not depend on brain. Like the rest of baton, it guards against slips, not same-user forgery of the state files.
-ASKED_MAX_AGE = 600
+ASKED_MAX_AGE = 1800                                  # 30 min: the slowest measured click from a phone was 18m28s
 VERSION_FLOOR = (2, 1, 211)                            # before it, auto mode could approve a hook's `ask` without the dialog
 DIALOG_MODES = ("default", "acceptEdits", "auto")
 MANAGED_SETTINGS = ("/etc/claude-code/managed-settings.json", "/Library/Application Support/ClaudeCode/managed-settings.json")
@@ -3621,9 +3696,10 @@ OWNER_PREFIXES = ("env", "xargs", "command", "exec", "nohup", "time", "sudo", "b
 NO_OWNER_DIALOG = ("sign --by owner is the owner's click in Claude Code's dialog: the session runs the printed command right "
                    "after the decision card, and the plugin's hook opens the dialog")
 SHAPE = ("the guard asks only for the printed command, exactly: <program> sign --by owner --seal <seal> <absolute script path, "
-         "or kit:/kind:/project:/user:<name>> [plain arguments]; printable ASCII, no quote or shell character; the program is this "
-         "plugin's "
-         "baton.py (`python3 [-I -B …] <it>`) or the installed launcher, by absolute path")
+         "or kit:/kind:/project:/user:<name>> [plain arguments], or <program> sign --by owner --queued <id>, or <program> sign --by "
+         "owner --approve <absolute spec path>, or <program> sign --by owner --charter <absolute spec path>; printable ASCII, no "
+         "quote or shell character; the program is this plugin's baton.py (`python3 [-I -B …] <it>`) or the installed launcher, by "
+         "absolute path")
 SAFE_WORD = re.compile(r"[A-Za-z0-9_./:@%+,=-]+\Z")   # no quote, glob, brace, tilde, `$`, `#`, `\`, `;&|()<>` or space
 SEAL_WORD = re.compile(r"[0-9a-f]{16}\.[0-9a-f]{16}\Z")
 LITERAL = ("write the `sign --by owner …` command alone in the Bash call, with literal arguments: no variable, substitution, "
@@ -3672,10 +3748,10 @@ def void_asked(session, now=None):
                 pass
 
 
-def record_asked(session, mode, argv, cwd, claude, after, kept=None, queued=None):
+def record_asked(session, mode, argv, cwd, claude, after, kept=None, queued=None, grant=None):
     """claude: [pid, start] of the Claude Code process that asked (None when unknown); after: the hook process's start.
     kept: (real path, sha256) of the pinned file a project: or user: name resolved to when the dialog opened.
-    queued: [id, body_sha256] of the queued item the dialog showed."""
+    queued: [id, body_sha256] of the queued item the dialog showed. grant: the digest of the approval body the dialog showed."""
     d = ensure_state()
     os.makedirs(os.path.join(d, "asked"), mode=0o700, exist_ok=True)
     rid = sha256(os.urandom(32))[:32]
@@ -3685,6 +3761,8 @@ def record_asked(session, mode, argv, cwd, claude, after, kept=None, queued=None
         rec["script_path"], rec["script_sha256"] = kept
     if queued:
         rec["queued"] = list(queued)
+    if grant:
+        rec["grant"] = grant
     write_private(os.path.join(d, "asked", rid + ".json"), json.dumps(rec, sort_keys=True) + "\n")
     return rid
 
@@ -4015,7 +4093,7 @@ def owner_signs(asked):
             pass
         raise Stop(REFUSED, "sign refused: %s", why)
     RUN["asked_kept"] = (rec.get("script_path"), rec.get("script_sha256"))
-    RUN["asked_queued"], RUN["asked_claude"] = rec.get("queued"), rec.get("claude")
+    RUN["asked_queued"], RUN["asked_claude"], RUN["asked_grant"] = rec.get("queued"), rec.get("claude"), rec.get("grant")
     return rec["id"]
 
 
@@ -4096,6 +4174,8 @@ def owner_shape(cmd):
     rest = ws[i:]
     if rest[:4] == ["sign", "--by", "owner", "--queued"]:
         return rest[1:] if len(rest) == 5 and QUEUE_ID.match(rest[4]) else None
+    if rest[:4] in (["sign", "--by", "owner", "--approve"], ["sign", "--by", "owner", "--charter"]):
+        return rest[1:] if len(rest) == 5 and os.path.isabs(rest[4]) else None
     if rest[:4] != ["sign", "--by", "owner", "--seal"] or len(rest) < 6 or not SEAL_WORD.match(rest[4]):
         return None
     if not (os.path.isabs(rest[5]) or re.fullmatch(r"(?:kit|kind|project|user):[a-z0-9][a-z0-9-]*", rest[5])):
@@ -4273,13 +4353,25 @@ def guard_owner(inp):
                                                                    remote_canon(argv[2])))
         return "ask", ("baton: the owner %s. Your click is the owner's decision; the session never answers this dialog for you."
                        % change)
-    kept = queued = it = None
+    kept = queued = it = grant = body = focus = None
     if argv[2] == "--queued":                          # a queued item: the dialog shows its card and binds its bytes
         _p, it, state = load_item(argv[3])
         why = queue_why(argv[3], state, it) if state != "pending" else queuer(it, sid, [this_claude(lin)])
         if why:
             return deny(why)
         queued = [it["id"], it["body_sha256"]]
+    elif argv[2] in ("--approve", "--charter"):         # every row (or the focus) resolved here, all shown, the body's digest bound
+        here = os.getcwd()
+        try:
+            os.chdir(cwd)
+            body, probs, focus = approval_body(argv[3]) + (None,) if argv[2] == "--approve" else charter_body(argv[3])
+        except (Stop, OSError) as e:
+            body, probs = None, [str(getattr(e, "text", None) or e)]
+        finally:
+            os.chdir(here)
+        if probs:
+            return deny("the %s spec %s cannot be signed: %s" % (argv[2][2:], argv[3], "; ".join(esc(p) for p in probs)))
+        grant = item_digest(body)
     elif re.match(r"(?:project|user):", argv[4]):        # a kept baton: the dialog binds the pinned file the name resolves to
         here = os.getcwd()
         try:
@@ -4290,9 +4382,23 @@ def guard_owner(inp):
             return deny("%s cannot be signed here: %s" % (argv[4], e))
         finally:
             os.chdir(here)
+    card = None                                        # built before the record: a card that cannot be built leaves none
+    if focus is not None and body is not None:
+        card = charter_card(body, focus)
+    elif body is not None:
+        card = shown(
+            "baton: the owner signs a plan approval of %d row%s:\n%s\nkit:merge-pr, run from that directory, merges a pull request "
+            "whose body names one of these rows (one `plan: <file>#<row>` line) with no owner merge when every trust-layer change it "
+            "makes is a touch its row lists here, as many PRs as the row says, while the intent, the spec and the row's cells are "
+            "as signed at the default branch's tip (and at the PR's head in the plan's repository), until the expiry or `grant "
+            "revoke`. What signs again, and any other trust-layer change, stays the owner's merge. Your click is the owner's "
+            "signature; the session never answers this dialog for you.",
+            len(body["rows"]), "" if len(body["rows"]) == 1 else "s", shown_join("\n", approval_lines(body)))
     log_event(ensure_state(), event="owner-ask", result="asked", mode=mode, dir=cwd, args=argv)
     record_asked(sid, mode, argv, os.path.realpath(cwd), [lin[ci][0], lin[ci][2]] if ci is not None else None,
-                 lin[0][2] if lin else None, kept, queued)    # last: the hook voids it when its `ask` cannot be written
+                 lin[0][2] if lin else None, kept, queued, grant)    # last: the hook voids it when its `ask` cannot be written
+    if card is not None:
+        return "ask", card
     if it is not None:
         return "ask", shown("baton: the owner signs queued item %s (%s), which the session may run until %s:\n%s\nYour click is "
                             "the owner's signature; the session never answers this dialog for you.", it["id"], it["name"],
@@ -4557,6 +4663,981 @@ def queue_wait(rest):
     return REFUSED
 
 
+# ── the owner's approval store ─────────────────────────────────────────────────────────────────────────────────────────────────
+# A plan approval (below) is kept as one owner-signed record under grants/: `sign --by owner --approve <spec>` takes the same guard,
+# dialog, record and lineage as `--seal`: the guard resolves every row from the dialog's directory, shows them all, and binds the
+# resolved body's digest; sign resolves again and writes grants/<id>.json only for that digest. A record is in force only while
+# its file is intact (body_sha256, the signature naming it) AND log.tsv holds its `grant signed` line; either record saying
+# expired or revoked is a no. So no single file a session writes, deletes or appends gives it an approval. Like the rest of baton,
+# it guards against slips, not a same-user process that edits both records: the file with its digest computed again, and log.tsv.
+# The plan grants that once shared this store were removed: a grant record left on disk is never in force.
+GRANT_ID = QUEUE_ID
+GRANT_PLANS_MAX = 20
+APPROVAL_LIFE_MAX = 30 * 24 * 3600                   # a plan approval (sign --approve): at most 30 days, signed again on the same commit
+GRANT_SHOW_MAX, GRANT_SHOW_LINES = 2048, 40            # the pinned content a card shows, else its path, size and sha256
+GRANT_SPEC_MAX, GRANT_MAX = 64 << 10, 256 << 10
+TOUCH_PRS_MAX = 20                                     # the most PRs a plan row declares (kb_plan's TOUCH_COUNT_MAX)
+# what a plan signature never covers, whatever a row declares: a run or a baton change with these Stops (a widened boundary passes
+# every test; an act with no way back fails its criteria only after it), and a `secrets` run of any baton but these kit batons
+# (each asks the owner on the passphrase holder's page in its run, or, script-run's, runs only reviewed code and hands the session nothing)
+SIGN_AGAIN_STOPS = ("security-boundary", "irreversible-delete", "no-way-back", "history-rewrite")
+PLAN_SECRETS_KITS = ("vault-put-text", "vault-put-file", "credential-import", "credential-upload", "kubeconfig-install", "script-run",
+                     "script-run-upload")
+GRANT_PLAN_SHAPE = "{repo: <owner/name>, path: <a relative path>, commit: <a full commit sha>}"
+GRANT_KINDS = ("approval", "charter")
+CHARTER_LIFE_MAX = 90 * 24 * 3600                   # a focus charter (sign --charter): at most 90 days, or until its focus closes
+CHARTER_KINDS = ("baton", "workflow", "script", "test")   # what a charter may hold; config, other, rbac, admission, vault-policy never
+CHARTER_KEYS = ("focus", "repos", "kinds", "max_stops", "expires")
+CHARTER_REPOS_MAX = 10
+FOCUS_ID = re.compile(r"P[1-9][0-9]*\Z")              # a focus of the brain, as intake reads it
+BRAIN_TIMEOUT = 10                                     # `brain show`, read in the guard hook, whose own timeout is 20 s (hooks.json)
+
+
+def grants_dir():
+    return os.path.join(state_dir(), "grants")
+
+
+def plan_problem(p):
+    """Why p is not one plan {repo, path, commit}, or None."""
+    ok = (isinstance(p, dict) and set(p) == {"repo", "path", "commit"} and all(isinstance(v, str) for v in p.values())
+          and WORD_RE["repo"].match(p["repo"]) and WORD_RE["sha40"].match(p["commit"])
+          and path_problem("/" + p["path"]) is None and not p["path"].startswith("/"))
+    return None if ok else "is " + GRANT_PLAN_SHAPE
+
+
+def plan_text(p):
+    return shown("%s %s @ %s", p.get("repo"), p.get("path"), str(p.get("commit"))[:12]) if isinstance(p, dict) else shown("%s", p)
+
+
+def grant_log():
+    """What log.tsv says of the approval store: {"signed": {(id, body sha256)}, "revoked": {id: time}}."""
+    seen = {"signed": set(), "revoked": {}}
+    try:
+        with open(os.path.join(state_dir(), "log.tsv"), encoding="utf-8", errors="backslashreplace", newline="") as f:
+            lines = f.read().split("\n")   # shortcut: the whole log on every call, as `log` reads it; a rotation when it is slow
+    except OSError:
+        lines = []
+    for ln in lines:
+        f = ln.split("\t")
+        f = f[-len(LOG_FIELDS):]                        # a fragment glued before a line does not shift its fields
+        if len(f) < 12 or f[1] != "grant":
+            continue
+        out = f[11].split(" ")
+        if f[9] == "signed" and f[7] == "owner" and len(out) == 2:
+            seen["signed"].add((out[0], out[1]))
+        elif f[9] == "revoked":
+            seen["revoked"].setdefault(out[0], f[0])
+    return seen
+
+
+def load_grant(gid, seen=None, now=None, kind="approval"):
+    """(record, state, why) of the record `kind` (approval, charter; None: the one the file names): state is `in force` (why
+    None), absent or damaged (record None: nothing of it is trusted), `not in force` (no `grant signed` line names its body; or
+    another kind, record None: a charter is never read as an approval, nor the reverse, and a plan grant never: the grants were
+    removed), revoked or expired."""
+    now = time.time() if now is None else now
+    path = os.path.join(grants_dir(), gid + ".json")
+    if not os.path.lexists(path):
+        return None, "absent", "no grant %s" % gid
+    try:
+        g = json.loads(read_small(path, GRANT_MAX))
+    except (OSError, ValueError, RecursionError):
+        g = None
+    if kind is None:                                    # a reader of every kind (log --grants): the file's own, when it is one
+        kind = g.get("kind") if isinstance(g, dict) and g.get("kind") in GRANT_KINDS else "approval"
+    if isinstance(g, dict) and g.get("kind") != kind:   # another kind: nothing of it is read as this one
+        if g.get("kind") in GRANT_KINDS:
+            return None, "not in force", "grant %s is a%s %s, never read as a%s %s" % (
+                gid, "n" if g["kind"] == "approval" else "", g["kind"], "n" if kind == "approval" else "", kind)
+        return None, "not in force", "grant %s is a plan grant: grants were removed, so it is never in force" % gid
+    sig = g.get("signature") if isinstance(g, dict) else None
+    try:                                                # nested past what json.dumps encodes: no digest, so damaged, never a crash
+        digest = item_digest(g) if isinstance(g, dict) else None
+    except RecursionError:
+        digest = None
+    if (not isinstance(g, dict) or digest is None or g.get("id") != gid or iso_seconds(str(g.get("expires"))) is None
+            or kind == "approval" and (g.get("v") not in (1, 2) or g.get("v") == 2 and not isinstance(g.get("plans"), list)
+                                       or not isinstance(g.get("plan"), (dict, list)) or not isinstance(g.get("rows"), list))
+            or kind == "charter" and (g.get("v") != 1 or not isinstance(g.get("focus"), str)
+                                      or not all(isinstance(g.get(k), list) for k in ("repos", "kinds", "max_stops"))
+                                      or any(k not in CHARTER_KINDS for k in g["kinds"])     # the floor, read again
+                                      or any(w in SIGN_AGAIN_STOPS + ("owner-acts",) for w in g["max_stops"]))
+            or g.get("body_sha256") != digest
+            or not (isinstance(sig, dict) and sig.get("by") == "owner" and re.fullmatch(r"[0-9a-f]{32}", str(sig.get("dialog")))
+                    and sig.get("body_sha256") == g["body_sha256"])):
+        return None, "damaged", "grant %s is damaged: its bytes changed since the owner signed it, so it is never in force" % gid
+    seen = grant_log() if seen is None else seen
+    if (gid, g["body_sha256"]) not in seen["signed"]:
+        return g, "not in force", "grant %s is not in force: no `grant signed` line in the log names its body" % gid
+    mark = os.path.join(grants_dir(), gid + ".revoked")
+    if os.path.lexists(mark) or gid in seen["revoked"]:
+        return g, "revoked", "grant %s was revoked%s" % (gid, " at " + seen["revoked"][gid] if gid in seen["revoked"] else "")
+    if now > iso_seconds(g["expires"]):
+        return g, "expired", "grant %s expired at %s" % (gid, g["expires"])
+    return g, "in force", None
+
+
+def signed_grant(path, dialog, kind="approval"):
+    """The owner's plan approval or focus charter, once cmd_sign used up the dialog's record: the spec resolved again (a charter's
+    focus read again from the brain), its digest the one the dialog bound."""
+    d = ensure_state()
+    body, probs = approval_body(path) if kind == "approval" else charter_body(path)[:2]
+
+    def refuse(rc, why):
+        log_event(d, event="sign", result="refused", args=["--approve" if kind == "approval" else "--charter", path],
+                  dir=os.path.realpath(os.getcwd()), signed_by="owner", output=why)
+        raise Stop(rc, "sign refused: %s", why)
+
+    if probs:
+        refuse(USAGE if kind == "approval" else DATAERR, "the %s spec %s: %s" % (kind, path, "; ".join(probs)))
+    if RUN.get("asked_grant") != item_digest(body):
+        refuse(REFUSED, "the %s changed since the dialog showed it (%s), or the dialog showed another: show it and ask again" % (
+            kind, "the spec, a plan's rows or the directory" if kind == "approval" else "the spec, the focus's words or the directory"))
+    g = dict(body, id=os.urandom(8).hex(), env=steering(), created=now_iso(), session=session_id())
+    g["body_sha256"] = item_digest(g)
+    g["signature"] = {"by": "owner", "dialog": dialog, "time": now_iso(), "body_sha256": g["body_sha256"]}
+    try:
+        os.makedirs(grants_dir(), mode=0o700, exist_ok=True)
+        write_private(os.path.join(grants_dir(), g["id"] + ".json"), json.dumps(g, indent=1, sort_keys=True) + "\n")
+    except OSError as e:
+        raise Stop(ENV, "the %s cannot be written under %s: %s", kind, grants_dir(), e.strerror or e)
+    log_event(d, event="grant", result="signed", signed_by="owner", dir=g["dir"], output="%s %s" % (g["id"], g["body_sha256"]))
+    if kind == "charter":
+        n = len(g["repos"])
+        say("signed charter %s by owner: focus %s, %d repositor%s, kinds %s, %s, until %s, from %s; kit:merge-pr and go --row run from "
+            "there read it for a plan whose frontmatter says focus: %s, after the plan approvals",
+            g["id"], g["focus"], n, "y" if n == 1 else "ies", ", ".join(g["kinds"]),
+            "Stops at most " + ", ".join(g["max_stops"]) if g["max_stops"] else "no Stops", g["expires"], g["dir"], g["focus"])
+        return OK
+    of = (shown("%s %s", g["plan"][0]["repo"], g["plan"][0]["path"]) if len(g["plan"]) == 1
+          else shown("%d plans", len(g["plan"])))
+    say("signed approval %s by owner: %d row%s of %s, until %s, from %s; kit:merge-pr run from there merges a PR naming one of "
+        "them when its every trust-layer change is a touch of that row, up to the row's PRs, while the plan is as signed",
+        g["id"], len(g["rows"]), "" if len(g["rows"]) == 1 else "s", of, g["expires"], g["dir"])
+    return OK
+
+
+def grant_ids(seen):
+    """Every grant id there is a file or a `grant signed` line for."""
+    try:
+        ids = [n[:-len(".json")] for n in os.listdir(grants_dir()) if n.endswith(".json") and GRANT_ID.match(n[:-len(".json")])]
+    except OSError:
+        ids = []
+    return sorted(set(ids) | set(i for i, _b in seen["signed"] if GRANT_ID.match(i)))   # a signed line whose file is gone: absent
+
+
+def grant_list(rest):
+    if rest:
+        raise Stop(USAGE, "usage: baton.py log --grants")
+    seen = grant_log()
+    ids = grant_ids(seen)
+    if not ids:
+        say("grants: none")
+        return OK
+    rows = [(gid,) + load_grant(gid, seen, kind=None) for gid in ids]
+    for gid, g, state, why in sorted(rows, key=lambda r: (str((r[1] or {}).get("created", "")), r[0])):
+        if g is None:
+            say("%s  %s  (%s)", gid, state, why)
+            continue
+        say("%s  %s  %s, signed %s", gid, state, g["kind"], g.get("created"))
+        try:                                            # a file rewritten with its digest is never in force; still listed
+            if g["kind"] == "charter":
+                lines = charter_lines(g)
+            else:
+                used = [len(touch_uses(touch_key(r["plan"], r["row"]))) for r in g["rows"]]
+                lines = approval_lines(g) + [shown("  row %s of %s: %s", r["row"], plan_text(r["plan"]),
+                                                   "%d of %d PR(s) merged" % (n, r.get("prs") or 1) if n else "not merged yet")
+                                             for r, n in zip(g["rows"], used)]
+        except (AttributeError, TypeError, ValueError, KeyError):
+            lines = [shown("  (its rows cannot be read)")]
+        for ln in lines:
+            say("%s", ln)
+        if why:
+            say("  %s", why)
+    return OK
+
+
+def cmd_grant(rest):
+    """grant revoke <id>: the approval or charter ends at once, for any session (a narrowing: no dialog). The revoke file and the
+    log line each end it, so deleting one does not bring it back. grant revoke --focus <P>: each charter in force for that focus
+    signed from this project ends so (what the brain's `op close` or `op supersede` of the focus runs)."""
+    if rest[:2] == ["revoke", "--focus"]:
+        if len(rest) != 3 or not FOCUS_ID.match(rest[2]):
+            raise Stop(USAGE, "usage: baton.py grant revoke --focus <P>  (a focus of the brain, like P8; nothing follows it)")
+        root, key, _git = project_root()
+        here, seen = root or os.path.realpath(os.getcwd()), grant_log()
+        gs = charters_in_force(rest[2], here, key, seen)
+        if not gs:
+            say("no charter in force for %s from %s", rest[2], here)
+        for g in gs:
+            revoke_grant(g["id"], ensure_state(), seen, "the charter for %s ended" % rest[2])
+        return OK
+    if len(rest) != 2 or rest[0] != "revoke" or not GRANT_ID.match(rest[1]):
+        raise Stop(USAGE, "usage: baton.py grant revoke <id>  (the id log --grants shows)")
+    gid, d, seen = rest[1], ensure_state(), grant_log()
+    if not os.path.lexists(os.path.join(grants_dir(), gid + ".json")) and gid not in [i for i, _b in seen["signed"]]:
+        raise Stop(NOINPUT, "no grant %s", gid)
+    try:                                                # the line's wording only: a revoke never depends on the record's bytes
+        g = json.loads(read_small(os.path.join(grants_dir(), gid + ".json"), GRANT_MAX))
+    except (OSError, ValueError, RecursionError):
+        g = None
+    if isinstance(g, dict) and g.get("kind") == "charter":
+        return revoke_grant(gid, d, seen, "the charter for %s ended" % g.get("focus"))
+    return revoke_grant(gid, d, seen)
+
+
+def revoke_grant(gid, d, seen, ended="kit:merge-pr's guard no longer merges under it"):
+    """The revoke line, then the revoke file, of grant `gid`: either ends it; Stop(ENV) when neither could be written."""
+    mark, logged = os.path.join(grants_dir(), gid + ".revoked"), gid in seen["revoked"]
+    if not logged:                                      # first, and whether the file is there or not: the line alone ends it
+        try:
+            log_event(d, event="grant", result="revoked", output=gid)
+            logged = True
+        except OSError as e:
+            say("grant %s: the revoke line cannot be written to the log (%s)", gid, e.strerror or e)
+    marked = os.path.lexists(mark)
+    if not marked:                                      # the file alone ends it too: each record is written whatever the other did
+        try:
+            os.makedirs(grants_dir(), mode=0o700, exist_ok=True)
+            write_private(mark, now_iso() + "\n")
+            marked = True
+        except OSError as e:
+            say("grant %s: the revoke file cannot be written under %s (%s)", gid, grants_dir(), e.strerror or e)
+    if not (logged or marked):
+        raise Stop(ENV, "grant %s is NOT revoked: neither the log line nor the revoke file could be written", gid)
+    say("grant %s revoked: %s", gid, ended)
+    return OK
+
+
+# ── plan approvals ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# A plan approval is the owner's one signature of a plan read at a pinned commit: its intent and spec (sha256), the spec's criteria
+# and every row's cells with their `Trust touches`: kit:merge-pr's guard (gates/merge_guard.py, `touches`) merges a PR of a row
+# without the owner when every trust-layer change it makes is one of them, up to the row's PRs, while the plan is as signed. Its
+# record (`kind: approval`) is kept in the approval store above: the same dialog, lineage, directory binding, `grant signed` line,
+# revoke and `log --grants`; it runs no step.
+GH_READ_TIMEOUT = 30
+
+
+def gh_raw(path):
+    """(text, None) of a file read through `gh api` (raw contents), else (None, why); a 404 is (None, "not found")."""
+    exe = shutil.which("gh")
+    if not exe:
+        return None, "no gh on PATH"
+    try:
+        p = subprocess.run([exe, "api", "-H", "Accept: application/vnd.github.raw", path], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=GH_READ_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, "gh api timed out after %d s" % GH_READ_TIMEOUT
+    if p.returncode != 0:
+        err = p.stderr.decode("utf-8", "replace").strip()
+        return None, "not found" if "HTTP 404" in err else "gh api failed: %s" % err[:200]
+    try:
+        return p.stdout.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, "not UTF-8"
+
+
+KB_PLAN = []                                           # kb_plan, once loaded (no sys.modules: signing-rules reads that as a reach)
+
+
+def kb_plan_module():
+    """kb_plan.py beside this file, loaded by its path when an approval first reads a plan: no other command needs it."""
+    if not KB_PLAN:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)                    # for kb_plan's own `import kb_index`
+        spec = importlib.util.spec_from_file_location("kb_plan", os.path.join(here, "kb_plan.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        KB_PLAN.append(mod)
+    return KB_PLAN[0]
+
+
+def plan_at(p):
+    """(the plan {repo, path, commit} parsed at its commit, None) or (None, why)."""
+    text, why = gh_raw("repos/%s/contents/%s?ref=%s" % (p["repo"], p["path"], p["commit"]))
+    return (kb_plan_module().read_plan_text(text, p["path"]), None) if text is not None else (None, why)
+
+
+def repo_judges(repo):
+    """(the paths that judge a later PR in `repo`, by its config at its default branch, None) or (None, why)."""
+    text, why = gh_raw("repos/%s/contents/.vibemaestro/sdlc.json" % repo)
+    if text is None and why != "not found":
+        return None, "its config cannot be read (%s)" % why
+    try:
+        cfg = json.loads(text) if text is not None else {}
+    except ValueError:
+        return None, "its config is not JSON"
+    return kb_plan_module().judges(cfg), None
+
+
+def stops_problem(stops):
+    """Why a baton touch's Stops (as stops_of joins them) is not stop words, `none` or `removed`, or None."""
+    ws = stops.split(", ")
+    return None if stops in ("none", "removed") or all(w in STOP_WORDS for w in ws) else (
+        "Stops %s: stop words (%s), none or removed" % (stops, ", ".join(STOP_WORDS)))
+
+
+def run_floor(t):
+    """Why a run touch is the floor (it signs again whatever the plan declares), or None."""
+    ws = (t.get("stops") or "").split(", ")
+    hit = [w for w in SIGN_AGAIN_STOPS if w in ws]
+    if hit:
+        return "its Stops hold %s, which sign again at every run" % ", ".join(hit)
+    stem = t["path"].split(":", 1)[1] if t["path"].startswith("kit:") else None
+    if "secrets" in ws and stem not in PLAN_SECRETS_KITS:
+        return "a secrets run of a baton outside the kit batons a plan covers (%s)" % ", ".join(PLAN_SECRETS_KITS)
+    return None
+
+
+def base_stops(repo, path):
+    """(the Stops of baton `path` at `repo`'s default branch: its words, `none`, `new` or `no Stops line`; None) or (None, why)."""
+    text, why = gh_raw("repos/%s/contents/%s" % (repo, urllib.parse.quote(path, safe="/")))
+    if text is None:
+        return ("new", None) if why == "not found" else (None, why)
+    return stops_of(text) or "no Stops line", None
+
+
+def stops_dropped(base, head):
+    """The SIGN_AGAIN_STOPS words a baton's base Stops hold and its head's do not (head None: no Stops line), in their order; none
+    for a deleted baton (`removed`): it has no next run to leave the floor with."""
+    b, h = (base or "").split(", "), (head or "").split(", ")
+    return [] if head == "removed" else [w for w in SIGN_AGAIN_STOPS if w in b and w not in h]
+
+
+def approval_row(r, doc, judged):
+    """(the approved row {plan, row, cells, touches, prs, cell}, problems) of spec row r in its plan as read at the commit (doc): its
+    cells but Link, its parsed touches, each floor one with its reason (`floor`) and a baton's Stops at the default branch (`base`),
+    its PRs. A floor touch the cell does not mark `(signs again)` is refused."""
+    p, kp = r["plan"], kb_plan_module()
+    at = shown("row %s of %s", r["row"], plan_text(p))
+    same = [x for x in doc["rows"] if x["id"].lower() == r["row"].lower()]
+    if not any(x["id"] == r["row"] for x in same):
+        return None, [shown("%s: no such row at that commit", at)]
+    if len(same) > 1:
+        return None, [shown("%s: rows %s have ids equal ignoring case, so a PR's plan line could name either", at,
+                            ", ".join(x["id"] for x in same))]
+    row = same[0]
+    if row["link"]["dropped"] is not None:
+        return None, [shown("%s: dropped at that commit (%s)", at, row["link"]["dropped"])]
+    cell, probs = kp.parse_cell(row["touches"], p["repo"])
+    if cell is None:
+        return None, [shown("%s: no Trust touches cell (`none` when it changes no trust layer)", at)]
+    probs = [shown("%s: %s", at, x) for x in probs]
+    for t in cell["touches"]:
+        if t["stops"] and (stops_problem(t["stops"]) or t["kind"] == "run" and t["stops"] == "removed"):
+            probs.append(shown("%s: %s %s", at, t["path"], stops_problem(t["stops"]) or "Stops removed is a baton change's, not a run's"))
+        floor = None
+        if t["kind"] == "run":
+            floor = run_floor(t)
+        else:
+            if t["repo"].lower() not in judged:          # one read of each repository's config
+                judged[t["repo"].lower()] = repo_judges(t["repo"])
+            js = judged[t["repo"].lower()]
+            if js[0] is None:
+                probs.append(shown("%s: %s: %s", at, t["repo"], js[1]))
+            elif kp.is_judge(t["path"], js[0]):
+                floor = "it judges every later PR in %s (the config, an adapter, the planner, a touch check's input, " \
+                        ".vibemaestro/gates/)" % t["repo"]
+            if kp.plugin_path(t["path"]):
+                floor = floor or "a .claude-plugin path: it chooses the code every machine installs"
+            if t["kind"] == "baton":
+                k = ("base", t["repo"].lower(), t["path"])  # one read of each baton, as of each repository's config
+                judged[k] = judged[k] if k in judged else base_stops(t["repo"], t["path"])
+                t["base"], why = judged[k]
+                if why:
+                    probs.append(shown("%s: %s: its Stops at the default branch cannot be read (%s)", at, t["path"], why))
+                lost = stops_dropped(t["base"], t["stops"])
+                floor = floor or ("its Stops drop %s, which the default branch holds" % ", ".join(lost) if lost else None)
+        if floor:
+            t["floor"] = floor
+            if not t["again"]:
+                probs.append(shown("%s: %s %s is the floor, never covered by a plan signature: %s; mark it (signs again)", at,
+                                   t["kind"], t["path"], floor))
+    return {"plan": p, "row": r["row"], "cells": kp.row_cells(row), "touches": cell["touches"], "prs": cell["prs"],
+            "cell": row["touches"]}, probs
+
+
+def plan_bound(p, doc):
+    """({plan, intent, spec, criteria}, problems) of a plan read at its commit: the intent and the spec its preamble names, each
+    {path, sha256} read at that commit, and the spec's acceptance criteria (numbered items)."""
+    kp = kb_plan_module()
+    paths, probs = kp.plan_refs(doc)
+    probs = [shown("%s: %s", plan_text(p), x) for x in probs]
+    out, text = {"plan": p, "criteria": []}, None
+    for key, rel in zip(("intent", "spec"), paths):
+        if rel is None:
+            continue
+        text, why = gh_raw("repos/%s/contents/%s?ref=%s" % (p["repo"], urllib.parse.quote(rel, safe="/"), p["commit"]))
+        if text is None:
+            probs.append(shown("%s: its %s %s cannot be read at its commit: %s", plan_text(p), key, rel, why))
+        out[key] = {"path": rel, "sha256": sha256(text) if text is not None else None}
+    if paths[1] is not None and text is not None:
+        out["criteria"] = kp.criteria(text)
+        if not out["criteria"]:
+            probs.append(shown("%s: its spec %s has no acceptance criteria (numbered items under `## %s`)", plan_text(p), paths[1],
+                               " or `## ".join(kp.CRITERIA_HEADINGS)))
+    return out, probs
+
+
+def approval_body(path):
+    """(body, problems) of the approval spec at `path`, an absolute path: {v, kind, plan, plans, expires, dir, dir_key, rows}: each
+    plan read at its pinned commit, with its intent, spec and criteria (plan_bound), and every row of it not dropped, or, while
+    the spec still lists `rows`, those rows only; each row with its cells and parsed touches (approval_row)."""
+    try:
+        spec = json.loads(read_small(path, GRANT_SPEC_MAX))
+    except (OSError, ValueError, RecursionError) as e:
+        return None, ["the approval spec %s cannot be read as JSON of at most %d bytes: %s" % (path, GRANT_SPEC_MAX, getattr(e, "strerror", None) or e)]
+    if not isinstance(spec, dict) or set(spec) not in ({"plan", "expires"}, {"plan", "expires", "rows"}) or (
+            "rows" in spec and not isinstance(spec["rows"], list)):
+        return None, ["the approval spec is an object of exactly plan and expires (every row of each plan), or plan, expires and "
+                      "rows (those rows only)"]
+    plan, rows, probs = spec["plan"], spec.get("rows"), []        # rows None: no `rows` key, every row
+    if not isinstance(plan, list) or not 0 < len(plan) <= GRANT_PLANS_MAX:
+        probs.append("plan is a list of 1 to %d plans, each %s" % (GRANT_PLANS_MAX, GRANT_PLAN_SHAPE))
+        plan = plan if isinstance(plan, list) else []
+    probs += ["plan %d %s" % (j, plan_problem(p)) for j, p in enumerate(plan, 1) if plan_problem(p)]
+    probs += ["plan %d is listed twice" % j for j, p in enumerate(plan, 1) if p in plan[:j - 1]]
+    exp, now = iso_seconds(str(spec["expires"])), time.time()
+    if exp is None or iso_at(exp) != spec["expires"] or not now < exp <= now + APPROVAL_LIFE_MAX:
+        probs.append("expires is a UTC time YYYY-MM-DDTHH:MM:SSZ after now and at most %d days ahead" % (APPROVAL_LIFE_MAX // 86400))
+    if rows is not None:
+        if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) and set(r) == {"plan", "row"} and isinstance(r["row"], str)
+                                                             and r["plan"] in plan for r in rows):
+            return None, probs + ["rows is a non-empty list of {plan: one of the plans, row: its id}"]
+        keys = [(json.dumps(r["plan"], sort_keys=True), r["row"].lower()) for r in rows]
+        probs += [shown("row %s of %s is listed twice (ids are compared ignoring case)", r["row"], plan_text(r["plan"]))
+                  for j, r in enumerate(rows) if keys[j] in keys[:j]]
+        probs += [shown("plan %d (%s) has no row listed", j, plan_text(p)) for j, p in enumerate(plan, 1)
+                  if plan_problem(p) is None and p not in [r["plan"] for r in rows]]
+    if probs:
+        return None, probs
+    judged, out, bound = {}, [], []
+    for p in plan:
+        doc, why = plan_at(p)
+        if doc is None:
+            probs.append(shown("%s cannot be read at its commit: %s", plan_text(p), why))
+            continue
+        b, pb = plan_bound(p, doc)
+        probs += pb
+        bound.append(b)
+        mine = ([r for r in rows if r["plan"] == p] if rows is not None else
+                [{"plan": p, "row": x["id"]} for x in doc["rows"] if x["link"]["dropped"] is None])
+        if not mine:
+            probs.append(shown("%s has no row that is not dropped", plan_text(p)))
+        for r in mine:
+            got, pr = approval_row(r, doc, judged)
+            probs += pr
+            out.append(got)
+    if probs:
+        return None, probs
+    root, key, _git = project_root()
+    body = {"v": 2, "kind": "approval", "plan": plan, "plans": bound, "expires": spec["expires"],
+            "dir": root or os.path.realpath(os.getcwd()), "dir_key": key, "rows": out}
+    if len(json.dumps(body, indent=1, sort_keys=True)) > GRANT_MAX - GRANT_SPEC_MAX:
+        return None, ["the approval is over %d bytes as JSON: approve fewer plans" % (GRANT_MAX - GRANT_SPEC_MAX)]
+    return body, []
+
+
+def touch_text(t):
+    """One touch as the card says it, every character outside ASCII escaped (a lookalike name shows as what it is)."""
+    if t.get("kind") == "run":
+        s = "run %s Stops: %s runs: %s" % (t.get("path"), t.get("stops"), t.get("runs"))
+    else:
+        s = "%s %s:%s%s%s" % (t.get("kind"), t.get("repo"), t.get("path"), " " + t["object"] if t.get("object") else "",
+                              " Stops: " + t["stops"] if t.get("stops") else "")
+        s += " (default branch: %s)" % t["base"] if t.get("base") else ""
+    s += " (signs again)" if t.get("again") else ""
+    return "".join(c if c < "\x80" else "\\u{%x}" % ord(c) for c in s)
+
+
+def approval_lines(g):
+    """What the owner signs, from the approval's own fields: the card the dialog and `log --grants` show."""
+    lines = [shown("  Dir:      %s (a merge run from any other project directory is not covered)", g.get("dir")),
+             shown("  Until:    %s", g.get("expires"))]
+    rows = [r for r in g.get("rows") or [] if isinstance(r, dict)]
+    for p in g["plan"]:
+        lines.append(shown("  Plan:     %s", plan_text(p)))
+        b = next((x for x in g.get("plans") or [] if isinstance(x, dict) and x.get("plan") == p), None)
+        if b is not None:
+            for k in ("intent", "spec"):
+                lines.append(shown("  %-9s %s sha256 %s", k.capitalize() + ":", b[k]["path"], str(b[k]["sha256"])[:12]))
+            crit = b.get("criteria") or []
+            if len("\n".join(crit).encode("utf-8")) > GRANT_SHOW_MAX or len(crit) > GRANT_SHOW_LINES:
+                lines.append(shown("  Criteria: %d, too many to show here: read them in the spec above", len(crit)))
+            else:
+                lines += [shown("  %s %d. %s", "Criteria:" if i == 1 else "         ", i, c) for i, c in enumerate(crit, 1)]
+        for r in [r for r in rows if r.get("plan") == p]:
+            ts, prs = r.get("touches") or [], r.get("prs") or 1
+            lines.append(shown("  Row %s:%s%s", r.get("row"), " PRs: %d" % prs if prs > 1 else "",
+                               "" if ts else " none (it changes no trust layer)"))
+            lines += [shown("            %s", touch_text(t)) for t in ts]
+    again = [(r, t) for r in rows for t in r.get("touches") or [] if t.get("again") or t.get("floor")]
+    if again:
+        lines.append(shown("  Signs again (an owner merge, or the owner's dialog at each run; never under this signature):"))
+        lines += [shown("    row %s: %s: %s", r.get("row"), touch_text(t), t.get("floor") or "the plan marks it") for r, t in again]
+    typed = [(r, t) for r in rows for t in r.get("touches") or [] if t.get("kind") == "run" and not (t.get("again") or t.get("floor"))
+             and "secrets" in (t.get("stops") or "").split(", ")]
+    if typed:
+        lines.append(shown("  The owner types, on the passphrase holder's page, what a baton asks (a value or a file); the GPG passphrase once per "
+                           "approval, held at most 24 h (a kit:script-run run is closed to the hold when its script starts, and the "
+                           "handover's token hold, after the script, asks the owner again); kit:script-run reads a Vault field with no ask:"))
+        lines += [shown("    row %s: %s, %d run(s)", r.get("row"), t.get("path"), t.get("runs") or 1) for r, t in typed]
+    return lines
+
+
+def touch_key(plan, row):
+    """The key of one use of a plan row, as the log records it: the plan {repo, path, commit} and the row, never the approval (a
+    charter pins no commit: commit None, the key touch_row gives an approval's, so both count the same uses)."""
+    at = "@%s" % plan["commit"] if plan.get("commit") is not None else ""
+    return "%s:%s%s#%s" % (str(plan.get("repo")).lower(), plan.get("path"), at, str(row).lower())
+
+
+def touch_row(key):
+    """A use key without its commit (and its use number): the row's PRs count, so neither an approval signed again (on that commit
+    or a later one) nor one pinning the plan at two commits merges a used row again."""
+    return re.sub(r"/[0-9]+$", "", re.sub(r"@[0-9a-f]{40}#", "#", key))
+
+
+def touch_mark(key, n=1):
+    """The marker of use n of a row (the first keeps the name it had when a row merged once)."""
+    return os.path.join(state_dir(), "touches", sha256(touch_row(key) + ("" if n == 1 else "/%d" % n)))
+
+
+def touch_uses(key):
+    """The use numbers merges took of this row, at any commit of its plan: their markers, or their `touches used` log lines
+    (either record says so; a line's key ends `/<n>` past the first use)."""
+    used = set(n for n in range(1, TOUCH_PRS_MAX + 1) if os.path.lexists(touch_mark(key, n)))
+    try:
+        with open(os.path.join(state_dir(), "log.tsv"), encoding="utf-8", errors="backslashreplace", newline="") as f:
+            for ln in f.read().split("\n"):
+                x = ln.split("\t")[-len(LOG_FIELDS):]
+                if len(x) >= 12 and x[1] == "touches" and x[9] == "used" and touch_row(x[11]) == touch_row(key):
+                    m = re.search(r"/([0-9]+)$", x[11])
+                    used.add(int(m.group(1)) if m else 1)
+    except OSError:
+        pass
+    return used
+
+
+def take_touch(key, gid, what, prs=1, kind="approval"):
+    """A use of a row, taken right before its merge under the approval or charter (`kind`) gid: the first of its `prs` use numbers
+    no record names, its marker created with O_EXCL (two merges at once never both get one), then the `touches used` line. The
+    number taken, or None when none was left."""
+    d = os.path.join(ensure_state(), "touches")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    used = touch_uses(key)
+    for n in range(1, min(prs, TOUCH_PRS_MAX) + 1):
+        if n in used:
+            continue
+        try:
+            os.close(os.open(touch_mark(key, n), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+        except FileExistsError:
+            continue
+        log_event(ensure_state(), event="touches", result="used", name="kit:merge-pr", args=[what], signed_by=kind + ":" + gid,
+                  output=key if n == 1 else "%s/%d" % (key, n))
+        return n
+    return None
+
+
+def approvals_for(repo, path, row):
+    """([(approval, its row)] in force, signed from this project directory, that list `row` of the plan {repo, path} at any commit
+    (repo None: of any repository), newest first; [(id, why)] of each approval that lists it but is not usable here)."""
+    seen = grant_log()
+    root, key, _git = project_root()
+    here = root or os.path.realpath(os.getcwd())
+    try:
+        ids = [n[:-len(".json")] for n in os.listdir(grants_dir()) if n.endswith(".json") and GRANT_ID.match(n[:-len(".json")])]
+    except OSError:
+        ids = []
+    found, near = [], []
+    for gid in sorted(ids):
+        g, state, why = load_grant(gid, seen)
+        if g is None and state == "not in force":       # a plan grant left from before the grants were removed: no approval
+            continue
+        if g is None:
+            near.append((gid, why))
+            continue
+        mine = [r for r in g["rows"] if isinstance(r, dict) and r.get("row") == row and isinstance(r.get("plan"), dict)
+                and (repo is None or str(r["plan"].get("repo")).lower() == repo.lower()) and r["plan"].get("path") == path]
+        if not mine:
+            continue
+        if state != "in force":
+            near.append((gid, why))
+        elif (g.get("dir"), g.get("dir_key")) != (here, key):
+            near.append((gid, "approval %s was signed from %s, not from %s" % (gid, g.get("dir"), here)))
+        else:
+            found += [(g, r) for r in mine]
+    return sorted(found, key=lambda x: (str(x[0].get("created")), x[0]["id"]), reverse=True), near
+
+
+# ── focus charters ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# A focus charter is the owner's one signature for a focus of the brain (P<n>): the repositories, touch kinds and maximum Stops of
+# every plan of that focus, until an expiry at most CHARTER_LIFE_MAX ahead or the focus ends. `sign --by owner --charter <spec>`
+# takes the same guard, dialog, record, `grant signed` line and directory binding as `--approve`; the focus is read through the
+# brain installed beside this copy, as intake reads it, and its words (text, quote, done when, not doing) are shown and bound by
+# their digest. Its record (`kind: charter`, v 1) is never read as an approval (load_grant), and an older kit, which reads
+# approvals only, never treats it as in force; kit:merge-pr's guard and `go --row` read it after the approvals (charter_plan_row).
+def brain_script():
+    """The brain.py of the vibemaestro-brain installed beside this sdlc copy, or None: intake's lookup (intent_branch.brain_script),
+    kept here so the owner's guard imports no more of sdlc. This copy is <plugins>/cache/<marketplace>/vibemaestro-sdlc/<version>,
+    <plugins>/installed_plugins.json (version 2) lists it as vibemaestro-sdlc@<marketplace>, and the brain's latest entry wins."""
+    me = plugin_real()
+    market_dir = os.path.dirname(os.path.dirname(me))
+    if os.path.basename(os.path.dirname(me)) != SDLC or os.path.basename(os.path.dirname(market_dir)) != "cache":
+        return None
+    try:
+        reg = json.loads(read_small(os.path.join(os.path.dirname(os.path.dirname(market_dir)), "installed_plugins.json"),
+                                    MAX_REGISTRY, nofollow=False))
+        ids, market = (reg["plugins"] if reg.get("version") == 2 else {}), os.path.basename(market_dir)
+        if not any(isinstance(x.get("installPath"), str) and os.path.isabs(x["installPath"]) and os.path.realpath(x["installPath"]) == me
+                   for x in ids.get("%s@%s" % (SDLC, market), [])):
+            return None                                 # a cache-shaped directory the registry does not list as this copy
+        e = max((x for x in ids["vibemaestro-brain@%s" % market] if isinstance(x.get("installPath"), str)
+                 and os.path.isabs(x["installPath"])), key=lambda x: str(x.get("lastUpdated") or ""))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return None
+    p = os.path.join(os.path.realpath(e["installPath"]), "scripts", "brain.py")
+    return p if os.path.isfile(p) else None
+
+
+def focus_item(focus):
+    """(the brain's item of `focus`, None), read as intake reads it: `brain show <P> --json` of the brain installed beside this
+    copy (brain_script), for the project of the working directory, the one the charter binds (no session id: the brain would
+    read the session's recorded project first); else (None, why)."""
+    brain = brain_script()
+    if brain is None:
+        return None, "no brain answers here (vibemaestro-brain is not installed beside this sdlc copy): a charter reads its focus there"
+    try:
+        r = subprocess.run([sys.executable, brain, "show", focus, "--json"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=BRAIN_TIMEOUT, universal_newlines=True, errors="replace",
+                           env={k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"})
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, "the brain did not answer: %s" % e
+    try:
+        it = json.loads(r.stdout) if r.returncode == 0 else None
+    except ValueError:
+        it = None
+    if not isinstance(it, dict):
+        return None, "%s is not an open focus of this brain (brain show: %s)" % (
+            focus, (r.stderr or r.stdout).strip()[:200] or "rc %d" % r.returncode)
+    if it.get("kind") != "focus" or it.get("status") != "live":
+        return None, "%s is not an open focus of this brain (it is a %s item, %s)" % (focus, it.get("kind"), it.get("status"))
+    return it, None
+
+
+def focus_words(it):
+    """What the card shows of the focus: its text, goal, the owner's quote and where, done when and not doing; focus_sha256 is
+    their digest, so a word changed between the dialog and the click is not signed."""
+    src = it.get("source") if isinstance(it.get("source"), dict) else {}
+    return {"text": it.get("text"), "goal": it.get("goal"), "quote": src.get("quote"), "where": src.get("where"),
+            "done": it.get("done"), "not_doing": it.get("not_doing")}
+
+
+def charters_in_force(focus, here, key, seen=None):
+    """[charter] in force for `focus` signed from the directory `here` or from another worktree of its repository (`key`)."""
+    seen = grant_log() if seen is None else seen
+    out = []
+    for gid in grant_ids(seen):
+        g, state, _why = load_grant(gid, seen, kind="charter")
+        if state == "in force" and g["focus"] == focus and (g.get("dir") == here or key is not None and g.get("dir_key") == key):
+            out.append(g)
+    return out
+
+
+def charter_for(focus):
+    """(the charter in force for `focus` signed from this project directory, as approvals_for binds an approval, None), else (None,
+    why), naming each charter for the focus that is not usable here: what a merge or a `go --row` run reads after the approvals."""
+    seen = grant_log()
+    root, key, _git = project_root()
+    here, near = root or os.path.realpath(os.getcwd()), []
+    for gid in grant_ids(seen):
+        g, state, why = load_grant(gid, seen, kind="charter")
+        if g is None or g["focus"] != focus:
+            continue
+        if state != "in force":
+            near.append(why)
+        elif (g.get("dir"), g.get("dir_key")) != (here, key):
+            near.append("charter %s was signed from %s, not from %s" % (gid, g.get("dir"), here))
+        else:
+            return g, None
+    return None, "no charter in force for %s signed from this directory%s" % (focus, "".join("; " + w for w in near))
+
+
+def outside_charter(g, repo, kind, stops):
+    """Why a change of `kind` in `repo` (kind None: a run), with these Stops (words, a list), lies outside charter g's envelope;
+    None when it lies inside."""
+    if repo is not None and repo.lower() not in [str(r).lower() for r in g["repos"]]:
+        return "its repository %s is outside charter %s's repos (%s)" % (repo, g["id"], ", ".join(map(str, g["repos"])))
+    if kind is not None and kind not in g["kinds"]:
+        return "kind %s is outside charter %s's kinds (%s)" % (kind, g["id"], ", ".join(map(str, g["kinds"])))
+    beyond = [w for w in stops if w not in g["max_stops"]]
+    return ("Stops %s go beyond charter %s's max_stops (%s)" % (", ".join(beyond), g["id"], ", ".join(map(str, g["max_stops"]))
+                                                                 or "none") if beyond else None)
+
+
+def charter_body(path):
+    """(body, problems, the focus's brain item) of the charter spec at `path`, an absolute path: {v, kind, focus, focus_sha256,
+    repos, kinds, max_stops, expires, dir, dir_key}, the focus live in the brain with its done when, none in force for it here."""
+    try:
+        spec = json.loads(read_small(path, GRANT_SPEC_MAX))
+    except (OSError, ValueError, RecursionError) as e:
+        return None, ["the charter spec %s cannot be read as JSON of at most %d bytes: %s" % (
+            path, GRANT_SPEC_MAX, getattr(e, "strerror", None) or e)], None
+    if not isinstance(spec, dict) or set(spec) != set(CHARTER_KEYS):
+        return None, ["the charter spec is an object of exactly focus, repos, kinds, max_stops and expires"], None
+    focus, repos, kinds, stops, probs = spec["focus"], spec["repos"], spec["kinds"], spec["max_stops"], []
+    if not (isinstance(repos, list) and 0 < len(repos) <= CHARTER_REPOS_MAX
+            and all(isinstance(r, str) and WORD_RE["repo"].match(r) for r in repos) and len({r.lower() for r in repos}) == len(repos)):
+        probs.append("repos is a list of 1 to %d owner/name, no repository twice" % CHARTER_REPOS_MAX)
+    if not (isinstance(kinds, list) and kinds and all(isinstance(k, str) for k in kinds) and len(set(kinds)) == len(kinds)):
+        probs.append("kinds is a non-empty list of %s, none twice" % ", ".join(CHARTER_KINDS))
+    else:
+        probs += ["kinds: %s is none of %s: it stays with a plan approval or the owner's merge" % (k, ", ".join(CHARTER_KINDS))
+                  for k in kinds if k not in CHARTER_KINDS]
+    if not (isinstance(stops, list) and all(isinstance(w, str) for w in stops) and len(set(stops)) == len(stops)):
+        probs.append("max_stops is a list of baton stop words, none twice")
+    else:
+        for w in stops:
+            if w in SIGN_AGAIN_STOPS:
+                probs.append("max_stops: %s signs again at every run: never inside a charter" % w)
+            elif w == "owner-acts":
+                probs.append("max_stops: owner-acts means the owner does the act: never inside an envelope that removes the owner's "
+                             "dialog")
+            elif w not in STOP_WORDS:
+                probs.append("max_stops: %s is not a baton stop word (%s)" % (w, ", ".join(STOP_WORDS)))
+    exp, now = iso_seconds(str(spec["expires"])), time.time()
+    if exp is None or iso_at(exp) != spec["expires"] or not now < exp <= now + CHARTER_LIFE_MAX:
+        probs.append("expires is a UTC time YYYY-MM-DDTHH:MM:SSZ after now and at most %d days ahead" % (CHARTER_LIFE_MAX // 86400))
+    it = None
+    if not (isinstance(focus, str) and FOCUS_ID.match(focus)):
+        probs.append("focus is a focus of the brain, like P8")
+    else:
+        it, why = focus_item(focus)
+        if why:
+            probs.append(why)
+        elif not (isinstance(it.get("done"), str) and it["done"].strip()):
+            probs.append("%s has no `done when`: a charter needs the owner's words for when the focus is done (brain op supersede %s "
+                         "--done-when …)" % (focus, focus))
+        root, key, _git = project_root()
+        here = root or os.path.realpath(os.getcwd())
+        probs += ["a charter for %s is in force from %s: %s until %s; grant revoke %s first (no dialog: a narrowing), then sign "
+                  "again" % (focus, g.get("dir"), g["id"], g.get("expires"), g["id"]) for g in charters_in_force(focus, here, key)]
+    if probs:
+        return None, probs, it
+    words = json.dumps(focus_words(it), sort_keys=True, separators=(",", ":"))
+    return {"v": 1, "kind": "charter", "focus": focus, "focus_sha256": sha256(words), "repos": repos, "kinds": kinds,
+            "max_stops": stops, "expires": spec["expires"], "dir": here, "dir_key": key}, [], it
+
+
+def charter_lines(g):
+    """A charter's envelope, from its own fields: what `log --grants` and the card show."""
+    stops = [str(w) for w in g.get("max_stops") or []]
+    return [shown("  Focus:     %s (its words sha256 %s)", g.get("focus"), str(g.get("focus_sha256"))[:12]),
+            shown("  Dir:       %s (a merge or a run from any other project directory is not covered)", g.get("dir")),
+            shown("  Repos:     %s", ", ".join(map(str, g.get("repos") or []))),
+            shown("  Kinds:     %s", ", ".join(map(str, g.get("kinds") or []))),
+            shown("  Stops:     %s", "at most " + ", ".join(stops) if stops else "none (only touches and runs with no Stops)"),
+            shown("  Until:     %s, or the close or supersede of %s in the brain (either revokes this charter), whichever comes first",
+                  g.get("expires"), g.get("focus"))]
+
+
+def charter_card(g, it):
+    """The dialog's card of a charter: the focus and its words as the brain holds them, the envelope, what it covers, what never,
+    and what the owner types."""
+    w = focus_words(it)
+    head = [shown("baton: the owner signs a charter for focus %s %s (goal %s):", g["focus"], w["text"], w["goal"]),
+            shown('  Quote:     "%s" · %s', w["quote"], w["where"]), shown("  Done when: %s", w["done"])]
+    head += [shown("  Not doing: %s", w["not_doing"])] if w["not_doing"] else []
+    tail = [shown("  Covers:    the merges and `go --row` runs of every plan whose frontmatter says `focus: %s`, when every change is a "
+                  "touch its row declares and inside this envelope, as many PRs and runs as the row says", g["focus"]),
+            shown("  Never:     the floor (the judge paths and every touch_inputs path, a .claude-plugin path, a baton or run with %s or "
+                  "%s, a secrets run of a baton outside %s, a signing-rules finding of kind other, a touch marked (signs again)), nor "
+                  "any touch outside this envelope: those stay a plan approval or the owner's merge", ", ".join(SIGN_AGAIN_STOPS[:-1]),
+                  SIGN_AGAIN_STOPS[-1], ", ".join(PLAN_SECRETS_KITS)),
+            shown("  The owner types: %s", "the GPG passphrase on the passphrase holder's page, once for the focus's charter-covered secrets runs, "
+                  "held at most 24 h" if "secrets" in g["max_stops"] else "nothing under this charter (a secrets run is outside it)"),
+            shown("Your click is the owner's signature; the session never answers this dialog for you.")]
+    return shown_join("\n", head + charter_lines(g) + tail)
+
+
+# ── plan-covered runs ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+# `go --row <plan line> <baton> <args>`: where plain go stops for the owner (exit 8), a run touch of a row the owner's approval
+# holds covers the call, else one of the row of a plan of the focus of the owner's charter (charter_row). It is signed in that
+# process, plan:<approval or charter>/<row>/<n>, never as a file; matched again right before the run phase, where use n of the
+# touch is taken with O_EXCL (a marker under touches/ and a `touches used` line, keyed by the row and the baton without the
+# commit, as a merge's use is, so an approval and a charter count the same uses), and its spent record is left in used/ as an
+# owner-signed run's is, with signed_by plan:… and `approval` (the approval's id) in place of a dialog, or `charter` (its id) and
+# `touch` (the run touch it matched): what the passphrase holder reads. No code is bound: the baton's Stops are read from the bytes that run.
+ROW_LINE = re.compile(r"(?:([A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+):)?(kb/plans/[A-Za-z0-9._/-]+\.md)#([A-Za-z0-9][A-Za-z0-9._-]*)\Z")
+
+
+def run_key(plan, row, word):
+    """The use key of a row's run touch of a baton: the row's own key (touch_key) and the baton."""
+    return "%s run %s" % (touch_key(plan, row), word)
+
+
+def tip_why(g, r):
+    """Why row r of approval g is not as the owner signed it at the default branch's tip of its plan's repository (read through
+    gh api, so a read that fails is a why): the row dropped there, a cell of it other than Link, its plan's intent or spec. None
+    when it is."""
+    p, row, kp, at = r["plan"], r["row"], kb_plan_module(), "the default branch's tip"
+    bound = [x for x in g.get("plans") or [] if isinstance(x, dict) and x.get("plan") == p]
+    if g.get("v") != 2 or len(bound) != 1:
+        return shown("approval %s binds no intent, spec or row cells (signed before a plan signature bound them): sign the plan "
+                     "again", g["id"])
+    text, why = gh_raw("repos/%s/contents/%s" % (p["repo"], urllib.parse.quote(p["path"], safe="/")))
+    if text is None:
+        return shown("the plan %s %s cannot be read at %s: %s", p["repo"], p["path"], at, why)
+    doc = kp.read_plan_text(text, p["path"])
+    same = [x for x in doc["rows"] if x["id"].lower() == row.lower()]
+    if [x["id"] for x in same] != [row]:
+        return shown("row %s is not one row of the plan at %s", row, at)
+    if same[0]["link"]["dropped"] is not None:
+        return shown("row %s is dropped at %s (%s)", row, at, same[0]["link"]["dropped"])
+    moved = [] if kp.row_cells(same[0]) == r.get("cells") else ["row %s's cells" % row]
+    for key, rel in zip(("intent", "spec"), kp.plan_refs(doc)[0]):
+        b = bound[0].get(key) or {}
+        got, why = (gh_raw("repos/%s/contents/%s" % (p["repo"], urllib.parse.quote(rel, safe="/"))) if rel is not None and
+                    rel == b.get("path") else (None, None))
+        if why and why != "not found":
+            return shown("its %s %s cannot be read at %s: %s", key, rel, at, why)
+        if got is None or sha256(got) != b.get("sha256"):
+            moved.append("its %s %s" % (key, b.get("path")))
+    if moved:
+        return shown("the plan changed since the owner signed it (%s, at %s): sign it again", ", ".join(moved), at)
+    return None
+
+
+def run_covered(g, r, s):
+    """((approval or charter, row, touch, use key, use n), None) when a run touch of row r of approval or charter g covers this
+    call of s, else (None, why) for the first part that did not match: a run touch naming the baton; not marked (signs again) nor
+    the floor, then or now (the call's Stops, the header's at run time, hold no SIGN_AGAIN_STOPS word, and `secrets` only for
+    PLAN_SECRETS_KITS); those Stops within the touch's, and a charter's max_stops; a project: baton reviewed on origin's default
+    branch; a use left; an approval's plan as signed at the tip (a charter's row was read there)."""
+    row, word, first = r["row"], s.word, None
+    for t in [t for t in r.get("touches") or [] if isinstance(t, dict) and t.get("kind") == "run" and t.get("path") == word]:
+        why, got = touch_why(g, r, t, s)
+        if why is None:
+            return got, None
+        first = first or why
+    return None, first or shown("row %s declares no run of %s", row, word)
+
+
+def touch_why(g, r, t, s):
+    """(why the run touch t of row r of approval g does not cover this call of s, None) in run_covered's order, each read only
+    when the cheaper ones before it hold; else (None, (approval, row, touch, use key, use n))."""
+    row, word = r["row"], s.word
+    stops, declared = s.call_stops(), [] if t.get("stops") == "none" else str(t.get("stops")).split(", ")
+    floor = run_floor({"stops": ", ".join(stops), "path": word})
+    if t.get("again"):
+        return shown("row %s marks the run of %s (signs again)", row, word), None
+    if t.get("floor"):
+        return shown("the run of %s is the floor: %s", word, t["floor"]), None
+    if floor:
+        return shown("%s: %s", word, floor), None
+    if any(w not in declared for w in stops):
+        return shown("the Stops of %s (%s) go beyond the row's (%s)", word, ", ".join(stops), t.get("stops")), None
+    beyond = outside_charter(g, None, None, stops) if g["kind"] == "charter" else None
+    if beyond:
+        return shown("the run of %s: %s", word, beyond), None
+    review = reviewed_on(s.kept, s.data) if s.kept is not None else (True, None)
+    if review[0] is None:
+        return shown("%s is not reviewed on origin's default branch: %s", word, review[1] or "it is not a project: baton in git"), None
+    key, runs = run_key(r["plan"], row, word), t.get("runs") or 1
+    used = touch_uses(key)
+    free = [n for n in range(1, min(runs, TOUCH_PRS_MAX) + 1) if n not in used]
+    if not free:
+        return shown("row %s's runs of %s are used up (%d of %d)", row, word, len(used), runs), None
+    why = tip_why(g, r) if g["kind"] == "approval" else None
+    return (why, None) if why else (None, (g, r, t, key, free[0]))
+
+
+def row_cover(line, s):
+    """((approval or charter, row, touch, use key, use n), None) when the owner's plan approval, else charter, covers this call of
+    s under the plan line (repo or None, path, row): an approval in force, signed from this project directory, holding the row (of
+    the one repository that holds it, when the line names none), with a run touch that covers it (run_covered); else, for a line
+    that names its repository, a charter (charter_row); else (None, why), the charter's why after the approvals'."""
+    repo, path, row = line
+    found, near = approvals_for(repo, path, row)
+    repos = sorted(set(str(r["plan"].get("repo")).lower() for _g, r in found))
+    if len(repos) > 1:
+        return None, shown("row %s of %s is in the plans of %s: name its repository (<owner/repo>:%s#%s)", row, path,
+                           ", ".join(repos), path, row)
+    first = None if found else shown("no approval in force signed from this directory holds row %s of %s%s", row,
+                                     (repo + " " if repo else "") + path, "".join("; " + w for _g, w in near))
+    for g, r in found:
+        got, why = run_covered(g, r, s)
+        if got is not None:
+            return got, None
+        first = first or why
+    got, why = charter_row(line, s) if repo is not None else (None, None)   # a charter pins no plan: the line names its repository
+    return (got, None) if got is not None else (None, shown("%s; %s", first, why) if why else first)
+
+
+def charter_row(line, s):
+    """((charter, row, touch, use key, use n), None) when a charter covers this call of s under the plan line (repo, path, row): the
+    plan read at its repository's default branch's tip, its row as charter_plan_row reads it, and a run touch of the row that
+    covers the call (run_covered). Else (None, why), why None when the plan is not there or has no focus: only approvals read it."""
+    repo, path, row = line
+    text, why = gh_raw("repos/%s/contents/%s" % (repo, urllib.parse.quote(path, safe="/")))
+    if text is None:
+        return None, None if why == "not found" else shown("the plan %s %s cannot be read at the default branch's tip: %s", repo,
+                                                           path, why)
+    g, _r, cell, why = charter_plan_row(kb_plan_module().read_plan_text(text, path), repo, path, row)
+    if g is None:
+        return None, shown("%s", why) if why else None
+    got, why = run_covered(g, {"plan": {"repo": repo, "path": path, "commit": None}, "row": row, "touches": cell["touches"]}, s)
+    return (got, None) if got is not None else (None, shown("charter %s for %s: %s", g["id"], g["focus"], why))
+
+
+def charter_plan_row(doc, repo, path, row):
+    """(charter, the row, its parsed Trust touches cell, None) of row `row` of the plan `path` of `repo` as doc holds it (read at
+    the default branch's tip; None: not there), read after the approvals: the plan says `focus: <P>`; a charter in force for P
+    signed from this project directory (charter_for) lists `repo`; `path` is written plainly (no `.` or `..` part, which GitHub
+    resolves to the same file under another use key); the row is one row of it, not dropped, its cell parsed whole, each run touch
+    on the floor marked as an approval's dialog marks it. Else (None, None, None, why): why None for a plan that is not there or
+    has no focus, else naming the charter and the first part that fails."""
+    focus = (doc or {}).get("focus")
+    if not focus:
+        return None, None, None, None
+    g, why = charter_for(focus)
+    if g is None:
+        return None, None, None, why
+    same = [x for x in doc["rows"] if x["id"].lower() == row.lower()]
+    cell, probs = kb_plan_module().parse_cell(same[0]["touches"], repo) if [x["id"] for x in same] == [row] else (None, [])
+    if repo.lower() not in [str(x).lower() for x in g["repos"]]:
+        why = "the plan's repository %s is outside its repos (%s)" % (repo, ", ".join(map(str, g["repos"])))
+    elif posixpath.normpath(path) != path:
+        why = "the plan's path %s is not written plainly (%s)" % (path, posixpath.normpath(path))
+    elif [x["id"] for x in same] != [row]:
+        why = "row %s is not one row of the plan at the default branch's tip" % row
+    elif same[0]["link"]["dropped"] is not None:
+        why = "row %s is dropped at the default branch's tip (%s)" % (row, same[0]["link"]["dropped"])
+    elif cell is None or probs:
+        why = "row %s's Trust touches cell %s" % (row, "is empty" if cell is None else "does not parse: " + "; ".join(probs))
+    if why:
+        return None, None, None, "charter %s for %s: %s" % (g["id"], focus, why)
+    for t in cell["touches"]:
+        if t["kind"] == "run" and run_floor(t):
+            t["floor"] = run_floor(t)
+    return g, same[0], cell, None
+
+
+def take_run(key, n, signer, word):
+    """Use n of a run touch, taken right before its run phase: its marker created with O_EXCL (two runs at once never both get
+    it), then the `touches used` line. False when a record already names it."""
+    os.makedirs(os.path.join(ensure_state(), "touches"), mode=0o700, exist_ok=True)
+    if n in touch_uses(key):
+        return False
+    try:
+        os.close(os.open(touch_mark(key, n), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+    except FileExistsError:
+        return False
+    log_event(ensure_state(), event="touches", result="used", name=word, signed_by=signer, output=key if n == 1 else "%s/%d" % (key, n))
+    return True
+
+
 # ── commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 def kinds():
     try:
@@ -4754,6 +5835,18 @@ def cmd_sign(rest):
         if rest[1] != "owner" or len(rest) != 4 or not QUEUE_ID.match(rest[3]):
             raise Stop(USAGE, "usage: baton.py sign --by owner --queued <id>  (only the owner signs a queued item; nothing follows the id)")
         return signed_queued(rest[3], owner_signs(asked))
+    if rest[2:3] and rest[2].split("=")[0] == "--grant":
+        raise Stop(USAGE, "sign --grant: the plan grants were removed; the owner signs a plan's trust-layer touches with --approve")
+    if rest[2:3] == ["--approve"]:                      # a plan approval: the owner only, one absolute spec path after it
+        if rest[1] != "owner" or len(rest) != 4 or not os.path.isabs(rest[3]):
+            raise Stop(USAGE, "usage: baton.py sign --by owner --approve <absolute path of the approval spec>  (only the owner signs "
+                              "an approval; nothing follows the path)")
+        return signed_grant(rest[3], owner_signs(asked))
+    if rest[2:3] == ["--charter"]:                      # a focus charter: the owner only, one absolute spec path after it
+        if rest[1] != "owner" or len(rest) != 4 or not os.path.isabs(rest[3]):
+            raise Stop(USAGE, "usage: baton.py sign --by owner --charter <absolute path of the charter spec>  (only the owner signs "
+                              "a charter; nothing follows the path)")
+        return signed_grant(rest[3], owner_signs(asked), "charter")
     by, rest = rest[1], rest[2:]
     while rest and rest[0].startswith("--") and rest[0] != "--":
         if rest[0] == "--seal" and len(rest) > 1 and seal is None:
@@ -4881,11 +5974,48 @@ def cmd_run(rest):
     return rc
 
 
-def signed_run(path, args, quiet=None, preamble=None, queued=None):
+# A run phase that exits UNANSWERED_RC with the last line UNANSWERED_LINE: its ask of the owner got no answer in time, nothing written.
+UNANSWERED_RC, UNANSWERED_LINE, REARM_MAX = 75, "VERDICT run unanswered", 3
+
+
+def given_back(d, s, rec, spent):
+    """After an unanswered run phase whose undo passed: the owner's record this run spent from signatures/ (spent: its path in
+    used/, None for any other signature) linked back to signatures/<binding>.json, never over a record there, for a kit: baton
+    whose header declares Stops: secrets, at most REARM_MAX times per owner dialog. (k, None) when it is back, k counting the
+    records of that dialog in used/ (one per run of the signature, this one included); (None, why) when it stays spent."""
+    if spent is None or rec.get("signed_by") != "owner" or not s.kit or "secrets" not in s.stops()[0]:
+        return None, "only the owner's signature from signatures/ of a kit: baton whose Stops declares secrets comes back"
+    used, back = os.path.dirname(spent), os.path.join(d, "signatures", rec["binding"] + ".json")
+
+    def record(p):                                      # a regular file's JSON, else None: a FIFO would block the run here
+        try:
+            return load_json(p) if stat.S_ISREG(os.lstat(p).st_mode) else None
+        except (OSError, RecursionError):
+            return None
+
+    def of_dialog(n):
+        r = record(os.path.join(used, n)) if n.endswith("-%s.json" % rec["binding"]) else None
+        return isinstance(r, dict) and r.get("dialog") == rec["dialog"]
+    try:
+        if record(spent) != rec:
+            return None, "the spent record is not the one this run checked"
+        k = len([n for n in os.listdir(used) if of_dialog(n)])
+        if k > REARM_MAX:
+            return None, "it came back %d times already: have the call signed again" % REARM_MAX
+        os.link(spent, back)                            # fails on a record there: the call was signed again meanwhile
+    except OSError as e:
+        return None, "it cannot go back to %s (%s)" % (back, e.strerror or e)
+    return k, None
+
+
+def signed_run(path, args, quiet=None, preamble=None, queued=None, planned=None):
     """The body of `run`: (exit code, result, the log line it wrote, the run log's path). The result is the log line's: ok,
-    run-failed, run-diverged, postcheck-failed, interrupted or error; a refusal raises Stop(REFUSED). With `quiet` (go), the
+    run-failed, run-diverged, postcheck-failed, interrupted, error, or `unanswered <k>/3` when given_back gave the owner's
+    signature back (exit UNDONE); a refusal raises Stop(REFUSED). With `quiet` (go), the
     output goes to that sink and the run log instead of stdout, and the run log starts with `preamble` (a Held of go's earlier steps).
-    queued: (path, item) of a signed queued item (queued_call): its signature, not one of signatures/, and it moves to queue/used/."""
+    queued: (path, item) of a signed queued item (queued_call): its signature, not one of signatures/, and it moves to queue/used/.
+    planned: (plan line, record) of a call `go --row` matched: a signature plan:<approval or charter>/<row>/<n> held in this process only;
+    right before the run phase the call is matched again, use n taken (take_run) and the record written to used/ as spent."""
     s = Script(path)
     need_bash()
     d = ensure_state()
@@ -4898,7 +6028,9 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
         log_event(d, event="run", result=result, signed_by=signer, output=output, **common)
         raise Stop(REFUSED, "run refused, nothing ran: %s", why)
 
-    if queued is None:
+    if planned is not None:                             # go --row's match: go's own binding, so bytes changed since go read them do not match
+        sig, rec = None, planned[1]
+    elif queued is None:
         sig = os.path.join(d, "signatures", binding + ".json")
         rec = load_json(sig) if os.path.exists(sig) else None
         if rec is None:
@@ -4914,7 +6046,7 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
                                                        "in, or queue it again)" % item["id"]))
     signer = rec.get("signed_by")
     stops, _u = s.stops()
-    why = allowed(signer, mode, stops, s.value_why())
+    why = None if planned is not None else allowed(signer, mode, stops, s.value_why())   # a plan run's check is its match, below
     if why is None and signer == "owner" and (rec.get("v") != 2 or not rec.get("dialog")):
         why = "the signature names no owner's dialog (a baton that signs without one wrote it): have it signed again"
     if why:
@@ -4936,7 +6068,7 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
         for out in sinks:
             header_summary(s, out)
             say("signed by %s at %s; mode %s; binding %s", signer, rec.get("time"), mode, binding[:12], out=out)
-        result, undone, consumed = None, None, False
+        result, undone, consumed, spent, unanswered, taken = None, None, False, None, False, None
         ufd, undo_only = tempfile.mkstemp(prefix=".undo-only-", dir=d)   # the paths the run keeps only for its undo
         os.close(ufd)
         started = time.time() - 2                       # a file system's coarse clock: a file the run wrote is never older
@@ -4956,13 +6088,33 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
                 if state != "signed" or again != item:
                     refuse(queue_why(item["id"], state, again) if state != "signed" else "item %s changed meanwhile" % item["id"],
                            signer, out_path)
-            try:
-                os.rename(sig, os.path.join(d, "used", "%s-%s.json" % (stamp, binding)) if queued is None
-                          else os.path.join(queue_dir(), "used", item["id"] + ".json"))
+            spent = os.path.join(d, "used", "%s-%s.json" % (stamp, binding)) if queued is None else None
+            if planned is not None:                     # matched again here: an expiry, a revoke, a changed plan or another run since loses
+                got, pwhy = row_cover(planned[0], s)
+                now = "plan:%s/%s/%d" % (got[0]["id"], got[1]["row"], got[4]) if got else None
+                if now != signer:
+                    refuse("the owner's %s no longer covers this call as %s: %s" % (
+                        "charter" if "charter" in rec else "plan approval", signer, pwhy or "it would now be " + now), signer, out_path)
+                if not take_run(got[3], got[4], signer, s.word):
+                    refuse("another run took use %d of %s under row %s; run the call again for a use still left" % (
+                        got[4], s.word, got[1]["row"]), signer, out_path)
+                taken = got[4]
+                if "touch" in rec:                      # the run touch this match used, not go's: the row may have moved since
+                    rec["touch"] = dict(got[2], plan=got[1]["plan"]["path"], row=got[1]["row"])
+                try:
+                    write_private(spent, json.dumps(rec, indent=1, sort_keys=True) + "\n")
+                except OSError as e:
+                    refuse("the spent record cannot be written to %s (%s); use %d stays taken" % (spent, e.strerror or e, got[4]),
+                           signer, out_path)
                 consumed = RUN["consumed"] = True
-            except OSError:
-                refuse("the signature was used meanwhile", signer, out_path)
+            else:
+                try:
+                    os.rename(sig, spent or os.path.join(queue_dir(), "used", item["id"] + ".json"))
+                    consumed = RUN["consumed"] = True
+                except OSError:
+                    refuse("the signature was used meanwhile", signer, out_path)
             rc, lines, done = run_phase(s, args, "run", sinks, plan=rec.get("plan") or [], undo_only=undo_only)
+            unanswered = rc == UNANSWERED_RC and lines[-1:] == [UNANSWERED_LINE]
             if rc != 0 or not verdict_ok(lines, "run"):
                 result = "run-failed"
             elif done != plan:
@@ -4979,7 +6131,8 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
         except (KeyboardInterrupt, Interrupted, Exception) as e:
             what = "interrupted" if isinstance(e, (KeyboardInterrupt, Interrupted)) else "error"
             if not consumed:
-                refuse("%s before the run phase (%s); the signature is still unused" % (what, type(e).__name__), signer,
+                refuse("%s before the run phase (%s); %s" % (what, type(e).__name__, "the signature is still unused" if taken is None
+                       else "use %d of the plan row stays taken" % taken), signer,
                        out_path, result=what + "-before-run")
             say("baton: %s during the run (%s: %s)", what, type(e).__name__, e, out=logf)
             result, undone = what, "no"
@@ -4987,11 +6140,19 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None):
             for sig in (signal.SIGTERM, signal.SIGHUP):  # the run is over: let the log line and the report through
                 signal.signal(sig, signal.SIG_IGN)
             drop_undo_only(undo_only, result == "ok" or undone == "yes", sinks, started)
+        back = why = None
+        if unanswered and result == "run-failed" and undone == "yes":
+            back, why = given_back(d, s, rec, spent)
+            result = "unanswered %d/%d" % (back, REARM_MAX) if back else result
         logged = log_event(d, event="run", signed_by=signer, result=result, undone=undone, output=out_path, **common)
         if result == "ok":
             msg = "run ok: %s did what it planned and the post-check holds" % s.name
+        elif back:
+            msg = ("no answer from the owner in time; undo put the state back and the signature is back (%d of %d): run the same "
+                   "call again" % (back, REARM_MAX))
         elif undone == "yes":
-            msg = "run FAILED (%s); undo put the state back" % result
+            msg = "run FAILED (%s); undo put the state back%s" % (
+                result, "; no answer from the owner in time, and the signature stays spent: " + why if why else "")
         elif undone == "failed":
             msg = "run FAILED (%s) and undo FAILED: the state is unknown, tell the owner" % result
         else:
@@ -5177,10 +6338,22 @@ def cmd_go(rest):
     """rehearse, sign --by coordinator-auto and run in one process: the same functions in turn, so the same checks. A baton the
     session may not sign stops after rehearse with the owner's decision card and exit 8; `go` never signs as owner. When every
     step holds it prints one line; a failing step prints its whole output."""
-    usage = ("usage: baton.py go [--by coordinator-auto | --queue] [--reuse] <script|-> [args...]  (- reads the script from stdin; "
-             "%s--queue leaves a run that needs the owner in the queue for them)"
-             % ("" if in_sandbox() else "the owner signs with `sign --by owner`; "))    # a pod never signs as the owner
+    usage = ("usage: baton.py go [--by coordinator-auto | --queue | --row <plan line>] [--reuse] <script|-> [args...]  (- reads "
+             "the script from stdin; %s--queue leaves a run that needs the owner in the queue for them; --row runs a baton a row "
+             "of the owner's plan approval or charter declares)" % ("" if in_sandbox() else "the owner signs with `sign --by owner`; "))
     by = reuse = queue = False
+    row = planned = rowline = None
+    if rest and rest[0].split("=")[0] == "--grant":
+        raise Stop(USAGE, "%s: go --grant: the plan grants were removed; a run the session may not sign stops for the owner", usage)
+    if rest and rest[0].split("=")[0] == "--row":       # a run a row of the owner's plan approval may cover
+        m = ROW_LINE.match(rest[1]) if rest[0] == "--row" and len(rest) > 1 else None
+        if not m:
+            raise Stop(USAGE, "%s: go --row takes a plan line [<owner/repo>:]kb/plans/<file>.md#<row>, then the baton", usage)
+        if in_sandbox():
+            raise Stop(USAGE, "go --row in a sandbox session: a plan's runs are the coordinator's, on the owner's machine")
+        row, rest = m.groups(), rest[2:]
+        if rest and (rest[0] in ("--by", "--queue") or rest[0].startswith("--by=")):
+            raise Stop(USAGE, "%s: --row goes first and alone (then --reuse); never with --by or --queue", usage)
     if rest and rest[0] == "--queue":                   # a run that needs the owner waits in the queue, not in a dialog
         if in_sandbox():
             raise Stop(USAGE, "go --queue in a sandbox session: the owner never signs there, so nothing is queued")
@@ -5194,11 +6367,17 @@ def cmd_go(rest):
         if rest[0] != "--by" or len(rest) < 2 or rest[1] != "coordinator-auto":
             raise Stop(USAGE, "%s: go signs only as coordinator-auto", usage)
         by, rest = True, rest[2:]
+    if rest and rest[0].split("=")[0] == "--row":
+        raise Stop(USAGE, "%s: --row goes first and alone (then --reuse); never with --by or --queue", usage)
     if rest and rest[0] == "--reuse":
         reuse, rest = True, rest[1:]
     if rest and rest[0].startswith("-") and rest[0] not in ("--", "-"):
-        raise Stop(USAGE, "%s (--by or --queue once, first; then --reuse once; no other option: the seal is go's own rehearse)", usage)
+        raise Stop(USAGE, "%s (--by, --queue or --row once, first; then --reuse once; no other option: the seal is go's own "
+                          "rehearse)", usage)
     path, args = script_and_args(rest, usage)
+    if row is not None and (path == "-" or place_of(path) not in ("kit", "project")):
+        raise Stop(USAGE, "go --row runs a kit: or project: baton that a row declares, never a user: baton, a session file or a "
+                          "kind:")
     call = list(args)                                   # as given: run --queued binds them again
     if path == "-" and reuse:
         raise Stop(USAGE, "%s (--reuse runs a file again; a script from stdin is fresh by construction)", usage)
@@ -5249,6 +6428,15 @@ def cmd_go(rest):
         why = allowed("coordinator-auto", mode, stops, s.value_why())
         if queue and not why:
             raise Stop(USAGE, "go --queue: %s needs no owner here (mode %s, Stops none): go without --queue runs it", s.name, mode)
+        if why and row is not None:                     # where go would stop for the owner, the owner's approval or charter may cover it
+            planned, rwhy = row_cover(row, s)
+            if planned is None:
+                rowline = shown("go --row: not covered by the owner's plan approval: %s", rwhy)
+                log_event(ensure_state(), event="go", result="not-covered", name=s.name, script=s.sha[:12], args=args,
+                          dir=os.path.realpath(os.getcwd()), mode=mode, output="%s:%s#%s" % (row[0] or "-", row[1], row[2]),
+                          baton=s.baton_id())
+            else:
+                why = None
         if why:
             d = ensure_state()
             stamp = "%s-%d" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), os.getpid())
@@ -5279,6 +6467,8 @@ def cmd_go(rest):
             say("script: %s", s.real)
             if needs_quoting(s, args):                  # the guard asks only for a literal command: not widened for a value
                 say("on the owner's go: %s", quoting_note(needs_quoting(s, args)))
+                if rowline:
+                    say("%s", rowline)
                 say("go: stopped after rehearse (exit %d, waiting for the owner): %s", OWNER, why)
                 return OWNER
             if in_sandbox():                            # a pod has no owner: the guard refuses its sign, so no sign line
@@ -5295,6 +6485,8 @@ def cmd_go(rest):
             else:
                 say("on the owner's go: %s", sign_cmd)
                 say("then:              %s", run_cmd)
+            if rowline:
+                say("%s", rowline)
             say("go: stopped after rehearse (exit %d, waiting for the owner): %s", OWNER, why)
             return OWNER
         say("go: rehearse ok", out=held)
@@ -5304,20 +6496,43 @@ def cmd_go(rest):
             log_event(ensure_state(), event="go", result="reuse", name=s.name, script=s.sha[:12], args=args,
                       dir=os.path.realpath(os.getcwd()), mode=mode, baton=s.baton_id())
         step, sheld = "sign", Held()
-        try:
-            rc = signed("coordinator-auto", seal, path, args, sheld)
-        except BaseException:
-            sys.stdout.write(sheld.text())
-            raise
-        if rc != OK:
-            sys.stdout.write(sheld.text())
-            say("go: stopped at sign (exit %d): the rehearse at signing failed", rc)
-            return rc
-        held.write(sheld.text())
-        say("go: sign ok", out=held)
+        if planned is not None:                         # a run touch of the owner's approval or charter: a signature in this process only
+            g, r, t, _key, n = planned
+            cwd, env = os.path.realpath(os.getcwd()), steering()
+            rec = {"v": 2, "binding": binding_of(s.bind_sha, args, cwd, env, s.inputs), "script_path": s.real,
+                   "script_sha256": s.sha, "args": args, "cwd": cwd, "env": env, "plan_sha256": plan_sha(plan), "plan": plan,
+                   "stops": s.call_stops(), "signed_by": "plan:%s/%s/%d" % (g["id"], r["row"], n), "approval": g["id"],
+                   "mode": mode, "time": now_iso()}
+            if g["kind"] == "charter":                  # the passphrase holder reads no plan: the touch, with the row that declares it
+                del rec["approval"]
+                rec.update(charter=g["id"], touch=dict(t, plan=r["plan"]["path"], row=r["row"]))
+            if s.inputs is not None:
+                rec["inputs"] = s.inputs
+            log_event(ensure_state(), event="sign", result="signed", name=s.name, script=s.sha[:12], binding=rec["binding"][:12],
+                      args=args, dir=cwd, signed_by=rec["signed_by"], mode=mode, baton=s.baton_id())
+            if g["kind"] == "charter":
+                say("go: signed %s: run %d of %d of %s under row %s of %s %s at the default branch's tip, charter %s for %s",
+                    rec["signed_by"], n, t.get("runs") or 1, s.word, r["row"], r["plan"]["repo"], r["plan"]["path"], g["id"],
+                    g["focus"], out=held)
+            else:
+                say("go: signed %s: run %d of %d of %s under row %s of %s, approval %s", rec["signed_by"], n, t.get("runs") or 1,
+                    s.word, r["row"], plan_text(r["plan"]), g["id"], out=held)
+            planned = (row, rec)
+        else:
+            try:
+                rc = signed("coordinator-auto", seal, path, args, sheld)
+            except BaseException:
+                sys.stdout.write(sheld.text())
+                raise
+            if rc != OK:
+                sys.stdout.write(sheld.text())
+                say("go: stopped at sign (exit %d): the rehearse at signing failed", rc)
+                return rc
+            held.write(sheld.text())
+            say("go: sign ok", out=held)
         step, rheld = "run", Held()
         try:
-            rc, result, _line, out_path = signed_run(path, args, quiet=rheld, preamble=held)
+            rc, result, _line, out_path = signed_run(path, args, quiet=rheld, preamble=held, planned=planned)
         except Stop:
             sys.stdout.write(rheld.text())
             withdraw()
@@ -5332,10 +6547,11 @@ def cmd_go(rest):
             say("go: stopped at %s (exit %d): %s", "post-check" if at_check else "run", rc, result)
             return rc if rc != OK else UNKNOWN
         step = "log"
+        tail = " — " + planned[1]["signed_by"] if planned else ""
         if s.kept is None:
-            say("go: ok — %d write%s — %s", len(plan), "" if len(plan) == 1 else "s", out_path)
+            say("go: ok — %d write%s — %s%s", len(plan), "" if len(plan) == 1 else "s", out_path, tail)
         else:                                           # go holds the sign line back: its one line carries the label
-            say("go: ok — %d write%s — %s — %s %s", len(plan), "" if len(plan) == 1 else "s", out_path, s.word, s.label())
+            say("go: ok — %d write%s — %s — %s %s%s", len(plan), "" if len(plan) == 1 else "s", out_path, s.word, s.label(), tail)
         return OK
     except Stop as e:
         say("go: stopped at %s (exit %d): %s", step, e.rc, e.text)
@@ -5371,6 +6587,10 @@ def cmd_log(rest):
         return queue_list(rest[1:])
     if rest[:1] == ["--wait-queued"]:
         return queue_wait(rest[1:])
+    if rest[:1] == ["--grants"]:
+        return grant_list(rest[1:])
+    if rest[:1] == ["--digest"]:
+        return digest_list(rest[1:])
     n = 20
     if rest == ["--last"]:
         try:
@@ -5387,7 +6607,7 @@ def cmd_log(rest):
             n = int(rest[1])
         else:
             raise Stop(USAGE, "usage: baton.py log [--tail N]  (N >= 1), or log --last, or log --wait-names N1,N2,... [--timeout S] "
-                              "[--since T], or log --queue, or log --wait-queued <id> [--timeout S]")
+                              "[--since T], or log --queue, or log --wait-queued <id> [--timeout S], or log --digest [--since T] [--plan <id>]")
     try:
         with open(os.path.join(state_dir(), "log.tsv"), encoding="utf-8", errors="backslashreplace", newline="") as f:
             lines = f.read().split("\n")[:-1]
@@ -5396,6 +6616,176 @@ def cmd_log(rest):
     for ln in lines[-n:]:
         say("%s", shown_join("\t", ln.split("\t")))     # the columns of log.tsv: each value escaped there already
     return OK
+
+
+DIGEST_BACK = re.compile(r"([1-9][0-9]{0,3})([hd])")
+DIGEST_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")   # strptime alone takes t, z, one digit, wide digits
+
+
+def digest_list(rest):
+    """log --digest: what was done since a time that the owner did not sign, grouped by plan signature. First the runs and merges
+    under no approval or charter, a count per signer and the approvals in force; then each approval in force or with an act in
+    the window: its state, each row's PRs merged and each run touch's runs used, its merges and its runs (plan:<id>/<row>/<n>);
+    each charter with an act or a hold line in the window: its state and focus, its merges and runs; last the owner's own
+    signatures in the window, by kind. --plan <id>: that approval or charter alone, since it was signed unless --since says
+    otherwise. Reads only."""
+    usage = ("usage: baton.py log --digest [--since <N>h|<N>d|YYYY-MM-DDTHH:MM:SSZ] [--plan <id>]  (N 1-9999; default 24h, or "
+             "with --plan since the approval was signed)")
+    now, since, only, opts = time.time(), None, None, list(rest)
+    while opts:
+        if len(opts) < 2 or opts[0] not in ("--since", "--plan") or (since if opts[0] == "--since" else only) is not None:
+            raise Stop(USAGE, "%s", usage)
+        if opts[0] == "--plan":
+            if not GRANT_ID.match(opts[1]):
+                raise Stop(USAGE, "%s (--plan %s)", usage, opts[1])
+            only = opts[1]
+        else:
+            m = DIGEST_BACK.fullmatch(opts[1])
+            since = (now - int(m.group(1)) * (3600 if m.group(2) == "h" else 86400) if m
+                     else iso_seconds(opts[1]) if DIGEST_TIME.fullmatch(opts[1]) else None)
+            if since is None:
+                raise Stop(USAGE, "%s (--since %s)", usage, opts[1])
+        opts = opts[2:]
+    seen = grant_log()
+    if only is not None:
+        g, state, _why = load_grant(only, seen, now, kind=None)
+        if state == "absent" and only not in [i for i, _b in seen["signed"]]:
+            raise Stop(NOINPUT, "no approval %s", only)
+        since = since if since is not None else iso_seconds(str((g or {}).get("created"))) or 0
+    since = now - 86400 if since is None else since
+    try:
+        with open(os.path.join(state_dir(), "log.tsv"), encoding="utf-8", errors="backslashreplace", newline="") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        lines = []
+    recs = [f for f in (ln.split("\t")[-len(LOG_FIELDS):] for ln in lines) if len(f) >= 12]   # a glued fragment does not shift its fields
+    ended = {f[11] for f in recs if f[1] == "run"}      # the run logs that have a `run` line: a start with none was killed or is still going
+    top, counts, acts, owner = [], {}, {}, dict.fromkeys(("grant", "sign", "merge", "queue"), 0)
+    for f in recs:
+        t = iso_seconds(f[0])
+        if t is not None and t < since:                 # a time that cannot be read is listed: the window never hides a line
+            continue
+        if f[7] == "owner":                             # the owner's own signatures: counted by kind, never listed
+            if f[9] == "signed" and f[1] in ("grant", "sign", "queue"):
+                owner[f[1]] += 1
+                owner["merge"] += int(f[1] == "sign" and len(f) > 12 and f[12].startswith("kit:merge-pr@"))
+            continue
+        under = (f[7].split(":", 1)[1] if f[7].startswith(("approval:", "charter:")) else
+                 f[7][len("plan:"):].split("/")[0] if f[7].startswith("plan:") else None)
+        if f[1] == "run" and f[9] != "refused" and not f[9].endswith("-before-run"):
+            line = [f[0], f[2], f[7], f[9], f[10]]
+        elif f[1] == "run-start" and f[11] not in ended:
+            line = [f[0], f[2], f[7], "unfinished", "-"]
+        elif f[1] == "touches" and f[9] == "used" and not f[7].startswith("plan:"):   # a run's use: its run line lists it
+            line = [f[0], f[2], f[7], "touches " + f[11], "-"] + ([first_arg(f[5])] if under else [])   # under it: the PR too
+        else:
+            continue                                    # a refused attempt, a marker, or a start that has its end line
+        who = f[7].split(":", 1)[0] if f[7].startswith(("approval:", "charter:", "plan:")) else f[7]
+        counts[who] = counts.get(who, 0) + 1
+        (acts.setdefault(under, []) if under else top).append(shown_join("\t", line))
+    holds, note = hold_events(since)
+    if only is None:
+        say("digest since %s", iso_at(since))
+        for r in top:
+            say("%s", r)
+        say("signers: %s", ", ".join("%s %d" % (k, n) for k, n in sorted(counts.items())) or "none")
+        live = [(gid,) + load_grant(gid, seen, now)[:2] for gid in grant_ids(seen)]
+        live = [(gid, g) for gid, g, state in live if state == "in force"]
+        say("approvals in force: %s", ", ".join("%s until %s" % (gid, g["expires"]) for gid, g in live) or "none")
+        held = {k.split("-", 1)[1] for k in holds if k.startswith(("approval-", "charter-")) and GRANT_ID.fullmatch(k.split("-", 1)[1])}
+        ids = sorted(set(acts) | set(gid for gid, _g in live) | held)     # an ended approval's hold lines are listed too
+    else:
+        say("digest since %s, %s %s", iso_at(since), (g or {}).get("kind") or "approval", only)
+        ids = [only]
+    if note:
+        say("%s", note)
+    for gid in ids:
+        g, state, why = load_grant(gid, seen, now, kind=None) if GRANT_ID.match(gid) else (None, None, None)
+        if (g or {}).get("kind") == "charter" or g is None and "charter-" + gid in holds:   # never a dead approval
+            say("%s", shown("charter %s: %s until %s, focus %s, signed %s from %s", gid, state, g.get("expires"), g.get("focus"),
+                            g.get("created"), g.get("dir")) if g else shown("charter %s: %s (%s)", gid, state, why))
+            for a in acts.get(gid, []):
+                say("%s", a)
+            for t, event, detail in holds.get("charter-" + gid, []):
+                say("%s", shown_join("\t", ["  hold", t, event, detail or "-"]))
+        else:
+            approval_digest(gid, seen, now, acts.get(gid, []), holds.get("approval-" + gid, []))
+    say("owner signatures in the window, any act: plan dialogs %d, per-run %d (merges through kit:merge-pr %d), queued %d",
+        owner["grant"], owner["sign"],
+        owner["merge"], owner["queue"])
+    return OK
+
+
+def first_arg(text):
+    """The first argument of a log line's args field (a JSON list), else the field as written."""
+    try:
+        v = json.loads(text)
+    except ValueError:
+        return text
+    return v[0] if isinstance(v, list) and v and isinstance(v[0], str) else text
+
+
+HOLD_EVENTS = ("open", "serve", "refuse", "close", "end", "unclosed")
+
+
+def hold_events(since):
+    """The passphrase holder's hold log, read as a file (nothing imported): the one `holds.tsv` in a directory beside the baton state
+    directory (two or more such directories: none is read, one line says so). ({hold key: [(time, event, detail)]} since `since`, one line to say
+    when the file is absent or has lines that are not its five columns with a known event, else None). A line is listed under the
+    key it names, `approval-<id>` (a charter's hold, `charter-<id>`, is read the same way: its caller asks for that key); the
+    fingerprint column and an event outside HOLD_EVENTS are never printed, a time that cannot be read is shown as `-`, a detail is cut. Never fails: the digest reads, it does not judge."""
+    sd, seen, files = os.path.realpath(state_dir()), set(), []
+    for p in sorted(glob.glob(os.path.join(glob.escape(os.path.dirname(state_dir())), "*", "holds.tsv"))):
+        try:                                            # beside the state by its directory's real path; one file by its identity
+            st = os.stat(p) if os.path.isfile(p) and os.path.realpath(os.path.dirname(p)) != sd else None
+        except OSError:
+            st = None
+        if st and (st.st_dev, st.st_ino) not in seen:
+            seen.add((st.st_dev, st.st_ino))
+            files.append(p)
+    if len(files) > 1:
+        return {}, "passphrase holds: %d holds.tsv files beside the baton state, none read" % len(files)
+    try:
+        with open(files[0], encoding="utf-8", errors="backslashreplace", newline="") as f:
+            lines = f.read().split("\n")
+    except (IndexError, OSError):                       # no such file (IndexError), or not readable
+        return {}, "passphrase holds: no holds.tsv to read (absent or unreadable)"
+    by, broken = {}, 0
+    for ln in lines:
+        v = ln.rstrip("\r").split("\t")
+        if len(v) == 1 and not v[0]:
+            continue
+        if len(v) != 5 or v[3] not in HOLD_EVENTS:
+            broken += 1
+            continue
+        t = iso_seconds(v[0])
+        if t is None or t >= since:                     # a time that cannot be read is listed, as in the log
+            by.setdefault(v[1], []).append((v[0] if t is not None else "-", v[3], v[4][:200]))   # no raw text in the time column
+    return by, "passphrase holds: %d line(s) of holds.tsv unreadable, not listed" % broken if broken else None
+
+
+def approval_digest(gid, seen, now, acts, holds=()):
+    """The digest's lines of one approval: its state, each row's PRs merged and each run touch's runs used, then its acts, then
+    its passphrase hold's lines (open, each serve with the run, refuse, close, end)."""
+    g, state, why = load_grant(gid, seen, now) if GRANT_ID.match(gid) else (None, "absent", "%s is not an approval id" % gid)
+    if g is None:
+        say("approval %s: %s (%s)", gid, state, why)
+    else:
+        say("approval %s: %s until %s, signed %s from %s", gid, state, g.get("expires"), g.get("created"), g.get("dir"))
+        try:                                            # a file rewritten with its digest is never in force; still listed
+            # shortcut: touch_uses reads log.tsv once per row and run touch; count from the lines digest_list read when it is slow
+            for r in g["rows"]:
+                parts = ["%d of %d PR(s) merged" % (len(touch_uses(touch_key(r["plan"], r["row"]))), r.get("prs") or 1)]
+                for t in [t for t in r.get("touches") or [] if t.get("kind") == "run"]:
+                    parts.append("run %s (signs again)" % t["path"] if t.get("again") or t.get("floor") else "run %s %d of %d used" % (
+                        t["path"], len(touch_uses(run_key(r["plan"], r["row"], t["path"]))), t.get("runs") or 1))
+                say("%s", shown("  row %s of %s: %s", r["row"], plan_text(r["plan"]), "; ".join(parts)))
+        except (AttributeError, TypeError, ValueError, KeyError):
+            say("  (its rows cannot be read)")
+    for a in acts:
+        say("%s", a)
+    for t, event, detail in holds:
+        say("%s", shown_join("\t", ["  hold", t, event, detail or "-"]))
 
 
 def iso_seconds(v):
@@ -5676,6 +7066,8 @@ def cmd_list(rest):
     entries, notes = catalogue()
     kws = [w.lower() for w in rest]
     hit = [e for e in entries if all(k in e["hay"] for k in kws)]
+    exact = [e for e in hit if "%s:%s" % (e["prefix"], e["name"]) in kws]    # kit:branch-delete, not also its -recoverable
+    hit = exact if len(exact) == 1 else hit
     for n in notes[:2]:
         say("%s", cut(n, LIST_WIDTH))
     if not hit:
@@ -6649,7 +8041,8 @@ def owner_probes():
     """The spellings of `sign --by owner` that the ask rules must catch."""
     out = []
     for prog in owner_probe_programs():
-        out += ["%s sign --by owner %s" % (prog, SEAL_PROBE), "%s sign --by owner --queued 0123456789abcdef" % prog]
+        out += ["%s sign --by owner %s" % (prog, SEAL_PROBE), "%s sign --by owner --queued 0123456789abcdef" % prog,
+                "%s sign --by owner --approve /tmp/approval.json" % prog]
     return out
 
 
@@ -6862,7 +8255,7 @@ def cmd_permissions(rest):
 
 
 COMMANDS = {"new": cmd_new, "check": cmd_check, "rehearse": cmd_rehearse, "sign": cmd_sign, "run": cmd_run, "go": cmd_go,
-            "list": cmd_list, "pack": cmd_pack, "log": cmd_log, "mode": cmd_mode, "permissions": cmd_permissions}
+            "list": cmd_list, "pack": cmd_pack, "log": cmd_log, "mode": cmd_mode, "permissions": cmd_permissions, "grant": cmd_grant}
 
 
 class SafeOut:

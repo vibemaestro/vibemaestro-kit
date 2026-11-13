@@ -282,7 +282,9 @@ p_start() { printf '{"session_id":"%s","hook_event_name":"SessionStart","source"
 tree_hash() { (cd "$1" && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum | cut -d' ' -f1); }
 git_state() { git_ -C "$1" status --porcelain | sha1sum | cut -d' ' -f1; }
 
-sid() { echo "s$RANDOM$RANDOM$RANDOM"; }
+# A session id from the kernel: $(sid) runs in a subshell, where bash reseeds $RANDOM from the clock and the pid, so ids repeated now and then and
+# the hook's once-per-session marker hid the second reminder of a rule.
+sid() { printf 's%s\n' "$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"; }
 
 # tree_shape <root> — the tree a suite runs on, told by three marks: the root kb/ and .vibemaestro/sdlc.json, which
 # scripts/export-public.sh never writes, and a plugins/<name>/LICENSE, which only it writes (it refuses a committed one). `private`:

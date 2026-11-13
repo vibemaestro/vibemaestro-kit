@@ -154,6 +154,17 @@
         "tests/map-exclusions.txt"
       ]
     },
+    "touch_checks": [
+      "test"
+    ],
+    "touch_inputs": {
+      "test": {
+        "workflow": ".github/workflows/test.yml",
+        "paths": [
+          "tests/run.sh"
+        ]
+      }
+    },
     "image_bump": {
       "enabled": true,
       "tag_files": [
@@ -178,6 +189,12 @@
     }
   },
   "upstream_issues": false,
+  "intake": {
+    "focus": "required"
+  },
+  "issue": {
+    "code": "ACM"
+  },
   "agents": {
     "review_model": "fable",
     "search_model": "sonnet",
@@ -207,6 +224,9 @@
       "out_of_scope": "Not doing",
       "criteria": "Checks",
       "design": "Approach",
+      "constraints": "Limits",
+      "risks": "Risks",
+      "clarify": "Open points",
       "evidence": "Proof",
       "placeholder": "<TODO"
     }

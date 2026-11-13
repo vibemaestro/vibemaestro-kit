@@ -80,18 +80,18 @@ TABLE = {
         "vi": "--date phải là YYYY-MM-DD",
         "en": "--date must be YYYY-MM-DD"},
     "kb.usage": {
-        "vi": "dùng: kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run] | kb.py new <intent|plan|spec> <slug> "
+        "vi": "dùng: kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run] | kb.py new <intent|plan|real-run|spec> <slug> "
               "[--date D] | kb.py base --default <ref> | kb.py check spec <ngày-slug|đường-dẫn> | kb.py check current-state [đường-dẫn] | "
               "%s | %s",
-        "en": "usage: kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run] | kb.py new <intent|plan|spec> <slug> "
+        "en": "usage: kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run] | kb.py new <intent|plan|real-run|spec> <slug> "
               "[--date D] | kb.py base --default <ref> | kb.py check spec <date-slug|path> | kb.py check current-state [path] | "
               "%s | %s"},
     "kb.check_usage": {
         "vi": "dùng: kb.py check [--strict] | kb.py check spec <ngày-slug|đường-dẫn> | kb.py check current-state [đường-dẫn]",
         "en": "usage: kb.py check [--strict] | kb.py check spec <date-slug|path> | kb.py check current-state [path]"},
     "kb.new_usage": {
-        "vi": "dùng: kb.py new <intent|plan|spec> <slug>",
-        "en": "usage: kb.py new <intent|plan|spec> <slug>"},
+        "vi": "dùng: kb.py new <intent|plan|real-run|spec> <slug>",
+        "en": "usage: kb.py new <intent|plan|real-run|spec> <slug>"},
 
     # ── current_state.py: the problems of `kb.py check current-state` and of the current-state gate ─────────────────────
     "cs.over_lines": {

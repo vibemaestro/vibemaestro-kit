@@ -24,10 +24,12 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.dont_write_bytecode = True
 
@@ -37,11 +39,21 @@ FUNCS = {"ci": ("runs",), "registry": ("list_tags", "tag_exists", "visibility")}
 OPTIONAL = {"ci": ("failed_steps",), "registry": ()}
 BUILTIN = {"ci": {"github-actions": "github_actions"}, "registry": {"ghcr": "ghcr"}}
 GH_TIMEOUT_S = 120                              # MERGE_GUARD_GH_TIMEOUT_S shortens it for tests: a number in (0, 120]
+RETRY_WAITS_S = (5, 10, 10)                     # api_retry: four attempts, these waits between them (25 s); MERGE_GUARD_RETRY_WAIT_S in [0, 10] replaces each
+# gh's own words for a connection that failed (DNS, dial, reset, TLS, EOF); an answer with an HTTP status is judged by that status
+CONNECTION = re.compile(r"error connecting to|dial tcp|connection reset|TLS handshake timeout|\bEOF\b")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 class NotFound(Infra):
     """A 404 from the API: the caller decides whether that means "absent"."""
+
+
+class Transient(Infra):
+    """A 5xx or a connection error from the API; `why` names it ("HTTP 500", "connection error")."""
+    def __init__(self, msg, why):
+        Infra.__init__(self, msg)
+        self.why = why
 
 
 def sha256_text(text):
@@ -56,8 +68,8 @@ def gh_timeout():
     return v if 0 < v <= GH_TIMEOUT_S else GH_TIMEOUT_S
 
 
-def gh(args):
-    """(rc, stdout, stderr) of one `gh` call; a missing `gh` or a timeout is Infra."""
+def gh(args, raw=False):
+    """(rc, stdout, stderr) of one `gh` call, stdout as bytes when `raw`; a missing `gh` or a timeout is Infra."""
     exe = shutil.which("gh")
     if not exe:
         raise Infra("no gh on PATH")
@@ -66,12 +78,17 @@ def gh(args):
         p = subprocess.run([exe] + args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=limit)
     except subprocess.TimeoutExpired:
         raise Infra("gh %s timed out after %gs" % (" ".join(args[:2]), limit))
-    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace").strip()
+    return p.returncode, p.stdout if raw else p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace").strip()
 
 
 def _fail(path, err):
     if "HTTP 404" in err:
         raise NotFound("not found: %s" % path)
+    codes = re.findall(r"HTTP (\d{3})", err)             # gh's own status closes the text; a body may quote another one
+    if codes[-1:] and codes[-1][0] == "5":
+        raise Transient("gh api %s failed: %s" % (path, err[:200]), "HTTP " + codes[-1])
+    if not codes and CONNECTION.search(err):
+        raise Transient("gh api %s failed: %s" % (path, err[:200]), "connection error")
     raise Infra("gh api %s failed: %s" % (path, err[:200]))
 
 
@@ -101,6 +118,23 @@ def api(path):
     return vals[0]
 
 
+def api_retry(path):
+    """api(path), asked again after a 5xx or a connection error (a 4xx is not): a transient fault that outlasts the waits stays a
+    Transient that says so, with the attempts, so the caller's "could not conclude" tells the reader to run it again."""
+    try:
+        w = float(os.environ.get("MERGE_GUARD_RETRY_WAIT_S", ""))
+    except ValueError:
+        w = -1
+    waits = (w,) * len(RETRY_WAITS_S) if 0 <= w <= 10 else RETRY_WAITS_S
+    for n, wait in enumerate(waits + (None,)):
+        try:
+            return api(path)
+        except Transient as e:
+            if wait is None:
+                raise Transient("%s [transient: %s on all %d attempts; run it again later]" % (e, e.why, n + 1), e.why)
+            time.sleep(wait)
+
+
 def api_pages(path):
     """Every page of a GET, each parsed."""
     args = ["api", path, "--paginate"]
@@ -128,6 +162,14 @@ def api_raw(path):
             _fail(path, err)
         except NotFound:
             return None
+    return out
+
+
+def api_bytes(path):
+    """The bytes a GET answers (an artifact's zip, after GitHub's redirect)."""
+    rc, out, err = gh(["api", path], raw=True)
+    if rc != 0:
+        _fail(path, err)
     return out
 
 

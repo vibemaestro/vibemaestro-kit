@@ -1,0 +1,4 @@
+{"format": 1,
+ "gates": {"demo": {"keys": "demo.key",
+                    "files": [{"from": "gates/workflows/demo.yml", "to": ".github/workflows/demo.yml"},
+                              {"from": "gates/demo_gate.py", "to": ".vibemaestro/gates/demo_gate.py"}]}}}

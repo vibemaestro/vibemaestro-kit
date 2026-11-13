@@ -17,6 +17,11 @@
 #   [S] at the push: a plan line not in the signed plan pushes nothing; a branch that appears just before the push is not
 #       moved (create-only)
 #   [U] undo: a branch it cannot delete is named and the run ends rc 5; a push that never landed undoes cleanly
+#   [C] the clone named by --clone (an absolute path), never the directory the baton starts in: every phase of this suite starts
+#       in a directory that is not the clone (nowhere/); the same plan from nowhere, from inside the clone and from another
+#       repository; sign and run from that other repository; no --clone, a relative path, a missing path, a file, an empty
+#       directory, a subdirectory of the clone and a directory it cannot enter are refused before any write; GIT_DIR cannot
+#       point the reads at another repository
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -71,6 +76,7 @@ setup() {
   git_ -C "$d/seed" add -A; git_ -C "$d/seed" commit -q -m seed; git_ -C "$d/seed" push -q "$d/bare.git" main
   git_ clone -q "$d/bare.git" "$d/clone"
   git_ -C "$d/clone" remote set-url origin "git@$GH:$repo.git"
+  mkdir -p "$d/nowhere"
   python3 - "$d/gh.json" <<'PY'
 import json, sys
 json.dump({"viewer": "bot", "next_run": 1, "repos": {
@@ -88,18 +94,23 @@ topic() {
   git_ -C "$c" rev-parse HEAD
 }
 remote_tip() { git_ -C "$1/bare.git" rev-parse --verify -q "refs/heads/$2" || true; }
-# bt <plugin> <case dir> <baton args...> — rc of baton run from the clone with the state in $ST; its output is in $BT_OUT
-bt() { local p=$1 d=$2; shift 2; [ $# -eq 2 ] && [ "$1" = mode ] && { baton_set_mode "$ST" "$2"; echo 0; return; }; ( cd "$d/clone" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$p/scripts/baton.py" "$@" ) > "$BT_OUT" 2>&1; echo $?; }
-# kit_phase <plugin> <case dir> <phase> <signed plan file> <kit args...> — the kit's own phase, run directly; rc, output in $BT_OUT
+# Where a phase starts and which clone it names: START (default <case dir>/nowhere, not a clone), CA (default: --clone <case
+# dir>/clone; "none": no --clone; else the value given to --clone)
+start_of() { printf '%s' "${START:-$1/nowhere}"; }
+cl() { case "${CA:-}" in none) ;; "") printf -- '--clone\n%s\n' "$1/clone" ;; *) printf -- '--clone\n%s\n' "$CA" ;; esac; }
+# bt <plugin> <case dir> <baton args...> — rc of baton run from START with the state in $ST; --clone appended; its output is in $BT_OUT
+bt() { local p=$1 d=$2 c; shift 2; [ $# -eq 2 ] && [ "$1" = mode ] && { baton_set_mode "$ST" "$2"; echo 0; return; }; c=(); while IFS= read -r l; do c+=("$l"); done < <(cl "$d"); ( cd "$(start_of "$d")" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$p/scripts/baton.py" "$@" ${c[@]+"${c[@]}"} ) > "$BT_OUT" 2>&1; echo $?; }
+# kit_phase <plugin> <case dir> <phase> <signed plan file> <kit args...> — the kit's own phase, run directly from START; rc, output in $BT_OUT
 kit_phase() {
-  local p=$1 d=$2 ph=$3 plan=$4; shift 4
-  ( cd "$d/clone" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" BATON_PHASE="$ph" BATON_PLAN="$plan" \
-      BATON_PLUGIN_ROOT="$p" bash "$p/batons/branch-push.sh" "$@" ) > "$BT_OUT" 2>&1; echo $?
+  local p=$1 d=$2 ph=$3 plan=$4 c l; shift 4
+  c=(); while IFS= read -r l; do c+=("$l"); done < <(cl "$d")
+  ( cd "$(start_of "$d")" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" BATON_PHASE="$ph" BATON_PLAN="$plan" \
+      BATON_PLUGIN_ROOT="$p" bash "$p/batons/branch-push.sh" "$@" ${c[@]+"${c[@]}"} ) > "$BT_OUT" 2>&1; echo $?
 }
 sg() {
   local p=$1 d=$2 seal; shift 2
   bt "$p" "$d" mode auto >/dev/null
-  seal=$( ( cd "$d/clone" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$p/scripts/baton.py" rehearse "$@" ) 2>/dev/null \
+  seal=$( ( cd "$(start_of "$d")" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$p/scripts/baton.py" rehearse "$@" --clone "$d/clone" ) 2>/dev/null \
           | sed -n 's/^seal \([^ ]*\) .*/\1/p')
   bt "$p" "$d" sign --by coordinator-auto --seal "${seal:-none}" "$@"
 }
@@ -140,16 +151,16 @@ fam_steer() {
   git_ -C "$d/clone" config log.showSignature true; git_ -C "$d/clone" config gpg.program "$d/evil"
   git_ -C "$d/clone" config push.followTags true; git_ -C "$d/clone" tag -a -m v v9.9.9 "$t"
   baton_set_mode "$ST" auto
-  ( cd "$d/clone" && env -u GIT_SSH_COMMAND PATH="$d/sshbin:$PATH" XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" \
-      sh -c 'python3 "$1/scripts/baton.py" go kit:branch-push --branch topic --head "$2" --repo acme/app' _ "$P" "$t" ) > "$BT_OUT" 2>&1
+  ( cd "$d/nowhere" && env -u GIT_SSH_COMMAND PATH="$d/sshbin:$PATH" XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" \
+      sh -c 'python3 "$1/scripts/baton.py" go kit:branch-push --branch topic --head "$2" --repo acme/app --clone "$3"' _ "$P" "$t" "$d/clone" ) > "$BT_OUT" 2>&1
   eq "$?:$(remote_tip "$d" topic)" "0:$t" "[G] the clone's core.sshCommand, pre-push hook, log.showSignature with gpg.program and push.followTags set: go rc 0, topic pushed"
   eq "$(ls "$d" | grep -c '^evil-')" 0 "[G] …none of the clone's programs ran (no ssh command, no hook, no gpg)"
   eq "$(git_ -C "$d/acme/app.git" tag | grep -c .)" 0 "[G] …and no tag was pushed"
-  ST="$(fresh)/state"; d=$(setup acme/app); t=$(topic "$d"); misroute "$d"; mkdir -p "$d/nowhere"
+  ST="$(fresh)/state"; d=$(setup acme/app); t=$(topic "$d"); misroute "$d"
   baton_set_mode "$ST" auto
-  ( cd "$d/clone" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.git@$GH:acme/pub.git.pushInsteadOf" GIT_CONFIG_VALUE_0="git@$GH:acme/app.git" \
+  ( cd "$d/nowhere" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.git@$GH:acme/pub.git.pushInsteadOf" GIT_CONFIG_VALUE_0="git@$GH:acme/app.git" \
       GIT_EXEC_PATH="$d/nowhere" GIT_SSL_CAINFO="$d/nowhere/ca.pem" GIT_SSH_COMMAND="$FB/fakessh $d" XDG_STATE_HOME="$ST" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" \
-      sh -c 'python3 "$1/scripts/baton.py" go kit:branch-push --branch topic --head "$2" --repo acme/app' _ "$P" "$t" ) > "$BT_OUT" 2>&1
+      sh -c 'python3 "$1/scripts/baton.py" go kit:branch-push --branch topic --head "$2" --repo acme/app --clone "$3"' _ "$P" "$t" "$d/clone" ) > "$BT_OUT" 2>&1
   eq "$?:$(remote_tip "$d" topic):$(pub_tip "$d")" "0:$t:" "[G] env-config (a pushInsteadOf toward acme/pub), GIT_EXEC_PATH and GIT_SSL_CAINFO in the environment: the push lands in acme/app only"
 }
 
@@ -185,8 +196,8 @@ fam_refuse() {
   GIT_SSH_COMMAND="$FB/fakessh $d" git_ -C "$d/clone" push -q origin b2; git_ -C "$d/clone" checkout -q -b topic main
   git_ -C "$d/clone" merge -q --no-commit --no-ff b2 2>/dev/null; printf 'on: push\njobs: {evil: {runs-on: x}}\n' > "$d/clone/.github/workflows/ci.yml"
   git_ -C "$d/clone" add -A; git_ -C "$d/clone" commit -q -m "merge b2"; t=$(git_ -C "$d/clone" rev-parse HEAD)
-  ( cd "$d/clone" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=log.diffMerges GIT_CONFIG_VALUE_0=off GIT_SSH_COMMAND="$FB/fakessh $d" XDG_STATE_HOME="$ST" \
-      FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$P/scripts/baton.py" rehearse $K --branch topic --head "$t" --repo acme/app ) > "$BT_OUT" 2>&1
+  ( cd "$d/nowhere" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=log.diffMerges GIT_CONFIG_VALUE_0=off GIT_SSH_COMMAND="$FB/fakessh $d" XDG_STATE_HOME="$ST" \
+      FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$P/scripts/baton.py" rehearse $K --branch topic --head "$t" --repo acme/app --clone "$d/clone" ) > "$BT_OUT" 2>&1
   eq "$?" 1 "[R] a workflow change made inside a merge, with log.diffMerges=off in env-config: rehearse rc 1"
   d=$(setup acme/app); t=$(topic "$d"); tr=$(git_ -C "$d/clone" rev-parse "$t^{tree}"); rm -f "$d/clone/.git/objects/${tr:0:2}/${tr:2}"
   eq "$(bt "$P" "$d" rehearse $K --branch topic --head "$t" --repo acme/app)" 1 "[R] a commit walk that fails (a tree missing): rehearse rc 1, not a pass"
@@ -242,7 +253,63 @@ fam_signed() {
   eq "$(remote_tip "$d" topic)" "$(git_ -C "$d/bare.git" rev-parse main)" "[S] …and the branch that appeared is not moved (create-only)"
 }
 
-FAMILIES="fam_push fam_steer fam_refuse fam_undo fam_signed"
+# decoy <case dir> — a second repository, the one a phase that read its repository from the current directory would find: its origin
+# is acme/pub and its branch topic is at a commit the case's clone does not have
+decoy() {
+  local x="$1/decoy"
+  git_ init -q -b main "$x"; git_ -C "$x" remote add origin "git@$GH:acme/pub.git"
+  git_ -C "$x" commit -q --allow-empty -m decoy; git_ -C "$x" checkout -q -b topic; git_ -C "$x" commit -q --allow-empty -m decoy2
+}
+# planof <case dir> <tip> <repo> — rc and plan lines of a rehearse started in $START, naming the clone as CA says
+planof() { local d=$1 t=$2 r=$3; kit_phase "$PLUGIN" "$d" rehearse /dev/null --branch topic --head "$t" --repo "$r"; sed -n 's/^PLAN //p' "$BT_OUT"; }
+# refused <case dir> <text> <label> — the last kit_phase output names the cause, and nothing was pushed
+refused() {
+  local d=$1 txt=$2 lbl=$3
+  has "$(cat "$BT_OUT")" "$txt" "$lbl: …names the cause"
+  hasnt "$(cat "$BT_OUT")" "PLAN " "$lbl: …no plan line"
+  eq "$(remote_tip "$d" topic)" "" "$lbl: …nothing pushed"
+}
+
+fam_clone() {
+  local P=$1 d t want rc
+  ST="$(fresh)/state"; d=$(setup acme/app); t=$(topic "$d"); decoy "$d"
+  want="push new branch topic at $t to git@$GH:acme/app.git (1 commits it lacks)"
+  eq "$(START="$d/nowhere"; planof "$d" "$t" acme/app)" "$(printf '0\n%s' "$want")" "[C1] --clone naming the clone, started in a directory that is not a clone: the plan"
+  eq "$(START="$d/clone"; planof "$d" "$t" acme/app)" "$(printf '0\n%s' "$want")" "[C1] …the same plan started inside the clone"
+  eq "$(START="$d/decoy"; planof "$d" "$t" acme/app)" "$(printf '0\n%s' "$want")" "[C1] …the same plan started in another repository (origin acme/pub, its own topic)"
+  eq "$(START="$d/decoy"; sg "$P" "$d" $K --branch topic --head "$t" --repo acme/app)/$(START="$d/decoy"; bt "$P" "$d" run $K --branch topic --head "$t" --repo acme/app)" "0/0" "[C2] sign and run through baton.py started in another repository: rc 0"
+  eq "$(remote_tip "$d" topic)" "$t" "[C2] …the clone's topic landed in acme/app at the pinned tip"
+  ST="$(fresh)/state"; d=$(setup acme/app); t=$(topic "$d"); decoy "$d"
+  eq "$(START="$d/clone"; CA=none; kit_phase "$P" "$d" rehearse /dev/null --branch topic --head "$t" --repo acme/app)" 64 "[C3] no --clone (the old call shape), standing in the clone: rc 64"
+  refused "$d" "--clone is required" "[C3]"
+  has "$(cat "$BT_OUT")" "--clone <absolute path>" "[C3] …and the usage line names it"
+  eq "$(START="$d"; CA=clone; kit_phase "$P" "$d" rehearse /dev/null --branch topic --head "$t" --repo acme/app)" 3 "[C4] a relative clone path that is the clone from where it starts: rc 3"
+  refused "$d" "REFUSE clone clone is not an absolute path: nothing done" "[C4]"
+  eq "$(CA="$d/nope"; kit_phase "$P" "$d" rehearse /dev/null --branch topic --head "$t" --repo acme/app)" 3 "[C5] a clone path that does not exist: rc 3"
+  refused "$d" "REFUSE clone $d/nope is not a directory: nothing done" "[C5]"
+  eq "$(CA="$d/clone/README.md"; kit_phase "$P" "$d" rehearse /dev/null --branch topic --head "$t" --repo acme/app)" 3 "[C5] a clone path that is a file: rc 3"
+  refused "$d" "REFUSE clone $d/clone/README.md is not a directory: nothing done" "[C5] a file"
+  mkdir -p "$d/empty"
+  eq "$(CA="$d/empty"; kit_phase "$P" "$d" rehearse /dev/null --branch topic --head "$t" --repo acme/app)" 3 "[C6] an empty directory: rc 3"
+  refused "$d" "REFUSE clone $d/empty is not the top of a git work tree: nothing done" "[C6]"
+  eq "$(CA="$d/clone/.github"; kit_phase "$P" "$d" rehearse /dev/null --branch topic --head "$t" --repo acme/app)" 3 "[C6] a subdirectory of the clone: rc 3"
+  refused "$d" "REFUSE clone $d/clone/.github is not the top of a git work tree: nothing done" "[C6] a subdirectory"
+  if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$d/locked"; chmod 000 "$d/locked"
+    eq "$(CA="$d/locked"; kit_phase "$P" "$d" rehearse /dev/null --branch topic --head "$t" --repo acme/app)" 3 "[C7] a directory the baton cannot enter: rc 3"
+    refused "$d" "REFUSE clone $d/locked cannot be entered: nothing done" "[C7]"
+    chmod 700 "$d/locked"
+  else
+    echo "  skip [C7] running as root: chmod 000 does not keep root out of a directory"
+  fi
+  git_ clone -q --bare "$d/bare.git" "$d/acme/other.git"   # a twin a misrouted push would reach
+  eq "$(kit_phase "$P" "$d" rehearse /dev/null --branch topic --head "$t" --repo acme/other)" 3 "[C8] a clone whose origin is acme/app, --repo acme/other, started elsewhere: rc 3"
+  refused "$d" "REFUSE remote origin is git@$GH:acme/app.git: this kit pushes only to github.com/acme/other" "[C8]"
+  eq "$(git_ -C "$d/acme/other.git" for-each-ref --format=x refs/heads | grep -c x)" 1 "[C8] …the twin still holds main only"
+  eq "$( (export GIT_DIR="$d/decoy/.git" GIT_COMMON_DIR="$d/decoy/.git" GIT_WORK_TREE="$d/decoy"; START="$d/nowhere"; planof "$d" "$t" acme/app) )" "$(printf '0\n%s' "push new branch topic at $t to git@$GH:acme/app.git (1 commits it lacks)")" "[C9] GIT_DIR, GIT_COMMON_DIR and GIT_WORK_TREE naming another repository: ignored, the clone named is read"
+}
+
+FAMILIES="fam_push fam_steer fam_refuse fam_undo fam_signed fam_clone"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
 
 echo "== nothing written outside the scratch tree =="

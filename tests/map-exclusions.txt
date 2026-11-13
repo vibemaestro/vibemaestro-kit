@@ -20,6 +20,7 @@ plugins/vibemaestro-brain/CHANGELOG.md  release notes: a document
 .changes/*.md  pending release notes: their form is checked by plugin-version on every plugin code change and on the release PR
 kb/*.md  intent, spec, plan and decision records: the ship and spec skills run kb.py check before each PR
 kb/*/.gitkeep  keeps an empty kb/ folder in git: no content
+kb/records/*.json  a record's data file (a list the coordinator acts on): read by no suite
 LICENSE  the licence text: a document
 NOTICE  the attribution notice: a document
 tests/replay-current-state.sh  a manual parity tool (needs a clone of another repository): no suite runs it

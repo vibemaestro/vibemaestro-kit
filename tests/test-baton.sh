@@ -307,6 +307,187 @@ sys.exit(baton.main(["run"] + sys.argv[3:]))' "$P/scripts" "$1" "$A" "$W/$2" hel
   eq "$(sg "$P" "$W" owner "$A" "$W/b.txt" hello)" 0 "[run-after-use] sign a second act: rc 0"
   eq "$(after term b.txt)/$(logcol 10)" "0/ok" "[run-after-use] SIGTERM once the phases are over is ignored: the run ends ok and is logged"
 }
+
+# A run the owner did not answer: a kit baton whose header declares Stops: secrets, signed by the owner, whose run phase ends with
+# the line `VERDICT run unanswered` and exit 75 (a passphrase-holder ask that timed out) and whose undo passes gets its signature back, at
+# most 3 times per owner dialog; any other run spends it as before.
+# ua_baton <file> <stops> — a baton written here: its one write asks for a value (the passphrase holder, faked) and creates {dest}. `how` picks
+# what the ask does: ok gives the value; unanswered ends the run `VERDICT run unanswered`, exit 75; code0 and code3 print that line
+# and exit 0 or 3; near prints a line that only ends with it; undofail is unanswered with an undo that fails; resign is unanswered
+# after a record for the same call landed in signatures/, as a new signature of it would; swap is unanswered after the run's own
+# spent record in used/ was rewritten
+ua_baton() {
+  { printf '#!/usr/bin/env bash\n# Purpose: test baton: ask the owner for a value, then create one file holding it\n'
+    printf '# Targets: {dest} — the file\n# Blast: that one file\n# Undo: removes the file while it holds the value\n'
+    printf '# Pre: the file is absent\n# Stops: %s\n' "$2"
+    cat <<'EOF'
+# Params: dest=path how=enum:ok|unanswered|code0|code3|near|undofail|resign|swap
+# Expect: ask then create *
+set -euo pipefail
+PHASE=${BATON_PHASE:-rehearse}
+
+write() {
+  local plan=$1
+  shift
+  case "$PHASE" in
+    rehearse)
+      printf 'PLAN %s\n' "$plan"
+      printf '%s\n' "$plan" >> "${BATON_WRITES:-/dev/null}"
+      ;;
+    run | undo)
+      printf 'DO %s\n' "$plan"
+      printf '%s\n' "$plan" >> "${BATON_WRITES:-/dev/null}"
+      "$@"
+      ;;
+    *)
+      printf 'write called in phase %s: %s\n' "$PHASE" "$plan" >&2
+      return 70
+      ;;
+  esac
+}
+
+P_DEST="$1"
+P_HOW="$2"
+
+holds() { [ -f "$P_DEST" ] && [ "$(cat "$P_DEST")" = held ]; }
+ask_put() {
+  local b f
+  case "$P_HOW" in
+    unanswered | undofail) echo "VERDICT run unanswered"; exit 75 ;;
+    code0) echo "VERDICT run unanswered"; exit 0 ;;
+    code3) echo "VERDICT run unanswered"; exit 3 ;;
+    near) echo "note: VERDICT run unanswered"; exit 75 ;;
+    resign)
+      b="$XDG_STATE_HOME/vibemaestro/baton"; f=$(ls "$b/used" | tail -n 1)
+      printf '{"signed again": true}\n' > "$b/signatures/${f#*-*-}"
+      echo "VERDICT run unanswered"; exit 75 ;;
+    swap)
+      b="$XDG_STATE_HOME/vibemaestro/baton"; f=$(ls "$b/used" | tail -n 1)
+      printf '{"swapped": true}\n' > "$b/used/$f"
+      echo "VERDICT run unanswered"; exit 75 ;;
+  esac
+  printf 'held\n' > "$P_DEST"
+}
+act() {
+  if [ -e "$P_DEST" ]; then
+    echo "REFUSE $P_DEST exists" >&2
+    return 3
+  fi
+  write "ask then create $P_DEST" ask_put
+}
+postcheck() {
+  holds
+}
+undo() {
+  [ "$P_HOW" != undofail ]
+  if holds; then
+    write "remove $P_DEST" rm -f -- "$P_DEST"
+  fi
+  ! holds
+}
+
+case "$PHASE" in
+  rehearse)
+    act
+    echo "VERDICT rehearse ok"
+    ;;
+  run)
+    act
+    echo "VERDICT run ok"
+    ;;
+  postcheck)
+    postcheck
+    echo "VERDICT postcheck ok"
+    ;;
+  undo)
+    undo
+    echo "VERDICT undo ok"
+    ;;
+  *)
+    echo "unknown phase: $PHASE" >&2
+    exit 64
+    ;;
+esac
+EOF
+  } > "$1"
+}
+fam_unanswered() {
+  local P=$1 W S I B k how
+  # KILL60 — runs its arguments, killed after 60 s: a run that hangs fails its check instead of the suite (SIGTERM is ignored there)
+  local KILL60=(python3 -c 'import subprocess, sys
+p = subprocess.Popen(sys.argv[1:])
+try:
+    sys.exit(p.wait(timeout=60))
+except subprocess.TimeoutExpired:
+    p.kill(); sys.exit(137)')
+  # ua sign|run <baton> <how> — the owner's sign (sg), or the run, of the call <baton> dest=$W/<how> how=<how>; prints the rc
+  ua() { if [ "$1" = sign ]; then sg "$P" "$W" owner "$2" dest="$W/$3" how="$3"; else bt "$P" "$W" run "$2" dest="$W/$3" how="$3"; fi; }
+  fresh_state; W=$(fresh); S="$W/signed.json"
+  ua_baton "$P/batons/t-ask.sh" secrets; ua_baton "$P/batons/t-ask-none.sh" none
+  eq "$(bt "$P" "$W" check kit:t-ask)" 0 "[unanswered] instrument: check kit:t-ask (Stops: secrets): rc 0"
+  eq "$(ua sign kit:t-ask ok)/$(ua run kit:t-ask ok)/$(nsig)/$(logcol 10)" "0/0/0/ok" \
+     "[unanswered] control: a run the owner answered: rc 0, the signature spent, log ok"
+  eq "$(ua sign kit:t-ask unanswered)" 0 "[unanswered] the owner signs kit:t-ask how=unanswered: rc 0"
+  cp "$(baton_dir)"/signatures/*.json "$S"
+  for k in 1 2 3; do
+    eq "$(ua run kit:t-ask unanswered)/$(nsig)/$(logcol 10)/$(logcol 11)" "4/1/unanswered $k/3/yes" \
+       "[unanswered] run $k with no sign before it: rc 4, the signature back, log unanswered $k/3, undone yes"
+    cmp -s "$(baton_dir)"/signatures/*.json "$S" && ok "[unanswered] …the record back is the one the owner signed ($k)" \
+      || bad "[unanswered] …the record back is the one the owner signed ($k)"
+  done
+  eq "$(bt "$P" "$W" run kit:t-ask dest="$W/unanswered" how=ok)/$(nsig)" "3/1" \
+     "[unanswered] the signature back runs only its own call: how=ok refused, rc 3, the record still there"
+  eq "$(ua run kit:t-ask unanswered)/$(nsig)/$(logcol 10)/$(logcol 11)" "4/0/run-failed/yes" \
+     "[unanswered] a 4th unanswered run: rc 4, the signature spent, log run-failed"
+  eq "$(ua run kit:t-ask unanswered)" 3 "[unanswered] …so the same call again is refused: rc 3"
+  eq "$(ua sign kit:t-ask unanswered)/$(ua run kit:t-ask unanswered)/$(nsig)/$(logcol 10)" "0/4/1/unanswered 1/3" \
+     "[unanswered] a new signature of the same call counts from 0: back, 1 of 3"
+  for how in code0 code3 near; do
+    fresh_state
+    eq "$(ua sign kit:t-ask $how)/$(ua run kit:t-ask $how)/$(nsig)/$(logcol 10)/$(logcol 11)" "0/4/0/run-failed/yes" \
+       "[unanswered] how=$how (not exactly the line \`VERDICT run unanswered\` with exit 75): rc 4, the signature spent"
+  done
+  fresh_state
+  eq "$(ua sign kit:t-ask undofail)/$(ua run kit:t-ask undofail)/$(nsig)/$(logcol 10)/$(logcol 11)" "0/5/0/run-failed/failed" \
+     "[unanswered] unanswered, its undo failed: rc 5, the signature spent"
+  fresh_state
+  eq "$(ua sign kit:t-ask resign)/$(ua run kit:t-ask resign)/$(nsig)/$(logcol 10)" "0/4/1/run-failed" \
+     "[unanswered] unanswered after the call was signed again meanwhile: rc 4, log run-failed"
+  eq "$(cat "$(baton_dir)"/signatures/*.json)" '{"signed again": true}' "[unanswered] …the record there is never replaced"
+  fresh_state
+  eq "$(ua sign kit:t-ask swap)/$(ua run kit:t-ask swap)/$(nsig)/$(logcol 10)" "0/4/0/run-failed" \
+     "[unanswered] unanswered after the run's spent record in used/ was rewritten: rc 4, the signature spent"
+  for how in fifo deep; do   # a file named as a record of the call in used/ that is no record: skipped
+    fresh_state
+    eq "$(ua sign kit:t-ask unanswered)" 0 "[unanswered] instrument: the owner signs again in a fresh state ($how): rc 0"
+    B="$(baton_dir)/used/00000000T000000Z-1-$(ls "$(baton_dir)/signatures")"
+    if [ $how = fifo ]; then mkfifo "$B"; else python3 -c 'print("[" * 200000 + "]" * 200000)' > "$B"; fi
+    BT_PRE=("${KILL60[@]}")
+    eq "$(ua run kit:t-ask unanswered)/$(nsig)/$(logcol 10)" "4/1/unanswered 1/3" \
+       "[unanswered] a $how named as a record of the call in used/: skipped (no hang, no crash), back 1 of 3"
+    BT_PRE=()
+  done
+  fresh_state
+  eq "$(ua sign kit:t-ask-none unanswered)/$(ua run kit:t-ask-none unanswered)/$(nsig)/$(logcol 10)" "0/4/0/run-failed" \
+     "[unanswered] a kit baton whose Stops is none, signed by the owner: rc 4, the signature spent"
+  fresh_state; OWNER_SID=s-coord
+  eq "$(bt "$P" "$W" go --queue kit:t-ask dest="$W/queued" how=unanswered)" 0 "[unanswered] instrument: go --queue kit:t-ask: rc 0"
+  I=$(sed -n 's/^go: queued \([0-9a-f]\{16\}\) .*/\1/p' "$BT_OUT"); OWNER_SID=s-owner
+  eq "$(bt "$P" "$W" sign --by owner --queued "$I")" 0 "[unanswered] instrument: the owner signs the queued item: rc 0"
+  eq "$(bt "$P" "$W" run --queued "$I")/$(logcol 10)/$(logcol 11)" "4/run-failed/yes" "[unanswered] a queued run unanswered: rc 4, log run-failed"
+  eq "$(bt "$P" "$W" run --queued "$I")/$(nsig)" "3/0" "[unanswered] …its item spent: run --queued again rc 3, no record in signatures/"
+  fresh_state; W=$(fresh); git_ init -q -b main "$W"; ua_baton "$W/s.sh" secrets
+  eq "$(ua sign "$W/s.sh" ok)/$(ua run "$W/s.sh" ok)" "0/0" "[unanswered] instrument: a session baton (Stops: secrets) runs ok"
+  eq "$(ua sign "$W/s.sh" unanswered)/$(ua run "$W/s.sh" unanswered)/$(nsig)/$(logcol 10)" "0/4/0/run-failed" \
+     "[unanswered] a session baton unanswered: rc 4, the signature spent"
+  eq "$(bt "$P" "$W" pack "$W/s.sh" user:t-unanswered)" 0 "[unanswered] instrument: pack it as user:t-unanswered: rc 0"
+  eq "$(ua sign user:t-unanswered unanswered)/$(ua run user:t-unanswered unanswered)/$(nsig)/$(logcol 10)" "0/4/0/run-failed" \
+     "[unanswered] a kept (user:) baton unanswered: rc 4, the signature spent"
+  eq "$(bt "$P" "$W" pack "$W/s.sh" project:t-unanswered)" 0 "[unanswered] instrument: pack it as project:t-unanswered: rc 0"
+  eq "$(ua sign project:t-unanswered unanswered)/$(ua run project:t-unanswered unanswered)/$(nsig)/$(logcol 10)" "0/4/0/run-failed" \
+     "[unanswered] a kept (project:) baton unanswered: rc 4, the signature spent"
+  rm -f "$P/batons/t-ask.sh" "$P/batons/t-ask-none.sh"
+}
 fam_check_set() {
   local P=$1 W A f; fresh_state; W=$(fresh); A=$(act_in "$P" "$W")
   f="$W/e1.sh"; cp "$A" "$f"; mutate "$f" $'set -euo pipefail\n' $'set -euo pipefail\nset +e +o pipefail\n'
@@ -1992,10 +2173,10 @@ import gh_write
 print("\n".join(sorted(gh_write.KINDS)))
 PY
 )
-  eq "$(printf '%s\n' "$code" | grep -c .)" 11 "[core-ops] instrument: gh_write.py accepts eleven ops"
+  eq "$(printf '%s\n' "$code" | grep -c .)" 12 "[core-ops] instrument: gh_write.py accepts twelve ops"
   eq "$doc" "$code" "[core-ops] the op list in the core equals the ops gh_write.py accepts"
   core=$(tr -s ' \n' '  ' < "$P/skills/batonrun/SKILL.md")
-  has "$core" 'Labels, tags, releases, a push: hand-written.' "[core-ops] the core names what needs a hand-written baton"
+  has "$core" 'A new label, tags, releases, a push: hand-written.' "[core-ops] the core names what needs a hand-written baton"
   has "$core" 'file-pr; never by hand (' "[core-ops] the core says the kit's ops are never hand-written"
   has "$core" 'an undo that cannot delete names what it leaves behind and exits non-zero' "[core-ops] the core says what an undo that cannot delete does"
 }
@@ -2365,7 +2546,7 @@ PY
 
 FAMILIES="fam_new fam_check_header fam_check_rehearse_path fam_check_undo fam_check_syntax fam_check_pipefail fam_check_fidelity
 fam_check_source fam_check_gate fam_check_unwrapped fam_check_round3 fam_check_round4 fam_cpu_within fam_check_set fam_check_stops fam_rehearse_expect fam_rehearse_verdict fam_run_signed fam_sign_seal fam_sign_by fam_run_edited fam_run_args fam_run_dir
-fam_run_env fam_run_diverged fam_run_pipe fam_run_plan fam_run_undo fam_run_interrupt fam_start_interrupt fam_run_after_use fam_round2_streams fam_modes fam_mode_choice fam_log_env fam_state_place fam_rule fam_kit fam_kit_dep fam_plugin_script fam_plan_env fam_each
+fam_run_env fam_run_diverged fam_run_pipe fam_run_plan fam_run_undo fam_run_interrupt fam_start_interrupt fam_run_after_use fam_unanswered fam_round2_streams fam_modes fam_mode_choice fam_log_env fam_state_place fam_rule fam_kit fam_kit_dep fam_plugin_script fam_plan_env fam_each
 fam_go_equiv fam_go_owner fam_go_attack fam_go_retry fam_go_fresh fam_check_refuses fam_skill_skeleton
 fam_stop_hint fam_gh_state fam_wait fam_skill_refs fam_expect_doc fam_expect_header fam_core_ops fam_pipe_trap fam_run_line fam_run_last fam_go_stdin fam_go_dash_guidance"
 

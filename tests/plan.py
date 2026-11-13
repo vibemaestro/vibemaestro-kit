@@ -21,8 +21,10 @@
 #                                           when the map or the exclusion list does not parse. --woken leaves out the @always set a
 #                                           plan holds for no path (a suite a path wakes stays); <dir> holds the map from before the
 #                                           change (tests/suites.map under it) for option B below: without it a changed map is
-#                                           @full, as in any plan. Reads only the map and the exclusion list (and <dir>'s map): no
-#                                           git, no suite file, no PATH (the guard runs the base's copy in an empty directory)
+#                                           @full, as in any plan. Without --woken (the PR's side) a path under tests/ that
+#                                           wakes an @always suite is @full: its checks read every tracked file, the base's new
+#                                           ones too. Reads only the map and the exclusion list (and <dir>'s map): no git, no
+#                                           suite file, no PATH (the guard runs the base's copy in an empty directory)
 #
 # The map is tests/suites.map (the only place that says which paths wake which suite), read from the working tree; the list of
 # documents and files no suite reads is tests/map-exclusions.txt, and a path it matches wakes no suite even when a suite line also
@@ -375,6 +377,11 @@ def main_suites(woken=False, old_dir=None):
         return 1
     try:
         out, _why = plan(paths, m, excl, old_text, always=not woken, check_files=False)
+        if not woken:   # an @always suite's checks (under tests/; the plugin code it installs is what it tests) read every tracked file
+            for p in paths:
+                hits = sorted(with_closure(m, wakes(m, p)) & set(m.always)) if p.startswith("tests/") and not hit(p, excl) else []
+                if hits:
+                    raise Full("`%s` changes @always suite %s, which reads every tracked file" % (p, " ".join(hits)))
     except Full as e:
         print("@full %s" % e)
         return 0

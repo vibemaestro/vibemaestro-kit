@@ -1,0 +1,63 @@
+# =============================================================================
+# Gate: a PR that changes who signs is an owner merge (.vibemaestro/gates/signing_rules.py)
+# =============================================================================
+# Red when the PR changes a baton's Stops, adds a file under a baton directory, changes a name of the repo's list that decides who
+# signs, or changes the gate, a file it loads, its list or this job. The list is .vibemaestro/signing-rules.json. A call site or a
+# condition passes: the review is the gate for code. Name this job in merge.required_checks so a red PR is left to the owner.
+#
+# Trust: the job checks out the BASE branch and runs the vendored gate, its baton.py and its list from there, and fetches the PR head
+# only as data, so a PR is judged by the list it would change. Nothing is fetched from another repository. The workflow file itself
+# comes from the PR: review changes under .github/ like code. A base without the gate yet warns and passes.
+# Findings: the gate's block (`--touches`, each cause by kind) is the artifact `trust-touches`, which the merge guard's `touches`
+# reads from this workflow run (merge.touch_inputs names this file).
+name: signing-rules
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+# A new commit on the PR cancels the run of the head it replaces. Every other event (a comment, an edit, a label, a review,
+# ready, main, a dispatch) gets a group of its own, so it neither cancels a commit run nor replaces a pending one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  signing-rules:
+    name: signing-rules
+    # No CI on a draft (ready_for_review starts the round); an edit runs it only when the base (whose list it reads) changed
+    if: github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.base)
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: judge the PR by the base's list
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .vibemaestro/gates/signing_rules.py ]; then
+            echo "::warning::the gates are not installed on the base branch yet, so signing-rules did not run for this PR"
+            exit 0
+          fi
+          git fetch --no-tags origin "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"
+          # the head this run's check is attached to, not whatever the PR holds by now (a newer push gets its own run)
+          python3 .vibemaestro/gates/signing_rules.py "origin/$BASE_REF" "$HEAD_SHA" --list .vibemaestro/signing-rules.json --touches "$RUNNER_TEMP/trust-touches.txt"
+
+      - name: keep the findings for the merge guard
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: trust-touches
+          path: ${{ runner.temp }}/trust-touches.txt
+          if-no-files-found: ignore
+          retention-days: 30

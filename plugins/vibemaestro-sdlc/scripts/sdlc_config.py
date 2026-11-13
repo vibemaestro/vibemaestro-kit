@@ -204,10 +204,21 @@ DEFAULTS = {
     # the guarded merge (gates/merge_guard.py), read from the PR's base commit: deny_globs null means "not set", and the guard
     # refuses to run until it is (an empty list is a valid answer)
     # planner: null, or {script, inputs}: the test planner `--behind auto` runs from the base commit (merge_guard.py's docstring)
+    # touch_checks: the checks whose findings `touches` judges (plan-approved merges); touch_inputs: per check, {workflow, paths}:
+    # the workflow file that runs it and every path its result depends on (each one judges a later PR, so never plan-approved)
     "merge": {"deny_globs": None, "admin_bypass": False, "required_checks": [], "log": None, "planner": None,
+              "touch_checks": [], "touch_inputs": {},
               "image_bump": {"enabled": False, "tag_files": [], "tree": None, "revision": None, "registry": None}},
     "rebase": {"identity": None},
     "upstream_issues": True,
+    # intake (intent_branch.py create-intent, kb.py check intent): an intent's `type:` and `focus:` (an open focus of the brain).
+    # "required" refuses an intent without them, "warn" prints one WARNING line and goes on, "off" is silent. "warn" keeps a plain
+    # intent at rc 0 for the repositories that call create-intent today; the next release makes "required" the default.
+    "intake": {"focus": "warn"},
+    # issue.code: null (the default: intent branches stay `intent/<date>-<slug>`), or the repository's 3-letter code (`KIT`):
+    # create-intent then opens the issue first, writes the key `<code>-<issue number>` as the intent's `key:`, and names the branch
+    # `intent/<key>-<slug>` (intent_branch.py)
+    "issue": {"code": None},
     # the model a skill passes to the Agent tool, by the subagent's job (see the skills that spawn agents)
     "agents": {"review_model": "opus", "search_model": "haiku", "worker_model": "sonnet"},
     # a spec over this many bytes is listed by `kb.py check` (~10k tokens at ~4 bytes a token: reading it whole stops being cheap)
@@ -237,6 +248,10 @@ DEFAULTS = {
             "out_of_scope": "Ngoài phạm vi",
             "criteria": "Tiêu chí chấp nhận",
             "design": "Thiết kế",
+            # the sections of a spec derived from a story, beside goal and criteria: hard constraints, the risks the tests cover, open points
+            "constraints": "Ràng buộc",
+            "risks": "Rủi ro cần test phủ",
+            "clarify": "Cần làm rõ",
             "evidence": "Bằng chứng chạy",
             "placeholder": "<ĐIỀN",
         },
@@ -270,6 +285,9 @@ LANGUAGE_PRESETS = {
                 "out_of_scope": "Out of scope",
                 "criteria": "Acceptance criteria",
                 "design": "Design",
+                "constraints": "Constraints",
+                "risks": "Risks to cover",
+                "clarify": "To clarify",
                 "evidence": "Run evidence",
                 "placeholder": "<FILL",
             },
@@ -311,8 +329,9 @@ def is_present(root):
 # A node is a tuple: ("int", min) ("intnull", min) ("num", min, strict) ("ratio",) ("bool",) ("str",) ("enum", values) ("regex",)
 # ("regexnull",) ("hole", "{x}") ("heading",) ("mark",) ("groupre",) ("strlist",) ("idlist", ids) ("pathlist",) ("relpath",) ("flow",) ("obj", {key: node}) ("objnull", {key: node},
 # required keys) ("tokenlist",) ("gate",) ("keyword",) ("ident",) ("patterns",) ("tables",) ("gitfile",) ("gitprefixes",) ("pageglob",)
-# ("labelre",)
+# ("labelre",) ("codenull",)
 _STR = ("str",)
+ISSUE_CODE_RX = re.compile(r"[A-Z]{3}")     # `issue.code`: the 3-letter repository code of the sandbox slugs (kit, vgo), upper case
 # `ci.runner_default` is a runner label, or this value: no fallback label at all, the workflows install-gates writes fail at the start of a
 # run while the runner variable is unset (an organisation with self-hosted runners only has no hosted machine to fall back to). It holds a
 # space, so it can never equal a label; to a reader that predates the form it is an ordinary string.
@@ -417,6 +436,8 @@ SCHEMA_TREE = {
         "required_checks": ("strlist",),
         "log": ("lognull",),
         "planner": ("objnull", {"script": ("gitfile",), "inputs": ("gitfiles",)}, ("script", "inputs")),
+        "touch_checks": ("strlist",),
+        "touch_inputs": ("objmap", {"workflow": ("gitfile",), "paths": ("gitfiles",)}, ("workflow", "paths")),
         "image_bump": ("obj", {
             "enabled": ("bool",),
             "tag_files": ("gitfiles",),
@@ -428,6 +449,8 @@ SCHEMA_TREE = {
     }),
     "rebase": ("obj", {"identity": ("objnull", {"name": _STR, "email": _STR}, ("name", "email"))}),
     "upstream_issues": ("bool",),
+    "intake": ("obj", {"focus": ("enum", ("required", "warn", "off"))}),
+    "issue": ("obj", {"code": ("codenull",)}),
     "agents": ("obj", {"review_model": ("enum", MODEL_ALIASES), "search_model": ("enum", MODEL_ALIASES),
                        "worker_model": ("enum", MODEL_ALIASES)}),
     "kb": ("obj", {"spec_warn_bytes": ("intnull", 1)}),
@@ -436,7 +459,8 @@ SCHEMA_TREE = {
         "fixes_line": _STR, "not_run": _STR, "no_state_change": ("tokenlist",), "commit_exception": _STR,
         "round_comment_prefix": _STR, "evidence_cut": ("hole", "{n}"), "not_run_note": _STR, "criteria_note": _STR,
         "spec": ("obj", {"context": ("heading",), "goal": ("heading",), "out_of_scope": ("heading",), "criteria": ("heading",),
-                         "design": ("heading",), "evidence": ("heading",), "placeholder": ("mark",)}),
+                         "design": ("heading",), "constraints": ("heading",), "risks": ("heading",), "clarify": ("heading",),
+                         "evidence": ("heading",), "placeholder": ("mark",)}),
     }),
 }
 
@@ -612,6 +636,9 @@ def _check(node, v, key, out):
     elif kind == "ident":
         if not isinstance(v, str) or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", v):
             out.append((key, "must be an identifier ([A-Za-z_][A-Za-z0-9_]*)"))
+    elif kind == "codenull":
+        if v is not None and not (isinstance(v, str) and ISSUE_CODE_RX.fullmatch(v)):
+            out.append((key, "must be null or the repository's code: 3 capital letters A-Z, like KIT"))
     elif kind == "enum":
         if not isinstance(v, str) or v not in node[1]:
             out.append((key, "must be one of %s" % ", ".join(node[1])))
@@ -747,6 +774,17 @@ def _check(node, v, key, out):
                 out.append((k, "must be a string or a {text, done} object"))
                 continue
             _check_obj({"text": _STR, "done": ("bool",)}, item, k, out, required=("text",))
+    elif kind == "objmap":                                       # {<name>: an object of node[1]}, every key of node[2] required
+        if not isinstance(v, dict):
+            out.append((key, "must be an object of name to {%s}" % ", ".join(node[2])))
+            return
+        for k, item in v.items():
+            if not _text(k):
+                out.append((key, "a name must be a non-empty single-line string"))
+            elif not isinstance(item, dict):
+                out.append(("%s.%s" % (key, k), "must be an object {%s}" % ", ".join(node[2])))
+            else:
+                _check_obj(node[1], item, "%s.%s" % (key, k), out, required=node[2])
     elif kind in ("obj", "objnull"):
         if v is None and kind == "objnull":
             return
@@ -1072,6 +1110,10 @@ def _check_effective(cfg):
                      % ", ".join(SPEC_SECTIONS))]
     out = []
     _check_lane(cfg["merge"]["image_bump"], "merge.image_bump", out)
+    m = cfg["merge"]
+    out += [("merge.touch_checks", "names %s, which merge.touch_inputs does not: the workflow that runs it and the paths its result "
+                                   "depends on judge every later PR, so they must be named" % n)
+            for n in m["touch_checks"] if n not in m["touch_inputs"]]
     return out
 
 

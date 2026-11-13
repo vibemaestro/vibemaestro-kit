@@ -31,8 +31,20 @@
 #   [U] undo: a delete followed by a failing post-check puts the branch back at its pinned SHA; with no run record, or another
 #       run's record, nothing is put back; with no signed plan it is left (rc 1); a branch there again at another SHA, after a
 #       delete or an unknown outcome, is named and left (the run ends rc 5)
-#   [K] the scratch-repository and environment blocks are byte for byte kit:branch-push's, and the gate's git settings and
-#       environment are the kit's
+#   [K] the scratch-repository and environment blocks are byte for byte kit:branch-push's (in both delete kits), and the gate's
+#       git settings and environment are the kit's
+# kit:branch-delete-recoverable (Stops recoverable-delete), the same fakes, a clone given as clone=<path>:
+#   [W] check: the kit passes; a session or project: baton declaring recoverable-delete is refused, the word named as kit-only;
+#       a Stops: none baton naming the bundles directory is refused
+#   [A] go in mode auto stops for the owner (exit 8); coordinator-auto cannot sign it; nothing deleted, no bundle
+#   [C] [R] rehearse refuses a shallow clone, one missing an object of head, one using alternates, a partial one, a worktree, no
+#       repository, and what kit:branch-delete refuses except "unmerged"; nothing deleted, no bundle
+#   [D] [U] a run bundles an unmerged head into the state directory, then deletes it; with the clone deleted and the remote
+#       pruned, undo pushes it back from the bundle; the lease, and a branch there again at another SHA, are left
+#   [P] the bundle write keeps the newest 200 bundles of the kit's exact name shape and removes nothing else; a state directory
+#       with a trailing / names the same bundle in the kit and the gate
+#   [G] the delete gate's recoverable form: no bundle, a bundle of another head, one with a prerequisite, a symlink, or one
+#       outside bundles/: rc 3, nothing pushed; a complete bundle of the head: deleted
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -397,6 +409,16 @@ print(" ".join(n for n in a if a[n] != b[n]) or "same")
 PY
 )
   eq "$out" same "[K] cleanenv(), sgit() and url_repo() are byte for byte kit:branch-push's"
+  out=$(python3 - "$P/batons/branch-delete-recoverable.sh" "$P/batons/branch-push.sh" <<'PY'
+import re, sys
+def blocks(p):
+    t = open(p, encoding="utf-8").read()
+    return {name: re.search(r"^%s\(\) \{\n.*?^\}\n" % name, t, re.S | re.M).group(0) for name in ("cleanenv", "sgit", "url_repo")}
+a, b = blocks(sys.argv[1]), blocks(sys.argv[2])
+print(" ".join(n for n in a if a[n] != b[n]) or "same")
+PY
+)
+  eq "$out" same "[K] kit:branch-delete-recoverable's cleanenv(), sgit() and url_repo() are byte for byte kit:branch-push's"
   out=$(python3 - "$P/batons/branch-delete.sh" "$P/gates/branch_delete.py" <<'PY' 2>&1
 import importlib.util, re, shlex, sys
 t = open(sys.argv[1], encoding="utf-8").read()
@@ -490,7 +512,249 @@ fam_squash() {
   eq "$(gt "$P" "$d")/$(tip "$d" topic)" "4/$t" "[Q] go, a lost answer and the pull ref moved: undo puts the branch back (rc 4)"
 }
 
-FAMILIES="fam_call fam_delete fam_refuse fam_signed fam_gate fam_lint fam_undo fam_squash fam_share"
+# ── kit:branch-delete-recoverable and the stop word recoverable-delete ────────────────────────────────────────────────────────
+RK=kit:branch-delete-recoverable
+# rk_seq <case dir> <signed plan file> <repo> <branch> <head> <clone> <step>... — the kit's phases from one process, as baton runs
+# them (the run record is keyed by that parent), from the case directory (not the clone): a step is a phase, its rc joined by /,
+# or fn:<function>, run on the case dir; the last phase's output is in $BT_OUT
+rk_seq() {
+  local d=$1 plan=$2 st rcs=""; local a=("$3" "$4" "$5" "$6"); shift 6
+  ( cd "$d" || exit 99
+    export XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" \
+      BATON_PLUGIN_ROOT="$PLUGIN" BATON_PLAN="$plan"
+    for st in "$@"; do
+      case "$st" in
+        fn:*) "${st#fn:}" "$d" ;;
+        *) BATON_PHASE=$st bash "$PLUGIN/batons/branch-delete-recoverable.sh" "${a[@]}" > "$BT_OUT" 2>&1; rcs="$rcs${rcs:+/}$?" ;;
+      esac
+    done
+    printf '%s' "$rcs" )
+}
+# rk_plan <case dir> <branch> <head> [clone] — rehearse through baton; its plan lines into <case dir>/plan; rc
+rk_plan() {
+  local d=$1 r
+  r=$(bt "$PLUGIN" "$d" rehearse $RK repo=acme/app "branch=$2" "head=$3" "clone=${4:-$d/clone}")
+  sed -n 's/^  PLAN //p' "$BT_OUT" > "$d/plan"; printf '%s' "$r"
+}
+rbundle() { printf '%s/vibemaestro/baton/bundles/kit-branch-delete-recoverable-%s-%s.bundle' "$ST" \
+  "$(printf 'acme/app %s' "$1" | sha256sum | cut -c1-16)" "$2"; }
+bundles_n() { find "$ST/vibemaestro/baton/bundles" -name '*.bundle' 2>/dev/null | grep -c . ; }
+# wipe <case dir> — the clone deleted, and the remote's objects no ref reaches pruned: only the bundle still holds them
+wipe() {
+  rm -rf "$1/clone"; git_ -C "$1/bare.git" reflog expire --expire=now --all; git_ -C "$1/bare.git" gc -q --prune=now
+  git_ -C "$1/bare.git" cat-file -e "$(cat "$1/head")" 2>/dev/null; echo $? > "$1/wiped"     # 0 while the remote still has it
+}
+# bw <dir> <baton args...> — rc of baton run from <dir> (not a case clone); output in $BT_OUT
+bw() { local w=$1; shift; ( cd "$w" && XDG_STATE_HOME="$ST" python3 "$PLUGIN/scripts/baton.py" "$@" ) > "$BT_OUT" 2>&1; echo $?; }
+
+fam_rd_word() {
+  local P=$1 W R
+  ST="$(fresh)/state"; W=$(fresh)
+  eq "$(bw "$W" check $RK)" 0 "[W0] check kit:branch-delete-recoverable: rc 0"
+  eq "$(grep -cx '# Stops: recoverable-delete' "$P/batons/branch-delete-recoverable.sh")" 1 "[W0] …its header declares Stops recoverable-delete"
+  bw "$W" new rdx --dir "$W" > /dev/null
+  sed -i 's/^# Stops: none$/# Stops: recoverable-delete/' "$W/rdx.sh"     # the input: a session baton declaring the word, not a break
+  eq "$(grep -cx '# Stops: recoverable-delete' "$W/rdx.sh")" 1 "[W1] the session baton's header declares it"
+  eq "$(bw "$W" check "$W/rdx.sh")" 1 "[W1] a session baton declaring recoverable-delete: check rc 1"
+  has "$(cat "$BT_OUT")" "header: Stops recoverable-delete is for kit batons shipped in a plugin (kit:<name>) only" "[W1] …named as a kit-only word"
+  R=$(fresh); git_ init -q -b main "$R"; mkdir -p "$R/.vibemaestro/batons"; cp "$W/rdx.sh" "$R/.vibemaestro/batons/rdp.sh"
+  eq "$(bw "$R" check project:rdp)" 1 "[W2] a project: baton declaring recoverable-delete: check rc 1"
+  has "$(cat "$BT_OUT")" "header: Stops recoverable-delete is for kit batons shipped in a plugin (kit:<name>) only" "[W2] …named as a kit-only word"
+  cat > "$W/rmb.sh" <<'SH'
+#!/usr/bin/env bash
+# Purpose: drop one file from the baton state directory
+# Targets: the file under the state directory
+# Blast: that one file
+# Undo: none
+# Pre: the file exists
+# Stops: none
+# Expect: remove *
+set -euo pipefail
+PHASE=${BATON_PHASE:-rehearse}
+write() {
+  local plan=$1
+  shift
+  case "$PHASE" in
+    rehearse)
+      printf 'PLAN %s\n' "$plan"
+      printf '%s\n' "$plan" >> "${BATON_WRITES:-/dev/null}"
+      ;;
+    run | undo)
+      printf 'DO %s\n' "$plan"
+      printf '%s\n' "$plan" >> "${BATON_WRITES:-/dev/null}"
+      "$@"
+      ;;
+    *)
+      printf 'write called in phase %s: %s\n' "$PHASE" "$plan" >&2
+      return 70
+      ;;
+  esac
+}
+DEST="$HOME/.local/state/vibemaestro/baton/bundles/old.bundle"
+act() { write "remove $DEST" rm -f -- "$DEST"; }
+postcheck() { [ ! -e "$DEST" ]; }
+undo() { :; }
+case "$PHASE" in
+  rehearse) act; echo "VERDICT rehearse ok" ;;
+  run) act; echo "VERDICT run ok" ;;
+  postcheck) postcheck; echo "VERDICT postcheck ok" ;;
+  undo) undo; echo "VERDICT undo ok" ;;
+  *) echo "unknown phase: $PHASE" >&2; exit 64 ;;
+esac
+SH
+  sed 's|/baton/bundles/old.bundle|/baton/other/old.bundle|' "$W/rmb.sh" > "$W/rmo.sh"     # the input: the same baton, another directory
+  eq "$(bw "$W" check "$W/rmo.sh")" 0 "[W4] control: the same Stops: none baton naming another directory of the state: check rc 0"
+  eq "$(bw "$W" check "$W/rmb.sh")" 1 "[W4] a Stops: none session baton naming the state directory's bundles/ (through a name): check rc 1"
+  has "$(cat "$BT_OUT")" "names the baton state directory's bundles/, which holds the only copy of what a recoverable delete removed" "[W4] …the bundles directory named"
+  has "$(cat "$BT_OUT")" "only a kit: baton (Stops recoverable-delete) touches it" "[W4] …which only a kit may touch"
+}
+
+fam_rd_sign() {
+  local P=$1 d t
+  ST="$(fresh)/state"; d=$(setup acme/app); t=$(tip "$d" topic)
+  eq "$(bt "$P" "$d" mode auto >/dev/null; bt "$P" "$d" go $RK repo=acme/app branch=topic "head=$t" "clone=$d/clone")" 8 \
+    "[A1] go in mode auto: exit 8, the owner signs a recoverable-delete run"
+  eq "$(tip "$d" topic)/$(bundles_n)" "$t/0" "[A1] …nothing deleted, no bundle written"
+  eq "$(sg "$P" "$d" $RK repo=acme/app branch=topic "head=$t" "clone=$d/clone")" 3 "[A2] sign --by coordinator-auto: refused, rc 3"
+  eq "$(bt "$P" "$d" run $RK repo=acme/app branch=topic "head=$t" "clone=$d/clone"):$(tip "$d" topic)/$(bundles_n)" "3:$t/0" \
+    "[A2] …and run has no signature to use: rc 3, nothing deleted, no bundle"
+}
+
+fam_rd_refuse() {
+  local P=$1 d t s m
+  ST="$(fresh)/state"
+  # rd_no <label> <reason> <case dir> <branch> <head> [clone] — rehearse rc 1, the reason named, the branch and no bundle left
+  rd_no() {
+    local before; before=$(tip "$3" "$4")
+    eq "$(rk_plan "$3" "$4" "$5" "${6:-}")" 1 "$1: rehearse rc 1"
+    has "$(cat "$BT_OUT")" "$2" "$1 …refused by name"
+    eq "$(tip "$3" "$4")/$(bundles_n)" "$before/0" "$1 …nothing deleted, no bundle"
+  }
+  d=$(setup acme/app); t=$(tip "$d" topic)
+  git_ clone -q --no-local --depth 1 --no-single-branch "$d/bare.git" "$d/shallow"; git_ -C "$d/shallow" remote set-url origin "git@$GH:acme/app.git"
+  rd_no "[C1] a shallow clone" "the clone is shallow" "$d" topic "$t" "$d/shallow"
+  git_ clone -q --no-local --single-branch -b main "$d/bare.git" "$d/single"; git_ -C "$d/single" remote set-url origin "git@$GH:acme/app.git"
+  rd_no "[C2] a clone missing an object of head" "the clone lacks an object of $t" "$d" topic "$t" "$d/single"
+  git_ clone -q --shared "$d/bare.git" "$d/shared"; git_ -C "$d/shared" remote set-url origin "git@$GH:acme/app.git"
+  rd_no "[C3] a clone using alternates" "the clone uses alternates" "$d" topic "$t" "$d/shared"
+  git_ clone -q "$d/bare.git" "$d/partial"; git_ -C "$d/partial" remote set-url origin "git@$GH:acme/app.git"
+  git_ -C "$d/partial" config extensions.partialClone origin
+  rd_no "[C4] a clone with extensions.partialClone" "the clone is partial" "$d" topic "$t" "$d/partial"
+  git_ -C "$d/clone" worktree add -q "$d/wt" main 2>/dev/null
+  rd_no "[C5] a worktree (its .git a file)" ".git is not a directory holding objects" "$d" topic "$t" "$d/wt"
+  rd_no "[C6] no repository at clone" ".git is not a directory holding objects" "$d" topic "$t" "$d/none"
+  git_ clone -q "$d/bare.git" "$d/grafted"; git_ -C "$d/grafted" remote set-url origin "git@$GH:acme/app.git"
+  printf '%s\n' "$t" > "$d/grafted/.git/info/grafts"
+  rd_no "[C7] a clone with grafts" "the clone has grafts" "$d" topic "$t" "$d/grafted"
+  git_ clone -q "$d/bare.git" "$d/promisor"; git_ -C "$d/promisor" remote set-url origin "git@$GH:acme/app.git"
+  : > "$d/promisor/.git/objects/pack/pack-0000000000000000000000000000000000000000.promisor"
+  rd_no "[C8] a clone with a .promisor pack" "the clone is partial" "$d" topic "$t" "$d/promisor"
+  s=$(tip "$d" done); m=$(tip "$d" main)
+  rd_no "[R1] the default branch" "REFUSE main is the default branch" "$d" main "$m"
+  rd_no "[R2] a tip off the pinned head" "not at the pinned head $m" "$d" done "$m"
+  git_ -C "$d/bare.git" update-ref refs/tags/topic "$t"
+  rd_no "[R3] a name that is also a tag" "has a tag topic" "$d" topic "$t"
+  git_ -C "$d/bare.git" update-ref -d refs/tags/topic
+  world "$d" 'A["protected"] = ["topic"]'
+  rd_no "[R4] a protected branch" "branch topic is protected" "$d" topic "$t"
+  world "$d" 'A["protected"] = []; A["pulls"] = [{"head": "acme:topic", "base": "main"}]'
+  rd_no "[R5] an open pull request from it" "an open pull request has topic as its head" "$d" topic "$t"
+  world "$d" 'A["pulls"] = [{"head": "acme:x", "base": "topic"}]'
+  rd_no "[R6] an open pull request into it" "an open pull request has topic as its base" "$d" topic "$t"
+  world "$d" 'A["pulls"] = []'
+  git_ -C "$d/clone" remote set-url origin "git@$GH:acme/other.git"
+  rd_no "[R7] a clone whose origin names another repository" "this kit deletes only on github.com/acme/app" "$d" topic "$t"
+  d=$(setup acme/pub); t=$(tip "$d" topic)
+  eq "$(bt "$P" "$d" rehearse $RK repo=acme/pub branch=topic "head=$t" "clone=$d/clone"):$(tip "$d" topic)" "1:$t" "[R8] a public repository: rehearse rc 1, nothing deleted"
+  has "$(cat "$BT_OUT")" "does not read private" "[R8] …refused by name"
+}
+
+fam_rd_run() {
+  local P=$1 d t s b
+  ST="$(fresh)/state"; d=$(setup acme/app); t=$(tip "$d" topic); b=$(rbundle topic "$t")
+  eq "$(rk_plan "$d" topic "$t")" 0 "[D1] rehearse an unmerged branch the clone holds: rc 0"
+  has "$(cat "$d/plan")" "bundle branch topic at $t into $b" "[D1] …the first write bundles the head into the state directory"
+  has "$(cat "$d/plan")" "delete branch topic at $t (kept in bundle $b) on git@$GH:acme/app.git" "[D1] …the second deletes, naming the bundle"
+  eq "$(tip "$d" topic)/$(bundles_n)" "$t/0" "[D1] …rehearse deleted nothing, wrote no bundle"
+  eq "$(rk_seq "$d" "$d/plan" acme/app topic "$t" "$d/clone" run postcheck)" "0/0" "[D1] the signed run and its post-check: rc 0/0"
+  eq "$(tip "$d" topic)/$(bundles_n)" "/1" "[D1] …the branch is gone, one bundle kept"
+  eq "$(git_ -C "$d/bare.git" bundle list-heads "$b")" "$t refs/heads/topic" "[D1] …the bundle's one head is the deleted one"
+  eq "$(find "$ST" -name 'kit-branch-delete-recoverable-*.last' | grep -c .)" 0 "[D1] …and the passing post-check dropped the run record"
+  ST="$(fresh)/state"; d=$(setup acme/app); t=$(tip "$d" topic); rk_plan "$d" topic "$t" > /dev/null; printf '%s' "$t" > "$d/head"
+  eq "$(rk_seq "$d" "$d/plan" acme/app topic "$t" "$d/clone" run fn:wipe undo)" "0/0" "[U1] a run, then the clone deleted and the remote pruned, then undo: rc 0/0"
+  eq "$(cat "$d/wiped")" 1 "[U1] …control: before undo, the remote no longer had the head's commit"
+  has "$(cat "$BT_OUT")" "DO push branch topic at $t back to git@$GH:acme/app.git from the bundle $(rbundle topic "$t")" "[U1] …undo pushes from the bundle"
+  eq "$(tip "$d" topic)" "$t" "[U1] …the branch is back at the pinned head"
+  eq "$(git_ -C "$d/bare.git" rev-list --objects --missing=error "$t" > /dev/null 2>&1; echo $?)" 0 "[U1] …with every object of it on the remote"
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); rk_plan "$d" done "$s" > /dev/null; : > "$d/race"
+  eq "$(rk_seq "$d" "$d/plan" acme/app done "$s" "$d/clone" run undo)" "3/0" "[U2] a branch moved just before the push: the lease refuses (rc 3), undo has nothing to put back (rc 0)"
+  eq "$(tip "$d" done)" "$(tip "$d" main~2)" "[U2] …the moved branch is left where it is"
+  rm -f "$d/race"
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); rk_plan "$d" done "$s" > /dev/null
+  eq "$(rk_seq "$d" "$d/plan" acme/app done "$s" "$d/clone" run fn:regrow undo)" "0/1" "[U3] a branch there again at another SHA when undo runs: undo rc 1"
+  has "$(cat "$BT_OUT")" "LEAVE branch done is at $(tip "$d" main)" "[U3] …named and left"
+  eq "$(tip "$d" done)" "$(tip "$d" main)" "[U3] …the other ref untouched"
+  # [P] the prune: 201 older bundles of the kit's exact name shape, a name with newlines (the oldest), and a file the newline
+  # pieces name in the run's directory; the run keeps the newest 200 of the exact shape and removes nothing else
+  ST="$(fresh)/state"; d=$(setup acme/app); t=$(tip "$d" topic); rk_plan "$d" topic "$t" > /dev/null
+  has "$(cat "$d/plan")" "into $(rbundle topic "$t"), dropping the kit's bundles past the newest 200" "[P1] the bundle's plan line names the prune"
+  mkdir -p "$ST/vibemaestro/baton/bundles"
+  python3 - "$ST/vibemaestro/baton/bundles" <<'PY'
+import os, sys, time
+d, now = sys.argv[1], time.time()
+for i in range(201):
+    p = os.path.join(d, "kit-branch-delete-recoverable-%016x-%040x.bundle" % (i, i))
+    open(p, "w").close(); os.utime(p, (now - 1000 + i, now - 1000 + i))      # i = 0 the oldest
+p = os.path.join(d, "kit-branch-delete-recoverable-\nvictim\nx.bundle")
+open(p, "w").close(); os.utime(p, (now - 5000, now - 5000))
+p = os.path.join(d, "junk\nkit-branch-delete-recoverable-%016x-%040x.bundle" % (150, 150))    # a piece naming a kept bundle
+open(p, "w").close(); os.utime(p, (now - 6000, now - 6000))
+PY
+  : > "$d/victim"
+  eq "$(rk_seq "$d" "$d/plan" acme/app topic "$t" "$d/clone" run)" 0 "[P1] the run over 201 older bundles: rc 0"
+  eq "$(python3 - "$ST/vibemaestro/baton/bundles" <<'PY'
+import os, re, sys
+names = os.listdir(sys.argv[1])
+exact = [n for n in names if re.fullmatch(r"kit-branch-delete-recoverable-[0-9a-f]{16}-[0-9a-f]{40}\.bundle", n)]
+fake = "kit-branch-delete-recoverable-%016x-%040x.bundle"
+print(len(exact), fake % (1, 1) in names, fake % (2, 2) in names, fake % (150, 150) in names, sum("\n" in n for n in names))
+PY
+)" "200 False True True 2" "[P1] …the newest 200 of the exact shape kept (the new one and 199): the two oldest dropped, the next kept; a newline-named file whose piece names a kept bundle removes nothing; both newline-named files left"
+  eq "$([ -e "$d/victim" ] && echo kept)" "kept" "[P1] …and the file a newline piece names in the run's directory is not removed"
+  ST="$(fresh)/state/"; d=$(setup acme/app); t=$(tip "$d" topic); rk_plan "$d" topic "$t" > /dev/null
+  eq "$(rk_seq "$d" "$d/plan" acme/app topic "$t" "$d/clone" run postcheck)/$(tip "$d" topic)" "0/0/" \
+    "[P2] XDG_STATE_HOME with a trailing /: the kit and the gate name the same bundle, run and post-check rc 0/0"
+}
+
+# rgate <case dir> <gate args...> — the delete gate run directly with the state in $ST; rc, output in $BT_OUT
+rgate() {
+  local d=$1; shift
+  ( cd "$d" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" python3 -I -B "$PLUGIN/gates/branch_delete.py" "$@" ) > "$BT_OUT" 2>&1; echo $?
+}
+fam_rd_gate() {
+  local P=$1 d t b u line
+  ST="$(fresh)/state"; d=$(setup acme/app); t=$(tip "$d" topic); b=$(rbundle topic "$t"); u="git@$GH:acme/app.git"
+  line="delete branch topic at $t (kept in bundle $b) on $u"; printf '%s\n' "$line" > "$d/plan"
+  g() { rgate "$d" --repo acme/app --branch topic --head "$t" --url "$u" --plan "$line" --expect-plan "$d/plan"; }
+  eq "$(g):$(tip "$d" topic)" "3:$t" "[G1] the recoverable form with no bundle: rc 3, nothing deleted"
+  has "$(cat "$BT_OUT")" "REFUSE $b cannot be read" "[G1] …named"
+  mkdir -p "$(dirname "$b")"; git_ -C "$d/seed" bundle create -q "$b" refs/heads/main
+  eq "$(g):$(tip "$d" topic)" "3:$t" "[G2] a bundle of another head at that path: rc 3, nothing deleted"
+  has "$(cat "$BT_OUT")" "does not hold exactly $t refs/heads/topic" "[G2] …named"
+  rm -f "$b"; git_ -C "$d/seed" bundle create -q "$b" main..topic
+  eq "$(g):$(tip "$d" topic)" "3:$t" "[G3] a bundle that needs main's commits (a prerequisite): rc 3, nothing deleted"
+  has "$(cat "$BT_OUT")" "does not hold every object of $t" "[G3] …named"
+  rm -f "$b"; git_ -C "$d/seed" bundle create -q "$d/x.bundle" refs/heads/topic; ln -s "$d/x.bundle" "$b"
+  eq "$(g):$(tip "$d" topic)" "3:$t" "[G4] a symlink at that path: rc 3, nothing deleted"
+  has "$(cat "$BT_OUT")" "REFUSE $b is not a regular file" "[G4] …named"
+  rm -f "$b"; line="delete branch topic at $t (kept in bundle $d/x.bundle) on $u"; printf '%s\n' "$line" > "$d/plan"
+  eq "$(g):$(tip "$d" topic)" "3:$t" "[G5] a complete bundle outside the state directory's bundles/: rc 3, nothing deleted"
+  has "$(cat "$BT_OUT")" "is not a bundle of this head under $ST/vibemaestro/baton/bundles" "[G5] …named"
+  line="delete branch topic at $t (kept in bundle $b) on $u"; printf '%s\n' "$line" > "$d/plan"; cp "$d/x.bundle" "$b"
+  eq "$(g):$(tip "$d" topic)" "0:" "[G6] the signed line and a complete bundle of the head: rc 0, deleted"
+}
+
+FAMILIES="fam_call fam_delete fam_refuse fam_signed fam_gate fam_lint fam_undo fam_squash fam_share fam_rd_word fam_rd_sign fam_rd_refuse fam_rd_run fam_rd_gate"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
 
 echo "== nothing written outside the scratch tree =="

@@ -5,7 +5,7 @@ description: "Use when: the person gives a request in an app repo that is still 
 
 # brainstorm — clarify the request before writing the spec
 
-`intake` records the **person's own words** verbatim; `spec` records **what is correct and which command proves it**. Between the two
+`intake` records the **person's own words** verbatim; `spec` records **what must be true, as behaviour, and the risks the tests cover**. Between the two
 there is often a gap: the person's words do not say enough to write the criteria. This skill fills the gap with a structured
 conversation and leaves **what was settled** in one place that `spec` can read. Settling the direction before the spec is cheaper than fixing
 the spec — and much cheaper than fixing code that was built in the wrong direction.
@@ -13,7 +13,7 @@ the spec — and much cheaper than fixing code that was built in the wrong direc
 Condition: an intent exists (`vibemaestro-sdlc:intake`) and you stand in the worktree of the branch `intent/<date>-<slug>`; with no intent, do `vibemaestro-sdlc:intake` first.
 
 **Skip this skill** when the handover package already has a "Brainstorm result" section in the intent (it was done already — do not ask the person
-again), or when the request already says enough about *what must be true* and *which command proves it*: go straight to `vibemaestro-sdlc:spec`.
+again), or when the request already says enough about *what must be true* and *how a person sees it*: go straight to `vibemaestro-sdlc:spec`.
 
 **This skill writes no code, builds no scaffold, creates no spec file.** The code written for a spike is throwaway code,
 labelled throwaway and not committed.
@@ -40,7 +40,7 @@ labelled throwaway and not committed.
 
 3. **Ask ONE question per turn.** Several questions in one turn and the person answers the easy one and skips the hard one. Prefer a question
    with answers to choose from (a/b/c). Order: *what for* → *constraints* (time, cost, technology, what must not be touched) → *success criteria*
-   (what the person sees when it is done, which command proves it). Bounded usually takes 1–2 questions; Architectural asks until nothing unknown is left.
+   (what the person sees when it is done). Bounded usually takes 1–2 questions; Architectural asks until nothing unknown is left.
    In a sandbox session (`VIBEMAESTRO_ROLE=worker`, or, deprecated and leaving in the next release, `INTENT_SLUG` and `SEAT` both set and
    not blank; checked by `[ "${VIBEMAESTRO_ROLE:-}" = worker ] || { [ -n "$(printf %s "${INTENT_SLUG:-}" | tr -d '[:space:]')" ] && [ -n "$(printf %s "${SEAT:-}" | tr -d '[:space:]')" ]; }`; a `session-ask` on PATH does not make a session a sandbox) and the `session-ask` command is installed, ask with
    `session-ask "<question>"` and then **end the turn** to wait for the answer; otherwise (a solo session, or a sandbox without the command) ask directly in the session.
@@ -53,7 +53,15 @@ labelled throwaway and not committed.
    to check, the risk). Architectural: split into parts the person can review separately (components, data flow, error handling, how to check,
    the way back) — put the whole thing in one turn and the person only nods.
 
-6. **Write the result into the intent file ITSELF** — add a `## Brainstorm result` section at the **end** of `kb/intent/<date>-<slug>.md`,
+6. **A story: the result is the story itself.** For an intent of type story, write the story the owner approves into the intent
+   (`kb.py new intent --type story` writes its card, in the repository's `language`): the As / I want / so that line, context,
+   numbered AC that say what the owner sees (no command, file name or code), out of scope, appetite, and at most 3 open questions,
+   each with a recommendation and why; it fits a phone screen. With a coordinator, the coordinator writes it after brainstorming
+   with the owner; in a solo session, write it with the person. The owner approves the story; the coordinator approves the spec (a solo person approves story and spec in one ask): an answer
+   moves its question to the story's decisions part, with the owner's words quoted. `kb.py check intent <date>-<slug>` checks the
+   parts. For a task or a bug, go on with item 7.
+
+7. **Write the result into the intent file ITSELF** — add a `## Brainstorm result` section at the **end** of `kb/intent/<date>-<slug>.md`,
    after the person's words (do not edit the person's words). The heading is in the language of the repo's `kb/` documents (`language` in the config); no script reads it:
 
    ```markdown
@@ -81,9 +89,9 @@ labelled throwaway and not committed.
 
 - **Do not create a separate spec file and do not write into the default output directory of the third-party process plugin (under `docs/`).** In an app repo the output is `kb/`; the spec is created by
   `vibemaestro-sdlc:spec`, in the spec shape.
-- **Do not add any `## ` section to the spec** from this result — the machine check `kb.py check spec` accepts only its own sections (`## Inputs and failure cases` among them) and `## Design`.
-  What was settled, `spec` takes into `## Context` / `## Goal`; the option chosen/rejected goes into `## Design` if the spec is large.
-  (The section names come from `tokens.spec`: with `"language": "en"` they are `## Context`, `## Goal` and `## Design`; a repo on the default `vi` language has the Vietnamese names, which `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get tokens.spec` prints.)
+- **Do not add any `## ` section to the spec** from this result — the machine check `kb.py check spec` accepts only its five sections.
+  What was settled, `spec` takes into its goal and constraints; the option chosen and the ones rejected go into the plan, which holds the how.
+  (The section names come from `tokens.spec`: with `"language": "en"` they are `## Goal`, `## Constraints`, `## Acceptance criteria`, `## Risks to cover`, `## To clarify`; a repo on the default `vi` language has the Vietnamese names, which `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get tokens.spec` prints.)
 - **Do not start coding while the person is reading**, and do not take "agreed with the design" as approval of the spec: approving the spec is a
   separate step of `spec`.
 

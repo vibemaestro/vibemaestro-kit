@@ -14,7 +14,7 @@
 #   [spec-fenced]       the heading, or the table, only inside a ``` fence does not count
 #   [spec-old-warns]    a spec already on the merge base without the section, or with a broken table, passes (rc 0) with a WARNING line
 #   [spec-date]         no origin to read: dated before 2026-11-02 warns (rc 0), dated on or after it is refused, no date warns
-#   [spec-language]     `kb.py new spec` writes the same `## Inputs and failure cases` between out-of-scope and criteria under vi and
+#   [spec-language]     `kb.py new spec` writes the five sections of a spec derived from a story (vi and en names) under vi and
 #                       en; the template is refused while its blanks are there, and passes once they are filled
 #   [sub-bad-payload]   SubagentStart with empty stdin, text that is not JSON, a JSON list: rc 0, no output
 #   [sub-readonly]      Explore, Plan, claude-code-guide, statusline-setup get nothing; general-purpose, a missing type and a plugin
@@ -261,10 +261,10 @@ for L in vi en; do
   printf '{"schema": 1, "language": "%s"}\n' "$L" > "$W/.vibemaestro/sdlc.json"
   kb "$W" new spec lang --date 2026-11-10 >/dev/null
   F="$W/kb/specs/2026-11-10-lang.md"
-  H=$(grep -E '^## ' "$F" | sed -n 3,5p | tr '\n' '|')
+  H=$(grep -E '^## ' "$F" | tr '\n' '|')
   case $L in
-    vi) eq "$H" "## Ngoài phạm vi|## Inputs and failure cases|## Tiêu chí chấp nhận|" "[spec-language] vi: the template has the section between out-of-scope and criteria" ;;
-    en) eq "$H" "## Out of scope|## Inputs and failure cases|## Acceptance criteria|" "[spec-language] en: the template has the same heading between out-of-scope and criteria" ;;
+    vi) eq "$H" "## Mục tiêu|## Ràng buộc|## Tiêu chí chấp nhận|## Rủi ro cần test phủ|## Cần làm rõ|" "[spec-language] vi: the template has the five sections of a spec derived from a story" ;;
+    en) eq "$H" "## Goal|## Constraints|## Acceptance criteria|## Risks to cover|## To clarify|" "[spec-language] en: the template has the same five sections, English names" ;;
   esac
   O=$(refused "$W" 2026-11-10-lang); eq "$?" 65 "[spec-language] $L: the fresh template is refused while its blanks are there"
   python3 - "$F" <<'PY'  # fills the template kb.py new wrote: the checker's input, not a break

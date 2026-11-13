@@ -35,6 +35,10 @@ stem_of_branch() {
     [ -n "$BRANCH" ] || BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || BRANCH=""
     PFX=$(python3 "$HERE/sdlc_config.py" get branch.intent_prefix 2>/dev/null) || PFX="intent/"
     case "$BRANCH" in "$PFX"?*) STEM="${BRANCH#"$PFX"}" ;; *) note "not on an intent branch" ;; esac
+    # a key branch `<prefix><key>-<slug>` is the intent whose `key:` names it: its stem is that file's (kb_plan.intent_of_branch)
+    local rel; rel=$(python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import kb_plan; print(kb_plan.intent_of_branch(sys.argv[2], sys.argv[3]) or "")' \
+        "$HERE" "$(git rev-parse --show-toplevel 2>/dev/null)" "$STEM" 2>/dev/null) || rel=""
+    case "$rel" in kb/intent/?*.md) STEM="${rel#kb/intent/}"; STEM="${STEM%.md}" ;; esac
 }
 
 if ! command -v session-notify >/dev/null 2>&1; then

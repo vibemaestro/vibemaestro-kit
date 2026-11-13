@@ -1,13 +1,16 @@
 ---
 name: spec
-description: "Use when: the intent of an app repo is recorded (kb/intent/<date>-<slug>.md, branch intent/<date>-<slug>) and there is no spec the person has approved yet — create kb/specs/<date>-<slug>.md in the spec shape (with its Inputs and failure cases table), commit it to the intent branch, then ask the person to approve (session-ask in a sandbox, ask directly in a solo session) BEFORE editing code."
+description: "Use when: the intent of an app repo is recorded (kb/intent/<date>-<slug>.md, branch intent/<date>-<slug>) and there is no approved spec yet — create kb/specs/<date>-<slug>.md in the spec shape (goal, constraints, behaviour-level criteria pointing to the story's AC, risks to cover, open points), commit it to the intent branch, then ask for approval (session-ask in a sandbox, ask directly in a solo session) BEFORE editing code."
 ---
 
-# spec — design an intent and ask the person to approve before code
+# spec — derive the spec from the intent and get it approved before code
 
-The intent says **what the person wants**; the spec says **what is correct and which command proves it**. The person approves the spec
-**before** the first line of code: approving one page of text is much cheaper than reviewing a PR that was built in the
-wrong direction. The spec shape is the one recorded in this repo's own `kb/README.md` (built by `init-kb`).
+The intent says **what the person wants** (for a story: the story the owner approved); the spec says **what must be true**, as
+behaviour, derived from it, and which risks the tests must cover. It holds no implementation: the how belongs to the plan
+(`vibemaestro-sdlc:plan`) or to the session's own judgement. The spec is approved **before** the first line of code: approving two
+pages is much cheaper than reviewing a PR built in the wrong direction. Who approves: in a coordinated session the coordinator;
+the owner is asked only when the spec would change an AC of the story. In a solo session the person approves the story and the
+spec in one ask. The spec shape is the one recorded in this repo's own `kb/README.md` (built by `init-kb`).
 
 Condition: an intent exists (`vibemaestro-sdlc:intake`) and you stand in the worktree of the branch `intent/<date>-<slug>`.
 If not, do `intake` first.
@@ -20,34 +23,34 @@ If not, do `intake` first.
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" new spec <slug> --date <date>
    ```
 
-   The command creates `kb/specs/<date>-<slug>.md` with the sections `## Context`, `## Goal`, `## Out of scope`,
-   `## Inputs and failure cases`, `## Acceptance criteria` and points `Intent:` at the intent file if it already exists. Link it back: add `spec: kb/specs/<date>-<slug>.md`
-   to the intent's frontmatter (and the intent's `plan:` line, if it has one, to the spec's) and commit the intent with the spec.
+   The command creates `kb/specs/<date>-<slug>.md` with the five sections `## Goal`, `## Constraints`, `## Acceptance criteria`,
+   `## Risks to cover` and `## To clarify`, and points `Intent:` at the intent file if it already exists. Link it back: add
+   `spec: kb/specs/<date>-<slug>.md` to the intent's frontmatter (and the intent's `plan:` line, if it has one, to the spec's) and
+   commit the intent with the spec.
 
-   **The section names come from the repo's config** (`tokens.spec`): with `"language": "en"` they are `## Context`, `## Goal`,
-   `## Out of scope`, `## Acceptance criteria`, the optional `## Design`, the last criterion names `## Run evidence`, and the
-   blanks are `<FILL: …>`. The English names in this skill are the ones of `"language": "en"`; a repo on the default `vi` language has
-   Vietnamese names, which `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get tokens.spec` prints; where the repo says otherwise,
-   keep the names the generated template carries, which are the ones `kb.py check spec` requires. The check counts the placeholder of every
-   language (`<FILL`, and the Vietnamese one that `tokens.spec.placeholder` holds by default), so a spec that writes about one quotes the word without its `<`.
+   **The section names come from the repo's config** (`tokens.spec`): the English names in this skill are the ones of
+   `"language": "en"`, and the blanks are `<FILL: …>`; a repo on the default `vi` language has Vietnamese names, which
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sdlc_config.py" get tokens.spec` prints; where the repo says otherwise, keep the names the
+   generated template carries, which are the ones `kb.py check spec` requires. The spec is kb content: write it in the repo's
+   `language` (`sdlc_config.py get language`). The check counts the placeholder of every language (`<FILL`, and the Vietnamese one
+   that `tokens.spec.placeholder` holds by default), so a spec that writes about one quotes the word without its `<`.
 
-2. **Fill in** — only from the intent and, if the intent has a `## Brainstorm result` section (written by `vibemaestro-sdlc:brainstorm` or by the
-   handover package), take **what was settled, the constraints, the option chosen/rejected** from there (into `## Context` / `## Goal`; the option
-   chosen/rejected into `## Design` if the spec is large). **Add no idea of your own** and do not widen the
-   scope beyond the person's words. If the spec needs a piece of information that is missing, write it down as a question for the person in step 4;
-   do not guess.
-   - `## Inputs and failure cases` (this exact heading in every language): a table of three columns, one row per input or
-     failure the change must survive, its expected behaviour, and the test that proves it. Choose rows by risk, about 10 at most:
-     the hostile input (injection, a path outside the tree, a huge or binary value), the odd one (unicode, spaces, a symlink), the
-     empty one, the oversized one, two runs at once, a failure half way (a write that dies, a network call that times out), the
-     wrong type. Most review defects are an input nobody listed. Every row's test is part of the acceptance: the criteria run it.
-     A change with no such input (a typo in a doc) replaces the table with one line `none, because <reason>`.
-     How a good test looks: rule `test-quality` of the plugin (`rules/test-quality.instructions.md`).
-   - `## Acceptance criteria`: each criterion is **one command + the expected result** (``1. `bash t.sh` → `0 fail` ``),
-     not a description. **The last criterion is always: the PR has a `## Run evidence` section** holding the real output of the commands above.
-   - A large spec gets a `## Design` **after** the other sections (the direction chosen, the options rejected, why); minor points inside it go
-     in as `###`. Add no other `## ` section — the machine will report it as an unknown section.
-   - Delete every `<FILL: …>`; the `description:` line in the frontmatter is a one-line description.
+2. **Fill in** — only from the intent: the story, its decisions and, for a task or a bug, a `## Brainstorm result` section.
+   **Add no idea of your own** and do not widen the scope beyond the story. A missing piece of information becomes an open point
+   in `## To clarify`; do not guess.
+   - `## Goal`: what must be true when done, said as a result a person sees, each line pointing to the AC it serves (`→ AC<n>`).
+   - `## Constraints`: hard limits only: security, cost, compatibility. Not how it is built: a "constraint" that names a file, a
+     function, a library or an order of steps is the plan's.
+   - `## Acceptance criteria`: behaviour, written as "when … then …" (vi: "khi … thì …"), each ending `→ AC<n>[, AC<m>]`; every AC
+     of the story has at least one. No command, unless the command is the behaviour (a CLI's output); no evidence line (the PR's
+     evidence section is the `ship` skill's).
+   - `## Risks to cover`: the inputs and failures the tests must cover, chosen by risk, about 10 at most: the hostile input
+     (injection, a path outside the tree, a huge or binary value), the odd one (unicode, spaces, a symlink), the empty one, the
+     oversized one, two runs at once, a failure half way, the wrong type. Most review defects are an input nobody listed. How a good
+     test looks: rule `test-quality` of the plugin (`rules/test-quality.instructions.md`).
+   - `## To clarify`: the open points, each with a recommendation and why; `none` when there are none. A point that would change
+     an AC of the story goes to the owner.
+   - About two pages for a usual story. Delete every `<FILL: …>`; the `description:` line in the frontmatter is one line.
 
 3. **Check the shape by machine** and fix until rc `0`:
 
@@ -55,19 +58,14 @@ If not, do `intake` first.
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" check spec <date>-<slug>
    ```
 
-   This command checks only the **shape**: the sections in the right order, none empty, no `<FILL` left, every criterion has a command
-   in backticks, the last criterion mentions `## Run evidence`, and `## Inputs and failure cases` holds a table of three filled
-   columns or a `none, because <reason>` line. That section is required on a spec new in the change (absent from the merge base of
-   `origin/HEAD`); a spec that already existed only gets a `WARNING` line.
-   It reads the table without rendering it: the header line, the `|---|` row under it, then the lines that hold a `|`, up to a
-   blank line or a line without one; one table, three columns, three filled cells per row. The lines around the table are not
-   judged, so a heading or a sentence above it and a list below it pass, as long as the line right under the rows holds no `|`
-   (a glued line with a `|` is read as a row); a fenced block ends the table like a blank line. What it cannot see also passes: prose glued under the
-   rows with no blank line (GitHub shows it as a broken row), a `|---|` row indented four spaces (no table on GitHub), a table
-   inside an HTML comment. Leave a blank line around the table and read the spec on GitHub once. It does **not** know whether a command is right or runs, and
-   it is **not** a gate: nothing stops you editing code before you have run it — keeping the discipline is your job.
+   Red: one of the five sections missing, twice or empty, another `## ` section, a blank left, an AC of the story that no criterion
+   names, an AC named that the story lacks. A warning, never red (also under `--strict`): a criterion not written as when … then
+   or naming no AC, a code block, a spec over 8000 characters. A story's spec of the earlier shape (`## Context`, `## Out of scope`,
+   `## Inputs and failure cases`, criteria as commands) passes with a warning until its body changes (its frontmatter does not
+   count); new or with a changed body, it takes the five sections. A task's or a bug's spec may keep either shape. The check reads the shape, not whether a criterion is right, and it is
+   **not** a gate: nothing stops you editing code before the approval — keeping the discipline is your job.
 
-4. **Commit, push, then ask the person to approve** (one commit, `git add` by pathspec):
+4. **Commit, push, then ask for the approval** (one commit, `git add` by pathspec):
 
    ```bash
    git add kb/specs/<date>-<slug>.md
@@ -79,6 +77,7 @@ If not, do `intake` first.
    - In a sandbox session (`VIBEMAESTRO_ROLE=worker`, or, deprecated and leaving in the next release, `INTENT_SLUG` and `SEAT` both set and
      not blank; checked by `[ "${VIBEMAESTRO_ROLE:-}" = worker ] || { [ -n "$(printf %s "${INTENT_SLUG:-}" | tr -d '[:space:]')" ] && [ -n "$(printf %s "${SEAT:-}" | tr -d '[:space:]')" ]; }`; a `session-ask` on PATH does not make a session a sandbox), when the `session-ask` command is installed, call
      `session-ask "Spec kb/specs/<date>-<slug>.md is pushed to intent/<date>-<slug>. Approve so I can start coding, or name what needs changing. Open points: <…>"`
+     (the coordinator answers it; it asks the owner only when an AC of the story would change)
      then **end the turn** and wait for the person's message. The command records the `waiting` status so that the person is woken up; the session stays alive.
    - Otherwise (a solo session, or a sandbox without the `session-ask` command), give the spec path in your reply and ask the person right in the session.
      First record the question with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" ask <date>-<slug>`, the question on stdin
@@ -87,10 +86,12 @@ If not, do `intake` first.
 
 5. **No code edit without an approval.** Approval is **the person's reply** through the person's channel; the machine has
    no "approved" mark, and silence is not approval. If the person asks for the spec to change, change it, run step 3 again, commit,
-   push, ask for approval again. With an approval, first run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" code <date>-<slug>` (the dashboard
+   push, ask for approval again. In a solo session, ask for the story and the spec in that one question. With an approval, first run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stage-signal.sh" code <date>-<slug>` (the dashboard
    shows coding started: in a sandbox through `session-notify`, else in the local state file of the session; it never fails), then carry on: `vibemaestro-sdlc:plan` if the work must be split, or code in this
-   worktree and then `vibemaestro-sdlc:ship`. While working, if you find the spec wrong, fix the spec in a commit of its own and tell the person;
-   do not silently work differently from the spec.
+   worktree and then `vibemaestro-sdlc:ship`. The spec is living: when the code teaches something, update the spec (and the plan) in the same PR and say so in the PR
+   body; that needs no new approval. Changing an AC of the story does: ask the owner (through the coordinator), and record the
+   answer as a decision of the story with the owner's words quoted — `kb.py check intent` and `kb.py check links` are red on a
+   story already on the base whose AC changed without one. Never silently work differently from the spec.
 
 ## An intent whose spec is already approved
 

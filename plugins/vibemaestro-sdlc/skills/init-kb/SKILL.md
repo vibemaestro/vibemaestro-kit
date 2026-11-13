@@ -9,8 +9,7 @@ description: "Use when: a repo app has no kb/ or lacks one of its directories, o
 a repo without `.vibemaestro/sdlc.json` runs the plugin on its defaults only. This skill is the one door for both: it scaffolds `kb/`
 and writes the per-repo config.
 
-The scaffold is **self-contained**: `kb/README.md` carries the directory table, the file-name convention, the spec shape
-(with its `## Inputs and failure cases` table) and the shape of `current-state.md`; it points to no other repo. Read the repo's own `kb/README.md` for the shapes.
+The scaffold is **self-contained**: `kb/README.md` carries the directory table, the file-name convention, the story, spec and plan shapes and the shape of `current-state.md`; it points to no other repo. Read the repo's own `kb/README.md` for the shapes.
 
 ## Questions (seven, five more for the guarded merge, then the script does the rest)
 
@@ -26,7 +25,7 @@ outside the repo, shape of `.vibemaestro/sdlc.json`, only the keys answered) and
 | 4 | verify that a PR carries its closing link (`Closes #N`) after opening it? | `pr.closing.verify` | yes |
 | 5 | file of approved literals for the sensitive-information gate | `sensitive.allowlist` | `.pr-sensitive-allow` |
 | 6 | name of the repo variable that picks the CI runner (`kb.py init` says once that `install-gates` later checks it is set, read-only) | `ci.runner_var` | `CI_RUNNER` |
-| 7 | language of the repo's `kb/` documents and PR bodies: `en` or `vi`; recommend `en`, or `vi` when the person writes to you in Vietnamese | `language`, passed as `--lang <en\|vi>` | `en` (a new config always records it) |
+| 7 | language of the repo's `kb/` documents (every session writes them in it) and of the fixed PR-body headings, the rest of a PR staying English: `en` or `vi`; recommend `en`, or `vi` when the person writes to you in Vietnamese | `language`, passed as `--lang <en\|vi>` | `en` (a new config always records it) |
 
 Then ask whether pull requests of this repo will be merged through the guarded merge (`gates/merge_guard.py`, run as the kit
 baton `kit:merge-pr`). Only on a yes, ask these too; the guard reads them from the PR's base branch, so a PR cannot widen them:

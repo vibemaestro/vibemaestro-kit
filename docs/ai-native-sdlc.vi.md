@@ -39,10 +39,10 @@ Kit có hai plugin, cho một người với một seat Claude trên một máy:
 | Giai đoạn | Anthropic khuyến nghị | Kit | Trạng thái |
 |---|---|---|---|
 | Plan | Ghi ý định bằng lời người yêu cầu thành một file được commit; một người chấp nhận nó [S1] | skill `intake` ghi `kb/intent/<date>-<slug>.md` trước khi có nhánh; skill `brainstorm` | đã có |
-| Specify | Một spec viết từ ý định, được người duyệt trước khi viết code [S1], [S3] | skill `spec`: năm mục, tiêu chí là lệnh, một bảng đầu vào và tình huống hỏng; hỏi duyệt trước khi code | đã có (duyệt là kỷ luật, không phải cổng) |
+| Specify | Một spec viết từ ý định, được người duyệt trước khi viết code [S1], [S3] | skill `spec`: năm mục suy ra từ story, tiêu chí theo hành vi trỏ về AC, danh sách rủi ro cần test phủ; hỏi duyệt trước khi code | đã có (duyệt là kỷ luật, không phải cổng) |
 | Build | CLAUDE.md ngắn, skill cho chính sách, hook cho điều bắt buộc, worktree và subagent [S1], [S5] | Luật do hook đưa tới đúng lúc thao tác; mỗi intent một worktree; model riêng cho từng việc của subagent | đã có |
 | Review | Review với ngữ cảnh mới; agent viết code không được tự duyệt [S1], [S3] | luật `before-ready`; model review lấy từ config; tác giả không bao giờ tự merge PR của mình; người merge, hoặc phiên chính của `local-parallel` merge qua merge có canh gác | đã có (review là kỷ luật, không phải cổng) |
-| Test | Cho agent một phép kiểm chạy được; đưa bằng chứng; eval cho cấu hình của agent [S1], [S3] | Tiêu chí spec là lệnh; `open-pr.sh` từ chối PR không có bằng chứng chạy | đã có; eval là khoảng trống |
+| Test | Cho agent một phép kiểm chạy được; đưa bằng chứng; eval cho cấu hình của agent [S1], [S3] | Test phủ hành vi của AC và rủi ro của spec; `open-pr.sh` từ chối PR không có bằng chứng chạy | đã có; eval là khoảng trống |
 | Release | Hook làm cổng phê duyệt; agent làm tới cổng production thì dừng [S1] | BatonRun cho mọi thao tác ghi đặc quyền; change file và script release | đã có |
 | Operate | Phát hiện bằng logic tất định; phát hiện quay lại thành intent mới; định danh agent quyền tối thiểu [S1], [S2] | Ghi vào hệ thống đang chạy đi qua BatonRun | khoảng trống: không có vòng giám sát, không có định danh agent |
 | Mọi giai đoạn | Quản lý ngữ cảnh; giữ trạng thái trong file; sandbox và quyền [S3], [S18], [S16] | `kb/` làm bộ nhớ của repo; plugin brain; luật quyền cho baton | đã có |
@@ -100,18 +100,22 @@ Kit có hai plugin, cho một người với một seat Claude trên một máy:
 
 ### Kit làm gì
 
-- Skill [`spec`](../plugins/vibemaestro-sdlc/skills/spec/SKILL.md) viết `kb/specs/<date>-<slug>.md` theo năm mục (bối cảnh,
-  mục tiêu, ngoài phạm vi, đầu vào và tình huống hỏng, tiêu chí chấp nhận). Mỗi tiêu chí là **một lệnh và kết quả mong đợi**.
-  Tiêu chí cuối luôn đòi pull request có mục bằng chứng chạy. `## Inputs and failure cases` liệt kê, theo rủi ro, các đầu vào
-  xấu, lạ, rỗng, quá cỡ, đồng thời hay hỏng giữa chừng mà thay đổi phải chịu được, mỗi dòng kèm test chứng minh.
-- `kb.py check spec` kiểm hình dạng: đủ mục, đúng thứ tự, không còn chỗ trống, tiêu chí nào cũng có lệnh
-  ([`kb.py`](../plugins/vibemaestro-sdlc/scripts/kb.py)).
-- Skill hỏi người duyệt spec trước khi sửa bất kỳ dòng code nào. Một subagent của `local-parallel` thay vào đó kết thúc lượt
-  bằng đường dẫn spec, và phiên chính chuyển spec cho người duyệt.
+- Skill [`spec`](../plugins/vibemaestro-sdlc/skills/spec/SKILL.md) viết `kb/specs/<date>-<slug>.md`, suy ra từ intent (với
+  story: story chủ repo đã duyệt), theo năm mục: mục tiêu, ràng buộc cứng, tiêu chí theo hành vi ("khi … thì …") mỗi tiêu chí trỏ
+  về một AC của story, rủi ro mà test phải phủ (đầu vào xấu, lạ, rỗng, quá cỡ, đồng thời hay hỏng giữa chừng), và các điểm cần
+  làm rõ. Spec không có cách làm: cách làm thuộc về plan.
+- `kb.py check spec` kiểm hình dạng: đủ năm mục, không còn chỗ trống, AC nào của story cũng có tiêu chí trỏ về; tiêu chí không
+  viết "khi … thì", khối code hay spec dài chỉ bị cảnh báo ([`kb.py`](../plugins/vibemaestro-sdlc/scripts/kb.py)).
+- Skill xin duyệt spec trước khi sửa bất kỳ dòng code nào: máy điều phối duyệt, chủ repo chỉ được hỏi khi spec đổi một AC của
+  story; người làm một mình duyệt story và spec trong một lần hỏi. Một subagent của `local-parallel` thay vào đó kết thúc lượt
+  bằng đường dẫn spec, và phiên chính chuyển story và spec cho người duyệt.
+- Nội dung kb mới (story, spec, plan, quyết định) viết bằng ngôn ngữ của repo (tệp cũ giữ ngôn ngữ của nó): khóa `language` trong `.vibemaestro/sdlc.json`, `vi`
+  khi chưa đặt. Mọi thứ khác viết tiếng Anh.
 
 ### Kit khác ở đâu
 
-- **Xa hơn:** tiêu chí là lệnh nên sprint contract [S22] chạy được. Chính các lệnh đó thành bằng chứng ở giai đoạn Test.
+- **Xa hơn:** tiêu chí theo hành vi, mỗi tiêu chí trỏ về một AC của story, kèm rủi ro mà test phải phủ, làm sprint contract [S22]
+  kiểm được; các test phủ chúng thành bằng chứng ở giai đoạn Test.
 - **Khoảng trống:** duyệt spec là kỷ luật, không phải cổng. Phép kiểm hình dạng không biết người đã duyệt hay chưa. Playbook
   lưu ý plan mode tự ép cổng của nó: “Plan mode enforces this itself, since Claude cannot edit files until the engineer accepts
   the plan.” [S1] Kit không có hook nào chặn sửa file trước khi được duyệt.
@@ -221,7 +225,7 @@ Kit có hai plugin, cho một người với một seat Claude trên một máy:
 
 ### Kit làm gì
 
-- Tiêu chí spec là lệnh kèm kết quả mong đợi (Specify), nên kế hoạch kiểm có trước code.
+- Spec liệt kê rủi ro mà test phải phủ (Specify), nên kế hoạch kiểm có trước code.
 - Skill [`ship`](../plugins/vibemaestro-sdlc/skills/ship/SKILL.md) chạy các lệnh chấp nhận và ghi output thật vào một file bằng
   chứng. `open-pr.sh` từ chối mở pull request khi file đó thiếu hoặc rỗng (mã thoát 3,
   [`open_pr.py`](../plugins/vibemaestro-sdlc/scripts/open_pr.py)); một lần chạy không thể làm phải ghi lý do ở dòng đầu.
@@ -424,9 +428,9 @@ Riêng file workflow vẫn lấy từ pull request, nên một thay đổi dư�
 - **guarded merge** (merge có canh): lệnh merge chỉ merge khi các phép canh đạt (SHA của head, check mới nhất, xung đột, danh sách cấm, phạm vi của brief), và mặc định chạy thử.
 - **intent**: `kb/intent/<ngày>-<slug>.md`, lời của chính người yêu cầu, ghi trước khi có branch. Một intent là một branch là một pull request nháp.
 - **kb**: thư mục `kb/` của một repo: intent, spec, plan, quyết định và file hiện trạng.
-- **main session** (phiên chính): trong `local-parallel`, phiên mà người nói chuyện cùng: nó chia việc, giao brief cho mỗi subagent một việc, chuyển spec cho người duyệt, kiểm lại và merge. Nó không sửa file nào của một việc.
+- **main session** (phiên chính): trong `local-parallel`, phiên mà người nói chuyện cùng: nó chia việc, giao brief cho mỗi subagent một việc, chuyển story và spec cho người duyệt, kiểm lại và merge. Nó không sửa file nào của một việc.
 - **planted break** (phá thử): một test chép code, cố ý phá bản chép ở một chỗ, và đòi suite phải đỏ.
-- **spec**: `kb/specs/<ngày>-<slug>.md`: năm mục theo thứ tự, tiêu chí là lệnh, được một người duyệt trước khi có code.
+- **spec**: `kb/specs/<ngày>-<slug>.md`: năm mục suy ra từ story (mục tiêu, ràng buộc, tiêu chí theo hành vi trỏ về AC, rủi ro cần test phủ, điểm cần làm rõ), được duyệt trước khi có code.
 - **worker**: một subagent xây một việc theo một brief, từ intake tới một pull request nháp. Kết quả của nó là một lời khẳng định; phiên chính chạy lại lệnh nghiệm thu trước khi tin.
 
 ## Nguồn

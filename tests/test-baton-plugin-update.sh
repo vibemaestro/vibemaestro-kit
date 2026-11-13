@@ -38,6 +38,11 @@
 #       install's .claude-plugin or scripts that is a symlink, a launcher template that is a symlink, a forged installPath
 #       outside the cache, an install directory that is a file, a launcher template that refuses the directory, a launcher
 #       that resolves to another install
+#   [W] a signed run or queued item that the plugin move would void: a signature of another kit baton of sdlc (not run), a queued
+#       item (pending, or signed), each refused at rehearse with its literal name, time and directory, no claude call; refused at
+#       run too when it appears after the rehearse; not pending: nothing, a used or expired item, a signature under a plugin not
+#       moved or outside the cache, a signature whose run-start is logged, the run's own record; --wait: a run that starts in
+#       time proceeds, one that does not refuses, a bad value is usage rc 64
 #   [U] undo with no run record, or an earlier run's record, puts nothing back; with no signed plan it leaves the record; a
 #       run whose record an earlier undo left for the owner is refused
 # =============================================================================
@@ -709,7 +714,164 @@ plugin update vibemaestro-brain@vibemaestro --scope user" "[K] …only sdlc and 
   eq "$(sha_of vibemaestro-sdlc@vibemaestro)" "$MEDDLE" "[M] …and kept"
 }
 
-FAMILIES="fam_layouts fam_refuse fam_transport fam_signed fam_moves fam_post fam_undo fam_local"
+# put_sig <script> <args json> <time> <dir> — another session's signed run, as `sign` writes the record (printed: its path)
+put_sig() { python3 - "$ST" "$@" <<'PY'
+import hashlib, json, os, sys
+st, script, args, when, cwd = sys.argv[1:6]
+d = os.path.join(st, "vibemaestro", "baton", "signatures"); os.makedirs(d, exist_ok=True)
+b = hashlib.sha256((script + args + cwd).encode()).hexdigest()
+path = os.path.join(d, b + ".json")
+json.dump({"v": 1, "binding": b, "script_path": script, "script_sha256": "ab" * 32, "args": json.loads(args), "cwd": cwd, "env": {},
+           "plan": [], "plan_sha256": "0" * 64, "signed_by": "owner", "mode": "auto", "time": when}, open(path, "w"))
+print(path)
+PY
+}
+# put_item <id> <state> <script> <name> <created> <dir> [<args json>] — a queued item (state pending, signed, used or expired), digest and all
+put_item() { python3 - "$ST" "$@" <<'PY'
+import hashlib, json, os, sys
+st, qid, state, script, name, created, cwd = sys.argv[1:8]
+args = json.loads(sys.argv[8]) if len(sys.argv) > 8 else []
+q = os.path.join(st, "vibemaestro", "baton", "queue"); os.makedirs(os.path.join(q, "used"), exist_ok=True)
+it = {"v": 1, "id": qid, "created": created, "expires": "2020-01-01T00:00:00Z" if state == "expired" else "2099-01-01T00:00:00Z",
+      "name": name, "word": "kit:" + name, "call": [], "script_path": script, "script_sha256": "ab" * 32, "args": args, "cwd": cwd,
+      "env": {}, "plan": [], "stops": "secrets", "mode": "auto", "card": []}
+it["body_sha256"] = hashlib.sha256(json.dumps(it, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+if state == "signed":
+    it["signature"] = {"by": "owner", "dialog": "d" * 16, "time": created, "body_sha256": it["body_sha256"]}
+json.dump(it, open(os.path.join(q, "used" if state == "used" else "", qid + ".json"), "w"))
+PY
+}
+# put_log <signature record> <time> <event> [<result>] — the log's run-start or run line of that signature's binding, at that time
+put_log() { python3 - "$ST" "$1" "$2" "$3" "${4:--}" <<'PY'
+import json, os, sys
+st, sig, when, event, result = sys.argv[1:6]
+b = json.load(open(sig))["binding"][:12]
+f = [when, event, "vault-put-text.sh", "ab" * 6, b, "[]", "/x", "owner", "auto", result, "-", "-", "kit:vault-put-text@" + "ab" * 32]
+open(os.path.join(st, "vibemaestro", "baton", "log.tsv"), "a").write("\t".join(f) + "\n")
+PY
+}
+
+fam_pending() {
+  local P=$1 sdlc s
+  machine own
+  sdlc="$C/plugins/cache/vibemaestro/vibemaestro-sdlc/${OLD:0:12}/batons/vault-put-text.sh"
+  s=$(put_sig "$sdlc" '["x"]' 2026-11-06T09:25:12Z "$D/other")
+  eq "$(bt "$P" rehearse $K $NEW)/$(calls)" "1/0" "[W] a signature of another kit baton of sdlc that has not run: rehearse rc 1, no claude call"
+  has "$(cat "$BT_OUT")" "PENDING signature vault-put-text.sh signed 2026-11-06T09:25:12Z in $D/other" "[W] …named: the baton, its time and its directory"
+  has "$(cat "$BT_OUT")" "REFUSE a signed run or queued item of a plugin this update moves has not run yet; the move would void it" "[W] …refused by name"
+  eq "$(bt "$P" go $K $NEW)/$(calls)" "1/0" "[W] …go refuses too, nothing moved"
+  eq "$(same "$D/reg.before" "$(REG)")" same "[W] …the registry is as it was"
+  # not pending: no record, or one whose run has started
+  rm "$s"
+  eq "$(bt "$P" rehearse $K $NEW)" 0 "[W] none pending (no signature, no queue): rehearse rc 0"
+  s=$(put_sig "$sdlc" '["x"]' 2026-11-06T09:25:12Z "$D/other"); put_log "$s" 2026-11-06T09:25:11Z run-start
+  eq "$(bt "$P" rehearse $K $NEW)" 1 "[W] a run-start older than the signature: the signature still waits"
+  put_log "$s" 2026-11-06T09:25:12Z run-start
+  eq "$(bt "$P" rehearse $K $NEW)" 0 "[W] …a run-start of its binding at its time: the run has begun, not pending"
+  put_log "$s" 2026-11-06T09:25:14Z run "unanswered 1/3"
+  eq "$(bt "$P" rehearse $K $NEW)" 1 "[W] …the run ended unanswered and the signature came back (its run line is later): pending again"
+  has "$(cat "$BT_OUT")" "PENDING signature vault-put-text.sh signed 2026-11-06T09:25:12Z in $D/other" "[W] …named"
+  rm "$s"
+  # a queued item
+  put_item 0123456789abcdef pending "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"
+  eq "$(bt "$P" rehearse $K $NEW)/$(calls)" "1/0" "[W] a pending queued item of sdlc: rehearse rc 1, no claude call"
+  has "$(cat "$BT_OUT")" "PENDING queued-item 0123456789abcdef vault-put-text.sh queued 2026-11-06T10:00:00Z in $D/queuer" "[W] …named: the id, the baton, its time and its directory"
+  rm "$ST/vibemaestro/baton/queue/0123456789abcdef.json"
+  put_item 0123456789abcdef signed "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"
+  eq "$(bt "$P" rehearse $K $NEW)" 1 "[W] a signed queued item: refused too"
+  has "$(cat "$BT_OUT")" "PENDING queued-item 0123456789abcdef vault-put-text.sh" "[W] …named"
+  rm "$ST/vibemaestro/baton/queue/0123456789abcdef.json"
+  put_item 0123456789abcdef used "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"
+  put_item fedcba9876543210 expired "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"
+  eq "$(bt "$P" rehearse $K $NEW)" 0 "[W] a used item and an expired one: not pending"
+  put_item 0123456789abcdef pending "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"
+  sed -i 's/2026-11-06T10:00:00Z/2026-11-06T10:00:01Z/' "$ST/vibemaestro/baton/queue/0123456789abcdef.json"
+  eq "$(bt "$P" rehearse $K $NEW)" 0 "[W] a damaged item (its bytes changed since baton wrote them; baton never runs it): not pending"
+  rm "$ST/vibemaestro/baton/queue/0123456789abcdef.json"
+  # a record of a baton the move does not touch
+  put_sig "$D/project/batons/x.sh" '[]' 2026-11-06T09:25:12Z "$D/other" > /dev/null
+  put_sig "$C/plugins/cache/vibemaestro/vibemaestro-sdlc-evil/${OLD:0:12}/batons/x.sh" '[]' 2026-11-06T09:25:12Z "$D/other" > /dev/null
+  eq "$(bt "$P" rehearse $K $NEW)" 0 "[W] a signature outside the cache, and one under a directory that only starts like sdlc's: not pending"
+  LOCALS=acme-ops machine subdir
+  json_set "$(REG)" 'J["plugins"]["acme-ops@vibemaestro"][0]["gitCommitSha"] = "'$M'"'
+  put_sig "$C/plugins/cache/vibemaestro/acme-ops/${OLDL:0:12}/batons/x.sh" '[]' 2026-11-06T09:25:12Z "$D/other" > /dev/null
+  eq "$(bt "$P" rehearse $K $NEW)" 0 "[W] a signature under a local plugin already at its target (not moved): not pending"
+  put_sig "$C/plugins/cache/vibemaestro/vibemaestro-brain/${OLD:0:12}-adc9e2e3/batons/x.sh" '[]' 2026-11-06T09:25:13Z "$D/other" > /dev/null
+  eq "$(bt "$P" rehearse $K $NEW)" 1 "[W] a signature under brain, which is moved: refused"
+  has "$(cat "$BT_OUT")" "PENDING signature x.sh signed 2026-11-06T09:25:13Z in $D/other" "[W] …named"
+  # the run's own record is not pending; the same script with other arguments is
+  LOCALS="" machine own
+  sdlc="$C/plugins/cache/vibemaestro/vibemaestro-sdlc/${OLD:0:12}/batons/plugin-update.sh"
+  put_sig "$sdlc" "[\"$NEW\"]" 2026-11-06T09:25:12Z "$D" > /dev/null
+  XENV=(BATON_SCRIPT="$sdlc")
+  eq "$(kit_phase "$P" rehearse "$D/none" $NEW)" 0 "[W] own signature (this script, these arguments, this directory): not pending"
+  put_sig "$sdlc" "[\"$OTHER\"]" 2026-11-06T09:25:14Z "$D" > /dev/null
+  eq "$(kit_phase "$P" rehearse "$D/none" $NEW)" 3 "[W] the same script signed with another SHA: pending"
+  has "$(cat "$BT_OUT")" "PENDING signature plugin-update.sh signed 2026-11-06T09:25:14Z in $D" "[W] …named"
+  rm -f "$ST"/vibemaestro/baton/signatures/*.json
+  put_item 0123456789abcdef signed "$sdlc" plugin-update.sh 2026-11-06T10:00:00Z "$D" "[\"$NEW\"]"
+  eq "$(kit_phase "$P" rehearse "$D/none" $NEW)" 0 "[W] own queued item (this script, these arguments, this directory): not pending"
+  rm "$ST/vibemaestro/baton/queue/0123456789abcdef.json"
+  put_item 0123456789abcdef signed "$sdlc" plugin-update.sh 2026-11-06T10:00:00Z "$D" "[\"$OTHER\"]"
+  eq "$(kit_phase "$P" rehearse "$D/none" $NEW)" 3 "[W] the same script queued with another SHA: pending"
+  has "$(cat "$BT_OUT")" "PENDING queued-item 0123456789abcdef plugin-update.sh queued 2026-11-06T10:00:00Z in $D" "[W] …named"
+  XENV=()
+  # an unreadable state, or a record the reader cannot print, is a refusal at once, never a wait or a pass
+  machine own
+  sdlc="$C/plugins/cache/vibemaestro/vibemaestro-sdlc/${OLD:0:12}/batons/vault-put-text.sh"
+  put_sig "$sdlc" '["x"]' 2026-11-06T09:25:12Z "$D/dir-ud800" > /dev/null
+  sed -i 's/dir-ud800/\\ud800/' "$ST"/vibemaestro/baton/signatures/*.json
+  eq "$(bt "$P" rehearse $K $NEW)/$(calls)" "1/0" "[W] a signature whose directory is a lone surrogate (a name that is not UTF-8): rehearse rc 1, no claude call"
+  has "$(cat "$BT_OUT")" "PENDING signature vault-put-text.sh signed 2026-11-06T09:25:12Z in " "[W] …named, the directory printed with ?, no crash"
+  machine own
+  mkdir -p "$ST/vibemaestro/baton/signatures"; python3 -c 'print("[" * 100000)' > "$ST/vibemaestro/baton/signatures/deep.json"
+  s=$SECONDS; eq "$(bt "$P" rehearse $K $NEW --wait 30)/$(calls)" "1/0" "[W] a record the reader cannot parse (100000 nested brackets): rehearse rc 1, no claude call"
+  eq "$([ $((SECONDS - s)) -lt 10 ] && echo fast || echo waited)" fast "[W] …refused at once, not after --wait 30"
+  has "$(cat "$BT_OUT")" "REFUSE the signed runs and queued items cannot be read: RecursionError" "[W] …refused by name"
+  machine own
+  mkdir -p "$ST/vibemaestro/baton/queue"; chmod 000 "$ST/vibemaestro/baton/queue"
+  eq "$(bt "$P" rehearse $K $NEW)/$(calls)" "1/0" "[W] a queue directory that cannot be read: rehearse rc 1, no claude call"
+  has "$(cat "$BT_OUT")" "REFUSE the signed runs and queued items cannot be read: Permission denied" "[W] …refused by name"
+  chmod 700 "$ST/vibemaestro/baton/queue"
+  # pending at run, though the rehearse was clean
+  machine own
+  kit_phase "$P" rehearse "$D/none" $NEW > /dev/null; sed -n 's/^PLAN //p' "$BT_OUT" > "$D/plan"
+  put_sig "$C/plugins/cache/vibemaestro/vibemaestro-sdlc/${OLD:0:12}/batons/vault-put-text.sh" '["x"]' 2026-11-06T09:25:12Z "$D/other" > /dev/null
+  eq "$(kit_phase "$P" run "$D/plan" $NEW)/$(calls)" "3/0" "[W] a signature that appears after the rehearse: run rc 3, no claude call"
+  has "$(cat "$BT_OUT")" "PENDING signature vault-put-text.sh signed 2026-11-06T09:25:12Z in $D/other" "[W] …named"
+  eq "$(same "$D/reg.before" "$(REG)")" same "[W] …nothing written"
+  # --wait
+  machine own
+  sdlc="$C/plugins/cache/vibemaestro/vibemaestro-sdlc/${OLD:0:12}/batons/vault-put-text.sh"
+  s=$(put_sig "$sdlc" '["x"]' 2026-11-06T09:25:12Z "$D/other")
+  ( sleep 1; rm -f "$s" ) &
+  eq "$(bt "$P" rehearse $K $NEW --wait 5)" 0 "[W] --wait 5, the signature spent after about a second: rehearse rc 0"
+  wait
+  s=$(put_sig "$sdlc" '["x"]' 2026-11-06T09:25:12Z "$D/other")
+  ( sleep 1; rm -f "$s" ) &
+  eq "$(go_ "$P" $NEW --wait 5)/$(sha_of vibemaestro-sdlc@vibemaestro)" "0/$NEW" "[W] …go with --wait 5: rc 0, sdlc at the SHA"
+  wait
+  machine own
+  kit_phase "$P" rehearse "$D/none" $NEW --wait 5 > /dev/null; sed -n 's/^PLAN //p' "$BT_OUT" > "$D/plan"
+  s=$(put_sig "$C/plugins/cache/vibemaestro/vibemaestro-sdlc/${OLD:0:12}/batons/vault-put-text.sh" '["x"]' 2026-11-06T09:25:12Z "$D/other")
+  ( sleep 1; rm -f "$s" ) &
+  eq "$(kit_phase "$P" run "$D/plan" $NEW --wait 5)/$(calls)" "0/3" "[W] the run phase with --wait 5, the signature spent after about a second: rc 0, three claude calls"
+  wait
+  machine own
+  sdlc="$C/plugins/cache/vibemaestro/vibemaestro-sdlc/${OLD:0:12}/batons/vault-put-text.sh"
+  put_sig "$sdlc" '["x"]' 2026-11-06T09:25:12Z "$D/other" > /dev/null
+  eq "$(bt "$P" rehearse $K $NEW --wait 2)/$(calls)" "1/0" "[W] --wait 2, the signature never spent: rehearse rc 1, no claude call"
+  has "$(cat "$BT_OUT")" "has not run yet (still waiting after 2 s); the move would void it" "[W] …says it waited 2 s"
+  has "$(cat "$BT_OUT")" "PENDING signature vault-put-text.sh signed 2026-11-06T09:25:12Z in $D/other" "[W] …and names the item"
+  machine own
+  for v in "--wait 0" "--wait 301" "--wait x" "--wait" "--wait 5 --wait 5"; do
+    eq "$(bt "$P" rehearse $K $NEW $v)/$(calls)" "1/0" "[W] '$v' (the maximum is 300, one --wait): rehearse rc 1, no claude call"
+    has "$(cat "$BT_OUT")" "usage: baton rehearse|run kit:plugin-update <full kit sha> [--wait <seconds, 1 to 300>]" "[W] …usage printed"
+  done
+  eq "$(bt "$P" rehearse $K $NEW --wait 300)" 0 "[W] --wait 300 with none pending: rehearse rc 0, no wait"
+}
+
+FAMILIES="fam_layouts fam_refuse fam_transport fam_signed fam_pending fam_moves fam_post fam_undo fam_local"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
 # the reader refuses a URL rewrite before the kit reads the clone (by the key, and by the fetch URL it gives): the kit's own
 # refusal runs on a copy without either

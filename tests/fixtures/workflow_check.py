@@ -4,7 +4,7 @@
     workflow_check.py build <work dir> <plugin dir>                       build the scratch repos and fixtures once
     workflow_check.py check <work dir> <plugin dir> <kind> <workflow.yml>  print one `FAIL ...` line per problem; rc 1 when there is any
 
-kind: commit-discipline | pr-title | pr-body | pr-sensitive | dead-branches.
+kind: commit-discipline | pr-title | pr-body | pr-sensitive | dead-branches | signing-rules.
 
 The structure is read with a YAML parser, not grep: a mutation that moves a line to another key must be seen. Structure problems stop the
 check before anything runs (the run would only repeat them). The run is the step's own shell block, executed with the shell Actions uses
@@ -43,7 +43,12 @@ SPEC = {
                      "if": {"(github.event_name != 'issue_comment' || github.event.issue.pull_request) && (github.event.repository.private == false || (github.event_name == 'issue_comment' && toJSON(github.event.issue.draft) == 'false') || (github.event_name != 'issue_comment' && github.event.pull_request.draft == false)) && (github.event_name != 'pull_request' || github.event.action != 'edited' || github.event.changes.body || github.event.changes.base)"}, "config_ref": False},
     "dead-branches": {"events": {"schedule": None, "workflow_dispatch": None}, "ref": None, "depth0": True, "script": "dead_branches.sh",
                       "if": {None}, "config_ref": False},
+    "signing-rules": {"events": {"pull_request": PR_TYPES}, "ref": "github.event.pull_request.base.ref", "depth0": True,
+                      "script": "signing_rules.py", "if": {"github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.base)"},
+                      "config_ref": False, "expr_ok": {"github.event.pull_request.head.sha"}},
 }
+# the one action besides actions/checkout a template may use: the findings artifact of signing-rules, at this pin only
+UPLOAD = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
 EXPR_OK = {"secrets.GITHUB_TOKEN", "github.event.pull_request.number", "github.event.pull_request.base.ref", "github.repository",
            "github.event.pull_request.number || github.event.issue.number"}
 IDENT = {"name": "t", "email": "t@t"}
@@ -67,7 +72,7 @@ def sha256(v):
 
 
 # ── building the scratch repos ───────────────────────────────────────────────────────────────────
-def mk_origin(work, name, plugin, gates=True, cfg=None):
+def mk_origin(work, name, plugin, gates=True, cfg=None, only=None):
     d = os.path.join(work, name)
     os.makedirs(d)
     bare, w = os.path.join(d, "origin.git"), os.path.join(d, "w")
@@ -80,7 +85,7 @@ def mk_origin(work, name, plugin, gates=True, cfg=None):
         with open(os.path.join(w, ".vibemaestro", "sdlc.json"), "w") as f:
             f.write(json.dumps(cfg))
     if gates:
-        sh([sys.executable, os.path.join(plugin, "scripts", "install_gates.py"), "--root", w], w)
+        sh([sys.executable, os.path.join(plugin, "scripts", "install_gates.py"), "--root", w] + (["--only", only] if only else []), w)
     git(w, "add", "-A")
     git(w, "commit", "-q", "-m", "seed")
     git(w, "branch", "-M", "main")
@@ -167,6 +172,27 @@ def build(work, plugin):
     mk_origin(work, "d_clean", plugin)
     w = mk_origin(work, "d_nogates", plugin, gates=False); git(w, "checkout", "-q", "-b", "old"); commits(w, 1); git(w, "checkout", "-q", "main"); git(w, "merge", "-q", "--ff-only", "old")
     git(w, "push", "-q", "origin", "main", "old"); git(w, "fetch", "-q", "origin")
+    # signing-rules: a baton on main; the first pull request changes its Stops, the second a README, the third changes Stops and empties the gate and its list
+    heads = {}
+    for name, gates in (("sr", True), ("sr_nogates", False)):
+        w = mk_origin(work, name, plugin, gates=gates, only="signing-rules")
+        os.makedirs(os.path.join(w, "batons"))
+        with open(os.path.join(w, "batons", "x.sh"), "w") as f:
+            f.write("#!/bin/bash\n# Stops: none\necho hi\n")
+        git(w, "add", "-A"); git(w, "commit", "-q", "-m", "a baton"); git(w, "push", "-q", "origin", "main")
+        for n, files in ((1, {"batons/x.sh": "#!/bin/bash\n# Stops: delete\necho hi\n"}), (2, {"README.md": "readme\n"}),
+                         (3, {"batons/x.sh": "#!/bin/bash\n# Stops: delete\necho hi\n", ".vibemaestro/gates/signing_rules.py": "import sys\nsys.exit(0)\n",
+                              ".vibemaestro/signing-rules.json": '{"baton_dirs": [], "lists": {}, "files": []}\n'})):
+            if not gates and n != 1:
+                continue
+            git(w, "checkout", "-q", "-b", "pr%d" % n)
+            for rel, text in files.items():
+                with open(os.path.join(w, rel), "w") as f:
+                    f.write(text)
+            git(w, "add", "-A"); git(w, "commit", "-q", "-m", "pr %d" % n)
+            heads["%s/%d" % (name, n)] = git(w, "rev-parse", "HEAD").strip()
+            publish_pr(w, n)
+    json.dump(heads, open(os.path.join(work, "sr.json"), "w"))
     json.dump(fx, open(os.path.join(work, "fx.json"), "w"))
     bindir = os.path.join(work, "bin")
     os.makedirs(bindir)
@@ -245,8 +271,8 @@ def structure(wf, kind, text):
             continue
         if not (re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}", u) or u.startswith("./")):
             errs.append("`uses: %s` is neither local nor pinned by a full commit SHA" % u)
-        elif not u.startswith("actions/checkout@") and not u.startswith("./"):
-            errs.append("`uses: %s`: only actions/checkout is allowed in a gate template" % u)
+        elif not u.startswith("actions/checkout@") and u != UPLOAD and not u.startswith("./"):
+            errs.append("`uses: %s`: only actions/checkout and %s are allowed in a gate template" % (u, UPLOAD))
     co = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
     run = [s for s in steps if sp["script"] in str(s.get("run", ""))]
     if len(co) != 1 or len(run) != 1:
@@ -268,7 +294,7 @@ def structure(wf, kind, text):
         errs.append("`run` interpolates ${{%s}}: data must go through env" % e)
     for k, v in (st.get("env") or {}).items():
         for e in re.findall(r"\$\{\{(.*?)\}\}", str(v)):
-            if e.strip() not in EXPR_OK:
+            if e.strip() not in EXPR_OK | sp.get("expr_ok", set()):
                 errs.append("env %s takes `${{%s}}`: not on the approved list" % (k, e))
     if "GITHUB_EVENT_PATH" in code:
         errs.append("`run` reads $GITHUB_EVENT_PATH: the payload is a stale snapshot")
@@ -355,6 +381,21 @@ def scenarios(work, plugin, kind, step):
         need(rc != 0, "gh failing: the step must not be green")
         rc, out, _ = run_step(body, work, "s_nogates", env, "s_clean")
         need(rc == 0 and "::warning::" in out, "no gates on the default branch: pass with a ::warning::, rc %d" % rc)
+    elif kind == "signing-rules":
+        heads = json.load(open(os.path.join(work, "sr.json")))
+        env = lambda s, n: {"PR_NUMBER": str(n), "BASE_REF": "main", "HEAD_SHA": heads["%s/%d" % (s, n)]}
+        rc, out, _ = run_step(body, work, "sr", env("sr", 1))
+        need(rc == 1 and "RED batons/x.sh: Stops 'none' → 'delete'" in out, "a PR that changes a baton's Stops: red, rc %d: %s" % (rc, out[-200:]))
+        touches = os.path.join(work, "rt-%d-sr" % _RUNS, "trust-touches.txt")
+        need(os.path.isfile(touches) and open(touches).read() == 'trust-touches v1\n["baton", "batons/x.sh", "-", "delete"]\nend 1\n',
+             "the findings block for the merge guard is written to $RUNNER_TEMP/trust-touches.txt")
+        rc, out, _ = run_step(body, work, "sr", env("sr", 2))
+        need(rc == 0 and "signing-rules: green" in out, "a PR that changes only a README: green, rc %d: %s" % (rc, out[-200:]))
+        rc, out, _ = run_step(body, work, "sr", env("sr", 3))
+        need(rc == 1 and "RED batons/x.sh: Stops" in out and "RED .vibemaestro/gates/signing_rules.py" in out,
+             "a PR that empties its gate and its list and changes Stops: judged by the base it must be red, rc %d: %s" % (rc, out[-300:]))
+        rc, out, _ = run_step(body, work, "sr_nogates", env("sr_nogates", 1))
+        need(rc == 0 and "::warning::" in out, "no gates on the base branch: pass with a ::warning::, rc %d" % rc)
     elif kind == "dead-branches":
         rc, out, _ = run_step(body, work, "d_red", {})
         need(rc != 0 and "origin/old" in out, "a merged branch on the remote: red, rc %d: %s" % (rc, out[-200:]))

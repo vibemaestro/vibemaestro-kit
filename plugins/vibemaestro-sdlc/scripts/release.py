@@ -3,9 +3,9 @@
 
   release.py check [--repo DIR] [--base REF] [--public REPO]
                                                         rc 0 ok, 1 red, 3 the check did not run, 64 usage
-  release.py plan  [--repo DIR] [--hotfix | --fold --public REPO]
+  release.py plan  [--repo DIR] [--hotfix | [--fold] --public REPO]
                                                         read-only: what a cut would do here; rc 0, 1 a change file is broken
-  release.py cut   [--repo DIR] [--hotfix | --fold --public REPO] [--base REF]
+  release.py cut   [--repo DIR] [--hotfix | [--fold] --public REPO] [--base REF]
                                                         edits the working tree into a release (or a hotfix, or a fold); rc 0,
                                                         1 refused
   release.py notes <plugin> <version> [--repo DIR]      the body of that version's public release on stdout: the lines of its
@@ -22,10 +22,12 @@ one CHANGELOG section per plugin; a hotfix PR into the branch `release` adds a p
 `release` to main; after a release or a hotfix merges, `release` moves to it, and the repository publishes it its own way (the
 public tags are `<plugin>--v<version>`; the private repository has none).
 
-A fold reads the public repository's tags with `git ls-remote --tags` (REPO is `owner/name` on GitHub, else a git URL or a path,
-`./a/b` for a relative one):
-a version is published once its tag `<plugin>--v<version>` exists there. The branch `release` cannot tell it: it moves when a
-release merges, before anything is published.
+A release and a fold read the public repository's tags with `git ls-remote --tags` (REPO is `owner/name` on GitHub, else a git URL
+or a path, `./a/b` for a relative one): a version is published once its tag `<plugin>--v<version>` exists there. The branch
+`release` cannot tell it: it moves when a release merges, before anything is published. A plugin's next public section is the
+final state since its last published version: the lines of every section cut and not published (they join it and go), then the
+pending change files', each once, less what a pending file's `supersedes:` or `cancels:` takes out and less a line already in a
+published section; so at most one section is ever cut and not published, the top one.
 
 The base is `--base`, else `origin/$GITHUB_BASE_REF` (the PR's base in CI), else `origin/main`. The change is the merge-base of HEAD
 and the base against the working tree (committed, staged, unstaged and untracked), so a local run sees what CI will. The kind of the
@@ -42,11 +44,15 @@ change is read from the base and the diff, in this order:
   back-merge `origin/release` exists and the commit the PR brings (HEAD, or the second parent of CI's test merge whose first parent
              is the base) is on `origin/release` and not on the base, with a clean working tree: every released version equals
              `origin/release`'s; no change file is needed (the hotfix consumed its own).
-  release    a released version here is not the merge-base's (a new first `## X.Y.Z` heading):
+  release    a released version here is not the merge-base's (a new first `## X.Y.Z` heading); `--public REPO` names the public
+             repository, and its tag list is read (else red):
              - every change file pending on the base tip is consumed and none is left or added in `.changes/`;
              - each plugin they name goes up exactly one step from the base's released version at the highest level naming it (a
                `major` on a 0.x plugin is a minor), or to 0.1.0 when it was never released; no other plugin's version moves;
-             - each raised plugin's `CHANGELOG.md` has `## <version>` holding `- <level>: <line>` for each consumed file naming it;
+             - each raised plugin's `CHANGELOG.md` has `## <version>` holding its next public section, the final state above (its
+               entries and upgrade notes, no other line, none twice, no line taken out); the base's unpublished sections it joined
+               are gone, every other section is as on the base, and no plugin has a section below its top one cut and not
+               published; a plugin whose every pending line is taken out keeps its version and its CHANGELOG;
              - the change touches only `CHANGELOG.md` files, the consumed change files and a `CONTRACT.md`'s `Frozen at` line (no
                manifest, no kb page: no version number is written anywhere else);
              - when `origin/release` exists it is an ancestor of HEAD (hotfixes are back-merged first).
@@ -57,12 +63,13 @@ change is read from the base and the diff, in this order:
                exist; with no `--public`, or a tag list that cannot be read, the fold is red (a fold whose publication was not
                read must not pass);
              - every change file pending on the base tip is consumed and none is left or added in `.changes/`;
-             - each plugin they name keeps the base's released version; its section holds every line of the base's section,
-               `- <level>: <line>` for each consumed file naming it and its upgrade note, none of them twice; and the version is
-               still one step from the previous `## X.Y.Z` heading at the highest level of the section's lines (0.1.0 with none);
-             - a line of the base's section may be reworded, since the section is not published: the base's entries and notes,
-               the consumed lines left out, are paired by position, both counts stay, and an entry keeps its `- <level>:`; a
-               published section, and every section below the top one, stays frozen;
+             - each plugin they name keeps the base's released version; its section holds its next public section, the final
+               state above (the base's lower unpublished sections join it and go), none of its lines twice; and the version is
+               at least one step from the heading below it on the base at the highest level of the section's lines (0.1.0 with
+               none; a section that joined lower ones stands further above);
+             - a line the section keeps of the base's unpublished sections may be reworded, since it is not published: those
+               lines and notes, the consumed lines left out, are paired by position, both counts stay, and an entry keeps its
+               `- <level>:`; a published section, and every section below the top one but those it joins, stays frozen;
              - no CHANGELOG of a plugin no consumed file names changes; the rest of the release scope and ancestry as a release.
   ordinary   otherwise:
              - no released version differs from the merge-base's (only a release moves one), except on a base whose manifests still
@@ -72,7 +79,11 @@ change is read from the base and the diff, in this order:
              - each plugin with changed files is named by a change file this change ADDS;
              - each added change file is a regular file `.changes/<a-z0-9 . _ ->.md` (not README.md, no subdirectory, no symlink),
                with the frontmatter `plugins:` (marketplace names, comma-separated; `plugins/<name>/` names when there is no
-               marketplace) and `level: patch|minor|major`, and a body of one line;
+               marketplace) and `level: patch|minor|major`, and a body of one line, its name without the date no other change
+               file's of the merge-base's history or the working tree; each name its `supersedes:` or `cancels:`
+               gives is a change file pending or consumed here, never itself, that names a plugin it names too and does not
+               lead back to it (directly or through others), a consumed one's line and upgrade note still in a section of those
+               plugins' CHANGELOG as written; a `cancels:` never names a file with marks of its own;
              - no change file of the merge-base is edited or deleted (only a release consumes them); `.changes/README.md` is not
                deleted or replaced by a symlink (editing its text is fine);
              - a plugin removed whole is the one exception: a marketplace entry of the merge-base may go when `plugins/<name>/`
@@ -90,10 +101,19 @@ a plugin's dependency floor from its released section, so the floor of a version
 A change file may add one optional frontmatter line `upgrade: <one line>`: what an existing user must do or will notice on update.
 A cut writes those lines, in the change files' order, under `### Upgrade notes` after the version's `- <level>: <line>` lines;
 the release and hotfix kinds of `check` require them there. An ordinary change may edit a pending change file of the base only to
-add, change or remove that line (plugins, level and line stay as on the base).
+add, change or remove that line (plugins, level, line and marks stay as on the base).
+It may also name earlier change files, comma-separated, by their name without `.md` and without a leading date (`kit-x` names the
+one change file that is `kit-x.md` or `<YYYY-MM-DD>-kit-x.md`, pending or consumed; two such files are red, a full dated name
+still works; a dated name repeats an intent's file name): `supersedes: <name>, …` (this change replaces
+the behaviour they describe: their line and upgrade note go from the next public section, this file's line stays and says the
+final behaviour) and `cancels: <name>, …` (this change undoes them: their line and note go, and this file's own go too unless
+something it cancels was published, since then a user loses it). Each takes effect in the plugins the naming file names; a named
+change already published stays where it is. A cut finds a consumed file's line by the text it last had, so a line a fold reworded
+cannot be named (the cut and the check refuse, naming it). So that a mark keeps naming one file, a change file added in an
+ordinary PR or a hotfix shares its name without the date with no other change file, pending or consumed.
 
 `plan` reads the change files in the working tree and prints, per plugin, `old -> new (level)` (`unreleased -> 0.1.0` for a
-plugin never released), and each `CONTRACT.md` whose surface differs from `origin/release`'s (the base's when there is no
+plugin never released), each unpublished section that joins the new one and each line taken out with why, and each `CONTRACT.md` whose surface differs from `origin/release`'s (the base's when there is no
 `release`) or whose plugin is released for the first time. When the marketplace has two or more plugins released once the cut is
 written, it also prints `released together: <name> <version>, …` (every marketplace entry released then, in marketplace order,
 raised or not) and, per raised plugin that depends on such a sibling, `needs <sibling> >=<its version>` (was: the floor of the
@@ -104,11 +124,16 @@ with no line), and `notes` tells the user to update a sibling whose floor moved.
 `release` or the base's own branch, a HEAD that does not descend from the base (`origin/main`, or `origin/release` with --hotfix),
 a release whose HEAD lacks `origin/release`, nothing pending, and with --hotfix a level other than patch, a surface change, a
 plugin never released, or a base whose manifests still carry a `version` (a `release` cut before the reset: release from main).
-`cut --fold --public REPO` (and `plan --fold`) writes each named plugin's lines and upgrade notes into its top `## X.Y.Z` section
-instead of a new one (a line or note already there is not written again), removes the change files and sets `Frozen at` to that
-version where the surface moved. It refuses, besides the refusals of a cut, a tag list that cannot be read, a folded version whose
-public tag exists, a plugin never released, and a fold whose highest level asks another version than the section carries (a minor
-into a patch section): a plain cut raises the version instead.
+`plan` and `cut` of a release take `--public REPO` (a hotfix takes none): a cut writes each raised plugin's next public section
+(the final state) and takes out the unpublished sections it joins. `cut --fold --public REPO` (and `plan --fold`) writes each
+named plugin's next public section in place of its top `## X.Y.Z` section, which keeps its version and its `Released together:`
+line, removes the change files and sets `Frozen at` to that version where the surface moved. Both refuse a tag list that cannot be read, one that holds no tag of any plugin here or none of a
+plugin with versions below its top (another repository), a mark that matches two change files, a named line or note not found
+as written, pending files whose marks
+make a ring, a plugin the cut does not name with a section cut and not published below its top, a plugin left with upgrade notes
+and no line, and a cut where every line is taken out (a plugin whose own lines all go is neither raised nor folded); a fold also refuses a folded version whose public tag exists, a plugin never released, and a fold
+whose highest level asks another version than the section carries (a minor into a patch section): a plain cut raises the version
+instead, joining the unpublished section.
 
 A manifest is `plugins/<name>/.claude-plugin/plugin.json`; a symlink or a non-JSON file is red for a plugin the change touches. A
 version is X.Y.Z (digits, no leading zero, no suffix). In the bootstrap kind the manifest `version` still decides, as it did. When the base does not resolve, or shares no history with HEAD (a
@@ -141,6 +166,8 @@ PUBLIC_TAG = "%s--v%s"                   # a published version's tag in the publ
 OWNER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", re.ASCII)
 ENTRY_LINE = re.compile(r"- (patch|minor|major): ", re.ASCII)
 TOGETHER = "Released together: "         # a cut section's first line: every plugin of the marketplace released with it, at its version
+MARKS = ("supersedes", "cancels")         # a change file's optional lines: the earlier change files it replaces or undoes
+DATE_PREFIX = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-", re.ASCII)   # a change file named after its intent starts with its date
 
 
 class Bad(Exception):
@@ -418,12 +445,14 @@ def upgrade_edit(repo, mb, p):
     if os.path.islink(full) or not os.path.isfile(full):
         return False
     try:
-        old = read_change(show(repo, mb, p).decode("utf-8", "replace"))
+        old_text = show(repo, mb, p).decode("utf-8", "replace")
+        old = read_change(old_text)
         with open(full, encoding="utf-8") as f:
-            now = read_change_full(f.read())
+            f_text = f.read()
+        now = read_change_full(f_text)
     except (Bad, OSError, UnicodeDecodeError):
         return False
-    if now[:3] != old:
+    if now[:3] != old or marks_of(f_text) != marks_or_none(old_text):
         return False
     print("change file %s: pending on the base, its upgrade line now: %s" % (p, now[3] or "none"))
     return True
@@ -431,8 +460,9 @@ def upgrade_edit(repo, mb, p):
 
 def judge_pending(repo, mb, p, removed, bad):
     """A pending change file of the merge-base that this change deletes or edits: red unless a plugin removed whole allows it."""
+    old_text = show(repo, mb, p).decode("utf-8", "replace")
     try:
-        old_plugins, old_level, _old_line = read_change(show(repo, mb, p).decode("utf-8", "replace"))
+        old_plugins, old_level, _old_line = read_change(old_text)
     except Bad:
         old_plugins, old_level = [], None
     gone = [x for x in old_plugins if x in removed]
@@ -454,13 +484,16 @@ def judge_pending(repo, mb, p, removed, bad):
         return
     try:
         with open(full, encoding="utf-8") as f:
-            plugins, level, line = read_change(f.read())
+            text = f.read()
+        plugins, level, line = read_change(text)
     except (OSError, UnicodeDecodeError) as e:
         bad.append("%s: cannot be read: %s" % (p, e))
         return
     except Bad as e:
         bad.append("%s: %s" % (p, e))
         return
+    if marks_of(text) != marks_or_none(old_text):
+        bad.append("%s: its supersedes:/cancels: changed; a pending change file that loses a plugin removed whole keeps them" % p)
     want = [x for x in old_plugins if x not in removed]
     if plugins != want:
         bad.append("%s: plugins: %s; a pending change file that loses a plugin removed whole keeps the others as they were: %s"
@@ -470,6 +503,77 @@ def judge_pending(repo, mb, p, removed, bad):
     for n in names_removed(line, removed):
         bad.append("%s: the body still names the removed plugin %s" % (p, n))
     print("change file %s: %s removed whole, now %s, %s: %s" % (p, ", ".join(gone), ", ".join(plugins), level, line))
+
+
+def change_text(repo, stem, revs=("HEAD",)):
+    """The last text of the change file `.changes/<stem>.md`: the working tree's, else the newest commit of a rev's history that
+    holds it (a consumed file: the one before the cut that removed it); None when it never existed there."""
+    rel = "%s/%s.md" % (CHANGES, stem)
+    text = text_here(repo, rel)
+    for rev in revs:
+        if text is not None:
+            break
+        rc, out = git(repo, "log", "--full-history", "--format=%H", rev, "--", rel)
+        text = next((t for t in (text_at(repo, c, rel) for c in out.decode().split()) if t is not None), None)
+    return text
+
+
+_EVER = {}
+
+
+def changes_ever(repo, revs):
+    """The names (without .md) of the change files the working tree holds and the history of each rev ever held."""
+    key = (repo, tuple(revs))
+    if key not in _EVER:
+        names = set(p[len(CHANGES) + 1:-len(".md")] for p in change_files_here(repo) if p.endswith(".md"))
+        for rev in revs:
+            rc, out = git(repo, "log", "--full-history", "--format=", "--name-only", rev, "--", CHANGES + "/")
+            names |= set(l[len(CHANGES) + 1:-len(".md")] for l in out.decode("utf-8", "replace").split("\n")
+                         if l.startswith(CHANGES + "/") and l.endswith(".md") and l.count("/") == 1)
+        names.discard("README")
+        _EVER[key] = names
+    return _EVER[key]
+
+
+def mark_target(repo, x, revs=("HEAD",)):
+    """The change file a mark `x` names: the one that is x itself or `<YYYY-MM-DD>-x` (a mark is written without the leading
+    date, which repeats an intent's file name); None when none; Bad naming the candidates when several."""
+    names = changes_ever(repo, revs)
+    hits = sorted(n for n in names if n == x or DATE_PREFIX.match(n) and undated(n) == x)
+    if len(hits) > 1:
+        raise Bad("%s matches %d change files (%s): name one with its date" % (x, len(hits), ", ".join(hits)))
+    return hits[0] if hits else None
+
+
+def undated(name):
+    """A change file's name without its leading date (the name a mark gives)."""
+    return name[len("YYYY-MM-DD-"):] if DATE_PREFIX.match(name) else name
+
+
+def judge_unique(repo, p, revs, bad):
+    """An added change file's name without its date is no other change file's, pending or consumed: a mark that names it would
+    else match two files, and a pending mark that matched one would stop every later cut."""
+    stem = p[len(CHANGES) + 1:-len(".md")]
+    others = sorted(n for n in changes_ever(repo, revs) if n != stem and undated(n) == undated(stem))
+    if others:
+        bad.append("%s: its name without the date, %s, is also that of %s: give it a name of its own (a mark names a change file "
+                   "by it)" % (p, undated(stem), ", ".join(others)))
+
+
+def resolved_marks(repo, marks, revs=("HEAD",), strict=True):
+    """A file's marks with each name as the change file it names (`mark_target`); a name nothing matches is kept as written.
+    With `strict`, an ambiguous name raises Bad; else it is kept as written."""
+    out = {}
+    for k, names in marks.items():
+        out[k] = []
+        for y in names:
+            try:
+                out[k].append(mark_target(repo, y, revs) or y)
+            except Bad:
+                if strict:
+                    raise
+                out[k].append(y)
+    return out
 
 
 def change_names(repo):
@@ -512,8 +616,8 @@ def upgrade_of(text):
     return read_change_full(text)[3]
 
 
-def read_change_full(text):
-    """(plugins, level, line, upgrade or None) of a change file's text; raises Bad with the reason."""
+def change_head(text):
+    """({frontmatter key: value}, the lines after it) of a change file's text; raises Bad with the reason."""
     lines = text.replace("\r\n", "\n").split("\n")
     if not lines or lines[0].strip() != "---":
         raise Bad("no frontmatter (it starts with ---)")
@@ -527,16 +631,40 @@ def read_change_full(text):
         if not sep or k.strip() in head:
             raise Bad("frontmatter line %r is not one `key: value`" % line)
         head[k.strip()] = v.strip().strip('"')
-    if not {"plugins", "level"} <= set(head) or set(head) - {"plugins", "level", "upgrade"}:
-        raise Bad("the frontmatter has %s, not plugins and level (and an optional upgrade)" % (", ".join(sorted(head)) or "nothing"))
+    return head, lines[end + 1:]
+
+
+def marks_of(text):
+    """{`supersedes`|`cancels`: [change file names]} of a change file's text (the keys it has); raises Bad with the reason."""
+    head, out = change_head(text)[0], {}
+    for k in MARKS:
+        if k not in head:
+            continue
+        names = [x.strip() for x in head[k].split(",")]
+        if not all(names):
+            raise Bad("%s: is empty or has an empty name" % k)
+        for x in names:
+            if x.endswith(".md") or not CHANGE_NAME.fullmatch(x + ".md"):
+                raise Bad("%s: %s is not a change file's name (its file name in %s/ without .md)" % (k, x, CHANGES))
+        out[k] = names
+    return out
+
+
+def read_change_full(text):
+    """(plugins, level, line, upgrade or None) of a change file's text; raises Bad with the reason."""
+    head, rest = change_head(text)
+    if not {"plugins", "level"} <= set(head) or set(head) - {"plugins", "level", "upgrade"} - set(MARKS):
+        raise Bad("the frontmatter has %s, not plugins and level (and an optional upgrade, supersedes, cancels)"
+                  % (", ".join(sorted(head)) or "nothing"))
     if "upgrade" in head and not head["upgrade"]:
         raise Bad("upgrade: is empty (leave the line out when an existing user has nothing to do or notice)")
+    marks_of(text)
     plugins = [p.strip() for p in head["plugins"].split(",")]
     if not plugins or not all(plugins):
         raise Bad("plugins: is empty or has an empty name")
     if head["level"] not in LEVELS:
         raise Bad("level: %r is not one of %s" % (head["level"], "|".join(LEVELS)))
-    body = [l for l in lines[end + 1:] if l.strip()]
+    body = [l for l in rest if l.strip()]
     if len(body) != 1:
         raise Bad("the body has %d non-empty lines, not one" % len(body))
     return plugins, head["level"], body[0].strip(), head.get("upgrade")
@@ -576,6 +704,75 @@ def special_under_plugins(repo):
     return sorted(set(found))
 
 
+def judge_marks(repo, p, text, bad):
+    """An added change file's `supersedes:` and `cancels:` name change files that are pending or were consumed, never itself, that
+    name a plugin it names too and do not name it back; a `cancels:` never names a file with marks of its own (undoing an undo or
+    a replacement is a change file of its own); and a consumed file's line is still in a CHANGELOG section as written, so the cut
+    has something to take out (one an earlier cut took out, or a fold reworded, cannot be named)."""
+    stem, plugins = p[len(CHANGES) + 1:-len(".md")], read_change(text)[0]
+    marks_by_name = lambda n: resolved_marks(repo, marks_of(text) if n == stem else marks_or_none(change_text(repo, n) or ""),
+                                             strict=False)
+    for kind, names in sorted(marks_of(text).items()):
+        for x in names:
+            try:
+                full = mark_target(repo, x)
+            except Bad as e:
+                bad.append("%s: %s: %s" % (p, kind, e))
+                continue
+            other = None if full in (None, stem) else change_text(repo, full)
+            theirs = marks_or_none(other or "")
+            try:
+                shared = [n for n in plugins if n in read_change(other)[0]] if other is not None else []
+            except Bad as e:
+                bad.append("%s: %s: %s cannot be read: %s" % (p, kind, x, e))
+                continue
+            if full == stem:
+                bad.append("%s: %s: names itself" % (p, kind))
+            elif other is None:
+                bad.append("%s: %s: %s is no change file of this repository (pending or consumed)" % (p, kind, x))
+            elif kind == "cancels" and theirs:
+                bad.append("%s: cancels %s, which itself supersedes or cancels: write what holds now in a change file of its own"
+                           % (p, x))
+            elif mark_ring(stem, marks_by_name):
+                bad.append("%s: %s %s, which names it back (directly or through others): one of them says what holds now"
+                           % (p, kind, x))
+            elif not shared:
+                bad.append("%s: %s %s, which names none of %s: a mark takes effect only in the plugins both name"
+                           % (p, kind, x, ", ".join(plugins)))
+            else:
+                up = upgrade_of(other)
+                written = [(n, (text_here(repo, "plugins/%s/%s" % (n, CHANGELOG)) or "").split("\n")) for n in shared]
+                lost = [] if text_here(repo, "%s/%s.md" % (CHANGES, full)) is not None else [
+                    (n, what) for n, lines in written for what, l in (("line", entry(*read_change(other)[1:])),
+                                                                     ("upgrade note", note(up) if up else None)) if l and l not in lines]
+                for n, what in lost:
+                    bad.append("%s: %s %s, whose %s is in no section of plugins/%s/%s as written (an earlier cut took it out, "
+                               "or a fold reworded it): there is nothing to take out" % (p, kind, x, what, n, CHANGELOG))
+                if not lost:
+                    print("change file %s: %s %s%s" % (p, kind, x, "" if full == x else " (%s)" % full))
+
+
+def mark_ring(start, marks_by_name):
+    """Whether following `supersedes:`/`cancels:` from change file `start` comes back to it (`marks_by_name(name)` gives a file's
+    marks, {} when it has none or does not exist)."""
+    seen, todo = set(), [start]
+    while todo and len(seen) < 1000:
+        for y in sum(marks_by_name(todo.pop()).values(), []):
+            if y == start:
+                return True
+            if y not in seen:
+                seen.add(y)
+                todo.append(y)
+    return False
+
+
+def marks_or_none(text):
+    try:
+        return marks_of(text)
+    except Bad:
+        return {}
+
+
 def judge_ordinary(repo, mb, paths, added, touched, bad):
     known = change_names(repo)
     removed = removed_plugins(repo, mb) if MARKETPLACE in paths else set()
@@ -596,7 +793,8 @@ def judge_ordinary(repo, mb, paths, added, touched, bad):
             continue
         try:
             with open(os.path.join(repo, p), encoding="utf-8") as f:
-                plugins, level, line = read_change(f.read())
+                text = f.read()
+            plugins, level, line = read_change(text)
         except (OSError, UnicodeDecodeError) as e:
             bad.append("%s: cannot be read: %s" % (p, e))
             continue
@@ -606,6 +804,8 @@ def judge_ordinary(repo, mb, paths, added, touched, bad):
         unknown = [x for x in plugins if x not in known]
         if unknown:
             bad.append("%s: plugins: %s is not a plugin of this repo" % (p, ", ".join(unknown)))
+        judge_marks(repo, p, text, bad)
+        judge_unique(repo, p, (mb,), bad)              # the merge-base's history: a name the PR itself dropped is no other file
         named |= set(plugins)
         print("change file %s: %s, %s: %s" % (p, ", ".join(plugins), level, line))
     for p in paths:
@@ -801,14 +1001,15 @@ def section_of(text, version):
     return out
 
 
-def without_section(text, version):
-    """The lines of a CHANGELOG text with its `## <version>` section left out (what a fold of that version must not change),
-    trailing spaces, a CR and blank lines at the end not counted (the cut writes LF and one final newline)."""
+def without_sections(text, versions):
+    """The lines of a CHANGELOG text with its `## <version>` sections of `versions` left out (what a release or a fold must not
+    change), trailing spaces, a CR and blank lines at the end not counted (the cut writes LF and one final newline)."""
     lines = [l.rstrip() for l in (text or "").split("\n")]
-    if "## " + version in lines:
-        at = lines.index("## " + version)
-        end = next((i for i in range(at + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
-        lines = lines[:at] + lines[end:]
+    for version in versions:
+        if "## " + version in lines:
+            at = lines.index("## " + version)
+            end = next((i for i in range(at + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+            lines = lines[:at] + lines[end:]
     while lines and not lines[-1]:
         lines.pop()                                 # the cut ends the file with one newline, whatever the base's end was
     return lines
@@ -851,10 +1052,10 @@ def public_tags(public):
         p = subprocess.run(["git", "ls-remote", "--tags", public_url(public)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            env=env, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise Bad("the tags of %s cannot be read (%s): a fold needs them to know a version is not published" % (public, e))
+        raise Bad("the tags of %s cannot be read (%s): a release or a fold needs them to know a version is not published" % (public, e))
     if p.returncode != 0:
         why = (p.stderr.decode("utf-8", "replace").strip().splitlines() or [""])[-1][:200]
-        raise Bad("the tags of %s cannot be read (git ls-remote rc %d%s): a fold needs them to know a version is not published"
+        raise Bad("the tags of %s cannot be read (git ls-remote rc %d%s): a release or a fold needs them to know a version is not published"
                   % (public, p.returncode, ": " + why if why else ""))
     tags = set()
     for line in p.stdout.decode("utf-8", "replace").splitlines():
@@ -862,6 +1063,159 @@ def public_tags(public):
         if ref.startswith("refs/tags/"):
             tags.add(ref[len("refs/tags/"):].rsplit("^{}", 1)[0])
     return tags
+
+
+def released_versions(text):
+    """The `## X.Y.Z` headings of a CHANGELOG text from the top down, above its first other `## ` heading (a private history)."""
+    out = []
+    for line in (text or "").split("\n"):
+        if line.startswith("## "):
+            v = line[3:].strip()
+            if not VERSION.fullmatch(v):
+                break
+            out.append(v)
+    return out
+
+
+def unpublished(text, name, tags):
+    """The versions of a CHANGELOG text cut but not published (no tag `<name>--v<version>` in `tags`), from the top down to the
+    first published one: what the next public release of `name` holds besides its pending change files. Raises Bad when the
+    text holds a released version below the top and `tags` hold no tag of `name` at all: a tag list of another repository would
+    read every section as unpublished and join published history into the next release."""
+    out, versions = [], released_versions(text)
+    if len(versions) > 1 and not any(t.startswith(name + "--v") for t in tags):
+        raise Bad("plugins/%s/%s has released versions below %s and the public repository holds no tag %s: is --public the "
+                  "repository %s is published to?" % (name, CHANGELOG, versions[0], PUBLIC_TAG % (name, "<version>"), name))
+    for v in versions:
+        if PUBLIC_TAG % (name, v) in tags:
+            break
+        out.append(v)
+    return out
+
+
+def notes_of(section):
+    return [l for l in upgrade_part(section) if l.startswith("- ")]
+
+
+def pending_changes(found):
+    """[(name, plugins, level, line, upgrade, marks)] of {path: text} change files, broken ones left out (the callers name them)."""
+    out = []
+    for p, text in sorted(found.items()):
+        try:
+            out.append((p[len(CHANGES) + 1:-len(".md")],) + tuple(read_change_full(text)) + (marks_of(text),))
+        except Bad:
+            continue
+    return out
+
+
+def final_state(repo, name, text, pending, tags, revs=("HEAD",)):
+    """What the next public section of plugin `name` holds: the lines of its unpublished sections and of the pending change files
+    naming it, each written once, less what a pending file's `supersedes:` or `cancels:` takes out in the plugins it names (a
+    cancelling file's own line goes too unless something it cancels was published for `name`), less a line already published.
+    Returns (unpublished versions top down, [old entries], [old notes], [new entries], [new notes], [(line, why) taken out]), old
+    being the unpublished sections' lines oldest first. Raises Bad when a named change's line is in no section as written."""
+    text = (text or "").replace("\r\n", "\n")
+    unpub = unpublished(text, name, tags)
+    old_e, old_n, pub_e, pub_n = [], [], [], []
+    for v in reversed(released_versions(text)):
+        sec = section_of(text, v)
+        if sec is None:
+            raise Bad("plugins/%s/%s: a heading reads %s but no line is exactly `## %s` (trailing spaces?)" % (name, CHANGELOG, v, v))
+        e, n = (old_e, old_n) if v in unpub else (pub_e, pub_n)
+        e += entries_of(sec)
+        n += notes_of(sec)
+    try:
+        pending = [(x, plugins, level, line, up, resolved_marks(repo, marks, revs)) for x, plugins, level, line, up, marks in pending]
+    except Bad:
+        for x, _, _, _, _, marks in pending:            # say which file holds the mark that matches several
+            try:
+                resolved_marks(repo, marks, revs)
+            except Bad as e:
+                raise Bad("%s: %s" % (x, e))
+        raise
+    new = [(x, entry(level, line), note(up) if up else None) for x, plugins, level, line, up, _ in pending if name in plugins]
+    rings = sorted(x for x, _, _, _, _, m in pending if mark_ring(x, lambda n: dict((s, k) for s, _, _, _, _, k in pending).get(n, {})))
+    if rings:
+        raise Bad("the pending change files %s supersede or cancel one another in a ring: one of them says what holds now"
+                  % ", ".join(rings))
+    stems, gone, seen, drop = [x for x, _, _ in new], [], {}, set()
+    for x, plugins, level, line, up, marks in pending:
+        if name not in plugins:
+            continue
+        published = False
+        for kind in MARKS:
+            for y in marks.get(kind, []):
+                if y not in seen:
+                    seen[y] = locate(repo, name, y, stems, old_e, old_n, pub_e + pub_n, revs, x, gone, kind)
+                drop |= {y} if seen[y] == "pending" else set()
+                published = published or (kind == "cancels" and seen[y] == "published")
+        if "cancels" in marks and not published:
+            drop.add(x)
+            gone += [(e, "cancels only what was never published") for s, e, _ in new if s == x]
+            gone += [(n, "cancels only what was never published") for s, _, n in new if s == x and n]
+    new_e = [e for s, e, _ in new if s not in drop]            # by file, not by text: another file's same note stays
+    new_n = [n for s, _, n in new if n and s not in drop]
+    for lines, pub in ((old_e, pub_e), (old_n, pub_n), (new_e, pub_e), (new_n, pub_n)):
+        gone += [(l, "already published") for l in lines if l in pub]
+        lines[:] = [l for i, l in enumerate(lines) if l not in pub and l not in lines[:i]]
+    new_e = [l for l in new_e if l not in old_e]
+    new_n = [l for l in new_n if l not in old_n]
+    return unpub, old_e, old_n, new_e, new_n, gone
+
+
+def locate(repo, name, y, stems, old_e, old_n, pub, revs, by, gone, kind):
+    """Where the change file `y` that `by` names sits for plugin `name`: "pending", "unpublished" (its line and note taken out of
+    old_e and old_n) or "published" (a copy of them in old_e and old_n taken out), or None when it does not name `name`; records
+    what goes in `gone`. Raises Bad when its text is gone, when a `cancels:` names a file with marks of its own, or when its line
+    is in no section of `name` as written."""
+    text = change_text(repo, y, revs)
+    if text is None:
+        raise Bad("%s: %s: %s is no change file of this repository (pending or consumed)" % (by, kind, y))
+    plugins, level, line, up = read_change_full(text)
+    if kind == "cancels" and marks_of(text):
+        raise Bad("%s cancels %s, which itself supersedes or cancels: write what holds now in a change file of its own" % (by, y))
+    if name not in plugins:
+        return None
+    why = "%s by %s" % ("superseded" if kind == "supersedes" else "cancelled", by)
+    e, n = entry(level, line), note(up) if up else None
+    if y in stems:
+        gone.append((e, why))
+        if n:
+            gone.append((n, why))
+        return "pending"
+    where = "published" if e in pub else "unpublished" if e in old_e else None
+    if where is None:
+        raise Bad("plugins/%s/%s: the line of %s, which %s names, is in no section as written (was it reworded?): %s"
+                  % (name, CHANGELOG, y, by, e[:100]))
+    if where == "unpublished" and n and n not in old_n and n not in pub and n not in [g for g, _ in gone]:
+        raise Bad("plugins/%s/%s: the upgrade note of %s, which %s names, is in no section as written (was it reworded?): %s"
+                  % (name, CHANGELOG, y, by, n[:100]))
+    why = "already published" if where == "published" else why
+    for lines, l in ((old_e, e), (old_n, n)):           # a copy of a published change in an unpublished section goes too
+        # shortcut: a note two consumed changes share is written once, so taking one out takes it from both; attribute notes to
+        # their change files if two upgrade lines ever match
+        if l and l in lines:
+            lines.remove(l)
+            gone.append((l, why))
+    return where
+
+
+def changelog_after(text, version, lines, notes, together, drop):
+    """A CHANGELOG text with the sections of `drop` taken out and `## <version>` (with the `Released together:` line `together`,
+    `lines` and, under the Upgrade notes heading, `notes`) written above its first `## ` heading; LF, one final newline."""
+    out, skip = [], False
+    for l in (text or "").replace("\r\n", "\n").split("\n"):
+        if l.startswith("## "):
+            skip = l[3:].strip() in drop
+        if not skip:
+            out.append(l)
+    body = "\n".join(out)
+    block = "## %s\n\n%s%s\n\n" % (version, together + "\n\n" if together else "", "\n".join(lines))
+    if notes:
+        block += "%s\n\n%s\n\n" % (UPGRADE_HEADING, "\n".join(notes))
+    m = re.search(r"^## ", body, re.M)
+    body = body[:m.start()] + block + body[m.start():] if m else body.rstrip("\n") + "\n\n" + block
+    return body.rstrip("\n") + "\n"
 
 
 def entry(level, line):
@@ -930,11 +1284,12 @@ def together_lines(text, released_only):
     return out
 
 
-def together_frozen(repo, mb, bad):
+def together_frozen(repo, mb, bad, joined=()):
     """A released `## X.Y.Z` section of the merge-base keeps its `Released together:` line as it was, wherever the section sits
     here (a heading put above it hides nothing), and a section that held one is still here while the CHANGELOG is (a lone CR
     cannot hide it): the export reads a plugin's dependency floor from its released section, so an edit there would move the
-    floor of a version that does not move."""
+    floor of a version that does not move. A section never published that this release or fold joined (`joined`, (plugin,
+    version) pairs) may go."""
     for name in sorted(plugin_dirs(repo)):
         rel = "plugins/%s/%s" % (name, CHANGELOG)
         path = os.path.join(repo, rel)
@@ -943,6 +1298,8 @@ def together_frozen(repo, mb, bad):
             continue                                    # no CHANGELOG file here: the released-version rule names that
         was, now = together_lines(text_at(repo, mb, rel), True), together_lines(raw, False)   # raw: a lone CR is no line break
         for v in sorted(was):
+            if (name, v) in joined:
+                continue                                # cut, never published: this release or fold joined it into its section
             if was[v] and v not in now:
                 bad.append("%s `## %s`: the section that holds its `Released together:` line is gone (as git and the export "
                            "read it, split on LF); a released section stays" % (rel, v))
@@ -1007,15 +1364,92 @@ def release_scope(repo, mb, paths, bad):
                        "kb page); ship this change in an ordinary PR first" % p)
 
 
-def judge_release(repo, base_ref, base, mb, paths, bad):
+def foreign_tags(repo, tags):
+    """The reason a tag list reads as another repository's: no plugin here with a released version has a tag in it (one that
+    was never published reads the same: publish its top version first); None when some plugin has one."""
+    names = sorted(n for n in plugin_dirs(repo) if released_versions(text_here(repo, "plugins/%s/%s" % (n, CHANGELOG))))
+    if names and not any(t.startswith(n + "--v") for t in tags for n in names):
+        return ("the public repository holds no tag of any plugin here (%s): is --public the repository they are published to? "
+                "(when none was ever published, publish the top version first)" % ", ".join(names))
+    return None
+
+
+def read_tags(public, kind, bad, repo="."):
+    """The public repository's tag names, or None with the reason in `bad`: a release or a fold whose publication was not read
+    must not pass."""
+    if not public:
+        bad.append("a %s needs --public <repo>: whether each version is published decides what it ships, and a %s whose "
+                   "publication was not read must not pass" % (kind, kind))
+        return None
+    try:
+        tags = public_tags(public)
+    except Bad as e:
+        bad.append(str(e))
+        return None
+    why = foreign_tags(repo, tags)
+    if why:
+        bad.append(why)
+        return None
+    return tags
+
+
+def judge_final(repo, name, now, base_text, unpub, gone, kept, bad):
+    """What a release and a fold both ask of plugin `name`'s CHANGELOG: no line that goes is left in `## now`, and every section
+    but it and the unpublished ones it joined is as on the base. Returns the lines left that go."""
+    rel = "plugins/%s/%s" % (name, CHANGELOG)
+    text = text_here(repo, rel)
+    section = section_of(text, now) or []
+    stale = [(l, why) for l, why in gone if l in section and l not in kept]
+    for l, why in stale:
+        bad.append("%s `## %s` still holds a line that goes (%s): %s" % (rel, now, why, l[:120]))
+    outside = (without_sections(text, [now]), without_sections((base_text or "").replace("\r\n", "\n"), unpub))
+    if base_text is not None and outside[0] != outside[1]:            # no CHANGELOG on the base: a first release writes it
+        bad.append("%s changes %d line(s) outside its `## %s` section: the sections below it are frozen (only an unpublished "
+                   "section it joins goes)" % (rel, lines_apart(*outside), now))
+    return [l for l, _ in stale]
+
+
+def below_published(repo, name, tags, bad):
+    """Red for each section below the top one of plugin `name`'s CHANGELOG that is cut and not published."""
+    rel = "plugins/%s/%s" % (name, CHANGELOG)
+    try:
+        stack = unpublished(text_here(repo, rel), name, tags)
+    except Bad as e:
+        bad.append(str(e))
+        return
+    for v in stack[1:]:
+        bad.append("%s `## %s` is cut and not published, below the top section: its lines join the next public release "
+                   "(release.py cut, or cut --fold, with --public)" % (rel, v))
+
+
+def judge_release(repo, base_ref, base, mb, paths, tags, bad):
+    """The release kind; returns the (plugin, version) sections it joined."""
     levels, lines, ups = shipped(repo, base_ref, base, bad)
-    names = plugin_names(repo, base)
+    pending = pending_changes(pending_on(repo, base))
+    names, joined = plugin_names(repo, base), set()
     for name in names:
         old, now = released_at(repo, base, name), released_here(repo, name)
         exists = manifest_here(repo, name)[0]
         if name in levels:
             if show(repo, base, "plugins/%s/%s" % (name, MANIFEST)) is None or not exists:
                 bad.append("plugin %s: a change file names it but it has no manifest on %s and here" % (name, base_ref))
+                continue
+            rel = "plugins/%s/%s" % (name, CHANGELOG)
+            base_text = text_at(repo, base, rel)
+            try:
+                state = final_state(repo, name, base_text, pending, tags, ("HEAD", base)) if tags is not None else None
+            except Bad as e:
+                bad.append(str(e))
+                continue
+            if state and not state[1] + state[3] and state[2] + state[4]:
+                bad.append("plugin %s: every line of it is taken out but %d upgrade note(s) remain" % (name, len(state[2] + state[4])))
+                continue
+            if state and not state[1] + state[3] and not state[0]:     # its pending lines all go: a cut does not raise it
+                if now != old or (text_here(repo, rel) or "") != (base_text or ""):
+                    bad.append("plugin %s: every pending line of it is taken out: it keeps %s and its CHANGELOG as on %s"
+                               % (name, old or "unreleased", base_ref))
+                else:
+                    print("plugin %s: every pending line of it is taken out: not raised, ok" % name)
                 continue
             want = bump(old, levels[name]) if old else FIRST_RELEASE
             if now != want:
@@ -1027,22 +1461,39 @@ def judge_release(repo, base_ref, base, mb, paths, bad):
             if section is None:
                 bad.append("plugins/%s/%s has no `## %s` entry" % (name, CHANGELOG, now))
                 continue
-            missing = [l for l in lines[name] if l not in section]
-            lacks = [l for l in ups.get(name, []) if l not in upgrade_part(section)]
+            if state is None:
+                continue                                # red already: the publication was not read
+            unpub, old_e, old_n, new_e, new_n, gone = state
+            joined |= set((name, v) for v in unpub)
+            want_e, want_n = old_e + new_e, old_n + new_n
+            stale = judge_final(repo, name, now, base_text, unpub, gone, want_e + want_n, bad)
+            have = [l for l in section if l.strip() and l != UPGRADE_HEADING and not l.startswith(TOGETHER)]
+            missing = [l for l in want_e if l not in section]
+            lacks = [l for l in want_n if l not in upgrade_part(section)]
+            extra = [l for l in have if l not in want_e + want_n and l not in stale]
+            twice = sorted(set(l for l in have if have.count(l) > 1))
             if missing:
                 bad.append("plugins/%s/%s `## %s` lacks %d shipped line(s), first: %s" % (name, CHANGELOG, now, len(missing), missing[0]))
             elif lacks:
                 bad.append("plugins/%s/%s `## %s` lacks %d line(s) under `%s`, first: %s"
                            % (name, CHANGELOG, now, len(lacks), UPGRADE_HEADING, lacks[0]))
-            else:
-                print("plugin %s: %s -> %s (%s), %d line(s) in its CHANGELOG: ok"
-                      % (name, old or "unreleased", now, levels[name], len(lines[name])))
+            if extra:
+                bad.append("plugins/%s/%s `## %s` gains %d line(s) no change ships, first: %s" % (name, CHANGELOG, now, len(extra), extra[0]))
+            if twice:
+                bad.append("plugins/%s/%s `## %s` holds a line twice: %s" % (name, CHANGELOG, now, twice[0]))
+            if not (missing or lacks or extra or twice or stale):
+                print("plugin %s: %s -> %s (%s), %d line(s) in its CHANGELOG: ok%s"
+                      % (name, old or "unreleased", now, levels[name], len(want_e),
+                         "".join(", joins unpublished %s" % v for v in unpub)))
         elif now != old:
             bad.append("plugin %s: %s -> %s, and no pending change file names it: a release raises only what it ships"
                        % (name, old or "unreleased", now or "unreleased"))
+    for name in sorted(plugin_dirs(repo)) if tags is not None else []:
+        below_published(repo, name, tags, bad)
     release_scope(repo, mb, paths, bad)
     for p in special_under_plugins(repo):
         bad.append("%s is a symlink or a submodule" % p)
+    return joined
 
 
 def reworded(was, section, shipped_lines, notes):
@@ -1074,17 +1525,10 @@ def lines_apart(a, b):
                if op != "equal")
 
 
-def judge_fold(repo, base_ref, base, mb, paths, public, bad):
-    tags = None
-    if not public:
-        bad.append("a fold needs --public <repo>: whether each folded version is published decides it, and a fold whose "
-                   "publication was not read must not pass")
-    else:
-        try:
-            tags = public_tags(public)
-        except Bad as e:
-            bad.append(str(e))
+def judge_fold(repo, base_ref, base, mb, paths, public, tags, bad):
+    """The fold kind; returns the (plugin, version) sections it joined into a top one."""
     levels, lines, ups = shipped(repo, base_ref, base, bad)
+    pending, joined = pending_changes(pending_on(repo, base)), set()
     for name in plugin_names(repo, base):
         old, now = released_at(repo, base, name), released_here(repo, name)
         if name not in levels:
@@ -1108,33 +1552,49 @@ def judge_fold(repo, base_ref, base, mb, paths, public, bad):
             bad.append("plugins/%s/%s: its first heading reads %s but no line is exactly `## %s` (trailing spaces?)"
                        % (name, CHANGELOG, now, now))
             continue
-        was = section_of(base_text, now) or []
-        pairs, why = reworded(was, section, lines[name], ups.get(name, []))
-        if tags is not None and PUBLIC_TAG % (name, now) in tags:
+        if tags is None:
+            continue                                    # red already: the publication was not read
+        try:
+            unpub, old_e, old_n, new_e, new_n, gone = final_state(repo, name, base_text, pending, tags, ("HEAD", base))
+        except Bad as e:
+            bad.append(str(e))
+            continue
+        if not old_e + new_e and old_n + new_n:
+            bad.append("plugin %s: every line of it is taken out but %d upgrade note(s) remain" % (name, len(old_n + new_n)))
+            continue
+        if not old_e + new_e and not unpub:             # its pending lines all go: a fold does not touch it
+            if (text or "").replace("\r\n", "\n") != base_text:
+                bad.append("plugin %s: every pending line of it is taken out: its CHANGELOG stays as on %s" % (name, base_ref))
+            else:
+                print("plugin %s: every pending line of it is taken out: not folded, ok" % name)
+            continue
+        top = section_of(base_text, now) or []
+        # what the section keeps of the base's unpublished sections, oldest first (a published top: the base's own section)
+        was = old_e + [UPGRADE_HEADING] + old_n if unpub and unpub[0] == now else top
+        pairs, why = reworded(was, section, new_e, new_n)
+        if not unpub or unpub[0] != now:
             bad.append("plugin %s %s is published (the tag %s exists in %s): its section is frozen%s, and a fold joins only a "
                        "version not published; cut without --fold" % (name, now, PUBLIC_TAG % (name, now), public,
                                                                        ", this change rewords %d of its line(s)" % len(pairs) if pairs else ""))
-        outside = (without_section(text, now), without_section(base_text, now))
-        if outside[0] != outside[1]:
-            bad.append("plugins/%s/%s changes %d line(s) outside its `## %s` section: the sections below it are frozen, a fold "
-                       "writes only that section" % (name, CHANGELOG, lines_apart(*outside), now))
+        joined |= set((name, v) for v in unpub[1:])
+        stale = judge_final(repo, name, now, base_text, unpub or [now], gone, old_e + old_n + new_e + new_n, bad)
         if why:
             bad.append("plugins/%s/%s `## %s`: %s" % (name, CHANGELOG, now, why))
-        dropped = [l for l in was if l.strip() and l not in section and l not in [b for b, _ in pairs]]
-        missing = [l for l in lines[name] if l not in entries_of(section)]
-        lacks = [l for l in ups.get(name, []) if l not in upgrade_part(section)]
+        dropped = [l for l in old_e + old_n if l not in section and l not in [b for b, _ in pairs]]
+        missing = [l for l in new_e if l not in entries_of(section)]
+        lacks = [l for l in new_n if l not in upgrade_part(section)]
         listed = [l for l in section if l.startswith("- ")]
         twice = sorted(set(l for l in listed if listed.count(l) > 1))
-        allowed = set(was) | set(lines[name]) | set(ups.get(name, [])) | {UPGRADE_HEADING} | set(h for _, h in pairs)
-        extra = [l for l in section if l.strip() and l not in allowed]
-        moved = [l for l in entries_of(was) if l in section and l not in entries_of(section)]
+        allowed = set(top) | set(old_e + old_n + new_e + new_n) | {UPGRADE_HEADING} | set(h for _, h in pairs)
+        extra = [l for l in section if l.strip() and l not in allowed and l not in stale]
+        moved = [l for l in old_e if l in section and l not in entries_of(section)]
         if extra:
             bad.append("plugins/%s/%s `## %s` gains %d line(s) no consumed change file ships, first: %s"
                        % (name, CHANGELOG, now, len(extra), extra[0]))
         if moved:
             bad.append("plugins/%s/%s `## %s` moves %d entry line(s) of %s below `%s`, first: %s"
                        % (name, CHANGELOG, now, len(moved), base_ref, UPGRADE_HEADING, moved[0]))
-        want = fold_version(text, now, [levels[name]] + [ENTRY_LINE.match(l).group(1) for l in entries_of(section)])
+        want = fold_version(base_text, now, [levels[name]] + [ENTRY_LINE.match(l).group(1) for l in entries_of(section)])
         if dropped:
             bad.append("plugins/%s/%s `## %s` drops %d line(s) of %s, first: %s" % (name, CHANGELOG, now, len(dropped), base_ref,
                                                                                      dropped[0]))
@@ -1145,15 +1605,19 @@ def judge_fold(repo, base_ref, base, mb, paths, public, bad):
                        % (name, CHANGELOG, now, len(lacks), UPGRADE_HEADING, lacks[0]))
         if twice:
             bad.append("plugins/%s/%s `## %s` holds a line twice: %s" % (name, CHANGELOG, now, twice[0]))
-        if want != now:
+        if vtuple(want) > vtuple(now):
             bad.append("plugin %s: its `## %s` section, with the folded lines, asks %s; cut without --fold" % (name, now, want))
-        if not (dropped or missing or lacks or twice or extra or moved or why or want != now):
-            print("plugin %s: %s keeps its version, %d line(s) folded into its CHANGELOG: ok" % (name, now, len(lines[name])))
+        if not (dropped or missing or lacks or twice or extra or moved or why or vtuple(want) > vtuple(now) or stale):
+            print("plugin %s: %s keeps its version, %d line(s) folded into its CHANGELOG: ok%s"
+                  % (name, now, len(new_e), "".join(", joins unpublished %s" % v for v in unpub[1:])))
             if pairs and not (tags is not None and PUBLIC_TAG % (name, now) in tags):
                 print("plugin %s: rewords %d line(s) of its unpublished `## %s` section: ok" % (name, len(pairs), now))
+    for name in sorted(plugin_dirs(repo)) if tags is not None else []:
+        below_published(repo, name, tags, bad)
     release_scope(repo, mb, paths, bad)
     for p in special_under_plugins(repo):
         bad.append("%s is a symlink or a submodule" % p)
+    return joined
 
 
 def shipped(repo, base_ref, base, bad):
@@ -1228,10 +1692,14 @@ def judge_hotfix(repo, base_ref, base, mb, paths, touched, bad):
             continue
         if level != "patch":
             bad.append("%s: level %s; a hotfix is a patch (a feature waits for the next release)" % (p, level))
+        if marks_or_none(text):
+            bad.append("%s: supersedes:/cancels: in a hotfix: a hotfix names no earlier change (a release resolves them)" % p)
         for name in plugins:
             named.setdefault(name, []).append(entry(level, line))
             if upgrade:
                 ups.setdefault(name, []).append(note(upgrade))
+        main = resolve(repo, default_ref(repo))
+        judge_unique(repo, p, (mb,) + ((main,) if main else ()), bad)   # main's history too: a back-merge brings the file there
         print("hotfix change file %s: %s, %s: %s" % (p, ", ".join(plugins), level, line))
     for p in change_files_here(repo):
         if show(repo, base, p) is None:
@@ -1293,7 +1761,7 @@ def check(repo, given, public=""):
     mb = out.decode().strip()
     paths, added = changed(repo, mb)
     touched = plugins_touched(paths)
-    bad = []
+    bad, tags, joined = [], None, set()
     kind = kind_of(repo, base_ref, base, mb)
     if kind == "bootstrap":
         print("kind: bootstrap (the history of %s never held %s/README.md)" % (base_ref, CHANGES))
@@ -1314,12 +1782,14 @@ def check(repo, given, public=""):
             elif kind == "back-merge":
                 judge_back_merge(repo, bad)
             elif kind == "release":
-                judge_release(repo, base_ref, base, mb, paths, bad)
+                tags = read_tags(public, kind, bad, repo)
+                joined = judge_release(repo, base_ref, base, mb, paths, tags, bad)
             elif kind == "fold":
-                judge_fold(repo, base_ref, base, mb, paths, public, bad)
+                tags = read_tags(public, kind, bad, repo)
+                joined = judge_fold(repo, base_ref, base, mb, paths, public, tags, bad)
             else:
                 judge_ordinary(repo, mb, paths, added, touched, bad)
-            together_frozen(repo, mb, bad)
+            together_frozen(repo, mb, bad, joined)
         except Bad as e:
             bad.append(str(e))
         check_no_versions(repo, bad)
@@ -1348,14 +1818,17 @@ def surface_of(text):
     return text[text.index(SURFACE[0]) + len(SURFACE[0]):text.index(SURFACE[1])].strip()
 
 
-def compute(repo, hotfix, base, tags=None, public=""):
-    """What a cut does here: ({name: (old, new, level, [entry lines], [upgrade notes])}, [change file paths], {contract path: new
-    Frozen at}). With `tags` (the public repository's tag names, read from `public`) it is a fold: new is old, level the highest
-    of the section and the folded files, and the lines and notes only those the section lacks.
-    Raises Refused with the reason when a change file is broken, names an unknown plugin, a hotfix asks more than a patch, or a
-    fold cannot join a plugin's top section."""
+def compute(repo, hotfix, base, tags=None, public="", fold=False):
+    """What a cut does here: ({name: (old, new, level, [entry lines], [upgrade notes], [versions it absorbs], [(line, why) taken
+    out])}, [change file paths], {contract path: new Frozen at}). With `tags` (the public repository's tag names, read from
+    `public`) the lines and notes are the plugin's next public section whole (final_state): the unpublished sections it absorbs,
+    then the pending files. A fold keeps the top version: new is old, level the highest of the section's lines.
+    Raises Refused with the reason when a change file is broken, names an unknown plugin, a hotfix asks more than a patch, a
+    named change's line cannot be found, or a fold cannot join a plugin's top section."""
     known = change_names(repo)
-    files, by, ups = [], {}, {}
+    if tags is not None and foreign_tags(repo, tags):
+        raise Refused(foreign_tags(repo, tags))
+    files, by, ups, found = [], {}, {}, {}
     for p in change_files_here(repo):
         full = os.path.join(repo, p)
         name = p[len(CHANGES) + 1:]
@@ -1363,7 +1836,8 @@ def compute(repo, hotfix, base, tags=None, public=""):
             raise Refused("%s is not a change file (%s/<a-z0-9 . _ ->.md, a regular file)" % (p, CHANGES))
         try:
             with open(full, encoding="utf-8") as f:
-                plugins, level, line, upgrade = read_change_full(f.read())
+                found[p] = f.read()
+            plugins, level, line, upgrade = read_change_full(found[p])
         except (Bad, OSError, UnicodeDecodeError) as e:
             raise Refused("%s: %s" % (p, e))
         unknown = [x for x in plugins if x not in known]
@@ -1371,6 +1845,8 @@ def compute(repo, hotfix, base, tags=None, public=""):
             raise Refused("%s names %s, not a plugin of this repo" % (p, ", ".join(unknown)))
         if hotfix and level != "patch":
             raise Refused("%s: level %s; a hotfix is a patch" % (p, level))
+        if hotfix and marks_or_none(found[p]):
+            raise Refused("%s: supersedes:/cancels: in a hotfix: a hotfix names no earlier change (a release resolves them)" % p)
         files.append(p)
         for n in plugins:
             by.setdefault(n, []).append((level, line))
@@ -1384,10 +1860,38 @@ def compute(repo, hotfix, base, tags=None, public=""):
         if hotfix and old is None:
             raise Refused("plugin %s was never released: a hotfix patches a release" % n)
         level = max((l for l, _ in items), key=LEVELS.index)
-        if tags is not None:
-            plan[n] = fold_plan(repo, n, old, level, [entry(l, t) for l, t in items], ups.get(n, []), tags, public)
+        if tags is None:
+            plan[n] = (old, bump(old, level) if old else FIRST_RELEASE, level, [entry(l, t) for l, t in items], ups.get(n, []), [], [])
             continue
-        plan[n] = (old, bump(old, level) if old else FIRST_RELEASE, level, [entry(l, t) for l, t in items], ups.get(n, []))
+        try:
+            unpub, old_e, old_n, new_e, new_n, gone = final_state(repo, n, text_here(repo, "plugins/%s/%s" % (n, CHANGELOG)),
+                                                                  pending_changes(found), tags)
+        except Bad as e:
+            raise Refused(str(e))
+        if not old_e + new_e and old_n + new_n:
+            raise Refused("plugin %s: every line of it is taken out (%s) but %d upgrade note(s) remain: write the line that goes "
+                          "with them" % (n, "; ".join(sorted(set(why for _, why in gone))) or "none", len(old_n + new_n)))
+        if not old_e + new_e and not unpub:
+            print("plugin %s: every pending line of it is taken out (%s): not raised"
+                  % (n, "; ".join(sorted(set(why for _, why in gone))) or "none"))
+            continue
+        if not old_e + new_e:
+            raise Refused("plugin %s: every line of its unpublished `## %s` section and of its pending change files is taken out: "
+                          "a section with no line cannot be written" % (n, unpub[0]))
+        if fold:
+            plan[n] = fold_plan(repo, n, old, level, unpub, old_e + new_e, old_n + new_n, gone, public)
+        else:
+            plan[n] = (old, bump(old, level) if old else FIRST_RELEASE, level, old_e + new_e, old_n + new_n, unpub, gone)
+    if tags is not None and not plan:
+        raise Refused("every pending line is taken out (cancelled, superseded or already published): nothing to release")
+    for n in [] if tags is None else sorted(set(plugin_dirs(repo)) - set(plan)):
+        try:
+            stack = unpublished(text_here(repo, "plugins/%s/%s" % (n, CHANGELOG)), n, tags)
+        except Bad as e:
+            raise Refused(str(e))
+        if len(stack) > 1:
+            raise Refused("plugin %s has `## %s` cut and not published below its top `## %s`: name it in a change file, so this "
+                          "cut joins them" % (n, stack[1], stack[0]))
     frozen = {}
     released_ref = release_ref(repo)
     for n in sorted(plugin_dirs(repo)):
@@ -1410,28 +1914,25 @@ def compute(repo, hotfix, base, tags=None, public=""):
     return plan, files, frozen
 
 
-def fold_plan(repo, n, old, level, lines, notes, tags, public):
-    """A plan entry that joins plugin n's top section `## old` (cut --fold), or Refused when it cannot."""
+def fold_plan(repo, n, old, level, unpub, lines, notes, gone, public):
+    """A plan entry that joins plugin n's unpublished sections and pending lines into its top section `## old` (cut --fold), or
+    Refused when it cannot. The version stays, and must be at least one step, at the highest level of the joined lines, above
+    the heading below it (a section that joined lower ones already stands more than one step above the published heading)."""
     if old is None:
         raise Refused("plugin %s was never released: a fold joins a released section; cut without --fold" % n)
-    if PUBLIC_TAG % (n, old) in tags:
+    if not unpub or unpub[0] != old:
         raise Refused("plugin %s %s is published (the tag %s exists in %s): a fold joins only a version not published; cut "
                       "without --fold" % (n, old, PUBLIC_TAG % (n, old), public))
     text = text_here(repo, "plugins/%s/%s" % (n, CHANGELOG))
-    section = section_of(text, old)
-    if section is None:
+    if section_of(text, old) is None:
         raise Refused("plugins/%s/%s: its first heading reads %s but no line is exactly `## %s` (trailing spaces?)"
                       % (n, CHANGELOG, old, old))
-    have = entries_of(section)
-    level = max([level] + [ENTRY_LINE.match(l).group(1) for l in have], key=LEVELS.index)
+    level = max([level] + [ENTRY_LINE.match(l).group(1) for l in lines], key=LEVELS.index)
     want = fold_version(text, old, [level])
-    if want != old:
+    if vtuple(want) > vtuple(old):
         raise Refused("plugin %s: its `## %s` section with the folded lines is a %s, which asks %s; cut without --fold"
                       % (n, old, level, want))
-    noted = upgrade_part(section)
-    lines = [l for i, l in enumerate(lines) if l not in have and l not in lines[:i]]
-    notes = [l for i, l in enumerate(notes) if l not in noted and l not in notes[:i]]
-    return (old, old, level, lines, notes)
+    return (old, old, level, lines, notes, unpub[1:], gone)
 
 
 def show_together(repo, plan, pairs):
@@ -1441,7 +1942,7 @@ def show_together(repo, plan, pairs):
         return
     print("released together: %s" % ", ".join("%s %s" % p for p in pairs))
     after = dict(pairs)
-    for n, (old, new, level, lines, notes) in sorted(plan.items()):
+    for n, (old, new, level, lines, notes, _, _) in sorted(plan.items()):
         was = together_in(changelog_section(repo, n, old)) if old else None
         for s in sibling_deps(repo, n):
             if s in after:
@@ -1451,10 +1952,14 @@ def show_together(repo, plan, pairs):
 def show_plan(plan, files, frozen, fold=False):
     for p in files:
         print("consume %s" % p)
-    for n, (old, new, level, lines, notes) in sorted(plan.items()):
+    for n, (old, new, level, lines, notes, absorbed, gone) in sorted(plan.items()):
         how = ("fold, " + level) if fold else level if old else "first release"
         print("plugin %s: %s -> %s (%s), %d CHANGELOG line(s)%s" % (n, old or "unreleased", new, how,
                                                                    len(lines), ", %d upgrade note(s)" % len(notes) if notes else ""))
+        for v in absorbed:
+            print("plugin %s: joins its unpublished `## %s` section, which goes" % (n, v))
+        for l, why in gone:
+            print("plugin %s: takes out (%s): %s" % (n, why, l[:120]))
     for rel, v in sorted(frozen.items()):
         print("%s: Frozen at -> %s (the surface moved since the last release, or the first release)" % (rel, v))
 
@@ -1463,66 +1968,41 @@ def base_for(hotfix, given):
     return given or (RELEASE_REF if hotfix else BASE_DEFAULT)
 
 
-def do_plan(repo, hotfix, given, public=""):
+NEEDS_PUBLIC = ("a release reads the public repository's tags to know what is published: name it with --public <repo> (its "
+               "unpublished sections join the new one)")
+
+
+def do_plan(repo, hotfix, given, public="", fold=False):
     base_ref = base_for(hotfix, given)
     base = resolve(repo, base_ref) or "HEAD"
     if not change_files_here(repo):
         print("nothing pending: no change file in %s/" % CHANGES)
         return 0
     try:
+        if not hotfix and not public:
+            raise Refused(NEEDS_PUBLIC)
         tags = public_tags(public) if public else None
-        plan, files, frozen = compute(repo, hotfix, base, tags, public)
+        plan, files, frozen = compute(repo, hotfix, base, tags, public, fold)
     except (Refused, Bad) as e:
         print("red: %s" % e)
         return 1
     if not files:
         print("nothing pending: no change file in %s/" % CHANGES)
         return 0
-    show_plan(plan, files, frozen, bool(public))
-    if not public:
+    show_plan(plan, files, frozen, fold)
+    if not fold:
         show_together(repo, plan, together_after(repo, plan))
     print("plan only: nothing written (release.py cut%s does it)"
-          % (" --hotfix" if hotfix else " --fold --public %s" % public if public else ""))
+          % (" --hotfix" if hotfix else (" --fold" if fold else "") + " --public %s" % public))
     return 0
 
 
-def write_changelog(repo, name, version, lines, notes, pairs):
-    path = os.path.join(repo, "plugins", name, CHANGELOG)
-    together = "%s%s\n\n" % (TOGETHER, ", ".join("%s %s" % p for p in pairs)) if pairs else ""
-    block = "## %s\n\n%s%s\n\n" % (version, together, "\n".join(lines))
-    if notes:
-        block += "%s\n\n%s\n\n" % (UPGRADE_HEADING, "\n".join(notes))
-    if os.path.isfile(path):
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-        m = re.search(r"^## ", text, re.M)
-        text = text[:m.start()] + block + text[m.start():] if m else text.rstrip("\n") + "\n\n" + block
-    else:
-        text = "# Changelog of %s\n\nNewest first.\n\n%s" % (name, block)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text.rstrip("\n") + "\n")
+def together_of(repo, name, version):
+    """The `Released together:` line of the plugin's `## <version>` section as it stands, or ""."""
+    return next((l for l in changelog_section(repo, name, version) or [] if l.startswith(TOGETHER)), "")
 
 
-def write_fold(repo, name, version, lines, notes):
-    """Join `lines` to the entries of the `## <version>` section of the plugin's CHANGELOG and `notes` to its Upgrade notes (the
-    heading made when it has none)."""
-    path = os.path.join(repo, "plugins", name, CHANGELOG)
-    with open(path, encoding="utf-8") as f:
-        text = f.read()
-    m = re.search(r"^## %s$" % re.escape(version), text, re.M)
-    n = re.search(r"^## ", text[m.end():], re.M)
-    end = m.end() + n.start() if n else len(text)
-    sec = text[m.start():end]
-    u = re.search(r"^%s[ \t]*$" % re.escape(UPGRADE_HEADING), sec, re.M)
-    head, ups = (sec, "") if u is None else (sec[:u.start()], sec[u.start():])
-    head = head.rstrip("\n") + "".join("\n" + l for l in lines) + "\n\n"
-    if ups or notes:
-        ups = (ups.rstrip("\n") if ups else UPGRADE_HEADING + "\n") + "".join("\n" + l for l in notes) + "\n\n"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write((text[:m.start()] + head + ups + text[end:]).rstrip("\n") + "\n")
-
-
-def do_cut(repo, hotfix, given, public=""):
+def do_cut(repo, hotfix, given, public="", fold=False):
     base_ref = base_for(hotfix, given)
     try:
         base = resolve(repo, base_ref)
@@ -1549,24 +2029,30 @@ def do_cut(repo, hotfix, given, public=""):
             raise Refused("%s holds a hotfix that HEAD lacks: merge its back-merge PR into main first" % RELEASE_REF)
         if not change_files_here(repo):
             raise Refused("nothing pending: no change file in %s/" % CHANGES)
+        if not hotfix and not public:
+            raise Refused(NEEDS_PUBLIC)
         tags = public_tags(public) if public else None
-        plan, files, frozen = compute(repo, hotfix, base, tags, public)
+        plan, files, frozen = compute(repo, hotfix, base, tags, public, fold)
         if not files:
             raise Refused("nothing pending: no change file in %s/" % CHANGES)
-        if public and not any(lines or notes for _, _, _, lines, notes in plan.values()):
+        pairs = [] if fold else together_after(repo, plan)
+        together = "%s%s" % (TOGETHER, ", ".join("%s %s" % p for p in pairs)) if pairs else ""
+        texts = {}
+        for n, (old, new, level, lines, notes, absorbed, gone) in sorted(plan.items()):
+            here = text_here(repo, "plugins/%s/%s" % (n, CHANGELOG))
+            texts[n] = changelog_after(here or "# Changelog of %s\n\nNewest first.\n" % n, new, lines, notes,
+                                       together_of(repo, n, old) if fold else together, ([old] if fold else []) + list(absorbed))
+        if fold and all(texts[n] == (text_here(repo, "plugins/%s/%s" % (n, CHANGELOG)) or "").replace("\r\n", "\n") for n in texts):
             raise Refused("nothing to fold: every line the pending change files ship is already in its section, so a fold "
                           "would change no CHANGELOG")
     except (Refused, Bad) as e:
         print("cut refused: %s" % e)
         return 1
-    show_plan(plan, files, frozen, bool(public))
-    pairs = [] if public else together_after(repo, plan)
+    show_plan(plan, files, frozen, fold)
     show_together(repo, plan, pairs)
-    for n, (old, new, level, lines, notes) in sorted(plan.items()):
-        if public:
-            write_fold(repo, n, new, lines, notes)
-        else:
-            write_changelog(repo, n, new, lines, notes, pairs)
+    for n, text in sorted(texts.items()):
+        with open(os.path.join(repo, "plugins", n, CHANGELOG), "w", encoding="utf-8") as f:
+            f.write(text)
     for p in files:
         os.remove(os.path.join(repo, p))
     for rel, v in frozen.items():
@@ -1653,15 +2139,15 @@ def main(argv):
         else:
             sys.stderr.write(__doc__)
             return 64
-    # a fold reads the public tags, so it names where they are; --public alone on plan or cut would be ignored, so it is refused
-    if public.startswith("-") or (cmd != "check" and (fold != bool(public) or (fold and hotfix))):
+    # a release or a fold reads the public tags, so it names where they are; a hotfix reads none, so --public there is refused
+    if public.startswith("-") or (cmd != "check" and (hotfix and (fold or public) or fold and not public)):
         sys.stderr.write(__doc__)
         return 64
     try:
         if cmd == "plan":
-            return do_plan(repo, hotfix, base, public)
+            return do_plan(repo, hotfix, base, public, fold)
         if cmd == "cut":
-            return do_cut(repo, hotfix, base, public)
+            return do_cut(repo, hotfix, base, public, fold)
         return check(repo, base, public)
     except Bad as e:
         print("red: %s" % e)

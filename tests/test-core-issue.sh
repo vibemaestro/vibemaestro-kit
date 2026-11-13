@@ -57,6 +57,8 @@ gh_adapter() { local w=$1 m=$2; shift 2; cenv PATH="$GHB:$PATH" GH_LOG="$GHL" GH
 no_gh_core() { local w=$1; shift; cenv PATH="$(bare_path nogh)" python3 "$PLX/scripts/intent_branch.py" --cwd "$w" "$@"; }
 rec() { printf -- '---\ndescription: "example record"\n---\n\nintent text\n' > "$1/kb/intent/$2.md"; }
 issue_lines() { grep -c '^issue:' "$1" || true; }
+# plain_warn <slug> — the one stderr line of create-intent on a plain intent under the default intake.focus: warn (the story process)
+plain_warn() { printf 'intent_branch: WARNING (intake.focus: warn): kb/intent/%s.md has no `type:` (story, task or bug) and no `focus:` (an open focus of the brain, like P1) in its frontmatter: kb.py new intent <slug> --type <t> --focus <P> writes both' "$1"; }
 gh_calls() { [ -s "$GHL" ] && wc -l < "$GHL" | tr -d ' ' || echo 0; }
 
 fam_ok() {  # --issue with a working gh
@@ -120,7 +122,7 @@ fam_default_off() {  # the core never touches gh unless asked; the adapter asks 
   out=$(gh_core "$W" ok create-intent --slug "$S" 2>"$TMP/err"); rc=$?; ERR=$(cat "$TMP/err")
   eq "$rc" 0 "[I3] the core without --issue: rc 0"; eq "$out" "intent/$S" "[I3] …stdout is the branch name"
   eq "$(gh_calls)" 0 "[I3] …gh was NOT called (a direct core call never reaches the network)"
-  empty "$ERR" "[I3] …stderr is empty"
+  eq "$ERR" "$(plain_warn "$S")" "[I3] …stderr is only the intake WARNING of a plain intent (default intake.focus: warn)"
   eq "$(issue_lines "$W/kb/intent/$S.md")" 0 "[I3] …no issue: line"
   git_ -C "$W" checkout -q main
   S=2026-02-03-adapter; rec "$W" "$S"
@@ -132,7 +134,7 @@ fam_default_off() {  # the core never touches gh unless asked; the adapter asks 
   out=$(gh_adapter "$W" ok create-intent --slug "$S" --no-issue 2>"$TMP/err"); rc=$?; ERR=$(cat "$TMP/err")
   eq "$rc" 0 "[I3] the adapter with --no-issue: rc 0"; eq "$out" "intent/$S" "[I3] …stdout is the branch name"
   eq "$(gh_calls)" 0 "[I3] …gh was NOT called"
-  empty "$ERR" "[I3] …stderr is empty (the flag did not reach the core as an unknown argument)"
+  eq "$ERR" "$(plain_warn "$S")" "[I3] …stderr is only the intake WARNING (the flag did not reach the core as an unknown argument)"
   eq "$(issue_lines "$W/kb/intent/$S.md")" 0 "[I3] …no issue: line"
   git_ -C "$W" checkout -q main
   gh_adapter "$W" ok worker-branch --intent "$S" --name feat/x --no-checkout --no-issue >/dev/null 2>&1

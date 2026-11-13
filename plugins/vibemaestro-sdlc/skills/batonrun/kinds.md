@@ -15,6 +15,5 @@ file instead, to change it); the signature binds the plugin version, as for a ki
 written as your own baton) write templates that do not run as `kind:`: they declare `Params`
 (the host, or the context, namespace, pod and API server; the path; the text as an `input` file) for the session to fill.
 
-Next, not built: `owner-merge-pr`, a merge the owner signs for a PR that touches `merge.deny_globs`; the guard refuses such a
-PR whatever signs it, so it waits for a guard change.
+A merge the owner signs for a PR the guard refuses by design is the kit `kit:owner-merge` (kits.md).
 
