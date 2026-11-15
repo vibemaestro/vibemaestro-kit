@@ -2,6 +2,32 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.7.2
+
+Released together: vibemaestro-sdlc 0.7.2, vibemaestro-brain 0.5.1
+
+- patch: On Windows the kit no longer goes silent when a message holds a character the machine's code page lacks: a developer session gets its process again, a rule written in Vietnamese blocks again, the kit's commands print Vietnamese without an error, and removing an old copy that holds a read-only file works instead of stopping with an error.
+
+## 0.7.1
+
+Released together: vibemaestro-sdlc 0.7.1, vibemaestro-brain 0.5.0
+
+- patch: In everyday mode the session start shows the person no line in a fixed language: the mode, why and how to switch, and a quiet save that did not keep the work, go to Claude, which says them in the person's own language when it matters. Claude offers the notebook at the first piece of work worth keeping and keeps where the work stands and the person's preferences (`kb/preferences.md`) in it.
+
+## 0.7.0
+
+Released together: vibemaestro-sdlc 0.7.0, vibemaestro-brain 0.5.0
+
+- minor: Everyday mode, for ordinary work that is not a software project: Claude talks in plain words and keeps your notes in a notebook folder (kb/); your folder is saved quietly after each turn, on this computer only; the history skill brings back an earlier save as a copy in a ban-cu/ folder and never writes over your work; it is made to run on Windows and in VS Code too (the README has a Windows / VS Code section; Windows is not tested yet) and says in one line when Python or Git is missing. A folder that is not a git repository, or one the kit created, gets this mode; a folder that already had git, or one connected to GitHub, gets the developer mode; the folder's `profile` setting overrides both.
+- minor: The brain learns from merged work: each pull request the merge guard merged counts for the rules and traps its body names (`Rules applied:`, `Traps met:`); `brain ledger --drift` lists the rules drifting with nobody on them, and a promoted SOUL code unused for 30 days shows as dormant; with `soul_file` set, the review card names where the SOUL file and the brain differ, and the owner's SOUL step can carry its line (`brain owner promote … --soul-line`), which the new kit baton `kit:soul-line` adds to that file.
+- patch: Merging is safe when GitHub fails part way: `kit:merge-pr` and `kit:owner-merge` no longer take a server error, a timeout or a dropped connection as a refusal; they read the pull request back, count it merged when it merged at the signed head and base, try once more when it is still open, else stop and say the state is unknown; the undo then leaves a merge at the signed head to the owner instead of advising a revert, and `kit:owner-merge` keeps a merge that may still land in its undo record until the run settles it.
+- minor: `kb.py check intent` checks a story's shape: each open question says why it exists, what each option means, its impact and the recommendation, and the asker's words map to the AC; an AC not written as when … then, or an unexplained short code, only warns.
+
+### Upgrade notes
+
+- A session in a folder that is not a git repository now gets the everyday mode instead of the developer process; set "profile": "developer" in .vibemaestro/sdlc.json, or VIBEMAESTRO_PROFILE=developer, to keep the developer process there. On a machine without Python the hooks no longer fail one by one: the session gets one line saying what is missing.
+- A story new or changed now needs four labelled parts per open question and a words → AC part; `kb.py new intent --type story` writes both, and a story already merged and unchanged only warns.
+
 ## 0.6.0
 
 Released together: vibemaestro-sdlc 0.6.0, vibemaestro-brain 0.4.0

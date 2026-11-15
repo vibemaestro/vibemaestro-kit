@@ -10,6 +10,7 @@ that holds one outside its comment, is put in a class:
   parsing    a pattern or word list that reads BOTH languages (PARSING below, by file and top-level name)
   vi-default the plugin's `vi` defaults that LANGUAGE_PRESETS["en"] lays English over (sdlc_config.py DEFAULTS, DEFAULT_FLOW)
   shell-vi   the `vi` arm of the shell refusals printed before python3 and the table are known to run (SHELL_VI below)
+  bilingual  a file's text written in both languages on purpose, read whatever the language setting (BILINGUAL below)
 Anything else is printed as `UNCLASSIFIED <file>:<line>: <text>` and the exit code is 1. The last line is the count per class.
 """
 import ast
@@ -24,11 +25,13 @@ VI = re.compile(r"[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽê
 PARSING = {   # file → the top-level names whose strings read both languages (never printed as a message)
     "current_state.py": {"_W", "_COUNT_AFTER", "_COUNT_BEFORE", "_RANK_BEFORE", "HISTORY", "HEADING_HISTORY", "_OVER_TEXT"},
     "kb_plan.py": {"COLUMNS", "DECISIONS_RX", "DROPPED_RX", "NONE_CELL"},
-    "kb.py": {"INPUTS_NONE_RX", "NOT_DOING_NONE", "STORY_PARTS", "STORY_LINE_RX", "STORY_RECOMMEND", "STORY_REASON", "WHEN_THEN_RX"},
+    "kb.py": {"INPUTS_NONE_RX", "NOT_DOING_NONE", "STORY_PARTS", "STORY_LINE_RX", "STORY_REASON", "QUESTION_PARTS", "EXAMPLE_WORDS",
+               "WHEN_THEN_RX"},
     "kb_index.py": {"fold"},
     "pr_evidence.py": {"E2E_SKIP"},
 }
 VI_DEFAULT = {"sdlc_config.py": {"DEFAULTS", "DEFAULT_FLOW"}}
+BILINGUAL = {"quiet_save.py": {"MARKER_TEXT"}}   # the marker file of the old copies: a Vietnamese line, then an English one
 SHELL_VI = {'if shell_en; then die "the core is missing: $f" 2; else die "thiếu lõi $f" 2; fi',
             'if shell_en; then die "no \\`python3\\`" 2; else die "không có \\`python3\\`" 2; fi'}
 
@@ -91,6 +94,8 @@ def classify_py(path, counts, bad):
                 counts["parsing"] += 1
             elif names.get(i) in VI_DEFAULT.get(fn, ()):
                 counts["vi-default"] += 1
+            elif names.get(i) in BILINGUAL.get(fn, ()):
+                counts["bilingual"] += 1
             else:
                 bad.append("%s:%d: %s" % (path, i, lines[i - 1].strip()[:160]))
 
@@ -121,7 +126,7 @@ def classify_sh(path, counts, bad):
 
 def main(argv):
     sdlc, brain = argv[1:3]
-    counts = {"vi-branch": 0, "parsing": 0, "vi-default": 0, "shell-vi": 0}
+    counts = {"vi-branch": 0, "parsing": 0, "vi-default": 0, "shell-vi": 0, "bilingual": 0}
     bad = []
     for top in (os.path.join(sdlc, "scripts"), os.path.join(sdlc, "gates"), os.path.join(brain, "scripts")):
         for d, subs, files in sorted(os.walk(top)):

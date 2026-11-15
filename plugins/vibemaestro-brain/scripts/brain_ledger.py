@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import stat
 import time
 
 import brain_store as s
@@ -81,6 +82,39 @@ def read(ops):
                  "pointer": op.get("pointer"), "differed": op.get("differed"), "measure": op.get("measure"),
                  "via": op.get("via")})
     return out
+
+
+def soul_state(ops):
+    """({code: the time its promotion was written}, {demoted codes}): the SOUL codes an `owner-promote` of the log took an item
+    to (its `soul`, an extension's `soul`, or the one code in brackets of its pointer, as `brain owner promote D3 "CLAUDE.md
+    [S14]"` stores it), less those a demotion took back (an `owner-demote`, or an owner item an extension marked
+    `demoted_from`)."""
+    def exts(d, k):
+        e = d.get("ext") if isinstance(d, dict) else None
+        return [v.get(k) for v in e.values() if isinstance(v, dict)] if isinstance(e, dict) else []
+    live, gone = {}, set()
+    for op in ops:
+        kind = op.get("op")
+        if kind == "owner-promote":
+            codes = [op.get("soul")] + exts(op, "soul")
+            if not any(isinstance(c, str) for c in codes) and isinstance(op.get("pointer"), str):
+                inner = re.findall(r"\[(%s)\]" % CODE, op["pointer"])
+                codes = inner if len(inner) == 1 else []
+            for c in codes:
+                if isinstance(c, str) and s.SOUL_CODE.fullmatch(c):
+                    live[c] = s.parse_iso(op.get("t") or "") or 0
+                    gone.discard(c)                 # promoted again after a demotion
+        else:
+            for c in [op.get("soul")] if kind == "owner-demote" else exts(op.get("item"), "demoted_from"):
+                if isinstance(c, str) and c in live:
+                    del live[c]
+                    gone.add(c)
+    return live, gone
+
+
+def soul_live(ops):
+    """{code: promotion time} of the SOUL codes promoted and not demoted (soul_state)."""
+    return soul_state(ops)[0]
 
 
 def snapshot(d):
@@ -177,7 +211,8 @@ def last_seen(led):
 
 def dormant(st, ops, led, now, t=None):
     """The live items of every section but G (its review day) and W (its expiry) whose last activity, the time of the op their
-    `touched` names or their last ledger event, is dormant_days days old or older: by section, then id."""
+    `touched` names or their last ledger event, is dormant_days days old or older: by section, then id; then the SOUL codes
+    promoted and not demoted with no event since dormant_days days (or since their promotion), as `[S07]`."""
     t = t or th()
     last, out = last_seen(led), []
     for letter, _ in s.SECTIONS:
@@ -189,6 +224,9 @@ def dormant(st, ops, led, now, t=None):
             times = [x for x in (when, last.get(it["id"])) if x is not None]
             if times and now - max(times) >= t["dormant_days"] * DAY:
                 out.append(it["id"])
+    for code, at in sorted(soul_live(ops).items(), key=lambda x: order("[%s]" % x[0])):   # a SOUL code: its promotion or its last event
+        if now - max(at, last.get("[%s]" % code, 0)) >= t["dormant_days"] * DAY:
+            out.append("[%s]" % code)
     return out
 
 
@@ -205,6 +243,82 @@ def standing(st, led, key, now, t):
     if drift_of(events, now, t):
         out.append("drift")
     return out
+
+
+# --- drift not handled yet ---------------------------------------------------------------------------------------------------
+
+def names(text, key):
+    """True when `text` names the rule `key` as a word: D3 (not D31), S07 or [S07] for `[S07]`."""
+    word = key.strip("[]")
+    return re.search(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(word), text or "") is not None
+
+
+def open_drift(st, ops, led, now, t=None):
+    """[(key, broke, checks, sessions, what to do)] of the rules in drift that nobody handled since their last broke: a trap or
+    a fact still live (the session fixes, narrows or drops it), a decision still live or a SOUL code not demoted with no
+    owner-queue item (Q, any status) added to the log after that broke and naming it (the owner decides on it). A broke after
+    the handling opens it again. Order is the log's, not the clock's: two writes of one second keep theirs."""
+    t = t or th()
+    gone, out = soul_state(ops)[1], []
+    added = {}
+    for op in ops:                                  # an item's first op: an add, or the supersede that gave it its id
+        if isinstance(op.get("item"), dict):
+            added.setdefault(op["item"].get("id"), op.get("seq") or 0)
+    for key in sorted(led, key=order):
+        if key[0] == "G" or "drift" not in standing(st, led, key, now, t) or key.strip("[]") in gone:
+            continue
+        events = led[key]["events"]
+        last = max(e["seq"] for e in events if e["result"] == "broke")
+        b, w, n = drift_of(events, now, t)
+        if key[0] in ("T", "F"):
+            do = "fix, narrow or drop it with the evidence (brain op supersede %s, or brain op close %s)" % (key, key)
+        elif any(it["id"][0] == "Q" and added.get(it["id"], 0) > last and names(it.get("text"), key)
+                 for it in st["items"].values()):
+            continue
+        else:
+            do = "an owner-queue item naming %s, with the evidence and one proposal (fix, narrow or drop)" % key
+        out.append((key, b, w, n, do))
+    return out
+
+
+def drift_text(rows, t=None):
+    t = t or th()
+    if not rows:
+        return "no drift left to handle"
+    return "\n".join("%s · drift: broke %d of %s in %d d, %s · to do: %s" % (k, b, plural(w, "check"), t["drift_days"],
+                                                                         plural(n, "session"), do) for k, b, w, n, do in rows)
+
+
+# --- the SOUL file ---------------------------------------------------------------------------------------------------------
+
+SOUL_FILE_MAX = 1024 * 1024
+
+
+def soul_file_line(ops):
+    """The card's line when the project's `soul_file` and the brain disagree: a code promoted with no `[Sxx]` in the file, a
+    `[Sxx]` of the file no owner step promoted (or one demoted); None when they agree or no file is set."""
+    path = s.conf().get("soul_file")
+    if not path:
+        return None
+    full = path if os.path.isabs(path) else os.path.join(s.config_root(), path)
+    try:
+        fd = os.open(full, os.O_RDONLY | os.O_NONBLOCK)    # a FIFO or a device must not hold a SessionStart hook
+    except (OSError, ValueError) as e:                  # ValueError: a path the file system cannot encode
+        return "SOUL file %s cannot be read (%s)" % (s.clean_line(path), e.__class__.__name__)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return "SOUL file %s cannot be read (not a regular file)" % s.clean_line(path)
+        data = os.read(fd, SOUL_FILE_MAX + 1)
+    except OSError as e:
+        return "SOUL file %s cannot be read (%s)" % (s.clean_line(path), e.__class__.__name__)
+    finally:
+        os.close(fd)
+    if len(data) > SOUL_FILE_MAX:
+        return "SOUL file %s cannot be read (over 1 MiB)" % s.clean_line(path)
+    found = set(re.findall(r"\[(%s)\]" % CODE, data.decode("utf-8", "replace")))
+    live = set(soul_live(ops))
+    parts = ["[%s] no line" % c for c in sorted(live - found)] + ["[%s] not promoted" % c for c in sorted(found - live)]
+    return s.fit_items("SOUL file %s differs: " % s.clean_line(path), parts, " · ") if parts else None
 
 
 # --- a goal's progress -------------------------------------------------------------------------------------------------------
@@ -277,13 +391,14 @@ def episodes(d, nbytes):
 
 
 def card(st, ops, now, d=None):
-    """{"goals" ({gid: parts}), "dormant", "record"}: the card's ledger lines (each a line or None) and each goal's progress
+    """{"goals" ({gid: parts}), "dormant", "soul", "record"}: the card's ledger lines (each a line or None) and each goal's progress
     part; `d`, the state directory, holds the last record's time."""
     led, t = read(ops), th()
     since = record_since(d, led) if d else None
     out = {"goals": {g["id"]: goal_parts(st, led, g["id"]) for g in s.live(st, "G")}}
     dorm = dormant(st, ops, led, now, t)
     out["dormant"] = s.fit_items("dormant (%d d): " % t["dormant_days"], dorm, " ") if dorm else None
+    out["soul"] = soul_file_line(ops)
     out["record"] = ("ledger record due: %d d since %s (brain ledger --record)" % ((now - since) // DAY, mmdd(since))
                      if since is not None and now - since >= RECORD_EVERY * DAY else None)
     return out
@@ -349,7 +464,7 @@ def line(st, led, key, now):
 
 
 def table(st, ops, led, now):
-    keys = sorted(set(led) | {g["id"] for g in s.live(st, "G")}, key=order)
+    keys = sorted(set(led) | {g["id"] for g in s.live(st, "G")} | {"[%s]" % c for c in soul_live(ops)}, key=order)
     if not keys:
         return "the ledger is empty: no held, broke or progress yet"
     dorm = set(dormant(st, ops, led, now))
@@ -469,8 +584,8 @@ def record(d, st, ops, led, now, days, project):
     by = {}
     for iid in dormant(st, ops, led, now, t):
         by.setdefault(iid[0], []).append(iid)
-    out.append("- " + " · ".join("%s: %s" % (dict(s.SECTIONS)[l].split(" (")[0], " ".join(ids)) for l, ids in
-                                 sorted(by.items(), key=lambda x: order(x[0] + "1"))) if by else "- none")
+    out.append("- " + " · ".join("%s: %s" % (dict(s.SECTIONS + (("[", "SOUL"),))[l].split(" (")[0], " ".join(ids)) for l, ids in
+                                 sorted(by.items(), key=lambda x: order(x[0] + "1") if x[0] != "[" else (99,))) if by else "- none")
     out += ["", "## Capacity at the end", ""]
     out.append("- " + " · ".join("%s %d/%d" % (title.split(" (")[0], len(s.live(st, l)), s.cap(l)) for l, title in s.SECTIONS)
                + ("; queued: " + ", ".join("%s %d" % q for q in s.queue_counts(st)) if s.queue_counts(st) else ""))

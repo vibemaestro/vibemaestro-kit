@@ -14,7 +14,7 @@
 #       pulls lookup unanswered, the same number merged in another repository: no close, a mark or a note, rc 0
 #   [c] done before `created` (also the same UTC day): no close; a supersede after the merge of an item first written before it: closes
 #   [d] a done anchor in `anchors` but not in `closes`: no close      [e] two `closes`, one done: no close, then both: closes
-#   [f] a pinned decision with a done anchor (and one forged with `closes`): never closed, marked `owner retires it`; T and W untouched
+#   [f] a pinned decision with a done anchor (and one forged with `closes`): never closed, marked `owner retires it`; T marked, never closed; W untouched
 #   [g] not the writer: marks only; the writer closes whatever CLAUDE_CODE_SESSION_ID says; the store refuses a link-close by another
 #   [h] 6 closable items: none closes, the `held` note; `brain op close-linked` closes all 6
 #   [i] --closes: a bare ¤N refused (BRAIN_DEFAULT_REPO set or not), a URL stored as owner/name¤N, a 404 and an anchor already
@@ -36,6 +36,11 @@
 #       a gh not logged in or hanging is never waited on
 #   [t] a session whose start ran an older brain logs `session-format` at its next brain command (the
 #       note-format hook, on `Bash(brain *)` only), once, and doctor stops warning about it; one with no brain command keeps it
+#   [v] link: closes added to a live item in place (same id, format 8; a URL stored as owner/name¤N), six in a row spend no
+#       retirement budget (a sixth close still refused); a closed, superseded, unknown, owner, trap or fact item, a bad, control,
+#       overlong, repeated, third, 404 or already merged anchor refused with the log unchanged; a queued item refused before any
+#       lookup; the linked anchor merged after the link closes the item, one merged before it (linked unchecked) never does; a log holding an op this brain does not know is refused, unchanged (as an older brain meets `link`);
+#       doctor names a session started on format 7
 # =============================================================================
 set -uo pipefail
 if [ -z "${BRAIN_SUITE_REEXEC:-}" ]; then
@@ -378,7 +383,7 @@ case_pins() {
   c_eq "$(nlinks)" 0 "[f] no link-close (a pin forged with closes neither)"
   c_has "$(line D1)" "stale: acme/app¤5 merged $D21, owner retires it" "[f] a pin with a done anchor: the owner retires it"
   c_hasnt "$(line W1)" "stale" "[f] a window is not marked"
-  c_hasnt "$(line T1)" "stale" "[f] a trap is not marked"
+  c_has "$(line T1)" "stale: acme/app¤6 merged $D21" "[f] a trap is marked, never closed"
   c_eq "$(calls_of pulls acme/app¤6)" 0 "[f] no pulls lookup for a pin's or a trap's anchor"
 }
 
@@ -640,7 +645,7 @@ for sid in ('reloaded-one', 'stale-two'):
   br doctor
   c_hasnt "$OUT" "session reloaded" "[t] the reloaded session's brain command clears its warning"
   c_has "$OUT" "warn     session stale-tw… last started on an older brain (log format 3" "[t] a session that ran no brain command keeps it"
-  c_has "$(eplines session-format)" '"format":7' "[t] the hook logged the session's format"
+  c_has "$(eplines session-format)" '"format":8' "[t] the hook logged the session's format"
   hk note-format "$(bash_in reloaded-one "$P" "brain render")"
   c_eq "$(eplines session-format | grep -c reloaded-one)" 1 "[t] once per format per session"
   hk note-format "$(bash_in sA "$P" "brain doctor")"
@@ -708,7 +713,7 @@ case_argv() {
   start compact; br doctor; pr 'acme/app¤10' open; br op add --kind next --text t --closes acme/app¤10
   c_eq "$(nissues) $(npulls)" "4 1" "[p] instrument: issues and pulls lookups by SessionStart, doctor and a write"
   c_eq "$(grep -v -c -F -e '--hostname github.com' "$STUB/calls" || true)" 0 "[p] every gh argv carries --hostname github.com"
-  c_has "$(eplines session-start)" '"format":7' "[p] the session-start line carries format 7"
+  c_has "$(eplines session-start)" '"format":8' "[p] the session-start line carries format 8"
   bpy "import json; d = s.state_dir(); f = open(d + '/episodes.jsonl', 'a')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'old-one-session'}) + '\n')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'older-two', 'format': 1}) + '\n')
@@ -912,9 +917,77 @@ case_starve() {
   c_eq "$(nlinks)" 1 "[s] and nothing else closed"
 }
 
+# --- [v] -----------------------------------------------------------------------------------------------------------------------
+case_link() {
+  np
+  seed "X1@$C20;text=written before its PR" "X2@$C20" "X3@$C20" "X4@$C20" "X5@$C20" "X6@$C20" "T1@$C20" "D1@$C20" "X9@$C20;linkclosed=$A21;closes=acme/app¤99"
+  local i; for i in 5 6 11 12 13 14 15 16; do pr "acme/app¤$i" open; done
+  br op link X1 --closes acme/app¤5
+  c_rc 0 "[v] link X1: rc 0"
+  c_has "$OUT" "linked X1: closes acme/app¤5" "[v] it says what it linked"; c_has "$OUT" "closes acme/app¤5: PR open · Stub title" "[v] and the lookup"
+  c_eq "$(bpy 'st = s.load(s.state_dir())[1]; it = st["items"]["X1"]; print(it["status"], it["text"], it["closes"], it["anchors"], it.get("supersedes"), "X7" in st["items"])')" \
+       "live written before its PR ['acme/app¤5'] ['acme/app¤5'] None False" "[v] same id, same text, closes and anchor added, no new item"
+  c_has "$(lastop)" '"op":"link"' "[v] one link op in the log"
+  for i in 2 3 4 5 6; do br op link "X$i" --closes "acme/app¤1$i"; c_rc 0 "[v] link X$i: rc 0"; done
+  br op link X1 --closes acme/app¤11; c_rc 0 "[v] a second anchor on X1 (the sixth link in a row): rc 0"
+  for i in 1 2 3 4 5; do br op add --kind trap --text "t$i"; br op close "T$((i + 1))" --reason done; c_rc 0 "[v] close $i by hand after six links"; done
+  br op close X6 --reason done; c_rc 1 "[v] a sixth close: refused, the budget counts closes and never the links"
+  br op link X4 --closes "$GH/acme/app/$PL/16"; c_rc 0 "[v] a PR URL: rc 0"
+  c_eq "$(bpy 'print(s.load(s.state_dir())[1]["items"]["X4"]["closes"])')" "['acme/app¤14', 'acme/app¤16']" "[v] stored as owner/name¤N"
+  br op supersede X5 --text "item X5 again" --reason r --bulk; br op add --kind fact --text "a fact"
+  local before; before=$(sums)
+  for i in "X1 acme/app¤6|1|already names 2" "X2 acme/app¤12|1|already closes" "X9 acme/app¤6|1|not a live item" "X99 acme/app¤6|1|not a live item" \
+           "T1 acme/app¤6|64|closed by hand" "D1 acme/app¤6|64|owner's to retire" "X3 ¤6|64|owner/name¤6" "X3 acme¤6|64|owner/name" \
+           "X3 acme/app¤404|1|404" "X5 acme/app¤6|1|not a live item" "F1 acme/app¤6|64|closed by hand" \
+           "X3 acme/app¤6$(printf '\001')|64|" "X3 acme/$(rep n 300)¤6|1|" ; do
+    IFS='|' read -r args want msg <<< "$i"; read -r id a <<< "$args"
+    br op link "$id" --closes "$a"; c_rc "$want" "[v] link $id ${a:0:30}: refused ($want)"; [ -z "$msg" ] || c_has "$OUT" "$msg" "[v] link $id $a: says why"
+  done
+  pr 'acme/app¤7' merged "$A21"; br op link X3 --closes acme/app¤7
+  c_rc 1 "[v] an anchor already merged: refused (1)"; c_has "$OUT" "close the item" "[v] it says to close the item instead"
+  c_eq "$(sums)" "$before" "[v] every refusal left the log and head unchanged"
+  local later; later=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600)))')
+  pr 'acme/app¤13' merged "$later"
+  pr 'acme/app¤8' merged "$A21"; PATH="$TMP/nogh" br op link X2 --closes acme/app¤8
+  c_rc 0 "[v] gh missing: a link to an anchor merged before it is accepted unchecked"
+  start compact
+  c_eq "$(status_of X3)" closed "[v] the linked anchor merged after the link: X3 closes at the writer's SessionStart"
+  c_eq "$(status_of X2)" live "[v] merged before the link (X2 holds acme/app¤12 open too): X2 stays live"
+  pr 'acme/app¤12' merged "$later"; br op close-linked
+  c_eq "$(status_of X2)" live "[v] even once its other anchor merges (fresh lookups): work done before the link never closes it"
+  c_has "$OUT" "acme/app¤8 done $A21" "[v] close-linked says why it skipped X2"
+  c_has "$(opf 'o["id"], o["pointer"]')" "('X3', 'acme/app¤13')" "[v] by a link-close"
+  c_has "$(eplines session-start | tail -n 1)" '"format":8' "[v] the session-start line carries format 8"
+  bpy "import json; d = s.state_dir(); f = open(d + '/episodes.jsonl', 'a')
+f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'older-seven', 'format': 7}) + '\n')"
+  br doctor
+  c_has "$OUT" "session older-se… last started on an older brain (log format 7, this one writes 8)" "[v] doctor names a session started on format 7"
+  c_has "$OUT" "closes added later (link)" "[v] and says a link is what it would refuse"
+  # a supersede chain: X1 named ¤20, X2 dropped it for ¤21, then ¤20 was linked to X2 after it merged
+  np; seed "X1@$C20;closes=acme/app¤20" "X2@$A22;closes=acme/app¤21;sup=X1"; pr 'acme/app¤20' merged "$A21"; pr 'acme/app¤21' open
+  PATH="$TMP/nogh" br op link X2 --closes acme/app¤20; c_rc 0 "[v] instrument: ¤20 linked to X2 unchecked"
+  pr 'acme/app¤21' merged "$later"; br op close-linked
+  c_eq "$(status_of X2)" live "[v] on a chain, the time a key was linked is read from the item it was linked to: X2 stays live"
+  np; mkdir -p "$P/.vibemaestro"; printf '{"caps": {"N": 1}}\n' > "$P/.vibemaestro/brain.json"
+  br op add --kind now --text "the one"; br op add --kind now --text "waits in the queue"; : > "$STUB/calls"
+  br op link N2 --closes acme/app¤5; c_rc 1 "[v] a queued item: refused"; c_has "$OUT" "N2 is queued" "[v] it says so"
+  c_eq "$(ncalls)" 0 "[v] before any lookup"
+  np; seed "X1@$C20"
+  # not a break: the log is built through the store library, holding an op of a newer brain, as a format-7 brain meets `link`
+  bpy "import json; d = s.state_dir()
+with s.locked(d):
+    raw, ops = s.verify(d)
+    s.append(d, raw, {'op': 'link-from-the-future', 'id': 'X1', 't': s.now_iso(), 'by': {'session': 'sA', 'agent': None}})"
+  before=$(sums)
+  start startup
+  c_has "$CTX" "hot memory was not injected: hot.jsonl line 3: unknown op 'link-from-the-future'" "[v] an op this brain does not know: refused, named"
+  br op add --kind next --text "after it"; c_rc 5 "[v] and every write stops (5)"
+  c_eq "$(sums)" "$before" "[v] the log is unchanged"
+}
+
 echo "== cases =="
 for c in case_close case_noclose case_time case_plain case_two case_pins case_writer case_burst case_write case_kinds case_cache \
-         case_op case_note case_rotation case_doctor case_argv case_size case_io case_starve case_reload case_prompt; do run_case $c; done
+         case_op case_note case_rotation case_doctor case_argv case_size case_io case_starve case_reload case_prompt case_link; do run_case $c; done
 cd "$TMP" || exit 1
 
 summary

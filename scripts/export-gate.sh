@@ -6,7 +6,7 @@
 #   bash scripts/export-gate.sh --rev <rev> --terms <file> [--gitleaks-tarball <file>] [--pins <file>]
 #
 #   --rev <rev>                the commit to export; resolved with `rev-parse --end-of-options`, printed back as its full sha
-#   --terms <file>             the internal-term list (in CI the KIT_TERMS secret, written to a 0600 file); it must hold a term
+#   --terms <file>             the internal-term list (in CI the KIT_TERMS variable, written to a 0600 file); it must hold a term
 #   --gitleaks-tarball <file>  a gitleaks release tarball already on disk, used instead of the download and verified the same way
 #   --pins <file>              the pinned gitleaks release (default: export-gate.pins beside this script)
 #

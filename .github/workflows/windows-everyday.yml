@@ -1,0 +1,64 @@
+name: windows-everyday
+
+# The everyday mode on real Windows: Git for Windows' bash and the runner's own Python, which no runner of ours has.
+# Run by hand only (Actions > windows-everyday > Run workflow on main): the one GitHub-hosted runner of the kit, because no runner
+# of ours runs Windows; never on push, PR or a schedule (tests/fixtures/runs_on_check.py, HOSTED_OK, is red otherwise). No secret,
+# no variable, no Claude: nothing here logs in anywhere.
+# The log holds one line per case (`ok`, `FAIL`, `SKIP <why>`), then one line per suite; the job is red when any case is.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-everyday:
+    name: windows everyday (run by hand)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash   # Git for Windows' bash, the shell Claude Code runs hooks with on Windows
+    steps:
+      # Git for Windows checks text out with CRLF by default, and bash cannot run a script with CRLF lines: this repository's own
+      # checkout keeps LF. The tests set their own git config, so the machine's system settings still reach the kit under test.
+      - name: Keep LF in the checkout
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The suites call `python3`; the runner's Python on Windows is `python`. A one-line stand-in when python3 is missing. The
+      # Windows-only cases build their own PATH (no Python, only `py`) and never see this.
+      - name: The runner's Python as python3
+        run: |
+          python --version; git --version; bash --version | head -n 1
+          if ! python3 -c 'import sys' </dev/null >/dev/null 2>&1; then   # missing, or a Store shortcut that runs nothing
+            d=$(cygpath -u "$RUNNER_TEMP")/py3; mkdir -p "$d"
+            printf '#!/bin/sh\nexec python "$@"\n' > "$d/python3"; chmod +x "$d/python3"
+            cygpath -w "$d" >> "$GITHUB_PATH"
+            echo "python3: a stand-in that runs python"
+          fi
+
+      # Each run's output goes to a file and is printed whole: a suite killed by its time cap cannot hold the log open.
+      # The Windows-only cases first, then the everyday suites. Each cap is about 2.5 times what the suite took on this runner
+      # (38, 18, 131, 38, 57 s; devmode-same more than 140): 1070 s of caps within the job's 20 minutes.
+      - name: Windows-only cases, then the everyday suites
+        run: |
+          out=$(cygpath -u "$RUNNER_TEMP")/out; mkdir -p "$out"; red=0; lines=()
+          for s in windows-everyday pyrun quiet-save everyday-mode init-setup devmode-same; do
+            case $s in windows-everyday|everyday-mode) cap=100;; pyrun) cap=60;; quiet-save) cap=240;; init-setup) cap=150;; *) cap=420;; esac
+            echo "::group::$s"
+            rc=0; timeout "$cap" bash "tests/test-$s.sh" </dev/null > "$out/$s.txt" 2>&1 || rc=$?
+            cat "$out/$s.txt"; echo "::endgroup::"
+            last=$(tail -n 1 "$out/$s.txt" | tr -d '\r')
+            if [ "$rc" = 124 ]; then lines+=("FAIL suite $s: stopped by its ${cap}s cap (this runner's speed, not a kit result; its output above is cut)"); red=1
+            elif [ "$rc" = 0 ]; then lines+=("ok   suite $s: $last")
+            else lines+=("FAIL suite $s (rc $rc): $last"); red=1; fi
+          done
+          echo "== every case that is not ok =="
+          grep -h -E '^  (FAIL|SKIP) ' "$out"/*.txt || echo "(none)"
+          echo "== suites =="
+          printf '%s\n' "${lines[@]}"
+          exit "$red"

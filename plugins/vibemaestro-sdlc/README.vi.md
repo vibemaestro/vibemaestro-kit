@@ -10,7 +10,7 @@ Phiên bản: xem `.claude-plugin/plugin.json`. Ghi chú phát hành: [CHANGELOG
 
 Trong phiên mở ở repo ứng dụng, plugin làm năm việc.
 
-1. **Lúc mở phiên**, plugin giao cho phiên lõi làm việc ([workflow-core](rules/workflow-core.instructions.md)), danh mục luật, lời nhắc về chuỗi skill và lời nhắc về `kb/` của chính repo đó. Trong một thư mục không phải cây làm việc git, phiên nhận lõi và danh mục luật, nhưng không nhận lời nhắc về luồng làm việc của repo app và không nhận lời khuyên dựng `kb/`. Việc này cần hai hook `SessionStart`, vì Claude Code giới hạn mỗi hook in ra tối đa 10.000 ký tự.
+1. **Lúc mở phiên**, plugin giao cho phiên lõi làm việc ([workflow-core](rules/workflow-core.instructions.md)), danh mục luật, lời nhắc về chuỗi skill và lời nhắc về `kb/` của chính repo đó. Ở chế độ đời thường (bên dưới), phiên nhận [lõi đời thường](templates/everyday-core.md) thay vào đó, kèm một dòng nói chế độ chỉ cho Claude: người dùng không thấy dòng chữ cố định nào, và Claude nói chế độ bằng tiếng của người dùng khi cần. Thư mục không phải cây làm việc git của một developer (khóa hay `VIBEMAESTRO_PROFILE` đặt `developer`) nhận lõi và danh mục luật, nhưng không nhận lời nhắc về luồng làm việc của repo app và không nhận lời khuyên dựng `kb/`. Việc này cần hai hook `SessionStart`, vì Claude Code giới hạn mỗi hook in ra tối đa 10.000 ký tự.
 2. **Trước khi sửa file** (`Edit`, `Write`, `NotebookEdit`), plugin nhắc mọi luật có `applyTo` khớp file đó, và mọi file `kb/decisions/*.md` của repo có `applyTo` khớp.
 3. **Trước khi chạy lệnh shell** (`Bash`), plugin nhắc mọi luật có `applyWhen` khớp lệnh. Luật có `level: block` thì chặn lệnh thay vì chỉ nhắc. Luật nào của plugin cũng không dùng `block`; luật của repo thì có thể.
 4. **Trong phiên worker** (biến môi trường `VIBEMAESTRO_ROLE` mang giá trị `worker`, như một công cụ mở phiên thay bạn có thể đặt; phiên bạn tự mở không có. Cả hai biến `INTENT_SLUG` và `SEAT` cùng có giá trị vẫn đánh dấu phiên worker, kèm một dòng báo ngừng hỗ trợ: tín hiệu đó bị bỏ ở bản phát hành kế tiếp), plugin thêm một lời nhắc: ghi intent nguyên văn, viết spec, xin người duyệt, rồi mới sửa code. Đây là lời nhắc, không phải cổng chặn.
@@ -25,6 +25,8 @@ Tính chất của hook:
 - Hook im khi `.vibemaestro/sdlc.json` đặt `"hooks": "off"`. Repo có hook tra luật riêng trong `.claude/settings.json` phải đặt `"hooks": "off"` hoặc gỡ chúng đi: hai bộ hook cộng dồn, không tự loại trùng.
 - Luật của plugin khác đã cài và khai phụ thuộc vào plugin này được chính các hook này giao.
 
+**Chế độ đời thường**, cho người làm việc thường chứ không làm phần mềm, được mô tả ở [Chế độ đời thường](#chế-độ-đời-thường).
+
 Quy trình, theo skill:
 
 ```
@@ -32,6 +34,29 @@ intake → brainstorm (chỉ khi yêu cầu còn mơ hồ) → spec → plan (ch
 ```
 
 Mọi yêu cầu thay đổi đều bắt đầu bằng `intake`. Chủ repo duyệt story; spec được duyệt trước khi có code (máy điều phối duyệt, hoặc người dùng một mình duyệt cùng story). Hành động đặc quyền (merge, đẩy lên registry, xóa) đi qua `batonrun`.
+
+## Chế độ đời thường
+
+**Chế độ đời thường** dành cho người làm việc thường với Claude (một báo cáo, một agent nhỏ, một bản demo, một bài nghiên cứu) chứ không làm phần mềm. Phiên của nó nhận một lõi bằng lời thường về việc giữ sổ trong `kb/`, không có luồng repo app, không có danh mục luật, và không được nhắc luật riêng của plugin khi sửa file hay chạy lệnh; chốt bảo vệ cài đặt và chữ ký, luật và quyết định riêng của repo, và gói luật của các plugin phụ thuộc vẫn chạy như ở chế độ developer. Phiên worker hay phiên điều phối luôn là developer. Chế độ được chọn theo thứ tự: khóa `profile` của thư mục; thư mục có git remote là developer; `VIBEMAESTRO_PROFILE` của người dùng (`everyday` hay `developer`, trong khối `env` của cài đặt Claude Code), cho thư mục không có remote; còn lại, thư mục không phải repo git, hoặc repo do kit tạo, là đời thường, và repo đã có từ trước (cả repo mà git báo lỗi) là developer.
+
+**Lưu ngầm.** Ở chế độ đời thường, một hook `Stop` (chạy nền) lưu thư mục sau mỗi lượt, tại chỗ, trong một lịch sử git do kit tạo ở đó và đánh dấu; nó không bao giờ ghi vào lịch sử có từ trước và không bao giờ đẩy đi đâu. Nó không lưu gốc ổ, thư mục nhà hay thư mục cha của nó, chính `Desktop`, `Documents`, `Downloads` hay một thư mục `OneDrive`, thư mục nằm trong repo khác hay thư mục git không đọc được, lần lưu đầu quá 2.000 file, thư mục có remote, hay lúc đang ghép dở hoặc HEAD rời; file mang tên bí mật thường gặp (khóa, file `.env`, credentials, token, mật khẩu) và thư mục sinh ra cồng kềnh không bao giờ được lưu (một danh sách bỏ qua riêng gồm các tên thường gặp: rà lịch sử trước khi chia sẻ). Lần lưu không giữ được bài, hay không chạy xong, được báo cho Claude ở lần mở phiên sau, và Claude nói với người dùng bằng tiếng của họ. Skill `history` liệt kê các bản lưu và chép bản người dùng chọn vào `ban-cu/<thời điểm>/` trong thư mục; nó không bao giờ ghi đè thư mục làm việc. `ban-cu/` của kit (hay `ban-cu-2/` và tiếp theo khi người dùng có `ban-cu` của riêng họ) chỉ chứa những bản cũ đó: nó có một tệp đánh dấu nói vậy, được ghi trong `.ignore` để công cụ tìm kiếm của Claude Code bỏ qua, và không được lưu; một thư mục của chính người dùng tên `ban-cu`, không có tệp đánh dấu, được lưu như mọi thư mục khác và không bao giờ bị ghi vào. Ở chế độ developer hook này không in gì và không ghi gì.
+
+Giới hạn đã biết của lưu ngầm:
+
+- `.gitignore` của chính bạn mà đưa lại một tên bí mật (ví dụ `!.env`) thắng danh sách của bản lưu, và tệp đó được lưu.
+- Trên Linux, tên bí mật được so đúng hoa thường: `.ENV` hay `ID_RSA` vẫn được lưu.
+- Chỉ các tên tiếng Anh Desktop, Documents và Downloads được che; cùng các thư mục đó mang tên ngôn ngữ khác thì không.
+- Lần lưu đầu bị dừng đúng lúc giữa khi tạo lịch sử và khi đánh dấu để lại một lịch sử không dấu, và thư mục đó từ đó ở chế độ developer.
+
+**Cuốn sổ.** Khi được nhờ lập sổ, skill `init-kb` dựng `kb/` ngay tại chỗ: thư mục chưa có lịch sử thì nó cho kit lưu một lần, rồi chạy `kb.py init --everyday`, lệnh này chỉ tạo `kb/current-state.md` và `kb/preferences.md` (không cấu hình, không luật, không thư mục nào khác), để Claude viết bằng tiếng của người dùng; `kb/preferences.md` chỉ ghi điều người dùng đã nói. Không worktree, không nhánh, không tự commit, không đẩy, không gate, không câu hỏi nào về merge hay CI; lần lưu ngầm kế tiếp giữ cuốn sổ. Thư mục chưa có tệp nào của người dùng thì nhận một dòng lời thường: sổ có khi thư mục có tệp đầu tiên.
+
+**Chuyển sang developer.** Khi muốn đưa bài lên GitHub:
+
+1. Tạo một repo trống trên GitHub.
+2. Nhờ Claude rà bí mật trong toàn bộ lịch sử trước khi đẩy: lưu ngầm bỏ qua các tên bí mật thường gặp nhưng không đọc nội dung tệp, và mọi bản lưu đều lên theo khi đẩy.
+3. Nhờ Claude chuyển thư mục sang developer: Claude đặt `"profile": "developer"` trong `.vibemaestro/sdlc.json`, nối thư mục với repo đó và đẩy lên. Lõi đời thường cấm đẩy trong mọi trường hợp khác; chỉ lời nhờ này cho phép.
+
+Từ phiên sau thư mục ở chế độ developer (thư mục có remote là developer, trừ khi `.vibemaestro/sdlc.json` của nó đặt `"profile": "everyday"`, thứ bước 3 thay đi), lưu ngầm dừng, và `kb/` dùng tiếp làm sổ của luồng developer. Thư mục bản cũ của kit không lên theo khi đẩy: nó bị loại bởi danh sách bỏ qua cục bộ của chính lịch sử, thứ không bao giờ được đẩy.
 
 ## Một việc hay nhiều việc
 
@@ -47,7 +72,7 @@ Plugin không cần plugin nào khác và không đọc repo nào khác.
 | Cần | Dùng cho | Ghi chú |
 |---|---|---|
 | Claude Code CLI (`claude`) | mọi thứ | đã thử với 2.1.290 |
-| `python3` 3.8 trở lên | hook, `kb.py`, các lõi, các cổng | chỉ thư viện chuẩn |
+| `python3` 3.8 trở lên | hook, `kb.py`, các lõi, các cổng | chỉ thư viện chuẩn; hook chạy qua `scripts/pyrun.sh`, trên Windows tìm cả `python` hay `py -3`, thiếu Python thì trả 0 kèm một dòng cho phiên |
 | `git` | mọi thứ | quy trình làm việc trong worktree nằm trong repo |
 | `bash` | các adapter `.sh` | đã thử trên Linux và macOS |
 | `gh` (GitHub CLI), đã đăng nhập | `intake` (issue theo dõi), `ship` (mở PR), `install-gates` (kiểm runner), `batonrun` | quy trình viết cho GitHub |
@@ -109,6 +134,7 @@ Skill được gọi theo tên, `vibemaestro-sdlc:<tên>`. Chúng ghi vào `kb/`
 | `bootstrap` | Dựng một máy cho BatonRun trong một run do chủ ký: launcher và khối quyền. `coordinator-bootstrap` là tên cũ của nó, bị bỏ ở bản phát hành kế tiếp. | một máy mới, hoặc kiểm quyền lúc mở phiên báo lỗi |
 | `local-parallel` | Chạy nhiều việc cùng lúc trên một máy: mỗi việc một subagent (worktree riêng, `intake` đến PR nháp, model `agents.worker_model`); phiên chính giữ hàng đợi, chuyển lời duyệt spec, hậu kiểm từng PR và merge bằng `kit:merge-pr`. | người dùng muốn làm nhiều việc song song |
 | `owner-sign` | Chỉ chủ gọi (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): liệt kê các run baton mà một phiên đã xếp hàng chờ chữ ký của chủ (`go --queue`) và mở một hộp thoại của chủ cho mỗi mục được chọn, trong phiên của chính chủ. | có run đang chờ chủ ký trong hàng chờ |
+| `history` | Ở chế độ đời thường: liệt kê các bản lưu ngầm của thư mục bằng lời thường và chép bản được chọn vào `ban-cu/`, không bao giờ ghi đè thư mục làm việc; người dùng tự lấy tệp cần, và bản chép chỉ bị xoá khi họ đồng ý. | người dùng hỏi đã lưu những gì hay muốn lấy lại bản cũ của một tệp |
 
 Các cách đọc `kb/` mà không nạp cả file: `kb.py find <từ khóa>`, `kb.py list [--type T] [--status S]`, `kb.py outline <file>`. Cả ba chỉ đọc.
 
@@ -217,6 +243,7 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 |---|---|---|
 | `schema` | `1` | Số schema của config, phiên bản lớn của định dạng. Plugin từ chối số lớn hơn của nó và nêu lệnh cập nhật cần chạy. |
 | `hooks` | `"auto"` | `"off"` làm mọi hook của plugin im. |
+| `profile` | `"auto"` | `"everyday"` hay `"developer"` cố định chế độ của kit trong thư mục này; `"auto"` để kit tự chọn (xem [Chế độ đời thường](#chế-độ-đời-thường)). |
 | `language` | `"vi"` | `"vi"` hoặc `"en"`: ngôn ngữ của nội dung kb (mọi phiên viết bằng nó) và của nhãn story, tên mục spec, tiêu đề thân PR, các dòng luồng. `kb.py init` ghi khoá này vào mọi config mới, `"en"` nếu không được trả lời, nên chỉ config tạo từ trước mới dùng mặc định. |
 | `update_check` | `true` | `false` tắt lời nhắc cập nhật của bản cài public trong repo này, cho vibemaestro-sdlc và vibemaestro-brain (xem README của kit, mục Cập nhật). |
 | `branch.intent_prefix` | `"intent/"` | Tiền tố của branch intent. |

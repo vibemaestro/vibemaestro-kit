@@ -53,9 +53,9 @@ OPTIONS_MAX, ARGS_MAX = 4, 2
 # brain's own options of each verb an extension may check: it adds none of them, but may take one of CLAIMABLE for the kinds
 # brain does not use it on (a focus's --goal, a Next item's --focus, a request's --due)
 BRAIN_OPTIONS = {"add": ("--kind", "--text", "--expires", "--link", "--anchor", "--closes", "--owner-quote", "--where", "--goal",
-                         "--focus", "--due", "--done-when", "--not-doing", "--jira"),
+                         "--focus", "--due", "--done-when", "--not-doing", "--jira", "--blocks"),
                  "supersede": ("--text", "--reason", "--drop-anchor", "--anchor", "--closes", "--focus", "--due", "--shorter",
-                               "--bulk", "--done-when", "--not-doing"),
+                               "--bulk", "--done-when", "--not-doing", "--blocks"),
                  "close": ("--reason", "--pointer", "--bulk"), "held": ("--pointer", "--session"),
                  "broke": ("--pointer", "--differed", "--session"), "hit": ("--pointer", "--session"),
                  "progress": ("--measure", "--pointer")}
@@ -743,12 +743,14 @@ def dialog(ns, d, st, ops, session=None):
     if detail and withheld(d, [detail]):
         raise s.Refused(1, "extension %s: its detail holds a sensitive value" % e["name"])
     more = " (%s)" % detail if detail else ""
+    soul = s.soul_suffix(s.soul_line_for(ns))
     if spec["effect"] == "pin":
         args = "".join(' "%s"' % getattr(ns, "ext_arg_" + a) for a in spec["args"])
-        return '%s %s%s: Pin owner decision %s (%s)%s, from "%s": "%s"' % (e["name"], ns.verb, args, s.next_id(st, "D"),
-                                                                          s.DECISION_KIND, more, ns.where, ns.text)
+        return '%s %s%s: Pin owner decision %s (%s)%s, from "%s": "%s"%s' % (e["name"], ns.verb, args, s.next_id(st, "D"),
+                                                                            s.DECISION_KIND, more, ns.where, ns.text, soul)
     noun = {"G": "owner goal", "D": "owner decision", "W": "owner window", "T": "lesson", "F": "fact"}[ns.id[0]]
-    return '%s %s: Promote %s %s to "%s"%s: "%s"' % (e["name"], ns.verb, noun, ns.id, ns.pointer, more, s.escaped(it["text"]))
+    return '%s %s: Promote %s %s to "%s"%s: "%s"%s' % (e["name"], ns.verb, noun, ns.id, ns.pointer, more, s.escaped(it["text"]),
+                                                       soul)
 
 
 def owner_write(ns, d, st, ops):

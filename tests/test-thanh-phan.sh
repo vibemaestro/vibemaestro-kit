@@ -35,7 +35,7 @@ for s in $SKILLS; do
 done
 mkdir -p "$TMP/sk"; printf 'x\n' > "$TMP/sk/f"
 eq "$(sed -n 2p "$TMP/sk/f")" '' "đối chứng dụng cụ: sed -n 2p trên file một dòng trả rỗng (assert 'name:' có thể đỏ)"
-eq "$(ls "$PLUGIN/skills" | wc -l | tr -d ' ')" 13 "đúng mười ba thư mục skill (không skill lạ; coordinator-bootstrap là tên cũ của bootstrap)"
+eq "$(ls "$PLUGIN/skills" | wc -l | tr -d ' ')" 14 "đúng mười bốn thư mục skill (không skill lạ; coordinator-bootstrap là tên cũ của bootstrap)"
 for s in $SKILLS; do
   for ref in $(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9_./-]+' "$PLUGIN/skills/$s/SKILL.md" 2>/dev/null | sed 's|^\${CLAUDE_PLUGIN_ROOT}/||' | sort -u); do
     [ -f "$PLUGIN/$ref" ] && ok "skills/$s: \${CLAUDE_PLUGIN_ROOT}/$ref là file có thật" || bad "skills/$s trỏ tới \${CLAUDE_PLUGIN_ROOT}/$ref — KHÔNG có file"
@@ -68,15 +68,15 @@ NAME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])'
 O=$(cl plugin install "vibemaestro-sdlc@$NAME"); rc=$?
 eq "$rc" 0 "install từ marketplace cục bộ: rc 0"; has "$O" 'Successfully installed' "install: thành công"
 O=$(cl plugin details "vibemaestro-sdlc@$NAME")
-has "$O" 'Skills (13)' "details: 13 skill"
-has "$O" 'Hooks (3)' "details: hook SessionStart + SubagentStart + PreToolUse"
+has "$O" 'Skills (14)' "details: 14 skill"
+has "$O" 'Hooks (4)' "details: hook SessionStart + SubagentStart + PreToolUse + Stop"
 for s in $SKILLS; do has "$O" "$s" "details: liệt kê skill $s"; done
 # đối chứng: bỏ một skill thì details đếm 11 (số 12 ở trên không phải cố định do CLI)
 CP2="$TMP/repo2"; cp -r "$CP" "$CP2"; rm -rf "$CP2/plugins/vibemaestro-sdlc/skills/ship"
 export CLAUDE_CONFIG_DIR="$TMP/cfg2"; mkdir -p "$CLAUDE_CONFIG_DIR"
 cl plugin marketplace add "$CP2" >/dev/null; cl plugin install "vibemaestro-sdlc@$NAME" >/dev/null
 O=$(cl plugin details "vibemaestro-sdlc@$NAME")
-has "$O" 'Skills (12)' "đối chứng: bỏ skills/ship → details đếm 12 skill"
+has "$O" 'Skills (13)' "đối chứng: bỏ skills/ship → details đếm 13 skill"
 hasnt "$(printf '%s\n' "$O" | grep -F 'Skills (')" 'ship' "đối chứng: ship không còn trong dòng liệt kê skill"
 
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "G2: phần CLI không ghi vào cây repo (test chạy trên bản chép)"

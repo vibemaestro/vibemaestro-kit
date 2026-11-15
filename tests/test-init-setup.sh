@@ -202,9 +202,11 @@ fam_bad() {
   kbi "$R" --answers "$TMP/under-file.json" --dry-run; eq "$RC" 65 "[e] …--dry-run says the same (it does not promise a write that would crash)"
   printf '{"current_state": {"path": "a.txt/cs.md"}}' > "$TMP/cs-under-file.json"; kbi "$R" --answers "$TMP/cs-under-file.json"
   eq "$RC" 65 "[e] a ledger path under a file: rc 65"; empty "$(porcelain "$R")" "[e] …and nothing written"
+  if can_link; then
   R=$(mk_repo); mkdir "$TMP/outside"; ln -s "$TMP/outside" "$R/rl"; git_ -C "$R" add -A; git_ -C "$R" commit -qm link
   printf '{"rules": {"dirs": ["rl"]}}' > "$TMP/link.json"; kbi "$R" --answers "$TMP/link.json"
   eq "$RC" 65 "[e] a rules directory that is a link out of the repo: rc 65"; empty "$(ls -A "$TMP/outside")" "[e] …and nothing was written outside the repo"; empty "$(porcelain "$R")" "[e] …nor inside it"
+  else echo "  SKIP [e] a rules directory that is a link: ln -s makes no link here (Git Bash copies the target)"; fi
   R=$(mk_repo); printf '{"ci": {"runner_default": "ok-runners"}}' > "$TMP/good.json"; kbi "$R" --answers "$TMP/good.json"
   eq "$RC" 0 "[e] control: valid answers are accepted (rc 0)"; has "$(cat "$R/.vibemaestro/sdlc.json")" "ok-runners" "[e] …and written"
 }

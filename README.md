@@ -103,11 +103,21 @@ Installing `vibemaestro-brain` installs `vibemaestro-sdlc` with it.
 | Needed | For |
 |---|---|
 | Claude Code (`claude` CLI); tested with 2.1.290; the one-command install in [Try it](#try-it) needs 2.1.292 or later | everything; the brain's decision items need 2.1.211 or later in `auto` mode |
-| `python3` 3.8 or later, `git`, `bash` | the hooks and scripts; tested on Linux and macOS, not on Windows; the brain needs a POSIX system |
+| Python 3.8 or later (`python3`; on Windows the hooks also find `python` or `py -3`), `git`, `bash` | the hooks and scripts; tested on Linux and macOS, not on Windows; the brain needs a POSIX system. Without Python no hook blocks anything and the session says what is missing |
 | `gh`, signed in (`gh auth login`) | the tracking issue at intake, the pull request at ship, GitHub writes in BatonRun |
 | A GitHub repository for your project | issues and pull requests; without a remote, intake records the intent and branch and skips the issue |
 
 The plugins do not depend on any other repository at run time.
+
+## Windows / VS Code
+
+The kit runs in Claude Code's VS Code extension; it is tested on Linux and macOS, not on Windows.
+
+- **What it needs, and why.** Git for Windows: Claude Code runs the kit's hooks through its `bash`, and in everyday mode the kit keeps the quiet saves of your folder in a local git history. Python 3.8 or later: the hooks and scripts are Python (on Windows the hooks also find `python` or `py -3`). `gh` and a GitHub repository are needed only for the developer flow.
+- **How to check.** Open a Claude Code session in your folder. When something is missing, no hook blocks your work: the session start says in one line what the kit needs, what this machine lacks, and how to check again. You can also ask Claude to check the machine: it proposes the way to install what is missing that fits your machine, and asks before it installs anything. The kit has no install script and no fixed steps for Git or Python.
+- **Install the kit without a terminal.** In the Claude Code panel in VS Code, type `/plugin` to open the plugin screen, add the marketplace `vibemaestro/vibemaestro-kit`, and install `vibemaestro-sdlc`. `vibemaestro-brain` runs on Linux and macOS only for now: on Windows it stays idle and lets Claude know, so Claude can tell you in your own language when it matters, and its guards refuse a change to its memory instead of letting it through.
+- **Which mode the kit picks.** A folder that is not a git repository yet, or one whose history the kit's quiet save created, opens in everyday mode: plain words, a notebook in `kb/`, a quiet save after each turn, no branches or pull requests. A folder that already had git, or one connected to GitHub, is in developer mode. How it is chosen, how to fix it for a folder, and how to move to developer later: [Everyday mode](plugins/vibemaestro-sdlc/README.md#everyday-mode).
+- **A known limit on Windows.** A folder inside your work folder that has a Git history of its own with nothing in it yet (made with `git init`, no commit) is saved as ordinary files on Windows; on Linux and macOS the quiet save stops at it and says why. Nothing is lost either way, and that inner history is left as it is.
 
 ## Install
 
@@ -162,7 +172,7 @@ Then run `/reload-plugins` in a running session, or open a new one.
 
 **Auto-update.** Claude Code does not update a third-party marketplace by itself until you turn it on: `/plugin`, **Marketplaces**, `vibemaestro`, **Enable auto-update**. It then updates the plugins when a session starts and says so; run `/reload-plugins` to load the new version.
 
-**The update reminder.** When a newer public version of vibemaestro-sdlc or vibemaestro-brain exists, a session start shows one line: the plugin, the installed and the new version, how to update, and the link to the release notes. Each plugin reads the public repository's tags at most once a day, in the background, with no token, and sends nothing about you or your machine; so the line shows at the session after that read, at most once a day per plugin. An install whose manifest carries no version, such as a clone of a development tree, shows nothing. To turn it off:
+**The update reminder.** When a newer public version of vibemaestro-sdlc or vibemaestro-brain exists, a session start shows one line: the plugin, the installed and the new version, how to update, and the link to the release notes. Each plugin reads the public repository's tags at most once a day, in the background, with no token, and sends nothing about you or your machine; so the line shows at the session after that read, at most once a day per plugin. In everyday mode the line goes to Claude instead, which mentions it in your own language when it matters. An install whose manifest carries no version, such as a clone of a development tree, shows nothing. To turn it off:
 
 - everywhere: set `VIBEMAESTRO_NO_UPDATE_CHECK` to `1`, for example in the `env` block of `~/.claude/settings.json`; Claude Code's own `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turns it off too;
 - in one repository: `"update_check": false` in its `.vibemaestro/sdlc.json`.

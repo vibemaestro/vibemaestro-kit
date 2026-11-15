@@ -4,6 +4,7 @@ and backup; extensions).
 
     brain op add --kind now|next|trap|session|queue|fact --text T [--expires ISO] [--link L]… [--anchor A]… [--closes A]…
                  [--focus P1 (next)]
+                 (queue: --blocks B, the work it blocks until the owner acts)
     brain op add --kind focus --text T --owner-quote Q --where W --goal G1 [--done-when D] [--not-doing N]
                  [--jira KEY] [--anchor A]… [--link L]…
     brain op add --kind request --text T --owner-quote Q --where W [--due YYYY-MM-DD] [--anchor A]… [--closes A]…
@@ -11,16 +12,19 @@ and backup; extensions).
     brain op supersede ID --text T --reason R [--drop-anchor A]… [--anchor A]… [--closes A]… [--focus P1] [--due DAY]
                        [--done-when D] [--not-doing N] [--shorter] [--bulk]
     brain op words P1 [--done-when D] [--not-doing N]          (a live focus's words, in place; only where unset)
+    brain op link X4 --closes owner/name#N…                    (closes added to a live N, X, S, Q or R item in place)
     brain op touch ID | brain op hit T5 [--pointer P] [--session S4]
     brain op held RULE --pointer P [--session S4] | brain op broke RULE --pointer P --differed D [--session S4]
     brain op progress G1 --measure M --pointer P
     brain op close-linked
+    brain op merge-evidence                                (held and hit from the PRs merged since the last run)
     brain owner add --kind decision|window --text T --owner-quote Q --where W [--anchor A]… [--link L]… [--expires ISO]
                     [--scope global|project (decision)]
     brain owner add --kind goal --text T --owner-quote Q --where W --done D --not-doing N --review YYYY-MM-DD [--jira KEY]
                     --scope global|project [--anchor A]… [--link L]…
     brain owner unpin ID | owner supersede ID [--text T] [--done D] [--not-doing N] [--review DAY] [--scope S]
-    brain owner promote ID POINTER                         (a goal, decision or window moved out to a pointer)
+    brain owner promote ID POINTER [--soul-line "[S14] T"] (a goal, decision or window moved out to a pointer; with the
+                                                           SOUL line, kit:soul-line then writes it into soul_file)
     brain owner import FILE                                (a bundle's goals, decisions and windows: one dialog for all)
     brain owner batch FILE                                 (2 to 5 owner items from a JSON array of owner argv lists: one dialog)
     brain owner backup DIR [--every HOURS] | owner backup off
@@ -31,15 +35,16 @@ and backup; extensions).
     brain claim [--take-over]
     brain render [--check]
     brain overflow
+    brain sweep                                            (the right-brain items worth cleaning; writes nothing)
     brain show ID [--json]
-    brain ledger [RULE] | brain ledger --record [--days N]
+    brain ledger [RULE] | brain ledger --record [--days N] | brain ledger --drift
     brain ext NAME [ARG…]                                  (what a plugin that extends the brain prints; it writes nothing)
     brain doctor [--path | --bundle FILE]
     brain matrix [--json]
     brain cost TRANSCRIPT [--merge-log F] [--json]
 
 rc 0 ok; 1 refused (sensitive, cap, budget, rule); 3 not the writer session; 4 a worker session; 5 the log does not match
-head.json; 6 owner item without an approved dialog; 7 no Claude Code session; 2 (cost) the transcript or merge log cannot be read; 64 usage; 70 an internal error (named, never a traceback, so it cannot
+head.json; 6 owner item without an approved dialog; 7 no Claude Code session; 2 (cost) the transcript or merge log cannot be read; 8 (ledger --drift) a rule in drift not handled yet, in the writer's session while writes are allowed; 64 usage; 70 an internal error (named, never a traceback, so it cannot
 read as a refusal).
 The owner argv is strict, because B1.2's dialog line is built from the same tokens: each option spelled in full, its value
 as the next token (no `--opt=value`; a value may start with `-`), and a single-value option at most once. `brain op` never touches a `G`, `D` or `W`
@@ -70,10 +75,12 @@ CLOSES_HELP = ("owner/name#N or an issue or PR URL whose close means this item i
                "issue); at most 2, all must be done; for now, next, session, queue and request")
 GOAL_OPTIONS = {"--done", "--not-doing", "--review", "--scope"}
 OWNER_OPTIONS = {"add": ({"--kind", "--text", "--owner-quote", "--where", "--expires", "--jira"} | GOAL_OPTIONS, {"--anchor", "--link"}),
-                 "supersede": ({"--text"} | GOAL_OPTIONS, set()), "unpin": (set(), set()), "promote": (set(), set()),
+                 "supersede": ({"--text"} | GOAL_OPTIONS, set()), "unpin": (set(), set()), "promote": ({"--soul-line"}, set()),
                  "import": (set(), set()), "backup": ({"--every"}, set()),
                  "batch": (set(), set())}
-EFFECT_OPTIONS = {"pin": ({"--text", "--owner-quote", "--where"}, {"--anchor", "--link"}), "archive": (set(), set())}
+EFFECT_OPTIONS = {"pin": ({"--text", "--owner-quote", "--where", "--soul-line"}, {"--anchor", "--link"}),
+                  "archive": ({"--soul-line"}, set())}
+SOUL_LINE_HELP = ('the SOUL line, "[S14] its text": once written, kit:soul-line %s the file soul_file names (the dialog shows it)')
 
 
 def owner_options(verb):
@@ -149,7 +156,7 @@ def parser():
     op.required = True
     a = op.add_parser("add")
     a.add_argument("--kind", required=True, help="now, next or trap; session (a running session: its next step and "
-                   "pointers, ≤ 600), queue (what waits on the owner) or fact (a path in use, a fact); focus (the wave's "
+                   "pointers, ≤ 600), queue (what the owner must act on before work can go on, with --blocks) or fact (a path in use, a fact); focus (the wave's "
                    "focus, pointing to a goal) or request (what the owner asked), each with the owner's words")
     a.add_argument("--text", required=True)
     a.add_argument("--expires")
@@ -164,6 +171,8 @@ def parser():
     a.add_argument("--focus", help="the live focus a Next item is tied to, like P1: it orders Next")
     a.add_argument("--due", help="a request's due day, YYYY-MM-DD: named from 7 days before")
     a.add_argument("--jira", help="a Jira issue key like ABC-12 (focus): stored and shown, never synced")
+    a.add_argument("--blocks", help="the work a queue item blocks until the owner acts (queue: required, ≤ 200; an "
+                   "owner/name#N in it is checked)")
     ext_options(a, "add")
     c = op.add_parser("close")
     c.add_argument("id")
@@ -182,6 +191,7 @@ def parser():
     u.add_argument("--due", help="a request's due day; without it the item's own is carried over")
     u.add_argument("--done-when", help="a focus's done when; without it the focus's own is carried over")
     u.add_argument("--not-doing", help="a focus's not doing; without it the focus's own is carried over")
+    u.add_argument("--blocks", help="what a queue item blocks; without it the item's own is carried over")
     u.add_argument("--shorter", action="store_true")
     u.add_argument("--bulk", action="store_true")
     ext_options(u, "supersede")
@@ -189,6 +199,10 @@ def parser():
     w.add_argument("id")
     w.add_argument("--done-when", help="when the focus is done, in the owner's words: stored whole; a charter needs it")
     w.add_argument("--not-doing", help="what the focus leaves out, in the owner's words: stored whole")
+    k = op.add_parser("link", help="add closes to a live now, next, session, queue or request item in place (same id, no "
+                      "retirement budget)")
+    k.add_argument("id")
+    k.add_argument("--closes", action="append", required=True, help=CLOSES_HELP)
     op.add_parser("touch").add_argument("id")
     h = op.add_parser("hit", help="a trap met again: a held for it in the ledger, and its hits")
     h.add_argument("id")
@@ -209,6 +223,8 @@ def parser():
     g.add_argument("--pointer", required=True)
     ext_options(g, "progress")
     op.add_parser("close-linked", help="close every item whose closes anchors are all done (fresh lookups)")
+    op.add_parser("merge-evidence", help="held and hit from the `Rules applied:` and `Traps met:` lines of the PRs merged "
+                                          "since the last run (fresh lookups)")
 
     ow = sub.add_parser("owner", help="owner goals, decisions and windows, through the permission dialog")
     ov = ow.add_subparsers(dest="verb", parser_class=Parser)
@@ -231,6 +247,7 @@ def parser():
     pr = ov.add_parser("promote", help="a goal, decision or window moved out of hot memory to a pointer")
     pr.add_argument("id")
     pr.add_argument("pointer")
+    pr.add_argument("--soul-line", help=SOUL_LINE_HELP % "adds it to")
     ov.add_parser("import", help="a bundle's goals, decisions and windows, through one dialog that lists them all").add_argument(
         "bundle")
     ov.add_parser("batch", help="2 to 5 owner items (add, supersede, unpin) from a JSON file, through one dialog that lists "
@@ -245,6 +262,7 @@ def parser():
             if spec["effect"] == "archive":
                 x.add_argument("id")
                 x.add_argument("pointer")
+                x.add_argument("--soul-line", help=SOUL_LINE_HELP % "adds it to")
                 continue
             for arg in spec["args"]:
                 x.add_argument("ext_arg_" + arg, metavar=arg.upper())
@@ -253,6 +271,7 @@ def parser():
             x.add_argument("--where", required=True)
             x.add_argument("--link", action="append", default=[])
             x.add_argument("--anchor", action="append", default=[])
+            x.add_argument("--soul-line", help=SOUL_LINE_HELP % "removes it from")
 
     ex = sub.add_parser("export", help="one bundle of this project's brain, into a new file")
     ex.add_argument("--out", required=True)
@@ -266,6 +285,8 @@ def parser():
     sub.add_parser("claim").add_argument("--take-over", action="store_true")
     sub.add_parser("render").add_argument("--check", action="store_true")
     sub.add_parser("overflow", help="the overflow queue of each right-brain section, head first (not injected)")
+    sub.add_parser("sweep", help="the right-brain items worth cleaning (closed anchors, untouched past their threshold), each "
+                   "with the characters it would free; writes nothing")
     sh = sub.add_parser("show", help="every stored field of one item, live, queued or retired; the owner's words whole")
     sh.add_argument("id")
     sh.add_argument("--json", action="store_true", help="the stored item as one JSON object (sdlc's intake reads a focus so)")
@@ -274,6 +295,8 @@ def parser():
     lg.add_argument("--record", action="store_true", help="the measurement record of the last --days days (logged; one of "
                     "30 days or more restarts the card's monthly due clock)")
     lg.add_argument("--days", type=int, default=30)
+    lg.add_argument("--drift", action="store_true", help="the rules in drift nobody handled since their last broke, and what "
+                    "to do; rc 8 while one is left, in the writer's session while writes are allowed")
     x = sub.add_parser("ext", help="what a plugin that extends the brain prints (it writes nothing)")
     x.add_argument("name")
     x.add_argument("args", nargs=argparse.REMAINDER)
@@ -320,6 +343,9 @@ def main(argv):
         return render(ns.check)
     if ns.cmd == "overflow":
         return overflow()
+    if ns.cmd == "sweep":
+        import brain_stale
+        return brain_stale.sweep_cmd()
     if ns.cmd == "show":
         return s.show(ns.id, ns.json)
     if ns.cmd == "ledger":
@@ -341,14 +367,16 @@ def write_cmd(argv, ns):
     if ns.cmd == "op":
         if ns.verb == "add":
             return s.op_add(ns.kind, ns.text, ns.link, ns.anchor, ns.expires, ns.closes, ns.owner_quote, ns.where, ns.goal,
-                            ns.focus, ns.due, ext_given(ns), ns.done_when, ns.not_doing, ns.jira)
+                            ns.focus, ns.due, ext_given(ns), ns.done_when, ns.not_doing, ns.jira, ns.blocks)
         if ns.verb == "close":
             return s.op_close(ns.id, ns.reason, ns.pointer, ns.bulk, ext_given(ns))
         if ns.verb == "supersede":
             return s.op_supersede(ns.id, ns.text, ns.reason, ns.drop_anchor, ns.anchor, ns.shorter, ns.bulk, ns.closes,
-                                  ns.focus, ns.due, ext_given(ns), ns.done_when, ns.not_doing)
+                                  ns.focus, ns.due, ext_given(ns), ns.done_when, ns.not_doing, ns.blocks)
         if ns.verb == "words":
             return s.op_words(ns.id, ns.done_when, ns.not_doing)
+        if ns.verb == "link":
+            return s.op_link(ns.id, ns.closes)
         if ns.verb in ("held", "broke"):
             return s.op_evidence(ns.rule, ns.verb, ns.pointer, getattr(ns, "differed", None), ns.session, extopts=ext_given(ns))
         if ns.verb == "hit":
@@ -358,6 +386,9 @@ def write_cmd(argv, ns):
         if ns.verb == "close-linked":
             import brain_stale
             return brain_stale.close_linked()
+        if ns.verb == "merge-evidence":
+            import brain_stale
+            return brain_stale.merge_evidence()
         return s.op_counter(ns.id, ns.verb)
     return s.owner(argv[1:], ns.verb, ns)
 
@@ -446,6 +477,8 @@ def ledger(ns):
     import brain_ledger as L
     if ns.record and ns.rule:
         raise s.Refused(64, "brain ledger --record [--days N] takes no RULE")
+    if ns.drift and (ns.record or ns.rule):
+        raise s.Refused(64, "brain ledger --drift takes no RULE and no --record")
     if not 1 <= ns.days <= 365:
         raise s.Refused(64, "--days is from 1 to 365")
     d = s.state_dir()
@@ -453,7 +486,10 @@ def ledger(ns):
         raise s.Refused(1, "no brain state for this project yet")
     st, ops, led = L.snapshot(d)
     now = time.time()
-    if ns.record:
+    rows = L.open_drift(st, ops, led, now) if ns.drift else None
+    if ns.drift:
+        text = L.drift_text(rows)
+    elif ns.record:
         text = L.record(d, st, ops, led, now, ns.days, os.path.basename(s.config_root()) or "project")
     elif ns.rule:
         text = L.events_text(st, led, L.rule_key(st, ns.rule), now)
@@ -463,6 +499,12 @@ def ledger(ns):
     if ns.record:                                   # logged once printed: a failed write does not lose the record
         sys.stdout.flush()
         L.recorded(d, ns.days, now)
+    if rows and st["writer"] == s.session_id() and not s.conf()["errors"]:
+        sys.stdout.flush()
+        sys.exit(8)                                 # only the writer can handle them, and only while writes are not refused
+    if rows:
+        print("(rc 0: %s)" % ("writes are refused until .vibemaestro/brain.json is fixed" if s.conf()["errors"]
+                              else "this session does not write this brain; brain claim --take-over makes it the writer"))
     return None
 
 
@@ -503,6 +545,8 @@ def doctor(path, bundle=None):
 
 
 if __name__ == "__main__":
+    for _s in filter(None, (sys.stdout, sys.stderr)):   # Windows writes a pipe in the system code page, which lacks Vietnamese and the arrows
+        _s.reconfigure(encoding="utf-8", errors="backslashreplace")
     try:
         msg = main(sys.argv[1:])
     except s.Refused as e:

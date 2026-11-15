@@ -5,7 +5,7 @@
 # Run: bash tests/test-export-gate.sh
 #
 # The gate runs for real (the real export, the real term scanner) on a scratch repository whose commit R1 holds this checkout's tracked files, with MADE-UP terms and a stub
-# gitleaks packed in a tarball whose sha256 this suite writes into its own pins file. No network, no real secret.
+# gitleaks packed in a tarball whose sha256 this suite writes into its own pins file. No network, no real term list.
 #   [G]  clean R1: rc 0, one `export-gate: rev=<R1> digest=<d>` line with d = export-public's stdout, `controls: terms 2/2, gitleaks
 #        2/2`; gitleaks ran twice with the gate's config, an ignore file of its own, --ignore-gitleaks-allow and --redact: over exactly
 #        the export plus the three control files, then over a mirror with one neutral name per file; no `terms:` count line; the work
@@ -22,12 +22,12 @@
 #        version, no pin for this platform: rc 3, gitleaks never run; [O] a work dir inside the repository: rc 2; [R] not a commit: rc 2
 #   [L]  no output line of any run holds a made-up term, the sentinel or a fake token
 #   [W]  workflow shape (YAML parser): only pull_request and workflow_dispatch (input rev, required); permissions contents: read; the
-#        secret named once, in the env of the step that calls the gate; no `${{ }}` in a run block; checkout pinned by sha, no persisted
+#        variable named once, in the env of the step that calls the gate; no `${{ }}` in a run block; checkout pinned by sha, no persisted
 #        credentials, full history; runs-on from vars.CI_GATE_RUNNER, then vars.CI_RUNNER; REV from the test-merge commit (github.sha) or the
 #        dispatch input; no path
 #        filter (every PR: the export is the whole tree but kb/ and public.private); the job runs only if github.event.repository.private
-#   [WR] the step's real run block, with a stub gate: the secret reaches the gate only as a 0600 file, gone afterwards, never in the
-#        gate's environment; an empty, blank or absent secret is red before the gate runs
+#   [WR] the step's real run block, with a stub gate: the term list reaches the gate only as a 0600 file, gone afterwards, never in the
+#        gate's environment; an empty, blank or absent variable is red before the gate runs
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -309,7 +309,7 @@ need("pull_request_target" not in text, "pull_request_target appears")
 rev = ((on.get("workflow_dispatch") or {}).get("inputs") or {}).get("rev") or {}
 need(rev.get("required") is True, "dispatch input rev is not required")
 need(y.get("permissions") == {"contents": "read"}, "permissions are %r" % y.get("permissions"))
-need(text.count("secrets.") == 1 and text.count("secrets.KIT_TERMS") == 1, "the secret is not named exactly once")
+need("secrets." not in text and text.count("vars.KIT_TERMS") == 1, "the variable is not named exactly once, or a secret is read")
 jobs = y["jobs"]
 need(list(jobs) == ["export-gate"], "jobs are %s" % list(jobs))
 job = jobs["export-gate"]
@@ -327,7 +327,7 @@ gs = [s for s in steps if "scripts/export-gate.sh" in str(s.get("run", ""))]
 need(len(gs) == 1, "not exactly one step calls the gate")
 if gs:
     env = gs[0].get("env") or {}
-    need(env.get("KIT_TERMS") == "${{ secrets.KIT_TERMS }}", "the gate step's env lacks KIT_TERMS")
+    need(env.get("KIT_TERMS") == "${{ vars.KIT_TERMS }}", "the gate step's env lacks KIT_TERMS")
     need(env.get("REV") == "${{ github.event_name == 'pull_request' && github.sha || inputs.rev }}",
          "REV is %r" % env.get("REV"))
 for s in steps:
@@ -349,7 +349,7 @@ print([s for s in y["jobs"]["export-gate"]["steps"] if "scripts/export-gate.sh" 
 RR="$TMP/rr"; mkdir -p "$RR/scripts" "$TMP/runner-temp"
 cat > "$RR/scripts/export-gate.sh" <<'EOF'
 #!/bin/bash
-# stub gate: records how the secret reached it
+# stub gate: records how the term list reached it
 t=""; while [ $# -gt 0 ]; do case $1 in --terms) t=$2; shift 2 ;; --rev) echo "rev=$2" >> "$STUB_REC"; shift 2 ;; *) shift ;; esac; done
 echo "mode=$(stat -c %a "$t" 2>/dev/null || stat -f %Lp "$t")" >> "$STUB_REC"
 echo "content=$(cat "$t")" >> "$STUB_REC"
@@ -358,19 +358,19 @@ env | grep -q '^KIT_TERMS=' && echo "env=leaked" >> "$STUB_REC"
 exit "${STUB_RC:-0}"
 EOF
 export STUB_REC="$TMP/stub.rec"
-# block <secret|-unset> — run the block in $RR; sets RC and OUT
+# block <terms|-unset> — run the block in $RR; sets RC and OUT
 block() {
   : > "$STUB_REC"
   if [ "$1" = -unset ]; then OUT=$(cd "$RR" && env -u KIT_TERMS RUNNER_TEMP="$TMP/runner-temp" REV=abc bash "$TMP/block.sh" 2>&1); RC=$?
   else OUT=$(cd "$RR" && KIT_TERMS="$1" RUNNER_TEMP="$TMP/runner-temp" REV=abc bash "$TMP/block.sh" 2>&1); RC=$?; fi
 }
 block "$TERM1"
-eq "$RC" 0 "[WR] a set secret: rc 0"
+eq "$RC" 0 "[WR] a set variable: rc 0"
 rec=$(cat "$STUB_REC")
 has "$rec" "rev=abc" "[WR] the gate gets REV"
 has "$rec" "mode=600" "[WR] the term file is 0600"
-has "$rec" "content=$TERM1" "[WR] the term file holds the secret"
-hasnt "$rec" "env=leaked" "[WR] the secret is not in the gate's environment"
+has "$rec" "content=$TERM1" "[WR] the term file holds the list"
+hasnt "$rec" "env=leaked" "[WR] the term list is not in the gate's environment"
 p=$(sed -n 's/^path=//p' "$STUB_REC")
 case "$p" in "$TMP/runner-temp/"*) ok "[WR] the term file is under RUNNER_TEMP" ;; *) bad "[WR] the term file is at $p" ;; esac
 [ -e "$p" ] && bad "[WR] the term file is left behind" || ok "[WR] the term file is gone afterwards"
@@ -380,9 +380,9 @@ has "$OUT" "exporting the test-merge commit mergesha of PR head headsha" "[WR] o
 block "$TERM1"; hasnt "$OUT" "exporting the test-merge" "[WR] …and on a dispatch (no PR head) it says nothing of the kind"
 for s in "" "   " -unset; do
   block "$s"
-  ne "$RC" 0 "[WR] secret '${s:-empty}': red"
-  empty "$(cat "$STUB_REC")" "[WR] secret '${s:-empty}': the gate never ran"
-  has "$OUT" "KIT_TERMS" "[WR] secret '${s:-empty}': the message names the secret"
+  ne "$RC" 0 "[WR] variable '${s:-empty}': red"
+  empty "$(cat "$STUB_REC")" "[WR] variable '${s:-empty}': the gate never ran"
+  has "$OUT" "KIT_TERMS" "[WR] variable '${s:-empty}': the message names the variable"
 done
 
 summary

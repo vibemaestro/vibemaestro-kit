@@ -53,7 +53,7 @@ Deprecated: these parts still work in the release that says so and leave vibemae
 - the baton kinds `kubectl-exec` and `remote-exec` of `templates/baton-kinds/`: a user keeps the script `baton new --from` wrote as
   their own baton.
 
-Frozen at: 0.6.0
+Frozen at: 0.7.0
 
 <!-- surface:begin -->
 ## Items
@@ -217,6 +217,7 @@ A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py ge
 |---|
 | `schema` |
 | `hooks` |
+| `profile` |
 | `language` |
 | `update_check` |
 | `branch.intent_prefix` |

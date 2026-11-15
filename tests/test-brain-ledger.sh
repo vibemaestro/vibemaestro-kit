@@ -30,6 +30,9 @@
 #       `brain ledger` counts each event under the rule it was written for, `brain show` prints the old fields, a new write
 #       chains on; the gate's and the ladder's commands are gone (usage), the owner's promote moves a goal, decision or window
 #       only, and a supersede keeps a session's reason for no goal
+#   [k] a log the brain of log format 7 wrote to, then holding a `link` of this brain: the brain of format 7 refuses it (rc 5,
+#       the op named), the log and head unchanged; this brain still writes; its hot.md, without a queue item's blocks line,
+#       is an older render to this brain's doctor, not a problem
 # No planted break: each case is red on the brain before the ledger, green after.
 # =============================================================================
 set -uo pipefail
@@ -56,6 +59,8 @@ brain_kit "$SRC_ROOT"
 MAIN_REV=c3f2765
 # the brain of the direction gate and the SOUL ladder, before they left the kit
 REV627=452fa22
+# the brain of log format 7, the last before `link`
+REV7=f3a7b39
 # the owner's command word pair, built here: a command line the suite is started with never holds it
 BO=$(printf 'brain %s' owner)
 
@@ -572,7 +577,7 @@ except s.Refused as e:
   c_hasnt "$ALL" "· goal G999999" "[i] the session lines show no goal tag"
   R=$(printf '%s\n' "$ALL" | python3 -c 'import re, sys
 ls = [l for l in sys.stdin.read().splitlines() if re.match(r"- S[0-9]+ ", l)]
-print(len(ls), max(len(re.sub(r" · stale: .*", "", l).encode("utf-16-le")) // 2 for l in ls) <= 660)')
+print(len(ls), max(len(re.sub(r" · (stale: .*|untouched [0-9]+ d)$", "", l).encode("utf-16-le")) // 2 for l in ls) <= 660)')
   c_eq "$R" "20 True" "[i] each session line within its cap of 660 units"
   c_eq "$(bpy 'n, top = s.worst_case(); print(n <= 12, top <= s.STRING_MAX)')" "True True" "[i] the worst case at the defaults: at most 12 strings"
 }
@@ -649,7 +654,33 @@ print(i["T1"]["status"], i["T1"]["soul"], i["T3"]["status"], i["D2"]["status"], 
   c_has "$(lastop)" '"no_goal":"the owner: a one-off"' "[j] keeps that reason, for a plugin that reads it"
 }
 
+# --- [k] -----------------------------------------------------------------------------------------------------------------------
+case_compat7() {
+  if ! old_brain "$REV7" old7; then ok "[k] skip: the brain of log format 7 ($REV7) is not in this clone's history"; return; fi
+  np; local NEW=$BROOT before R out
+  sums() { (cd "$(sdir)" && sha256sum hot.jsonl head.json | sha256sum | cut -c1-16); }
+  printf 'open\t\t\t\tissue\n' > "$STUB/answers/acme_app_5"
+  br op add --kind next --text "written before its issue"
+  br op add --kind queue --text "owner: sign the release" --blocks "the release cut"
+  BROOT="$OLD/plugins/vibemaestro-brain"
+  c_eq "$(bpy 'print(s.FORMAT)')" 7 "[k] instrument: the old brain writes log format 7"
+  br op add --kind next --text "the old brain writes here"; c_rc 0 "[k] instrument: the old brain writes to this log before a link"
+  c_hasnt "$(cat "$(sdir)/hot.md")" "  blocks: " "[k] instrument: its hot.md has no blocks line"
+  BROOT=$NEW
+  br doctor; c_hasnt "$OUT" "problem" "[k] this brain's doctor reads that hot.md as an older render, not a problem"
+  c_has "$OUT" "hot.md holds an older brain's render" "[k] and says so"
+  br op link X1 --closes acme/app¤5; c_rc 0 "[k] this brain links X1"
+  before=$(sums)
+  BROOT="$OLD/plugins/vibemaestro-brain"
+  br op add --kind next --text "after the link"; R=$RC; out=$OUT
+  BROOT=$NEW
+  c_eq "$R" 5 "[k] the brain of log format 7 refuses a log with a link (rc 5)"
+  c_has "$out" "unknown op 'link'" "[k] it names the op it does not know"
+  c_eq "$(sums)" "$before" "[k] the log and head are unchanged"
+  br op add --kind next --text "after the link, here"; c_rc 0 "[k] this brain still writes"
+}
+
 echo "== cases =="
-for c in case_evidence case_thresholds case_progress case_card case_record case_compat5 case_compat627; do run_case $c; done
+for c in case_evidence case_thresholds case_progress case_card case_record case_compat5 case_compat627 case_compat7; do run_case $c; done
 cd "$TMP" || exit 1
 summary

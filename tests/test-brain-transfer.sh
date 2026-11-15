@@ -134,7 +134,7 @@ fill() {  # fill — a brain with every section, written through the CLI as SID:
   must br op add --kind request --text "a restore drill" --owner-quote "phải có diễn tập khôi phục" --where "chat 1/11" --due "$(dplus 5)"
   must br op add --kind now --text "write the suite" --anchor "acme/app¤5"
   older '{"op": "add", "item": {"id": "S1", "kind": "session", "pinned": false, "text": "w-a: review round 1", "source": {"type": "coordinator"}, "expires": null, "links": ["kb/round.md"], "anchors": [], "supersedes": null, "goal": "G1"}}'
-  must br op add --kind queue --text "the owner signs the release"
+  must br op add --kind queue --text "the owner signs the release" --blocks "the public release"
   must br op add --kind next --text "the backup" --focus P1
   must br op add --kind next --text "the docs"
   must br op add --kind next --text "the README"
@@ -441,6 +441,7 @@ case_import() {
   c_has "$OUT" "quote: phải có diễn tập khôi phục" "[d] a request's words verbatim"
   c_has "$OUT" "provenance: imported from proj$((NP - 1)) (key $key) at head " "[d] … with a provenance line"
   c_has "$OUT" ", was R1" "[d] … naming its old id"
+  br show Q1; c_has "$OUT" "blocks: the public release" "[d] a queue item keeps what it blocks"
   owner_import "$f"; c_rc 0 "[d] the owner's half through the dialog"
   br import "$f"; c_rc 0 "[d] brain import again"
   c_has "$OUT" "landed: P1 as P1; S1 as S1; X1 as X4 (queued)" "[d] what waited lands (a taken id renumbered); a full section queues"
@@ -490,6 +491,19 @@ case_jira_roundtrip() {
   forge "$f" "$TMP/jr-badp.json" 'o["item"]["jira"] = "abc-8"' "$s"
   np; bad_in import "$TMP/jr-badp.json"; c_rc 1 "[jira-roundtrip] a malformed focus key refuses the bundle whole"
   c_has "$OUT" "its jira is not a Jira issue key" "[jira-roundtrip] … saying so (focus)"
+}
+
+# --- [link-roundtrip] closes linked later keep when they were linked through export and import ----------------------------------
+case_link_roundtrip() {
+  np; local f="$TMP/lr-$NP.json" show
+  show='import json, sys; i = json.load(sys.stdin); print(i["closes"], sorted(i.get("closes_at") or {}))'
+  must br op add --kind next --text "written before its PR"
+  br op link X1 --closes acme/app¤5; c_rc 0 "[link-roundtrip] instrument: X1 linked (gh unanswered: not checked)"
+  local at; at=$(bpy 'print(s.load(s.state_dir())[1]["items"]["X1"]["closes_at"]["acme/app¤5"])')
+  must br export --out "$f"
+  np; br import "$f"; c_rc 0 "[link-roundtrip] the right brain lands"
+  br show X1 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" "['acme/app¤5'] ['acme/app¤5']" "[link-roundtrip] the item keeps its closes and when it was linked"
+  c_eq "$(bpy 'print(s.load(s.state_dir())[1]["items"]["X1"]["closes_at"]["acme/app¤5"])')" "$at" "[link-roundtrip] … at the source's time"
 }
 
 # --- [words-roundtrip] a focus's done when and not doing through export and import ----------------------------------------------
@@ -1015,7 +1029,7 @@ st, ops, led = L.snapshot(s.state_dir()); print(L.dormant(st, ops, led, time.tim
 }
 
 echo "== cases =="
-for c in case_export case_doctor case_scope case_import case_jira_roundtrip case_words_roundtrip case_owner case_ledger case_refuse case_drill case_backup case_lock case_compat case_hookpath case_forged case_fidelity; do
+for c in case_export case_doctor case_scope case_import case_jira_roundtrip case_words_roundtrip case_link_roundtrip case_owner case_ledger case_refuse case_drill case_backup case_lock case_compat case_hookpath case_forged case_fidelity; do
   run_case $c
 done
 cd "$TMP" || exit 1

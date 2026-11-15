@@ -55,8 +55,9 @@ labelled throwaway and not committed.
 
 6. **A story: the result is the story itself.** For an intent of type story, write the story the owner approves into the intent
    (`kb.py new intent --type story` writes its card, in the repository's `language`): the As / I want / so that line, context,
-   numbered AC that say what the owner sees (no command, file name or code), out of scope, appetite, and at most 3 open questions,
-   each with a recommendation and why; it fits a phone screen. With a coordinator, the coordinator writes it after brainstorming
+   numbered AC that say what the owner sees, each as when … then (no command, file name or code), out of scope, appetite, the
+   words of the person who asked mapped to the AC, and at most 3 open questions, each with four labelled parts: why this question
+   (with one example), what each option means, impact, recommendation (and why); it fits a phone screen. With a coordinator, the coordinator writes it after brainstorming
    with the owner; in a solo session, write it with the person. The owner approves the story; the coordinator approves the spec (a solo person approves story and spec in one ask): an answer
    moves its question to the story's decisions part, with the owner's words quoted. `kb.py check intent <date>-<slug>` checks the
    parts. For a task or a bug, go on with item 7.

@@ -2,6 +2,7 @@
   "_comment": "Synthetic full answers: every key of schema 1 with a value that differs from the default, so a verbatim write is distinguishable from a merge over defaults.",
   "schema": 1,
   "hooks": "auto",
+  "profile": "auto",
   "language": "en",
   "update_check": false,
   "branch": {

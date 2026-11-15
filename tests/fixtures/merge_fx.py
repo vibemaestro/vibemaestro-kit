@@ -136,6 +136,8 @@ def fx_moved_head(fx, _a): fx["pr"]["merge_head"] = H2
 def fx_pr_view_fail(fx, _a): fx.setdefault("fail", {})["pr view"] = "boom"
 def fx_fail_path(fx, a): fx.setdefault("fail", {})[a] = "boom"      # that api path answers HTTP 500
 def fx_after_merge_head(fx, _a): fx["pr"]["after_merge_head"] = H2
+def fx_after_merge_base(fx, a): fx["pr"]["after_merge_base"] = a
+def fx_queue_head(fx, _a): fx["pr"]["queue_head"] = H2
 def fx_merge_mode(fx, a): fx["pr"]["merge_mode"] = a
 def fx_view_fails_after_merge(fx, _a): fx["fail_after_merge"] = {"pr view": "boom"}
 
@@ -252,6 +254,11 @@ def fx_base_tree_truncated(fx, _a):
     root = fx["api"][R + "git/trees/" + B]
     root["truncated"] = True
     root["tree"] = [e for e in root["tree"] if e["path"] != "tools"]
+
+
+def fx_merge_5xx(fx, a):
+    """`pr merge` answers HTTP 502, one fault per call: a comma list of landed (it merged) and lost (it did not)."""
+    fx["pr"]["merge_5xx"] = a.split(",")
 
 
 def fx_merge_hang(fx, a):

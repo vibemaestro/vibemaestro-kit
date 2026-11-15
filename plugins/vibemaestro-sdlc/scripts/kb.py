@@ -3,12 +3,13 @@
 
 Mọi việc đều ghi/đọc `kb/` của repo ở cwd. Không đọc hay ghi repo nào khác.
 
-  kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run]
+  kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run] [--everyday]
       dựng kb/{intent,specs,plans,decisions}/, kb/README.md, kb/current-state.md VÀ cấu hình `.vibemaestro/sdlc.json` của repo (chỉ khoá đã
       chọn: scaffold, giá trị dò được, câu trả lời), cộng `<rules.dirs[0]>/README.md` và `example.instructions.md` cho repo app. IDEMPOTENT:
       thứ đã có giữ nguyên byte (`kept`), config đã có không bao giờ bị viết lại (in `would add` / `differs`). `--adopt` cho repo đã có file
       quy trình: không ghi file luật, không sửa file nào, in việc phải làm tay.
       `--detect` (chỉ với `--adopt`) ĐỀ XUẤT; câu trả lời thắng. Câu trả lời hỏng thì rc 65 và không ghi gì. Chi tiết ở `init_setup.py`.
+      `--everyday` (chế độ đời thường của kit): chỉ `kb/current-state.md` và `kb/preferences.md`, rỗng, để Claude viết bằng tiếng của người dùng.
       `kb/README.md` sinh ra TỰ ĐỦ (bảng thư mục, quy ước tên, khuôn spec và khuôn current-state) — không trỏ sang repo nào khác.
       `--lang vi|en`: the scaffold's language (also the answer `language`); without it, the `language` of the config (absent: vi).
   kb.py new <intent|plan|real-run|spec> <slug> [--date YYYY-MM-DD]
@@ -154,9 +155,14 @@ Check: `kb.py check [--strict]`.
 **Finding things without reading them:** `kb.py find <words>` (superseded/done hidden unless `--all`), `kb.py list
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
-**Story** (intent loại story, viết bằng ngôn ngữ repo đặt): dòng "Là / tôi muốn / để", bối cảnh, AC đánh số, phần không làm,
-khẩu phần, tối đa 3 câu hỏi mỗi câu kèm đề xuất và lý do; vừa một màn hình điện thoại, không lệnh, tên tệp hay code.
-Kiểm: `kb.py check intent <ngày>-<slug>`.
+**Story** (intent loại story, viết bằng ngôn ngữ repo đặt): dòng "Là / tôi muốn / để", bối cảnh, AC đánh số (mỗi AC "khi … thì
+…"), phần không làm, khẩu phần, phần **Lời người hỏi → AC** (đúng bảng khuôn viết: mỗi hàng một lời trích nguyên văn | các AC
+nó đòi, AC1, AC2 hay AC1–AC3; mọi AC có mặt ở ít nhất một hàng), tối đa 3 câu hỏi; vừa một màn hình điện thoại, không lệnh,
+tên tệp hay code. Mỗi câu hỏi có bốn phần có nhãn, mỗi nhãn mở một dòng: **Vì sao có câu hỏi này** (kèm một ví dụ),
+**Mỗi phương án nghĩa là gì**, **Tác động**, **Đề xuất** (kèm lý do). Kiểm: `kb.py check intent <ngày>-<slug>`: thiếu phần, phần rỗng,
+phần lời → AC không phải bảng ấy, lời không trỏ AC, AC không có hay AC không nằm hàng nào thì đỏ với story mới hoặc đổi thân;
+story đã có trên merge base, thân không đổi, chỉ bị cảnh báo. Mã ngắn không giải thích trong ngoặc ngay sau nó (D24 (…)) và
+AC không viết "khi … thì" chỉ bị cảnh báo.
 
 **Khuôn spec của một intent:** năm mục `## `, thứ tự tuỳ ý — `## {goal}` (mỗi mục trỏ về AC, `→ AC<n>`), `## {constraints}`
 (bảo mật, chi phí, tương thích; không phải cách làm), `## {criteria}` (theo hành vi, "khi … thì …", mỗi tiêu chí trỏ về AC),
@@ -198,9 +204,15 @@ Check: `kb.py check [--strict]`.
 **Finding things without reading them:** `kb.py find <words>` (superseded/done hidden unless `--all`), `kb.py list
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
-**Story** (an intent of type story, in the repository's language): the As / I want / so that line, context, numbered AC, out
-of scope, appetite, at most 3 questions each with a recommendation and why; it fits a phone screen, with no command, file
-name or code. Check: `kb.py check intent <date>-<slug>`.
+**Story** (an intent of type story, in the repository's language): the As / I want / so that line, context, numbered AC (each
+"when … then …"), out of scope, appetite, a **Words of the person who asked → AC** part (the table the template writes: each row
+one quote, as given | the AC it asks for, AC1, AC2 or AC1–AC3; every AC is in a row), at most 3 questions; it fits a phone
+screen, with no command, file name or code. Each question has four labelled parts, each label opening a line:
+**Why this question** (with one example), **What each option means**, **Impact**, **Recommendation** (with its reason). Check:
+`kb.py check intent <date>-<slug>`: a missing or empty part, a words → AC part that is not that table, a quote with no AC, an
+AC the story lacks or an AC in no row is red for a story new or with its body changed; a story on the merge base with its body
+unchanged only warns. A short code word not explained in parentheses right after it (D24 (…)) and an AC not written as "when
+… then" only warn.
 
 **Shape of the spec of an intent:** five `## ` sections in any order: `## {goal}` (each pointing to an AC, `→ AC<n>`),
 `## {constraints}` (security, cost, compatibility; not how it is built), `## {criteria}` (behaviour-level, "when … then …",
@@ -420,30 +432,50 @@ CARD_BODY = {
 **Bối cảnh.** {fill}: chuyện đã xảy ra, con số đo được>
 
 **Tiêu chí chấp nhận (AC)**
-1. {fill}: điều chủ repo thấy được khi xong; không lệnh, tên tệp hay code>
+1. Khi {fill}: tình huống>, thì {fill}: điều người hỏi thấy được; không lệnh, tên tệp hay code>
 
 **Không làm**
 - {fill}: điều không làm, hoặc "không có">
 
 **Khẩu phần.** {fill}: cỡ việc: ngày, số PR>
 
+**Lời người hỏi → AC**
+
+| Lời người hỏi | AC |
+|---|---|
+| "{fill}: lời người hỏi, trích nguyên văn>" | AC{fill}: số> |
+
 **Câu hỏi**
-1. {fill}: câu hỏi, tối đa 3; bỏ phần này khi không còn câu nào> Đề xuất: {fill}: phương án>. Lý do: {fill}: vì sao>.
+1. {fill}: câu hỏi, tối đa 3; bỏ phần này khi không còn câu nào>
+   - **Vì sao có câu hỏi này:** {fill}: tình huống buộc phải chọn, kèm một ví dụ>
+   - **Mỗi phương án nghĩa là gì:** {fill}: (a) …, (b) …, theo việc hằng ngày của người hỏi>
+   - **Tác động:** {fill}: mỗi phương án tốt hơn, tệ hơn ở đâu; điều gì khó quay lại>
+   - **Đề xuất:** {fill}: phương án>. Lý do: {fill}: vì sao>.
 """, "en": """
 **As** {fill}: who>, **I want** {fill}: what>, **so that** {fill}: why>.
 
 **Context.** {fill}: what happened, what was measured>
 
 **Acceptance criteria**
-1. {fill}: what the owner sees when done; no command, file name or code>
+1. When {fill}: the situation>, then {fill}: what the person who asked sees; no command, file name or code>
 
 **Out of scope**
 - {fill}: what is not done, or "none">
 
 **Appetite.** {fill}: the size: days, PRs>
 
+**Words of the person who asked → AC**
+
+| Words of the person who asked | AC |
+|---|---|
+| "{fill}: their words, quoted as given>" | AC{fill}: number> |
+
 **Questions**
-1. {fill}: a question, 3 at most; drop this part when none is left> Recommend: {fill}: an option>. Because: {fill}: why>.
+1. {fill}: a question, 3 at most; drop this part when none is left>
+   - **Why this question:** {fill}: the situation that forces the choice, with one example>
+   - **What each option means:** {fill}: (a) …, (b) …, in the day-to-day of the person who asked>
+   - **Impact:** {fill}: what each option makes better or worse; what is hard to undo>
+   - **Recommendation:** {fill}: an option>. Because: {fill}: why>.
 """},
     "task": "\n## What\n\n{fill}: what is done>\n\n## Why\n\n{fill}: why now>\n\n## Check\n\n{fill}: the command that proves it>\n",
     "bug": "\n## Reproduce\n\n{fill}: the steps and what happens>\n\n## Expected\n\n{fill}: what should happen>\n\n"
@@ -845,10 +877,22 @@ def spec_problems(text, sp=None, warn=None):
 # `**Tiêu chí chấp nhận (AC)**`, `## Questions`); a bold lead that is no label, or that opens a sentence, is text.
 STORY_PARTS = (("context", ("bối cảnh", "context")), ("ac", ("tiêu chí chấp nhận", "acceptance criteria")),
                ("not_doing", ("không làm", "ngoài phạm vi", "out of scope", "not doing")), ("appetite", ("khẩu phần", "appetite")),
-               ("questions", ("câu hỏi", "questions")), ("decisions", ("quyết định", "decisions")))
+               ("questions", ("câu hỏi", "questions")), ("decisions", ("quyết định", "decisions")),
+               ("trace", ("lời người hỏi", "words of the person who asked")))
 STORY_NEEDS = (("context", "Context"), ("ac", "Acceptance criteria"), ("not_doing", "Out of scope"), ("appetite", "Appetite"))
-STORY_RECOMMEND = ("đề xuất", "recommend")                      # the words of a question's recommendation and reason, vi and en
-STORY_REASON = ("lý do", "vì", "because", "why", "reason")
+STORY_REASON = ("lý do", "vì", "because", "why", "reason")     # the words of a recommendation's reason, vi and en
+# The four labelled parts of an open question, matched at the start of a label opening a line of the question (`**Tác động:** …`,
+# `- *Impact:* …`), and the words of the example its why part gives (a missing one only warns: the machine cannot read meaning).
+QUESTION_PARTS = (("why", "why this question", ("vì sao", "why")),
+                  ("options", "what each option means", ("mỗi phương án", "phương án", "what each option", "each option", "options")),
+                  ("impact", "impact", ("tác động", "impact")), ("recommend", "recommendation", ("đề xuất", "recommend")))
+QUESTION_LABEL_RX = re.compile(r"^\s*(?:(?:\d+[.)]|[-*+])\s+)?(?:\*\*(?P<b>[^*\n]+?)\*\*|\*(?P<i>[^*\n]+?)\*|_(?P<u>[^_\n]+?)_)(?P<rest>.*)$")
+AC_RANGE_RX = re.compile(r"\bAC(\d+)\s*[–-]\s*AC(\d+)\b")       # AC1–AC3 or AC1-AC3: every AC from the first to the last
+AC_ID = r"AC\d+(?:\s*[–-]\s*AC\d+)?"
+AC_CELL_RX = re.compile(r"^%s(?:\s*,\s*%s)*$" % (AC_ID, AC_ID))        # the AC cell of a words → AC row: ids, a comma list
+EXAMPLE_WORDS = ("ví dụ", "vd", "chẳng hạn", "example", "e.g", "for instance")
+TRACE_NAME = {"vi": "Lời người hỏi → AC", "en": "Words of the person who asked → AC"}   # its label as messages name it
+CODE_WORD_RX = re.compile(r"\b[A-Z]{1,4}[0-9]+\b")         # a short code word: letters then digits (D24, AC6, T36, X218)
 STORY_LABEL_RX = re.compile(r"^ {0,3}(?:#{2,6}\s+(?P<h>.+?)\s*#*\s*$|\*\*(?P<b>[^*\n]+?)\*\*(?P<rest>.*)$)")
 STORY_LINE_RX = (re.compile(r"\blà\b.*\btôi muốn\b.*\bđể\b", re.S), re.compile(r"\bas\b.*\bi want\b.*\bso that\b", re.S))
 STORY_ITEM_RX = re.compile(r"^( {0,3})(?:(\d+)[.)]|[-*+])(\s+)\S")
@@ -953,13 +997,105 @@ def story_ac_ids(itext):
     return list(dict.fromkeys(x for x, _i in story_ac_list(story_parts(story_part(itext or "")[0])) if x))
 
 
-def story_problems_v2(text):
-    """(problems, warnings) of a story in the v2 shape. Red, and few: a missing part (the As / I want / so that line, context, AC,
-    out of scope, appetite), an AC list with no number or a number twice, more than 3 open questions. Everything that could
-    stop a reasonable story only warns: a question with no recommendation or reason, code, a file name or a command, the length."""
+def has_word(text, words):
+    low = unicodedata.normalize("NFC", text).casefold()
+    return any(re.search(r"(?<!\w)%s(?!\w)" % re.escape(x), low) for x in words)
+
+
+def question_parts(item):
+    """{part key: its text} of an open question: a part runs from its label, a bold or italic lead opening a line after the
+    question's first and ending in `.` or `:` (`**Tác động:** …`), to the next label; any other line is text of the part above."""
+    got, cur = {}, None
+    for ln in item.split("\n")[1:]:
+        m = QUESTION_LABEL_RX.match(ln)
+        raw = (m.group("b") or m.group("i") or m.group("u")).strip() if m else ""
+        if m and not (raw.endswith((".", ":")) or not m.group("rest").strip() or m.group("rest").lstrip().startswith((".", ":"))):
+            m = None                                     # `**Tác động** thì …`: a bold word opening a sentence is text
+        name = unicodedata.normalize("NFC", raw.rstrip(".:").strip()).casefold() if m else ""
+        key = next((k for k, _n, words in QUESTION_PARTS if name.startswith(words)), None) if m else None
+        if key:
+            cur = key
+            got[key] = got.get(key, "") + " " + m.group("rest").lstrip(" .:")
+        elif cur:
+            got[cur] += "\n" + ln
+    return got
+
+
+def trace_problems(parts, first, marks, label):
+    """[problem] of the story's words → AC part: the table the template writes and nothing else (a header, its `---` line, then one
+    row per quote: the quote | the AC ids as a comma list or a range AC1–AC3); each id is an AC of the story and each AC is in a
+    row. A part still holding a blank is judged by the blank alone."""
+    if "trace" not in parts:
+        return ["the story has no `%s` part: a table, each quote of the person who asked | the AC ids it asks for" % label]
+    part = [(i, ln.strip()) for i, ln in parts["trace"] if ln.strip()]
+    if any(m in ln for _i, ln in part for m in marks):
+        return []
+    cells = [[c.strip() for c in ln.strip("|").split("|")] for _i, ln in part]
+    if (len(part) < 2 or not all(ln.startswith("|") and ln.endswith("|") and len(c) == 2 for (_i, ln), c in zip(part, cells))
+            or not all(SEP_CELL_RX.match(c) for c in cells[1])):
+        return ["the story's `%s` part must be the table the template writes: | quote | AC |, its `---` line, one row per quote"
+                % label]
+    if len(part) == 2:
+        return ["the story's `%s` part has no row: one per quote, | \"quote\" | AC1, AC2 |" % label]
+    ids, out, seen = set(x for x, _i in story_ac_list(parts) if x), [], set()
+    for (i, _ln), (quote, acs) in zip(part[2:], cells[2:]):
+        if not has_quote(quote):
+            out.append("line %d: a words → AC row has no quote of the person who asked (\"…\")" % (first + i + 1))
+        if not acs:
+            out.append("line %d: the quote %s maps to no AC" % (first + i + 1, quote))
+            continue
+        if not AC_CELL_RX.match(acs):
+            out.append("line %d: the AC cell `%s` is not AC ids: a comma list or a range, AC1, AC2 or AC1–AC3" % (first + i + 1, acs))
+            continue
+        refs = ac_refs(acs)
+        out += ["line %d: AC%s is not an AC of the story" % (first + i + 1, n) for n in refs if n not in ids]
+        seen.update(refs)
+    for n in sorted(ids - seen, key=int):
+        out.append("AC%s is in no row of the words → AC part: which words of the person who asked does it answer?" % n)
+    return out
+
+
+def ac_refs(cell):
+    """The AC ids (digit strings) of an AC cell: `AC2`, and every id of a range `AC1–AC3` (its two ends when over 100 wide)."""
+    out = []
+    for m in AC_RANGE_RX.finditer(cell):
+        lo, hi = int(m.group(1)), int(m.group(2))
+        out += [str(n) for n in (range(lo, hi + 1) if 0 <= hi - lo <= 100 else (lo, hi))]
+    return out + re.findall(r"\bAC(\d+)\b", AC_RANGE_RX.sub(" ", cell))
+
+
+def code_word_warnings(lines, first, acs, focus):
+    """[warning] per short code word (D24, T36) the story uses and never explains: no use of it is followed directly by its
+    explanation in parentheses, `D24 (…)`. The story's own AC ids and its focus are known words; a quote of the person who asked
+    and a code span are not judged."""
+    blank = lambda m: " " * len(m.group(0))  # noqa: E731  (blanked in place: a word keeps its column in the line)
+    uses, told, fenced = {}, set(), False
+    for i, ln in enumerate(lines):
+        if FENCE_RX.match(ln):
+            fenced = not fenced
+            continue
+        prose = CARD_QUOTE_RX.sub(blank, CODE_RX.sub(blank, ln))
+        for m in [] if fenced else CODE_WORD_RX.finditer(prose):
+            w = m.group(0)
+            uses.setdefault(w, first + i + 1)
+            if re.match(r" ?\(", ln[m.end():]):
+                told.add(w)
+    return ["line %d: %s is a short code word the story never explains: say what it is once, `%s (…)`" % (n, w, w)
+            for w, n in sorted(uses.items(), key=lambda x: x[1])
+            if w not in told and w != focus and not (w.startswith("AC") and w[2:] in acs)]
+
+
+def story_problems_v2(text, marks=(), lang="vi"):
+    """(problems, warnings, shape) of a story in the v2 shape. Red, and few: a missing part (the As / I want / so that line,
+    context, AC, out of scope, appetite), an AC list with no number or a number twice, more than 3 open questions. `shape`, red for
+    a story new or changed in the change and a warning on an older one: an open question missing one of its four labelled parts or
+    with one empty, the words → AC part missing, a quote mapping to no AC, an AC id the story lacks, an AC in no row. Everything
+    that could stop a reasonable story only warns: a why with no example, a recommendation with no reason, an AC not written as
+    when … then, a short code word never explained, code, a file name or a command, the length."""
     lines, first = story_part(text)
     parts = story_parts(lines)
-    out, warns = [], []
+    focus = kb_index.front_block((text or "").splitlines())[0].get("focus", "")
+    out, warns, shape = [], [], []
     paras = re.split(r"\n\s*\n", unicodedata.normalize("NFC", _prose(lines).replace("**", "")).casefold())
     if not any(rx.search(p) for p in paras for rx in STORY_LINE_RX):
         out.append("the story has no As … I want … so that … line (in vi or en)")
@@ -979,11 +1115,21 @@ def story_problems_v2(text):
     if len(qs) > STORY_MAX_QUESTIONS:
         out.append("the story asks %d questions: at most %d (an answered one goes under the decisions)" % (len(qs), STORY_MAX_QUESTIONS))
     for k, (_n, i, it) in enumerate(qs, 1):
-        low = unicodedata.normalize("NFC", it).casefold()
-        miss = [w for w, words in (("recommendation", STORY_RECOMMEND), ("reason", STORY_REASON))
-                if not any(re.search(r"\b%s\b" % re.escape(x), low) for x in words)]
-        if miss:
-            warns.append("line %d: question %d has no %s" % (first + i + 1, k, " and no ".join(miss)))
+        got = question_parts(it)
+        for key, name, _w in QUESTION_PARTS:
+            if key not in got:
+                shape.append("line %d: question %d has no `%s` part (a label opening its own line)" % (first + i + 1, k, name))
+            elif not re.search(r"\w", got[key]):
+                shape.append("line %d: question %d: its `%s` part is empty" % (first + i + 1, k, name))
+        if re.search(r"\w", got.get("why", "")) and not has_word(got["why"], EXAMPLE_WORDS):
+            warns.append("line %d: question %d: its why part gives no example" % (first + i + 1, k))
+        if re.search(r"\w", got.get("recommend", "")) and not has_word(got["recommend"], STORY_REASON):
+            warns.append("line %d: question %d: its recommendation gives no reason" % (first + i + 1, k))
+    shape += trace_problems(parts, first, marks, TRACE_NAME.get(lang, TRACE_NAME["en"]))
+    for (n, i), (_m, _j, it) in zip(story_ac_list(parts), story_items(parts.get("ac", []))):
+        if not any(rx.search(unicodedata.normalize("NFC", _prose(it.split("\n"))).casefold()) for rx in WHEN_THEN_RX):
+            warns.append("line %d: AC%s is not written as when … then" % (first + i + 1, n or "?"))
+    warns += code_word_warnings(lines, first, set(story_ac_ids(text)), focus)
     fenced = False
     for i, ln in enumerate(lines):
         if FENCE_RX.match(ln):
@@ -1000,7 +1146,7 @@ def story_problems_v2(text):
     size = len("\n".join(lines).strip())
     if size > STORY_MAX_CHARS:
         warns.append("the story is %d characters, over %d (about one phone screen): cut it down" % (size, STORY_MAX_CHARS))
-    return out, warns
+    return out, warns, shape
 
 
 # ── the spec derived from a story (v2): five sections, behaviour-level criteria pointing to the story's AC ─────────────────
@@ -1139,11 +1285,12 @@ def ac_guard(root, rel, base=None):
     return [moved] if moved else []
 
 
-def card_problems(text, sp, mode="warn", hints=None):
+def card_problems(text, sp, mode="warn", hints=None, fresh=None, lang="vi"):
     """(problems, warnings) of an intent's card: `type:` and `focus:` (judged by `intake.focus` `mode`: required is a problem, warn
     a warning, off nothing), the sections of its type, a story's As a / I want / so that, an `AC<n>` id and a quote on each AC, a
     Measure. A Not doing line with neither a quote nor a page decision id is a warning: the gate-2 page makes it a mandatory
-    decision, whose answer becomes its quote (`--strict` makes it a problem)."""
+    decision, whose answer becomes its quote (`--strict` makes it a problem). A v2 story's shape problems (story_problems_v2) go
+    to `fresh` when given, else they are problems."""
     lines = text.splitlines()
     fm = kb_index.front_block(lines)[0]
     out, warns = [], []
@@ -1165,8 +1312,10 @@ def card_problems(text, sp, mode="warn", hints=None):
     names = [n for n, _ in secs]
     v2 = t == "story" and story_is_v2(text)              # the story the owner approves (v2), else the first card
     if v2:
-        p, w = story_problems_v2(text)
-        out = out + p
+        p, w, s = story_problems_v2(text, placeholder_marks(sp), lang)
+        out = out + p + (s if fresh is None else [])
+        if fresh is not None:
+            fresh.extend(s)
         (hints if hints is not None else warns).extend(w)  # warnings `--strict` keeps as warnings: they never block a story
     for n in () if v2 else CARDS.get(t, ()):
         if names.count(n) > 1:
@@ -1215,8 +1364,8 @@ def check_intent_file(path, root, cfg, strict, older):
             text = f.read()
     except OSError:
         return die("cannot read %s" % path, 66)
-    hints = []
-    probs, warns = card_problems(text, cfg["tokens"]["spec"], cfg["intake"]["focus"], hints)
+    hints, shape = [], []
+    probs, warns = card_problems(text, cfg["tokens"]["spec"], cfg["intake"]["focus"], hints, shape, cfg["language"])
     fm, code = kb_index.front_block(text.splitlines())[0], cfg["issue"]["code"]
     if code and fm.get("key") and KEY_RX.match(fm["key"]) and fm["key"] != "%s-%s" % (code, str(fm.get("issue") or "").strip()):
         probs.append("frontmatter `key: %s` is not `%s-<issue>` with this intent's `issue: %s` (issue.code is %s)"
@@ -1229,6 +1378,10 @@ def check_intent_file(path, root, cfg, strict, older):
     if is_story and story_is_v2(text):
         moved = ac_change_problem(path, text) if older else None   # an AC of a story already on the base
         probs += [moved] if moved else []
+        if older and not spec_body_changed(path, text):            # a card on the base, unchanged, keeps passing
+            hints += [w + " (a story on the merge base whose body is unchanged only warns)" for w in shape]
+        else:
+            probs += shape
     elif is_story and not older:
         hints.append("the first story card: a new story takes the story the owner approves (kb.py new intent --type story writes it)")
     rel = os.path.relpath(path, root)
@@ -2226,4 +2379,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    for _s in filter(None, (sys.stdout, sys.stderr)):   # Windows writes a pipe in the system code page, which lacks Vietnamese and the arrows
+        _s.reconfigure(encoding="utf-8", errors="backslashreplace")
     sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,1064 @@
+recorded on 1d0eab3
+## remote sdlc SessionStart startup cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## remote sdlc SessionStart startup cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## remote sdlc SessionStart startup cmd 3 rc=0
+
+## remote sdlc SessionStart startup cmd 4 rc=0
+
+## remote brain SessionStart startup cmd 1 rc=0
+{"hookSpecificOutput": {"additionalContext": "# vibemaestro-brain — re-injected at SessionStart:startup; change it only with `brain op` / `brain owner` (skill brain)\nPrecedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner).\n## Brain · left brain v2 · 171/9,500 chars   (the owner's: change only with `brain owner`, through the dialog)\nGoals (owner)\nPinned (owner)\nWindows\nMatrix: `brain matrix`\n\n", "hookEventName": "SessionStart"}}
+## remote brain SessionStart startup cmd 2 rc=0
+{"hookSpecificOutput": {"additionalContext": "## Brain · right brain v2 · 204/9,500 chars   (change only with `brain op`; Done is derived)\nFocus\nRequests\nNow\n- N1 ship the release notes · since <MM-DD>\nSessions\nOwner queue\nNext\nTraps\nDone (24 h)\nFacts\n", "hookEventName": "SessionStart"}}
+## remote brain SessionStart startup cmd 3 rc=0
+
+## remote brain SessionStart startup cmd 4 rc=0
+
+## remote brain SessionStart startup cmd 5 rc=0
+
+## remote brain SessionStart startup cmd 6 rc=0
+
+## remote brain SessionStart startup cmd 7 rc=0
+
+## remote brain SessionStart startup cmd 8 rc=0
+
+## remote brain SessionStart startup cmd 9 rc=0
+
+## remote brain SessionStart startup cmd 10 rc=0
+
+## remote brain SessionStart startup cmd 11 rc=0
+
+## remote brain SessionStart startup cmd 12 rc=0
+
+## remote brain SessionStart startup cmd 13 rc=0
+
+## remote brain SessionStart startup cmd 14 rc=0
+
+## remote brain SessionStart startup cmd 15 rc=0
+
+## remote brain UserPromptSubmit cmd 1 rc=0
+
+## remote sdlc SubagentStart cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": "The vibemaestro-sdlc process, short form for a subagent (the session that started you follows it; you got none of its start-up text).\n\n- **Your brief is your contract.** Outside it, stop and say so in your reply; do not decide for the person. When another installed\n  plugin's skill says otherwise (run the whole suite, revert the fix to see it fail, ask a human partner, decide without asking),\n  the brief and sdlc win.\n- **Evidence, not claims.** Run the command that proves your change on its final version; report the command, its exit code and\n  its real output. Run what your change reaches (the repo's suite planner when it has one), not the whole suite.\n- **Check the instrument.** An all-yes or all-no result: suspect the command first. A number needs a sure-positive control.\n- **Root cause before a fix.** Reproduce, read the failing path, name the cause. For each defect you fix, list the other places in\n  the change with the same class and fix or test them in the same commit. The second fix of the same class stops the patching:\n  fix the shared code, or question the design and say so.\n- **Rules reach you as hook reminders** when you edit a file or run a command: read the named rule file before you go on.\n- No secret, token, public IP, account ID or personal machine path in code, commits or PR text.\n- **kb content in the repo's language:** a new kb file (story, spec, plan, decision) is written in the `language` key of\n  `.vibemaestro/sdlc.json` (`vi` when unset); an older file keeps its language; the person's own words are quoted as given;\n  everything else is in English.\n\nTests (rule `test-quality`):\n1. Each test names the break it catches.\n2. Expected values are literal, never computed by the code under test.\n3. At least one refusal or negative case per rule; every risk the spec lists (an older spec: every row of `## Inputs and failure cases`) has a test, or the PR says why only a review can catch it.\n4. No test that only asserts that a source file contains a line, or the wording of the spec: test the behaviour of the AC and the risks.\n5. No assertion that only checks a mock.\n6. A new test is red on main before the change and green after it.\n7. Never revert or mutate the fix (or copy and edit the code under test) to see red: that is a planted break. A negative case\n   builds its own bad input."}}
+## remote sdlc SessionStart not-json cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## remote sdlc SessionStart not-json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## remote sdlc SessionStart not-json cmd 3 rc=0
+
+## remote sdlc SessionStart not-json cmd 4 rc=0
+
+## remote brain SessionStart not-json cmd 1 rc=0
+
+## remote brain SessionStart not-json cmd 2 rc=0
+
+## remote brain SessionStart not-json cmd 3 rc=0
+
+## remote brain SessionStart not-json cmd 4 rc=0
+
+## remote brain SessionStart not-json cmd 5 rc=0
+
+## remote brain SessionStart not-json cmd 6 rc=0
+
+## remote brain SessionStart not-json cmd 7 rc=0
+
+## remote brain SessionStart not-json cmd 8 rc=0
+
+## remote brain SessionStart not-json cmd 9 rc=0
+
+## remote brain SessionStart not-json cmd 10 rc=0
+
+## remote brain SessionStart not-json cmd 11 rc=0
+
+## remote brain SessionStart not-json cmd 12 rc=0
+
+## remote brain SessionStart not-json cmd 13 rc=0
+
+## remote brain SessionStart not-json cmd 14 rc=0
+
+## remote brain SessionStart not-json cmd 15 rc=0
+
+## remote sdlc Edit <T>/dev-remote/src/main.ts cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "Before editing `src/main.ts`, rules you must read (matched by `applyTo`):\n- <T>/sdlc/rules/r-all.instructions.md\nRead the files above before you write. This is the plugin's instruction, not a suggestion.\n\nThis area already has a settled decision (with the alternatives that were dropped):\n- <T>/dev-remote/kb/decisions/d-app.md\nRead it so you do not break a choice that had a reason without knowing. You may change it, but bring a new measurement — do not reopen it with an argument that was already rejected there."}}
+## remote sdlc Edit <T>/dev-remote/src/main.ts cmd 2 rc=0
+
+## remote brain Edit <T>/dev-remote/src/main.ts cmd 1 rc=0
+
+## remote sdlc Write <T>/dev-remote/src/main.ts cmd 1 rc=0
+
+## remote sdlc Write <T>/dev-remote/src/main.ts cmd 2 rc=0
+
+## remote brain Write <T>/dev-remote/src/main.ts cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/dev-remote/src/main.ts cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/dev-remote/src/main.ts cmd 2 rc=0
+
+## remote brain NotebookEdit <T>/dev-remote/src/main.ts cmd 1 rc=0
+
+## remote sdlc Edit <T>/dev-remote/clusters/x.yaml cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "Before editing `clusters/x.yaml`, rules you must read (matched by `applyTo`):\n- <T>/sdlc/rules/r-clusters.instructions.md\nRead the files above before you write. This is the plugin's instruction, not a suggestion."}}
+## remote sdlc Edit <T>/dev-remote/clusters/x.yaml cmd 2 rc=0
+
+## remote brain Edit <T>/dev-remote/clusters/x.yaml cmd 1 rc=0
+
+## remote sdlc Write <T>/dev-remote/clusters/x.yaml cmd 1 rc=0
+
+## remote sdlc Write <T>/dev-remote/clusters/x.yaml cmd 2 rc=0
+
+## remote brain Write <T>/dev-remote/clusters/x.yaml cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/dev-remote/clusters/x.yaml cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/dev-remote/clusters/x.yaml cmd 2 rc=0
+
+## remote brain NotebookEdit <T>/dev-remote/clusters/x.yaml cmd 1 rc=0
+
+## remote sdlc Edit <T>/dev-remote/docs/y.md cmd 1 rc=0
+
+## remote sdlc Edit <T>/dev-remote/docs/y.md cmd 2 rc=0
+
+## remote brain Edit <T>/dev-remote/docs/y.md cmd 1 rc=0
+
+## remote sdlc Write <T>/dev-remote/docs/y.md cmd 1 rc=0
+
+## remote sdlc Write <T>/dev-remote/docs/y.md cmd 2 rc=0
+
+## remote brain Write <T>/dev-remote/docs/y.md cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/dev-remote/docs/y.md cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/dev-remote/docs/y.md cmd 2 rc=0
+
+## remote brain NotebookEdit <T>/dev-remote/docs/y.md cmd 1 rc=0
+
+## remote sdlc Edit <T>/dev-remote/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc Edit <T>/dev-remote/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this Edit call could not be checked: the file does not exist and the edit names text in it in <T>/dev-remote/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/dev-remote/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/dev-remote/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## remote brain Edit <T>/dev-remote/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc Write <T>/dev-remote/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc Write <T>/dev-remote/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this Write call leaves it not a JSON object as JavaScript reads it (Claude Code then drops the file, its deny rules with it) in <T>/dev-remote/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/dev-remote/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/dev-remote/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## remote brain Write <T>/dev-remote/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/dev-remote/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/dev-remote/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this NotebookEdit call edits it with NotebookEdit in <T>/dev-remote/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/dev-remote/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/dev-remote/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## remote brain NotebookEdit <T>/dev-remote/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc Edit <T>/home/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc Edit <T>/home/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this Edit call could not be checked: the file does not exist and the edit names text in it in <T>/home/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/home/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/home/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## remote brain Edit <T>/home/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc Write <T>/home/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc Write <T>/home/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this Write call leaves it not a JSON object as JavaScript reads it (Claude Code then drops the file, its deny rules with it) in <T>/home/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/home/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/home/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## remote brain Write <T>/home/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/home/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/home/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this NotebookEdit call edits it with NotebookEdit in <T>/home/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/home/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/home/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## remote brain NotebookEdit <T>/home/.claude/settings.json cmd 1 rc=0
+
+## remote sdlc Edit <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+
+## remote sdlc Edit <T>/home/.local/state/vibemaestro/brain/x cmd 2 rc=0
+
+## remote brain Edit <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: the state directory is changed only through `brain op` and `brain owner` (skill brain); an edit would break the hash chain and stop all writes", "hookEventName": "PreToolUse"}}
+## remote sdlc Write <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+
+## remote sdlc Write <T>/home/.local/state/vibemaestro/brain/x cmd 2 rc=0
+
+## remote brain Write <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: the state directory is changed only through `brain op` and `brain owner` (skill brain); an edit would break the hash chain and stop all writes", "hookEventName": "PreToolUse"}}
+## remote sdlc NotebookEdit <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+
+## remote sdlc NotebookEdit <T>/home/.local/state/vibemaestro/brain/x cmd 2 rc=0
+
+## remote brain NotebookEdit <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: the state directory is changed only through `brain op` and `brain owner` (skill brain); an edit would break the hash chain and stop all writes", "hookEventName": "PreToolUse"}}
+## remote sdlc Bash git status  cmd 1 rc=0
+
+## remote sdlc Bash git status  cmd 2 rc=0
+
+## remote sdlc Bash git status  cmd 3 rc=0
+
+## remote brain Bash git status  cmd 1 rc=0
+
+## remote brain Bash git status  cmd 2 rc=0
+
+## remote brain Bash git status  cmd 3 rc=0
+
+## remote brain Bash git status  cmd 4 rc=0
+
+## remote sdlc Bash git status (agent) cmd 1 rc=0
+
+## remote sdlc Bash git status (agent) cmd 2 rc=0
+
+## remote sdlc Bash git status (agent) cmd 3 rc=0
+
+## remote brain Bash git status (agent) cmd 1 rc=0
+
+## remote brain Bash git status (agent) cmd 2 rc=0
+
+## remote brain Bash git status (agent) cmd 3 rc=0
+
+## remote brain Bash git status (agent) cmd 4 rc=0
+
+## remote sdlc Bash git push origin main  cmd 1 rc=0
+
+## remote sdlc Bash git push origin main  cmd 2 rc=0
+
+## remote sdlc Bash git push origin main  cmd 3 rc=0
+
+## remote brain Bash git push origin main  cmd 1 rc=0
+
+## remote brain Bash git push origin main  cmd 2 rc=0
+
+## remote brain Bash git push origin main  cmd 3 rc=0
+
+## remote brain Bash git push origin main  cmd 4 rc=0
+
+## remote sdlc Bash git push origin main (agent) cmd 1 rc=0
+
+## remote sdlc Bash git push origin main (agent) cmd 2 rc=0
+
+## remote sdlc Bash git push origin main (agent) cmd 3 rc=0
+
+## remote brain Bash git push origin main (agent) cmd 1 rc=0
+
+## remote brain Bash git push origin main (agent) cmd 2 rc=0
+
+## remote brain Bash git push origin main (agent) cmd 3 rc=0
+
+## remote brain Bash git push origin main (agent) cmd 4 rc=0
+
+## remote sdlc Bash lenh-bay now  cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "This command has its own rule — read it before you run it:\n- <T>/sdlc/rules/r-cmd.instructions.md — PL-LUAT-LENH-BAY"}}
+## remote sdlc Bash lenh-bay now  cmd 2 rc=0
+
+## remote sdlc Bash lenh-bay now  cmd 3 rc=0
+
+## remote brain Bash lenh-bay now  cmd 1 rc=0
+
+## remote brain Bash lenh-bay now  cmd 2 rc=0
+
+## remote brain Bash lenh-bay now  cmd 3 rc=0
+
+## remote brain Bash lenh-bay now  cmd 4 rc=0
+
+## remote sdlc Bash lenh-bay now (agent) cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "This command has its own rule — read it before you run it:\n- <T>/sdlc/rules/r-cmd.instructions.md — PL-LUAT-LENH-BAY"}}
+## remote sdlc Bash lenh-bay now (agent) cmd 2 rc=0
+
+## remote sdlc Bash lenh-bay now (agent) cmd 3 rc=0
+
+## remote brain Bash lenh-bay now (agent) cmd 1 rc=0
+
+## remote brain Bash lenh-bay now (agent) cmd 2 rc=0
+
+## remote brain Bash lenh-bay now (agent) cmd 3 rc=0
+
+## remote brain Bash lenh-bay now (agent) cmd 4 rc=0
+
+## remote sdlc Bash nguy-hiem now  cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "This command has its own rule — read it before you run it:\n- <T>/sdlc/rules/r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM\n\nThis is a trap whose consequence cannot be undone, so it BLOCKS, not only reminds.\nIf you still want to run it, put the prefix `RULES_GATE=off` RIGHT IN the command."}}
+## remote sdlc Bash nguy-hiem now  cmd 2 rc=0
+
+## remote sdlc Bash nguy-hiem now  cmd 3 rc=0
+
+## remote brain Bash nguy-hiem now  cmd 1 rc=0
+
+## remote brain Bash nguy-hiem now  cmd 2 rc=0
+
+## remote brain Bash nguy-hiem now  cmd 3 rc=0
+
+## remote brain Bash nguy-hiem now  cmd 4 rc=0
+
+## remote sdlc Bash nguy-hiem now (agent) cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "This command has its own rule — read it before you run it:\n- <T>/sdlc/rules/r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM\n\nThis is a trap whose consequence cannot be undone, so it BLOCKS, not only reminds.\nIf you still want to run it, put the prefix `RULES_GATE=off` RIGHT IN the command."}}
+## remote sdlc Bash nguy-hiem now (agent) cmd 2 rc=0
+
+## remote sdlc Bash nguy-hiem now (agent) cmd 3 rc=0
+
+## remote brain Bash nguy-hiem now (agent) cmd 1 rc=0
+
+## remote brain Bash nguy-hiem now (agent) cmd 2 rc=0
+
+## remote brain Bash nguy-hiem now (agent) cmd 3 rc=0
+
+## remote brain Bash nguy-hiem now (agent) cmd 4 rc=0
+
+## remote sdlc Bash brain op add --kind now --text x  cmd 1 rc=0
+
+## remote sdlc Bash brain op add --kind now --text x  cmd 2 rc=0
+
+## remote sdlc Bash brain op add --kind now --text x  cmd 3 rc=0
+
+## remote brain Bash brain op add --kind now --text x  cmd 1 rc=0
+
+## remote brain Bash brain op add --kind now --text x  cmd 2 rc=0
+
+## remote brain Bash brain op add --kind now --text x  cmd 3 rc=0
+
+## remote brain Bash brain op add --kind now --text x  cmd 4 rc=0
+
+## remote sdlc Bash brain op add --kind now --text x (agent) cmd 1 rc=0
+
+## remote sdlc Bash brain op add --kind now --text x (agent) cmd 2 rc=0
+
+## remote sdlc Bash brain op add --kind now --text x (agent) cmd 3 rc=0
+
+## remote brain Bash brain op add --kind now --text x (agent) cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: hot memory is written by the main session only; report back, and the main session runs `brain op` or `brain import`", "hookEventName": "PreToolUse"}}
+## remote brain Bash brain op add --kind now --text x (agent) cmd 2 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: hot memory is written by the main session only; report back, and the main session runs `brain op` or `brain import`", "hookEventName": "PreToolUse"}}
+## remote brain Bash brain op add --kind now --text x (agent) cmd 3 rc=0
+
+## remote brain Bash brain op add --kind now --text x (agent) cmd 4 rc=0
+
+## remote sdlc Bash brain owner pin --text x  cmd 1 rc=0
+
+## remote sdlc Bash brain owner pin --text x  cmd 2 rc=0
+
+## remote sdlc Bash brain owner pin --text x  cmd 3 rc=0
+
+## remote brain Bash brain owner pin --text x  cmd 1 rc=0
+
+## remote brain Bash brain owner pin --text x  cmd 2 rc=0
+
+## remote brain Bash brain owner pin --text x  cmd 3 rc=0
+
+## remote brain Bash brain owner pin --text x  cmd 4 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: argument verb: invalid choice: 'pin' (choose from 'add', 'unpin', 'supersede', 'promote', 'import', 'batch', 'backup')", "hookEventName": "PreToolUse"}}
+## remote sdlc Bash brain owner pin --text x (agent) cmd 1 rc=0
+
+## remote sdlc Bash brain owner pin --text x (agent) cmd 2 rc=0
+
+## remote sdlc Bash brain owner pin --text x (agent) cmd 3 rc=0
+
+## remote brain Bash brain owner pin --text x (agent) cmd 1 rc=0
+
+## remote brain Bash brain owner pin --text x (agent) cmd 2 rc=0
+
+## remote brain Bash brain owner pin --text x (agent) cmd 3 rc=0
+
+## remote brain Bash brain owner pin --text x (agent) cmd 4 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: owner items come from the main session only; a subagent reports the owner's words back", "hookEventName": "PreToolUse"}}
+## remote sdlc Bash cd /tmp && brain owner pin --text x  cmd 1 rc=0
+
+## remote sdlc Bash cd /tmp && brain owner pin --text x  cmd 2 rc=0
+
+## remote sdlc Bash cd /tmp && brain owner pin --text x  cmd 3 rc=0
+
+## remote brain Bash cd /tmp && brain owner pin --text x  cmd 1 rc=0
+
+## remote brain Bash cd /tmp && brain owner pin --text x  cmd 2 rc=0
+
+## remote brain Bash cd /tmp && brain owner pin --text x  cmd 3 rc=0
+
+## remote brain Bash cd /tmp && brain owner pin --text x  cmd 4 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: write one `brain owner …` command alone in the Bash call, with literal arguments: no variable, substitution, backslash, glob, ~ or redirect, and nothing before or after it, so the dialog shows exactly what runs", "hookEventName": "PreToolUse"}}
+## remote sdlc Bash cd /tmp && brain owner pin --text x (agent) cmd 1 rc=0
+
+## remote sdlc Bash cd /tmp && brain owner pin --text x (agent) cmd 2 rc=0
+
+## remote sdlc Bash cd /tmp && brain owner pin --text x (agent) cmd 3 rc=0
+
+## remote brain Bash cd /tmp && brain owner pin --text x (agent) cmd 1 rc=0
+
+## remote brain Bash cd /tmp && brain owner pin --text x (agent) cmd 2 rc=0
+
+## remote brain Bash cd /tmp && brain owner pin --text x (agent) cmd 3 rc=0
+
+## remote brain Bash cd /tmp && brain owner pin --text x (agent) cmd 4 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: owner items come from the main session only; a subagent reports the owner's words back", "hookEventName": "PreToolUse"}}
+## remote sdlc Bash brain import f.json  cmd 1 rc=0
+
+## remote sdlc Bash brain import f.json  cmd 2 rc=0
+
+## remote sdlc Bash brain import f.json  cmd 3 rc=0
+
+## remote brain Bash brain import f.json  cmd 1 rc=0
+
+## remote brain Bash brain import f.json  cmd 2 rc=0
+
+## remote brain Bash brain import f.json  cmd 3 rc=0
+
+## remote brain Bash brain import f.json  cmd 4 rc=0
+
+## remote sdlc Bash brain import f.json (agent) cmd 1 rc=0
+
+## remote sdlc Bash brain import f.json (agent) cmd 2 rc=0
+
+## remote sdlc Bash brain import f.json (agent) cmd 3 rc=0
+
+## remote brain Bash brain import f.json (agent) cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: hot memory is written by the main session only; report back, and the main session runs `brain op` or `brain import`", "hookEventName": "PreToolUse"}}
+## remote brain Bash brain import f.json (agent) cmd 2 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: hot memory is written by the main session only; report back, and the main session runs `brain op` or `brain import`", "hookEventName": "PreToolUse"}}
+## remote brain Bash brain import f.json (agent) cmd 3 rc=0
+
+## remote brain Bash brain import f.json (agent) cmd 4 rc=0
+
+## remote brain PreCompact cmd 1 rc=0
+
+## remote brain PostCompact cmd 1 rc=0
+
+## remote sdlc SessionStart compact cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## remote sdlc SessionStart compact cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## remote sdlc SessionStart compact cmd 3 rc=0
+
+## remote sdlc SessionStart compact cmd 4 rc=0
+
+## remote brain SessionStart compact cmd 1 rc=0
+{"hookSpecificOutput": {"additionalContext": "# vibemaestro-brain — re-injected at SessionStart:compact; change it only with `brain op` / `brain owner` (skill brain)\nPrecedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner).\nReview card (after compaction)\n- loss score of the last compaction logged: none (no anchor or no summary) (<MM-DD HH:MM>)\n## Brain · left brain v2 · 171/9,500 chars   (the owner's: change only with `brain owner`, through the dialog)\nGoals (owner)\nPinned (owner)\nWindows\nMatrix: `brain matrix`\n\n", "hookEventName": "SessionStart"}}
+## remote brain SessionStart compact cmd 2 rc=0
+{"hookSpecificOutput": {"additionalContext": "## Brain · right brain v2 · 204/9,500 chars   (change only with `brain op`; Done is derived)\nFocus\nRequests\nNow\n- N1 ship the release notes · since <MM-DD>\nSessions\nOwner queue\nNext\nTraps\nDone (24 h)\nFacts\n", "hookEventName": "SessionStart"}}
+## remote brain SessionStart compact cmd 3 rc=0
+
+## remote brain SessionStart compact cmd 4 rc=0
+
+## remote brain SessionStart compact cmd 5 rc=0
+
+## remote brain SessionStart compact cmd 6 rc=0
+
+## remote brain SessionStart compact cmd 7 rc=0
+
+## remote brain SessionStart compact cmd 8 rc=0
+
+## remote brain SessionStart compact cmd 9 rc=0
+
+## remote brain SessionStart compact cmd 10 rc=0
+
+## remote brain SessionStart compact cmd 11 rc=0
+
+## remote brain SessionStart compact cmd 12 rc=0
+
+## remote brain SessionStart compact cmd 13 rc=0
+
+## remote brain SessionStart compact cmd 14 rc=0
+
+## remote brain SessionStart compact cmd 15 rc=0
+
+## remote sdlc SessionStart resume cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## remote sdlc SessionStart resume cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## remote sdlc SessionStart resume cmd 3 rc=0
+
+## remote sdlc SessionStart resume cmd 4 rc=0
+
+## remote brain SessionStart resume cmd 1 rc=0
+{"hookSpecificOutput": {"additionalContext": "# vibemaestro-brain — re-injected at SessionStart:resume; change it only with `brain op` / `brain owner` (skill brain)\nPrecedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner).\n## Brain · left brain v2 · 171/9,500 chars   (the owner's: change only with `brain owner`, through the dialog)\nGoals (owner)\nPinned (owner)\nWindows\nMatrix: `brain matrix`\n\n", "hookEventName": "SessionStart"}}
+## remote brain SessionStart resume cmd 2 rc=0
+{"hookSpecificOutput": {"additionalContext": "## Brain · right brain v2 · 204/9,500 chars   (change only with `brain op`; Done is derived)\nFocus\nRequests\nNow\n- N1 ship the release notes · since <MM-DD>\nSessions\nOwner queue\nNext\nTraps\nDone (24 h)\nFacts\n", "hookEventName": "SessionStart"}}
+## remote brain SessionStart resume cmd 3 rc=0
+
+## remote brain SessionStart resume cmd 4 rc=0
+
+## remote brain SessionStart resume cmd 5 rc=0
+
+## remote brain SessionStart resume cmd 6 rc=0
+
+## remote brain SessionStart resume cmd 7 rc=0
+
+## remote brain SessionStart resume cmd 8 rc=0
+
+## remote brain SessionStart resume cmd 9 rc=0
+
+## remote brain SessionStart resume cmd 10 rc=0
+
+## remote brain SessionStart resume cmd 11 rc=0
+
+## remote brain SessionStart resume cmd 12 rc=0
+
+## remote brain SessionStart resume cmd 13 rc=0
+
+## remote brain SessionStart resume cmd 14 rc=0
+
+## remote brain SessionStart resume cmd 15 rc=0
+
+## remote sdlc SessionStart clear cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## remote sdlc SessionStart clear cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## remote sdlc SessionStart clear cmd 3 rc=0
+
+## remote sdlc SessionStart clear cmd 4 rc=0
+
+## remote brain SessionStart clear cmd 1 rc=0
+{"hookSpecificOutput": {"additionalContext": "# vibemaestro-brain — re-injected at SessionStart:clear; change it only with `brain op` / `brain owner` (skill brain)\nPrecedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner).\n## Brain · left brain v2 · 171/9,500 chars   (the owner's: change only with `brain owner`, through the dialog)\nGoals (owner)\nPinned (owner)\nWindows\nMatrix: `brain matrix`\n\n", "hookEventName": "SessionStart"}}
+## remote brain SessionStart clear cmd 2 rc=0
+{"hookSpecificOutput": {"additionalContext": "## Brain · right brain v2 · 204/9,500 chars   (change only with `brain op`; Done is derived)\nFocus\nRequests\nNow\n- N1 ship the release notes · since <MM-DD>\nSessions\nOwner queue\nNext\nTraps\nDone (24 h)\nFacts\n", "hookEventName": "SessionStart"}}
+## remote brain SessionStart clear cmd 3 rc=0
+
+## remote brain SessionStart clear cmd 4 rc=0
+
+## remote brain SessionStart clear cmd 5 rc=0
+
+## remote brain SessionStart clear cmd 6 rc=0
+
+## remote brain SessionStart clear cmd 7 rc=0
+
+## remote brain SessionStart clear cmd 8 rc=0
+
+## remote brain SessionStart clear cmd 9 rc=0
+
+## remote brain SessionStart clear cmd 10 rc=0
+
+## remote brain SessionStart clear cmd 11 rc=0
+
+## remote brain SessionStart clear cmd 12 rc=0
+
+## remote brain SessionStart clear cmd 13 rc=0
+
+## remote brain SessionStart clear cmd 14 rc=0
+
+## remote brain SessionStart clear cmd 15 rc=0
+
+## remote brain SessionEnd cmd 1 rc=0
+
+## local sdlc SessionStart startup cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## local sdlc SessionStart startup cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## local sdlc SessionStart startup cmd 3 rc=0
+
+## local sdlc SessionStart startup cmd 4 rc=0
+
+## local brain SessionStart startup cmd 1 rc=0
+{"hookSpecificOutput": {"additionalContext": "# vibemaestro-brain — re-injected at SessionStart:startup; change it only with `brain op` / `brain owner` (skill brain)\nPrecedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner).\n## Brain · left brain v2 · 171/9,500 chars   (the owner's: change only with `brain owner`, through the dialog)\nGoals (owner)\nPinned (owner)\nWindows\nMatrix: `brain matrix`\n\n", "hookEventName": "SessionStart"}}
+## local brain SessionStart startup cmd 2 rc=0
+{"hookSpecificOutput": {"additionalContext": "## Brain · right brain v2 · 204/9,500 chars   (change only with `brain op`; Done is derived)\nFocus\nRequests\nNow\n- N1 ship the release notes · since <MM-DD>\nSessions\nOwner queue\nNext\nTraps\nDone (24 h)\nFacts\n", "hookEventName": "SessionStart"}}
+## local brain SessionStart startup cmd 3 rc=0
+
+## local brain SessionStart startup cmd 4 rc=0
+
+## local brain SessionStart startup cmd 5 rc=0
+
+## local brain SessionStart startup cmd 6 rc=0
+
+## local brain SessionStart startup cmd 7 rc=0
+
+## local brain SessionStart startup cmd 8 rc=0
+
+## local brain SessionStart startup cmd 9 rc=0
+
+## local brain SessionStart startup cmd 10 rc=0
+
+## local brain SessionStart startup cmd 11 rc=0
+
+## local brain SessionStart startup cmd 12 rc=0
+
+## local brain SessionStart startup cmd 13 rc=0
+
+## local brain SessionStart startup cmd 14 rc=0
+
+## local brain SessionStart startup cmd 15 rc=0
+
+## local brain UserPromptSubmit cmd 1 rc=0
+
+## local sdlc SubagentStart cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": "The vibemaestro-sdlc process, short form for a subagent (the session that started you follows it; you got none of its start-up text).\n\n- **Your brief is your contract.** Outside it, stop and say so in your reply; do not decide for the person. When another installed\n  plugin's skill says otherwise (run the whole suite, revert the fix to see it fail, ask a human partner, decide without asking),\n  the brief and sdlc win.\n- **Evidence, not claims.** Run the command that proves your change on its final version; report the command, its exit code and\n  its real output. Run what your change reaches (the repo's suite planner when it has one), not the whole suite.\n- **Check the instrument.** An all-yes or all-no result: suspect the command first. A number needs a sure-positive control.\n- **Root cause before a fix.** Reproduce, read the failing path, name the cause. For each defect you fix, list the other places in\n  the change with the same class and fix or test them in the same commit. The second fix of the same class stops the patching:\n  fix the shared code, or question the design and say so.\n- **Rules reach you as hook reminders** when you edit a file or run a command: read the named rule file before you go on.\n- No secret, token, public IP, account ID or personal machine path in code, commits or PR text.\n- **kb content in the repo's language:** a new kb file (story, spec, plan, decision) is written in the `language` key of\n  `.vibemaestro/sdlc.json` (`vi` when unset); an older file keeps its language; the person's own words are quoted as given;\n  everything else is in English.\n\nTests (rule `test-quality`):\n1. Each test names the break it catches.\n2. Expected values are literal, never computed by the code under test.\n3. At least one refusal or negative case per rule; every risk the spec lists (an older spec: every row of `## Inputs and failure cases`) has a test, or the PR says why only a review can catch it.\n4. No test that only asserts that a source file contains a line, or the wording of the spec: test the behaviour of the AC and the risks.\n5. No assertion that only checks a mock.\n6. A new test is red on main before the change and green after it.\n7. Never revert or mutate the fix (or copy and edit the code under test) to see red: that is a planted break. A negative case\n   builds its own bad input."}}
+## local sdlc SessionStart not-json cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## local sdlc SessionStart not-json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## local sdlc SessionStart not-json cmd 3 rc=0
+
+## local sdlc SessionStart not-json cmd 4 rc=0
+
+## local brain SessionStart not-json cmd 1 rc=0
+
+## local brain SessionStart not-json cmd 2 rc=0
+
+## local brain SessionStart not-json cmd 3 rc=0
+
+## local brain SessionStart not-json cmd 4 rc=0
+
+## local brain SessionStart not-json cmd 5 rc=0
+
+## local brain SessionStart not-json cmd 6 rc=0
+
+## local brain SessionStart not-json cmd 7 rc=0
+
+## local brain SessionStart not-json cmd 8 rc=0
+
+## local brain SessionStart not-json cmd 9 rc=0
+
+## local brain SessionStart not-json cmd 10 rc=0
+
+## local brain SessionStart not-json cmd 11 rc=0
+
+## local brain SessionStart not-json cmd 12 rc=0
+
+## local brain SessionStart not-json cmd 13 rc=0
+
+## local brain SessionStart not-json cmd 14 rc=0
+
+## local brain SessionStart not-json cmd 15 rc=0
+
+## local sdlc Edit <T>/dev-local/src/main.ts cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "Before editing `src/main.ts`, rules you must read (matched by `applyTo`):\n- <T>/sdlc/rules/r-all.instructions.md\nRead the files above before you write. This is the plugin's instruction, not a suggestion.\n\nThis area already has a settled decision (with the alternatives that were dropped):\n- <T>/dev-local/kb/decisions/d-app.md\nRead it so you do not break a choice that had a reason without knowing. You may change it, but bring a new measurement — do not reopen it with an argument that was already rejected there."}}
+## local sdlc Edit <T>/dev-local/src/main.ts cmd 2 rc=0
+
+## local brain Edit <T>/dev-local/src/main.ts cmd 1 rc=0
+
+## local sdlc Write <T>/dev-local/src/main.ts cmd 1 rc=0
+
+## local sdlc Write <T>/dev-local/src/main.ts cmd 2 rc=0
+
+## local brain Write <T>/dev-local/src/main.ts cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/dev-local/src/main.ts cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/dev-local/src/main.ts cmd 2 rc=0
+
+## local brain NotebookEdit <T>/dev-local/src/main.ts cmd 1 rc=0
+
+## local sdlc Edit <T>/dev-local/clusters/x.yaml cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "Before editing `clusters/x.yaml`, rules you must read (matched by `applyTo`):\n- <T>/sdlc/rules/r-clusters.instructions.md\nRead the files above before you write. This is the plugin's instruction, not a suggestion."}}
+## local sdlc Edit <T>/dev-local/clusters/x.yaml cmd 2 rc=0
+
+## local brain Edit <T>/dev-local/clusters/x.yaml cmd 1 rc=0
+
+## local sdlc Write <T>/dev-local/clusters/x.yaml cmd 1 rc=0
+
+## local sdlc Write <T>/dev-local/clusters/x.yaml cmd 2 rc=0
+
+## local brain Write <T>/dev-local/clusters/x.yaml cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/dev-local/clusters/x.yaml cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/dev-local/clusters/x.yaml cmd 2 rc=0
+
+## local brain NotebookEdit <T>/dev-local/clusters/x.yaml cmd 1 rc=0
+
+## local sdlc Edit <T>/dev-local/docs/y.md cmd 1 rc=0
+
+## local sdlc Edit <T>/dev-local/docs/y.md cmd 2 rc=0
+
+## local brain Edit <T>/dev-local/docs/y.md cmd 1 rc=0
+
+## local sdlc Write <T>/dev-local/docs/y.md cmd 1 rc=0
+
+## local sdlc Write <T>/dev-local/docs/y.md cmd 2 rc=0
+
+## local brain Write <T>/dev-local/docs/y.md cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/dev-local/docs/y.md cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/dev-local/docs/y.md cmd 2 rc=0
+
+## local brain NotebookEdit <T>/dev-local/docs/y.md cmd 1 rc=0
+
+## local sdlc Edit <T>/dev-local/.claude/settings.json cmd 1 rc=0
+
+## local sdlc Edit <T>/dev-local/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this Edit call could not be checked: the file does not exist and the edit names text in it in <T>/dev-local/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/dev-local/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/dev-local/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## local brain Edit <T>/dev-local/.claude/settings.json cmd 1 rc=0
+
+## local sdlc Write <T>/dev-local/.claude/settings.json cmd 1 rc=0
+
+## local sdlc Write <T>/dev-local/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this Write call leaves it not a JSON object as JavaScript reads it (Claude Code then drops the file, its deny rules with it) in <T>/dev-local/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/dev-local/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/dev-local/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## local brain Write <T>/dev-local/.claude/settings.json cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/dev-local/.claude/settings.json cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/dev-local/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this NotebookEdit call edits it with NotebookEdit in <T>/dev-local/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/dev-local/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/dev-local/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## local brain NotebookEdit <T>/dev-local/.claude/settings.json cmd 1 rc=0
+
+## local sdlc Edit <T>/home/.claude/settings.json cmd 1 rc=0
+
+## local sdlc Edit <T>/home/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this Edit call could not be checked: the file does not exist and the edit names text in it in <T>/home/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/home/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/home/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## local brain Edit <T>/home/.claude/settings.json cmd 1 rc=0
+
+## local sdlc Write <T>/home/.claude/settings.json cmd 1 rc=0
+
+## local sdlc Write <T>/home/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this Write call leaves it not a JSON object as JavaScript reads it (Claude Code then drops the file, its deny rules with it) in <T>/home/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/home/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/home/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## local brain Write <T>/home/.claude/settings.json cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/home/.claude/settings.json cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/home/.claude/settings.json cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "vibemaestro-sdlc settings guard: this NotebookEdit call edits it with NotebookEdit in <T>/home/.claude/settings.json. Widening what a session may do through a Claude Code settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's laptop as in a pod. The one way, in one response: Write {} to <T>/home/.claude/settings.json (Read it first if it exists; it widens nothing, so it passes; the kind merges only into a file holding a JSON object), then Write the rules you mean to add, as {\"allow\": [...], \"ask\": [...], \"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run `python3 <T>/sdlc/scripts/baton.py go kind:settings-merge <T>/home/.claude/settings.json <that path>`; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding an ask or deny rule) and the keys $schema, model, outputStyle, attribution, includeCoAuthoredBy, cleanupPeriodDays, language, alwaysThinkingEnabled, spinnerTipsEnabled, theme pass through Edit, which this guard checks exactly."}}
+## local brain NotebookEdit <T>/home/.claude/settings.json cmd 1 rc=0
+
+## local sdlc Edit <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+
+## local sdlc Edit <T>/home/.local/state/vibemaestro/brain/x cmd 2 rc=0
+
+## local brain Edit <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: the state directory is changed only through `brain op` and `brain owner` (skill brain); an edit would break the hash chain and stop all writes", "hookEventName": "PreToolUse"}}
+## local sdlc Write <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+
+## local sdlc Write <T>/home/.local/state/vibemaestro/brain/x cmd 2 rc=0
+
+## local brain Write <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: the state directory is changed only through `brain op` and `brain owner` (skill brain); an edit would break the hash chain and stop all writes", "hookEventName": "PreToolUse"}}
+## local sdlc NotebookEdit <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+
+## local sdlc NotebookEdit <T>/home/.local/state/vibemaestro/brain/x cmd 2 rc=0
+
+## local brain NotebookEdit <T>/home/.local/state/vibemaestro/brain/x cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: the state directory is changed only through `brain op` and `brain owner` (skill brain); an edit would break the hash chain and stop all writes", "hookEventName": "PreToolUse"}}
+## local sdlc Bash git status  cmd 1 rc=0
+
+## local sdlc Bash git status  cmd 2 rc=0
+
+## local sdlc Bash git status  cmd 3 rc=0
+
+## local brain Bash git status  cmd 1 rc=0
+
+## local brain Bash git status  cmd 2 rc=0
+
+## local brain Bash git status  cmd 3 rc=0
+
+## local brain Bash git status  cmd 4 rc=0
+
+## local sdlc Bash git status (agent) cmd 1 rc=0
+
+## local sdlc Bash git status (agent) cmd 2 rc=0
+
+## local sdlc Bash git status (agent) cmd 3 rc=0
+
+## local brain Bash git status (agent) cmd 1 rc=0
+
+## local brain Bash git status (agent) cmd 2 rc=0
+
+## local brain Bash git status (agent) cmd 3 rc=0
+
+## local brain Bash git status (agent) cmd 4 rc=0
+
+## local sdlc Bash git push origin main  cmd 1 rc=0
+
+## local sdlc Bash git push origin main  cmd 2 rc=0
+
+## local sdlc Bash git push origin main  cmd 3 rc=0
+
+## local brain Bash git push origin main  cmd 1 rc=0
+
+## local brain Bash git push origin main  cmd 2 rc=0
+
+## local brain Bash git push origin main  cmd 3 rc=0
+
+## local brain Bash git push origin main  cmd 4 rc=0
+
+## local sdlc Bash git push origin main (agent) cmd 1 rc=0
+
+## local sdlc Bash git push origin main (agent) cmd 2 rc=0
+
+## local sdlc Bash git push origin main (agent) cmd 3 rc=0
+
+## local brain Bash git push origin main (agent) cmd 1 rc=0
+
+## local brain Bash git push origin main (agent) cmd 2 rc=0
+
+## local brain Bash git push origin main (agent) cmd 3 rc=0
+
+## local brain Bash git push origin main (agent) cmd 4 rc=0
+
+## local sdlc Bash lenh-bay now  cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "This command has its own rule — read it before you run it:\n- <T>/sdlc/rules/r-cmd.instructions.md — PL-LUAT-LENH-BAY"}}
+## local sdlc Bash lenh-bay now  cmd 2 rc=0
+
+## local sdlc Bash lenh-bay now  cmd 3 rc=0
+
+## local brain Bash lenh-bay now  cmd 1 rc=0
+
+## local brain Bash lenh-bay now  cmd 2 rc=0
+
+## local brain Bash lenh-bay now  cmd 3 rc=0
+
+## local brain Bash lenh-bay now  cmd 4 rc=0
+
+## local sdlc Bash lenh-bay now (agent) cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "This command has its own rule — read it before you run it:\n- <T>/sdlc/rules/r-cmd.instructions.md — PL-LUAT-LENH-BAY"}}
+## local sdlc Bash lenh-bay now (agent) cmd 2 rc=0
+
+## local sdlc Bash lenh-bay now (agent) cmd 3 rc=0
+
+## local brain Bash lenh-bay now (agent) cmd 1 rc=0
+
+## local brain Bash lenh-bay now (agent) cmd 2 rc=0
+
+## local brain Bash lenh-bay now (agent) cmd 3 rc=0
+
+## local brain Bash lenh-bay now (agent) cmd 4 rc=0
+
+## local sdlc Bash nguy-hiem now  cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "This command has its own rule — read it before you run it:\n- <T>/sdlc/rules/r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM\n\nThis is a trap whose consequence cannot be undone, so it BLOCKS, not only reminds.\nIf you still want to run it, put the prefix `RULES_GATE=off` RIGHT IN the command."}}
+## local sdlc Bash nguy-hiem now  cmd 2 rc=0
+
+## local sdlc Bash nguy-hiem now  cmd 3 rc=0
+
+## local brain Bash nguy-hiem now  cmd 1 rc=0
+
+## local brain Bash nguy-hiem now  cmd 2 rc=0
+
+## local brain Bash nguy-hiem now  cmd 3 rc=0
+
+## local brain Bash nguy-hiem now  cmd 4 rc=0
+
+## local sdlc Bash nguy-hiem now (agent) cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "This command has its own rule — read it before you run it:\n- <T>/sdlc/rules/r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM\n\nThis is a trap whose consequence cannot be undone, so it BLOCKS, not only reminds.\nIf you still want to run it, put the prefix `RULES_GATE=off` RIGHT IN the command."}}
+## local sdlc Bash nguy-hiem now (agent) cmd 2 rc=0
+
+## local sdlc Bash nguy-hiem now (agent) cmd 3 rc=0
+
+## local brain Bash nguy-hiem now (agent) cmd 1 rc=0
+
+## local brain Bash nguy-hiem now (agent) cmd 2 rc=0
+
+## local brain Bash nguy-hiem now (agent) cmd 3 rc=0
+
+## local brain Bash nguy-hiem now (agent) cmd 4 rc=0
+
+## local sdlc Bash brain op add --kind now --text x  cmd 1 rc=0
+
+## local sdlc Bash brain op add --kind now --text x  cmd 2 rc=0
+
+## local sdlc Bash brain op add --kind now --text x  cmd 3 rc=0
+
+## local brain Bash brain op add --kind now --text x  cmd 1 rc=0
+
+## local brain Bash brain op add --kind now --text x  cmd 2 rc=0
+
+## local brain Bash brain op add --kind now --text x  cmd 3 rc=0
+
+## local brain Bash brain op add --kind now --text x  cmd 4 rc=0
+
+## local sdlc Bash brain op add --kind now --text x (agent) cmd 1 rc=0
+
+## local sdlc Bash brain op add --kind now --text x (agent) cmd 2 rc=0
+
+## local sdlc Bash brain op add --kind now --text x (agent) cmd 3 rc=0
+
+## local brain Bash brain op add --kind now --text x (agent) cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: hot memory is written by the main session only; report back, and the main session runs `brain op` or `brain import`", "hookEventName": "PreToolUse"}}
+## local brain Bash brain op add --kind now --text x (agent) cmd 2 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: hot memory is written by the main session only; report back, and the main session runs `brain op` or `brain import`", "hookEventName": "PreToolUse"}}
+## local brain Bash brain op add --kind now --text x (agent) cmd 3 rc=0
+
+## local brain Bash brain op add --kind now --text x (agent) cmd 4 rc=0
+
+## local sdlc Bash brain owner pin --text x  cmd 1 rc=0
+
+## local sdlc Bash brain owner pin --text x  cmd 2 rc=0
+
+## local sdlc Bash brain owner pin --text x  cmd 3 rc=0
+
+## local brain Bash brain owner pin --text x  cmd 1 rc=0
+
+## local brain Bash brain owner pin --text x  cmd 2 rc=0
+
+## local brain Bash brain owner pin --text x  cmd 3 rc=0
+
+## local brain Bash brain owner pin --text x  cmd 4 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: argument verb: invalid choice: 'pin' (choose from 'add', 'unpin', 'supersede', 'promote', 'import', 'batch', 'backup')", "hookEventName": "PreToolUse"}}
+## local sdlc Bash brain owner pin --text x (agent) cmd 1 rc=0
+
+## local sdlc Bash brain owner pin --text x (agent) cmd 2 rc=0
+
+## local sdlc Bash brain owner pin --text x (agent) cmd 3 rc=0
+
+## local brain Bash brain owner pin --text x (agent) cmd 1 rc=0
+
+## local brain Bash brain owner pin --text x (agent) cmd 2 rc=0
+
+## local brain Bash brain owner pin --text x (agent) cmd 3 rc=0
+
+## local brain Bash brain owner pin --text x (agent) cmd 4 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: owner items come from the main session only; a subagent reports the owner's words back", "hookEventName": "PreToolUse"}}
+## local sdlc Bash cd /tmp && brain owner pin --text x  cmd 1 rc=0
+
+## local sdlc Bash cd /tmp && brain owner pin --text x  cmd 2 rc=0
+
+## local sdlc Bash cd /tmp && brain owner pin --text x  cmd 3 rc=0
+
+## local brain Bash cd /tmp && brain owner pin --text x  cmd 1 rc=0
+
+## local brain Bash cd /tmp && brain owner pin --text x  cmd 2 rc=0
+
+## local brain Bash cd /tmp && brain owner pin --text x  cmd 3 rc=0
+
+## local brain Bash cd /tmp && brain owner pin --text x  cmd 4 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: write one `brain owner …` command alone in the Bash call, with literal arguments: no variable, substitution, backslash, glob, ~ or redirect, and nothing before or after it, so the dialog shows exactly what runs", "hookEventName": "PreToolUse"}}
+## local sdlc Bash cd /tmp && brain owner pin --text x (agent) cmd 1 rc=0
+
+## local sdlc Bash cd /tmp && brain owner pin --text x (agent) cmd 2 rc=0
+
+## local sdlc Bash cd /tmp && brain owner pin --text x (agent) cmd 3 rc=0
+
+## local brain Bash cd /tmp && brain owner pin --text x (agent) cmd 1 rc=0
+
+## local brain Bash cd /tmp && brain owner pin --text x (agent) cmd 2 rc=0
+
+## local brain Bash cd /tmp && brain owner pin --text x (agent) cmd 3 rc=0
+
+## local brain Bash cd /tmp && brain owner pin --text x (agent) cmd 4 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: owner items come from the main session only; a subagent reports the owner's words back", "hookEventName": "PreToolUse"}}
+## local sdlc Bash brain import f.json  cmd 1 rc=0
+
+## local sdlc Bash brain import f.json  cmd 2 rc=0
+
+## local sdlc Bash brain import f.json  cmd 3 rc=0
+
+## local brain Bash brain import f.json  cmd 1 rc=0
+
+## local brain Bash brain import f.json  cmd 2 rc=0
+
+## local brain Bash brain import f.json  cmd 3 rc=0
+
+## local brain Bash brain import f.json  cmd 4 rc=0
+
+## local sdlc Bash brain import f.json (agent) cmd 1 rc=0
+
+## local sdlc Bash brain import f.json (agent) cmd 2 rc=0
+
+## local sdlc Bash brain import f.json (agent) cmd 3 rc=0
+
+## local brain Bash brain import f.json (agent) cmd 1 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: hot memory is written by the main session only; report back, and the main session runs `brain op` or `brain import`", "hookEventName": "PreToolUse"}}
+## local brain Bash brain import f.json (agent) cmd 2 rc=0
+{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "brain: hot memory is written by the main session only; report back, and the main session runs `brain op` or `brain import`", "hookEventName": "PreToolUse"}}
+## local brain Bash brain import f.json (agent) cmd 3 rc=0
+
+## local brain Bash brain import f.json (agent) cmd 4 rc=0
+
+## local brain PreCompact cmd 1 rc=0
+
+## local brain PostCompact cmd 1 rc=0
+
+## local sdlc SessionStart compact cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## local sdlc SessionStart compact cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## local sdlc SessionStart compact cmd 3 rc=0
+
+## local sdlc SessionStart compact cmd 4 rc=0
+
+## local brain SessionStart compact cmd 1 rc=0
+{"hookSpecificOutput": {"additionalContext": "# vibemaestro-brain — re-injected at SessionStart:compact; change it only with `brain op` / `brain owner` (skill brain)\nPrecedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner).\nReview card (after compaction)\n- loss score of the last compaction logged: none (no anchor or no summary) (<MM-DD HH:MM>)\n## Brain · left brain v2 · 171/9,500 chars   (the owner's: change only with `brain owner`, through the dialog)\nGoals (owner)\nPinned (owner)\nWindows\nMatrix: `brain matrix`\n\n", "hookEventName": "SessionStart"}}
+## local brain SessionStart compact cmd 2 rc=0
+{"hookSpecificOutput": {"additionalContext": "## Brain · right brain v2 · 204/9,500 chars   (change only with `brain op`; Done is derived)\nFocus\nRequests\nNow\n- N1 ship the release notes · since <MM-DD>\nSessions\nOwner queue\nNext\nTraps\nDone (24 h)\nFacts\n", "hookEventName": "SessionStart"}}
+## local brain SessionStart compact cmd 3 rc=0
+
+## local brain SessionStart compact cmd 4 rc=0
+
+## local brain SessionStart compact cmd 5 rc=0
+
+## local brain SessionStart compact cmd 6 rc=0
+
+## local brain SessionStart compact cmd 7 rc=0
+
+## local brain SessionStart compact cmd 8 rc=0
+
+## local brain SessionStart compact cmd 9 rc=0
+
+## local brain SessionStart compact cmd 10 rc=0
+
+## local brain SessionStart compact cmd 11 rc=0
+
+## local brain SessionStart compact cmd 12 rc=0
+
+## local brain SessionStart compact cmd 13 rc=0
+
+## local brain SessionStart compact cmd 14 rc=0
+
+## local brain SessionStart compact cmd 15 rc=0
+
+## local sdlc SessionStart resume cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## local sdlc SessionStart resume cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## local sdlc SessionStart resume cmd 3 rc=0
+
+## local sdlc SessionStart resume cmd 4 rc=0
+
+## local brain SessionStart resume cmd 1 rc=0
+{"hookSpecificOutput": {"additionalContext": "# vibemaestro-brain — re-injected at SessionStart:resume; change it only with `brain op` / `brain owner` (skill brain)\nPrecedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner).\n## Brain · left brain v2 · 171/9,500 chars   (the owner's: change only with `brain owner`, through the dialog)\nGoals (owner)\nPinned (owner)\nWindows\nMatrix: `brain matrix`\n\n", "hookEventName": "SessionStart"}}
+## local brain SessionStart resume cmd 2 rc=0
+{"hookSpecificOutput": {"additionalContext": "## Brain · right brain v2 · 204/9,500 chars   (change only with `brain op`; Done is derived)\nFocus\nRequests\nNow\n- N1 ship the release notes · since <MM-DD>\nSessions\nOwner queue\nNext\nTraps\nDone (24 h)\nFacts\n", "hookEventName": "SessionStart"}}
+## local brain SessionStart resume cmd 3 rc=0
+
+## local brain SessionStart resume cmd 4 rc=0
+
+## local brain SessionStart resume cmd 5 rc=0
+
+## local brain SessionStart resume cmd 6 rc=0
+
+## local brain SessionStart resume cmd 7 rc=0
+
+## local brain SessionStart resume cmd 8 rc=0
+
+## local brain SessionStart resume cmd 9 rc=0
+
+## local brain SessionStart resume cmd 10 rc=0
+
+## local brain SessionStart resume cmd 11 rc=0
+
+## local brain SessionStart resume cmd 12 rc=0
+
+## local brain SessionStart resume cmd 13 rc=0
+
+## local brain SessionStart resume cmd 14 rc=0
+
+## local brain SessionStart resume cmd 15 rc=0
+
+## local sdlc SessionStart clear cmd 1 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The general way of working (read from the plugin at session start): <T>/sdlc/rules/workflow-core.instructions.md\n\n# Cách làm việc chung (giả)\n\nDONG-DAU-LOI-QUY-TRINH\n\n- Đoạn đệm số 1: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 2: giải thích vì sao trước khi làm, rồi mới làm.\n\n- Đoạn đệm số 3: giải thích vì sao trước khi làm, rồi mới làm.\n\nCUOI-LOI-QUY-TRINH-DA-DEN-NOI"}}
+## local sdlc SessionStart clear cmd 2 rc=0
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "The work flow in an app repo — the plugin's process WINS over the third-party process plugin here, because this is the process the user set for this plugin in an app repo (a hook reminder, not CLAUDE.md). That third-party process plugin itself says the user's instructions rank above its skills; when the two disagree, follow this process.\n- Every request for a change — even when the person only types \"redo\", \"make a plan\", \"design\", \"add a feature\", or asks for a UI change — starts with `vibemaestro-sdlc:intake`, then `vibemaestro-sdlc:brainstorm` (when the request is still vague), then `vibemaestro-sdlc:spec`, then `vibemaestro-sdlc:plan` (when the work must be split), then `vibemaestro-sdlc:ship`. Call the first skill of the chain BEFORE you read code or ask anything outside it; a clarifying question to the person is part of that skill itself.\n- In an app repo do NOT use these skills of the third-party process plugin: `brainstorming` (the plugin already has `vibemaestro-sdlc:brainstorm`), `writing-plans` (the plugin already has `vibemaestro-sdlc:plan`), `finishing-a-development-branch` (the plugin already has `vibemaestro-sdlc:ship`).\n- Write the output into `kb/intent`, `kb/specs`, `kb/plans` of this very repo, not into the default output directory of the third-party process plugin (under `docs/`).\n- Skills of the third-party process plugin that do not overlap (`test-driven-development`, `systematic-debugging`, `verification-before-completion`) are still used as normal when present.\n\nThe plugin's common rules are in <T>/sdlc/rules — a hook will remind you of the right rule when you edit a file (applyTo) or run a command (applyWhen); the catalogue below is only so you know they exist:\n- r-all.instructions.md — PL-LUAT-MOI-FILE [applyTo: **]\n- r-block.instructions.md — PL-LUAT-CHAN-NGUY-HIEM [applyWhen: by command [BLOCK]]\n- r-clusters.instructions.md — PL-LUAT-CLUSTERS [applyTo: clusters/**]\n- r-cmd.instructions.md — PL-LUAT-LENH-BAY [applyWhen: by command]\n\nThis repo has a `kb/`. `kb/current-state.md` is the map (what holds now, where to read more): read it first. Do not read `kb/` or a long spec whole; find what you need with `python3 \"<T>/sdlc/scripts/kb.py\"`: `find <words>` (one line per document, superseded/done hidden), `list --type intent --status live` (open intents), `outline <file>` (line range of each section, then Read that range with offset/limit).\nSkills of the plugin (just checked to be present): `vibemaestro-sdlc:init-kb`, `vibemaestro-sdlc:intake`, `vibemaestro-sdlc:brainstorm`, `vibemaestro-sdlc:spec`, `vibemaestro-sdlc:plan`, `vibemaestro-sdlc:ship`, `vibemaestro-sdlc:batonrun`, `vibemaestro-sdlc:bootstrap`, `vibemaestro-sdlc:install-gates`, `vibemaestro-sdlc:local-parallel`, `vibemaestro-sdlc:owner-sign`, `vibemaestro-sdlc:release`."}}
+## local sdlc SessionStart clear cmd 3 rc=0
+
+## local sdlc SessionStart clear cmd 4 rc=0
+
+## local brain SessionStart clear cmd 1 rc=0
+{"hookSpecificOutput": {"additionalContext": "# vibemaestro-brain — re-injected at SessionStart:clear; change it only with `brain op` / `brain owner` (skill brain)\nPrecedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner).\n## Brain · left brain v2 · 171/9,500 chars   (the owner's: change only with `brain owner`, through the dialog)\nGoals (owner)\nPinned (owner)\nWindows\nMatrix: `brain matrix`\n\n", "hookEventName": "SessionStart"}}
+## local brain SessionStart clear cmd 2 rc=0
+{"hookSpecificOutput": {"additionalContext": "## Brain · right brain v2 · 204/9,500 chars   (change only with `brain op`; Done is derived)\nFocus\nRequests\nNow\n- N1 ship the release notes · since <MM-DD>\nSessions\nOwner queue\nNext\nTraps\nDone (24 h)\nFacts\n", "hookEventName": "SessionStart"}}
+## local brain SessionStart clear cmd 3 rc=0
+
+## local brain SessionStart clear cmd 4 rc=0
+
+## local brain SessionStart clear cmd 5 rc=0
+
+## local brain SessionStart clear cmd 6 rc=0
+
+## local brain SessionStart clear cmd 7 rc=0
+
+## local brain SessionStart clear cmd 8 rc=0
+
+## local brain SessionStart clear cmd 9 rc=0
+
+## local brain SessionStart clear cmd 10 rc=0
+
+## local brain SessionStart clear cmd 11 rc=0
+
+## local brain SessionStart clear cmd 12 rc=0
+
+## local brain SessionStart clear cmd 13 rc=0
+
+## local brain SessionStart clear cmd 14 rc=0
+
+## local brain SessionStart clear cmd 15 rc=0
+
+## local brain SessionEnd cmd 1 rc=0

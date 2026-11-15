@@ -3,7 +3,7 @@
 
 Called by `kb.py` (which owns the `kb/` templates and the config check); not a command of its own.
 
-    kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run]
+    kb.py init [--answers F.json] [--lang vi|en] [--adopt [--detect]] [--dry-run] [--everyday]
 
   default      an app repo: `kb/` scaffold, `.vibemaestro/sdlc.json`, `<rules dir>/README.md` and `example.instructions.md`.
   --adopt      a repo that already has process files: the same, but no rule file is written and no existing file is touched;
@@ -19,6 +19,9 @@ Called by `kb.py` (which owns the `kb/` templates and the config check); not a c
                `language`) that differs from its language is rc 64 and nothing is written. Without either: a new config records
                `en`; an existing one keeps its `language` (absent: `vi`).
   --dry-run    validate, print the proposal and the report, write nothing.
+  --everyday   the kit's everyday mode (a person's notebook, no git flow): only `kb/current-state.md` and `kb/preferences.md`,
+               empty, for Claude to write in the person's language; no config, no rules, no other `kb/` folder (Claude makes one
+               when it first writes in it). Not with --adopt, --answers or --lang.
 
 The file written is `schema` plus the scaffold keys, the detected values and the answers (later layer wins key by key; `_` keys of
 the answers are kept). It is not a copy of the defaults: a later plugin version's defaults still reach the repo. An existing config is
@@ -233,7 +236,7 @@ def read_answers(path):
 
 def parse(argv):
     """(options, None) or (None, message)."""
-    o = {"adopt": False, "detect": False, "dry": False, "answers": None, "lang": None}
+    o = {"adopt": False, "detect": False, "dry": False, "answers": None, "lang": None, "everyday": False}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -243,6 +246,8 @@ def parse(argv):
             o["detect"] = True
         elif a == "--dry-run":
             o["dry"] = True
+        elif a == "--everyday":
+            o["everyday"] = True
         elif a == "--answers" and i + 1 < len(argv) and o["answers"] is None:
             if not argv[i + 1]:
                 return None, "--answers needs a file path; an empty value is not \"no answers\" (leave the flag out for that)"
@@ -256,6 +261,8 @@ def parse(argv):
         i += 1
     if o["detect"] and not o["adopt"]:
         return None, "--detect is only for --adopt (an app repo has nothing to detect)"
+    if o["everyday"] and (o["adopt"] or o["answers"] or o["lang"]):
+        return None, "--everyday writes only the person's notebook: not with --adopt, --answers or --lang"
     return o, None
 
 
@@ -278,6 +285,29 @@ def unfit(root, rels):
                 bad.append("%s leads outside the repo, so %s cannot be written" % (os.path.relpath(cur, root), rel))
                 break
     return bad
+
+
+EVERYDAY_FILES = ("kb/current-state.md", "kb/preferences.md")      # the notebook the everyday core names
+
+
+def everyday(root, o):
+    """`init --everyday`: the two files of the person's notebook, empty (Claude writes them in the person's language, which no
+    script knows); each written only if absent. rc 0, or 65 when a path cannot be used."""
+    blocked = unfit(root, list(EVERYDAY_FILES))
+    if blocked:
+        sys.stderr.write("kb: init: nothing was written; the paths cannot be used:\n  %s\n" % "\n  ".join(blocked))
+        return 65
+    out = sys.stdout.write
+    out("kb.py init (everyday%s)\n" % (", dry run" if o["dry"] else ""))
+    for rel in EVERYDAY_FILES:
+        p = os.path.join(root, *rel.split("/"))
+        if os.path.lexists(p):
+            out("kept    %s\n" % rel)
+        elif o["dry"]:
+            out("would create %s\n" % rel)
+        else:
+            out(("created %s\n" if write_new(p, "") else "kept    %s\n") % rel)
+    return 0
 
 
 def write_new(path, text):
@@ -320,6 +350,8 @@ def run(root, argv, kb_plan, config_check, config_notices):
     if err:
         sys.stderr.write("kb: init: %s\n" % err)
         return 64
+    if o["everyday"]:
+        return everyday(root, o)
     cfg, _probs, present = C.load(root)                             # kb.py has already exited 65 on an invalid config
     answers = {}
     if o["answers"]:
@@ -398,11 +430,12 @@ def run(root, argv, kb_plan, config_check, config_notices):
             out("kept    %s\n" % rel)
     for n in notes:
         out(n + "\n")
-    if not present:
+    if not present and not o["everyday"]:
         deny = dig(composed, "merge.deny_globs")
         out((DENY_NOTE % j(deny)) if deny is not None else DENY_UNSET_NOTE)
         out("\n")
-    out(RUNNER_NOTE % " ".join(str(dig(basis, "ci.runner_var") or C.DEFAULTS["ci"]["runner_var"]).split()) + "\n")
+    if not o["everyday"]:
+        out(RUNNER_NOTE % " ".join(str(dig(basis, "ci.runner_var") or C.DEFAULTS["ci"]["runner_var"]).split()) + "\n")
     if present:
         try:
             with open(C.config_path(root), encoding="utf-8") as f:

@@ -2,7 +2,7 @@
 # Purpose: merge one pull request through the guarded merge of vibemaestro-sdlc (gates/merge_guard.py), pinned to the reported head
 # Targets: the pull request named by --repo and --pr, and its base branch
 # Blast: one squash merge into the base branch, and one line per guard run in the merge log; nothing else
-# Undo: none by this script: a merge is not reversible. The way back is a revert PR, opened and reviewed like any PR; undo here only confirms that nothing merged when the run failed before the merge
+# Undo: none by this script: a merge is not reversible. The way back is a revert PR, opened and reviewed like any PR; undo here confirms that nothing merged when the run failed before the merge, or names a merge at the signed head for the owner to decide (no revert before that)
 # Pre: every condition of the guard holds at rehearse, and again inside the merge call, which GitHub pins with --match-head-commit
 # Stops: none
 #   Why none (the owner's standing rule): the coordinator merges a PR whose guard passes. A merge cannot be undone, but its dry run
@@ -117,12 +117,20 @@ undo() {
   st=$(guard_read --status)
   echo "state: $st"
   case "$st" in
+    "merged ? "*)
+      echo "the PR reads merged with no merge commit: the state is unknown; tell the owner now" >&2
+      return 1
+      ;;
+    "merged "*" head $HEAD")
+      echo "merged at the signed head $HEAD, by this run or another hand (the base is not read here): the run did not confirm it; tell the owner, who decides whether it stays (no revert before that)" >&2
+      return 1
+      ;;
     "merged "*)
       echo "a merge is not reversible: open a revert PR, have it reviewed, and tell the owner now" >&2
       return 1
       ;;
     "queued "* | "pending "*)
-      echo "the merge is queued or pending and may still happen: tell the owner now (a revert PR once it lands)" >&2
+      echo "the merge is queued or pending and may still happen: tell the owner now, who decides whether it stays once it lands" >&2
       return 1
       ;;
   esac

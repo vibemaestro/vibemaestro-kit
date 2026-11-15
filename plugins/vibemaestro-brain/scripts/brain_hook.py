@@ -25,9 +25,11 @@
     guard-owner    on an owner-shaped Bash command: ask with the one-line dialog (an import: one dialog, a line per owner item
                    of the bundle, its text's hash kept in the record) and write the "asked" record in a dialog mode; deny
                    otherwise (owner-confirmation spec)
-    prompt         UserPromptSubmit, in the writer's session: at most every 10 minutes, start `close-linked-bg` in the
-                   background when a live item names a `closes` anchor and gh is on PATH; never waits
+    prompt         UserPromptSubmit, in the writer's session, when gh is on PATH: at most every 10 minutes each, start
+                   `close-linked-bg` (a live item names a `closes` anchor) and `merge-evidence-bg` (the merge guard's log
+                   exists, or it never ran) in the background; never waits
     close-linked-bg  that run: `brain op close-linked` as the writer, its outcome or refusal one episode line
+    merge-evidence-bg  `brain op merge-evidence` the same way
     note-format    on a `brain` command (hooks.json's `if`): a session whose last start ran an older brain was reloaded
                    (/reload-plugins), since this hook runs this one: log `session-format` once, so doctor stops warning
     update-check   the update reminder: vibemaestro-sdlc's scripts/update_check.py run with brain's own root and data
@@ -150,6 +152,38 @@ def decide(decision, reason):
 def store():
     import brain_store
     return brain_store
+
+
+# The store needs fcntl and pwd, which Windows Python lacks: there the brain cannot run yet (its port is its own work). Claude is
+# told in its context, never a fixed-language line to the person, and the guards that need the store refuse instead of passing.
+NO_STORE = ("vibemaestro-brain cannot run on this machine yet: its store needs file locking that Python on Windows does not have, so "
+            "nothing is remembered across sessions here and the `brain` command does not work. Do not raise this unprompted; when it "
+            "matters (the person asks you to remember something for a later session, or asks about the brain), tell them in their "
+            "own language that the brain does not run on Windows yet.")
+NO_STORE_DENY = "brain: the brain cannot run on this machine yet (Windows), so its memory is not changed here"
+
+
+def store_loads():
+    """The store can be imported here (False on Windows: no fcntl, no pwd)."""
+    try:
+        store()
+    except ImportError:
+        return False
+    return True
+
+
+def state_root_unloaded():
+    """brain_store.state_root() without the store: XDG_STATE_HOME, else an absolute HOME, else the account's home (pwd where it
+    exists, the user's home folder on Windows)."""
+    x, h = os.environ.get("XDG_STATE_HOME", ""), os.environ.get("HOME", "")
+    if not os.path.isabs(h):
+        try:
+            import pwd
+            h = pwd.getpwuid(os.getuid()).pw_dir
+        except (ImportError, KeyError, AttributeError):
+            h = os.path.expanduser("~")
+    base = x if os.path.isabs(x) else os.path.join(h, ".local", "state")
+    return os.path.join(base, "vibemaestro", "brain")
 
 
 def has_state(d):
@@ -588,6 +622,9 @@ def ext_lines(s, d, st, ops, source, sid, project, closed=False):
 
 
 def session_start(inp):
+    if not store_loads():
+        emit("SessionStart", additionalContext=NO_STORE)
+        return
     s = store()
     project, d, rebound = resolve(inp)
     if not has_state(d):
@@ -616,7 +653,7 @@ def session_start(inp):
             sys.stderr.write(warn + "\n")
             return
         import brain_stale
-        strings, stale, did, st = brain_stale.annotate(strings, st, d, sid or None)
+        strings, stale, did, st = brain_stale.annotate(strings, st, d, sid or None, ops)
         cfg = s.config_line()
         right = not s.half_empty(st, "right")      # the right brain's strings print when it holds anything, or with a note
         more = {i + 1: cut(text, s.STRING_MAX) if half == "left" or right or i in did["noted"] else ("", 0)
@@ -629,7 +666,8 @@ def session_start(inp):
         card = (review_card(s, st, d, did, ops, ext, sid) if source == "compact" else
                 s.card_text(ext, s.EXT_TITLE) if ext else "")       # no card: the extensions' lines take its room
         block, gone = cut(head_line + s.PRECEDENCE + "\n" + (cfg + "\n" if cfg else "") + card
-                          + strings[0][1] + "\n" + shelf_index(s, project), s.STRING_MAX)
+                          + (did["sweep"] + "\n" if did.get("sweep") else "") + strings[0][1] + "\n" + shelf_index(s, project),
+                          s.STRING_MAX)
     except BaseException:
         hand["error"] = "failed"                    # the other commands render their own parts
         raise
@@ -891,9 +929,9 @@ def guard_edit(inp):
     p = ti.get("file_path") or ti.get("notebook_path")
     if not isinstance(p, str) or not p:
         return
-    s = store()
+    sr = store().state_root() if store_loads() else state_root_unloaded()
     full = os.path.realpath(os.path.join(cwd_of(inp), os.path.expanduser(p)))
-    for root in {s.state_root(), os.path.realpath(s.state_root())}:
+    for root in {sr, os.path.realpath(sr)}:
         if full == root or full.startswith(root.rstrip(os.sep) + os.sep):
             decide("deny", "brain: the state directory is changed only through `brain op` and `brain owner` (skill brain); "
                            "an edit would break the hash chain and stop all writes")
@@ -971,14 +1009,16 @@ def mark_pending(s, sid, d):
     s._write_file(pending_marker(sid), d + "\n")
 
 
+STAMPS = {"close-linked": "close-linked.json", "merge-evidence": "merge-evidence-bg.json"}   # each job's last start
 CLOSE_EVERY = 600       # seconds between two background close-linked runs of one brain, started by the writer's prompts
 
 
 def prompt(inp):
-    """UserPromptSubmit, in the writer's session only: when the last background close-linked of this brain started at least
-    CLOSE_EVERY seconds ago and a live item names a `closes` anchor, start `close-linked-bg` as a process of its own session and
-    never wait for it (a long session closes what merged without a SessionStart). The stamp is written before the start, so a
-    run that fails or is refused is not started again before CLOSE_EVERY. Silent."""
+    """UserPromptSubmit, in the writer's session only: start each background job of this brain whose last start was at least
+    CLOSE_EVERY seconds ago, as a process of its own session, and never wait for it: `close-linked-bg` when a live item names a
+    `closes` anchor (a long session closes what merged without a SessionStart), `merge-evidence-bg` when the merge guard's log
+    exists or it never ran (the held and hit of what merged). Both need gh. A job's stamp is written before its start, so a run that fails or
+    is refused is not started again before CLOSE_EVERY. Silent."""
     sid = inp.get("session_id")
     if not isinstance(sid, str) or not sid or inp.get("agent_id"):
         return
@@ -986,14 +1026,9 @@ def prompt(inp):
     project, d, _ = resolve(inp, record=False)
     if not has_state(d):
         return
-    stamp = os.path.join(d, "close-linked.json")
-    try:
-        with open(stamp, encoding="utf-8") as f:
-            last = json.loads(f.read()).get("t")
-    except (OSError, ValueError, AttributeError):
-        last = None
     now = time.time()
-    if isinstance(last, (int, float)) and not isinstance(last, bool) and 0 <= now - last < CLOSE_EVERY:
+    jobs = [j for j in STAMPS if not recent(os.path.join(d, STAMPS[j]), now)]
+    if not jobs:
         return
     try:
         _, st = s.load(d)
@@ -1001,29 +1036,56 @@ def prompt(inp):
         return
     if st["writer"] != sid:                         # only the session that holds the claim; another one's prompt leaves no stamp
         return
-    s._write_file(stamp, json.dumps({"t": now, "session": sid}) + "\n")
     import brain_stale
     import shutil
-    if not brain_stale.linked_items(st) or shutil.which("gh") is None:
-        return
-    p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "close-linked-bg"], cwd=project,
-                         env=dict(os.environ, CLAUDE_CODE_SESSION_ID=sid), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
-    p.stdin.write(json.dumps(inp).encode("utf-8"))
-    p.stdin.close()
+    for j in jobs:
+        s._write_file(os.path.join(d, STAMPS[j]), json.dumps({"t": now, "session": sid}) + "\n")
+        if shutil.which("gh") is None:
+            continue
+        if not (brain_stale.linked_items(st) if j == "close-linked" else os.path.isfile(brain_stale.merge_log())
+                or not os.path.exists(os.path.join(d, brain_stale.MERGE_FILE))):   # a first run before any merge: from offset 0
+            continue
+        p = subprocess.Popen([sys.executable, os.path.abspath(__file__), j + "-bg"], cwd=project,
+                             env=dict(os.environ, CLAUDE_CODE_SESSION_ID=sid), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        p.stdin.write(json.dumps(inp).encode("utf-8"))
+        p.stdin.close()
+
+
+def recent(stamp, now):
+    """True when the job's stamp file holds a start less than CLOSE_EVERY seconds before `now`."""
+    try:
+        with open(stamp, encoding="utf-8") as f:
+            last = json.loads(f.read()).get("t")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return isinstance(last, (int, float)) and not isinstance(last, bool) and 0 <= now - last < CLOSE_EVERY
 
 
 def close_linked_bg(inp):
     """The background run `prompt` starts: `brain op close-linked` as the writer, its outcome or its refusal one `close-linked`
     episode line. link-close is a machine op: like close-linked by hand, it spends none of the session's retirement budget."""
+    import brain_stale
+    bg_run(inp, "close-linked", brain_stale.close_linked)
+
+
+def merge_evidence_bg(inp):
+    """The background run `prompt` starts: `brain op merge-evidence` as the writer, its outcome or its refusal one
+    `merge-evidence` episode line."""
+    import brain_stale
+    bg_run(inp, "merge-evidence", brain_stale.merge_evidence)
+
+
+def bg_run(inp, kind, fn):
     s = store()
     d = resolve(inp, record=False)[1]
-    import brain_stale
     try:
-        fields = {"result": s.printable(brain_stale.close_linked())[:500]}
+        fields = {"result": s.printable(fn())[:500]}
     except s.Refused as e:
         fields = {"refused": e.rc, "why": s.printable(e.msg)[:300]}
-    episode(d, inp, "close-linked", hook="UserPromptSubmit", **fields)
+    except Exception as e:  # noqa: BLE001 — a background run has no one to tell but the Episode Log
+        fields = {"error": s.printable("%s: %s" % (type(e).__name__, e))[:300]}
+    episode(d, inp, kind, hook="UserPromptSubmit", **fields)
 
 
 def note_format(inp):
@@ -1046,6 +1108,11 @@ def note_format(inp):
 
 def guard_owner(inp):
     cmd = command_of(inp)
+    if not store_loads():                           # no store to keep a record in: an owner call is refused, never let through
+        if "owner" in cmd and "brain" in cmd and any(
+                owner_tokens(words(t) if words(t) is not None else lead_words(t)) is not None for t, _ in segments(cmd, heredoc=True)):
+            decide("deny", NO_STORE_DENY)
+        return
     sid = inp.get("session_id") or ""
     if sid:
         clear_pending(store(), sid)
@@ -1113,6 +1180,8 @@ def guard_owner(inp):
         else:
             _, st, ops = s.load_ops(d) if has_state(d) else (None, s.empty_state(), [])
             line = dialog_line(s, ns, st, ops, d, sid)
+            sl = s.soul_line_for(ns)                # the line and the file shown: bound to the record, checked at the write
+            plan = s.soul_digest(sl) if sl else None
     except s.Refused as e:
         return deny(s.printable(e.msg), "state")
     mark_pending(s, sid, d)                         # first: a marker with no record is harmless, a record with none is not
@@ -1145,7 +1214,8 @@ def update_check(inp):
 
 HANDLERS = {"session-start": session_start, "pre-compact": pre_compact, "post-compact": post_compact,
             "session-end": session_end, "guard-bash": guard_bash, "guard-edit": guard_edit, "guard-owner": guard_owner,
-            "update-check": update_check, "note-format": note_format, "prompt": prompt, "close-linked-bg": close_linked_bg}
+            "update-check": update_check, "note-format": note_format, "prompt": prompt, "close-linked-bg": close_linked_bg,
+            "merge-evidence-bg": merge_evidence_bg}
 HANDLERS.update({e: (lambda n: lambda inp: session_part(inp, n))(n) for e, n in SLOT_EVENTS.items()})
 
 

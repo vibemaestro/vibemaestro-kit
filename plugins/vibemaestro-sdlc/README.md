@@ -10,7 +10,7 @@ Version: see `.claude-plugin/plugin.json`. Release notes: [CHANGELOG.md](CHANGEL
 
 In a session opened in an application repository the plugin does five things.
 
-1. **At session start** it hands the session the working core ([workflow-core](rules/workflow-core.instructions.md)), the catalogue of rules, a reminder of the skill chain, and a reminder of the repository's own `kb/`. In a folder that is not a git work tree the session gets the core and the catalogue, but not the reminder of the app-repo flow and not the advice to scaffold `kb/`. This takes two `SessionStart` hooks, because Claude Code caps the text of each hook at 10,000 characters.
+1. **At session start** it hands the session the working core ([workflow-core](rules/workflow-core.instructions.md)), the catalogue of rules, a reminder of the skill chain, and a reminder of the repository's own `kb/`. In everyday mode (below) the session gets the [everyday core](templates/everyday-core.md) instead, with a line naming the mode for Claude only: the person sees no line in a fixed language, and Claude says the mode in the person's own language when it matters. A developer's folder that is not a git work tree (the key or `VIBEMAESTRO_PROFILE` set to `developer`) gets the core and the catalogue, but not the reminder of the app-repo flow and not the advice to scaffold `kb/`. This takes two `SessionStart` hooks, because Claude Code caps the text of each hook at 10,000 characters.
 2. **Before a file edit** (`Edit`, `Write`, `NotebookEdit`) it reminds the session of every rule whose `applyTo` matches the file, and of every `kb/decisions/*.md` file of the repository whose `applyTo` matches.
 3. **Before a shell command** (`Bash`) it reminds the session of every rule whose `applyWhen` matches the command. A rule with `level: block` denies the command instead. None of the plugin's own rules uses `block`; a repository rule may.
 4. **In a worker session** (the environment variable `VIBEMAESTRO_ROLE` set to `worker`, as a tool that starts sessions for you may set it; a session you open yourself has none. Both `INTENT_SLUG` and `SEAT` set and not empty still mark a worker session too, with a deprecation line: that signal leaves in the next release) it adds one more reminder: record the intent word for word, write the spec, ask the person to approve, and only then edit code. This is a reminder, not a gate.
@@ -25,6 +25,8 @@ Properties of the hooks:
 - The hooks are silent when `.vibemaestro/sdlc.json` sets `"hooks": "off"`. A repository that keeps its own rule hooks in `.claude/settings.json` must set `"hooks": "off"` or remove them: the two sets add up and are not de-duplicated.
 - Rules of other installed plugins that declare a dependency on this one are served by the same hooks.
 
+**Everyday mode**, for a person doing ordinary work rather than software, is described in [Everyday mode](#everyday-mode).
+
 The process, by skill:
 
 ```
@@ -32,6 +34,29 @@ intake → brainstorm (only if the request is vague) → spec → plan (only if 
 ```
 
 Every request for a change starts with `intake`. The owner approves the story; the spec is approved before code (by the coordinator, or by a solo person together with the story). A privileged action (a merge, a push to a registry, a deletion) goes through `batonrun`.
+
+## Everyday mode
+
+**Everyday mode** is for a person doing ordinary work with Claude (a report, a small agent, a demo, research) rather than software. Its session gets a plain-language core about keeping a notebook in `kb/`, no app-repo flow, no rule catalogue, and no reminder of the plugin's own rules at an edit or a command; the settings and signature guards, a repository's own rules and decisions, and the rule packs of dependent plugins run as in developer mode. A worker or coordinated session is always developer. The mode is chosen in this order: the folder's `profile` key; a folder with a git remote is developer; the person's `VIBEMAESTRO_PROFILE` (`everyday` or `developer`, in the `env` block of their Claude Code settings), for a folder with no remote; otherwise a folder that is not a git repository, or one the kit created, is everyday, and a repository that was there before (also one where git fails) is developer.
+
+**The quiet save.** In everyday mode a `Stop` hook (asynchronous) saves the folder after each turn, locally, in a git history the kit creates there and marks; it never writes a history that was there before and never pushes. It does not save the root, the home folder or a parent of it, `Desktop`, `Documents`, `Downloads` or a `OneDrive` folder itself, a folder inside another repository or one git cannot read, a first save of more than 2,000 files, a folder with a remote, or during a merge or a detached HEAD; files with common secret names (keys, `.env` files, credentials, tokens, passwords) and bulky generated folders are never saved (a private exclude list of common names: review the history before sharing it). A save that did not keep the work, or never finished, is told to Claude at the next session start, and Claude tells the person in their own language. The skill `history` lists the saves and writes the one the person picks as a copy into `ban-cu/<time>/` inside the folder; it never overwrites the work folder. The kit's `ban-cu/` (`ban-cu-2/` and so on when the person has a `ban-cu` of their own) holds only those old copies: it carries a marker file saying so, is listed in `.ignore` so Claude Code's search skips it, and is not saved; a folder of the person's own named `ban-cu`, without the marker, is saved like any other and never written into. In developer mode the hook prints nothing and writes nothing.
+
+Known limits of the quiet save:
+
+- A `.gitignore` of your own that re-includes a secret name (for example `!.env`) wins over the save's list, and that file is saved.
+- On Linux the secret names are matched with their exact letter case: `.ENV` or `ID_RSA` is saved.
+- Only the English names Desktop, Documents and Downloads are protected; the same folders under another language's name are not.
+- A first save stopped in the instant between creating the history and marking it leaves an unmarked history, and that folder is then in developer mode.
+
+**The notebook.** Asked to start the notebook, the skill `init-kb` sets up `kb/` in place: when the folder has no history yet it has the kit save it once, then it runs `kb.py init --everyday`, which makes only `kb/current-state.md` and `kb/preferences.md` (no config, rules or other folders), for Claude to write in the person's language; `kb/preferences.md` holds only what the person said. No worktree, branch, commit of its own, push, gates, or question about merge or CI; the next quiet save keeps the notebook. A folder with no file of the person's yet gets one plain line: the notebook comes with the first file.
+
+**Moving to developer.** When the work should go to GitHub:
+
+1. Create an empty repository on GitHub.
+2. Ask Claude to review the whole history for secrets before you push: the quiet save leaves out common secret names but does not read what files contain, and every save goes up with the push.
+3. Ask Claude to move the folder to developer: it sets `"profile": "developer"` in `.vibemaestro/sdlc.json`, connects the folder to the repository and pushes. The everyday core forbids pushing otherwise; this request is the one that allows it.
+
+From the next session the folder is in developer mode (a folder with a remote is developer, unless its `.vibemaestro/sdlc.json` sets `"profile": "everyday"`, which step 3 replaces), the quiet save stops, and `kb/` carries on as the notebook of the developer flow. The kit's folder of old copies stays out of what is pushed: it is left out by the history's own local exclude list, which is never pushed.
 
 ## One task or several
 
@@ -47,7 +72,7 @@ The plugin needs no other plugin and reads no other repository.
 | Need | For | Notes |
 |---|---|---|
 | Claude Code CLI (`claude`) | everything | tested with 2.1.290 |
-| `python3` 3.8 or newer | the hooks, `kb.py`, the cores, the gates | standard library only |
+| `python3` 3.8 or newer | the hooks, `kb.py`, the cores, the gates | standard library only; the hooks run through `scripts/pyrun.sh`, which also finds `python` or `py -3` on Windows, and without Python exits 0 with one line for the session |
 | `git` | everything | the process works in worktrees inside the repository |
 | `bash` | the `.sh` adapters | tested on Linux and macOS |
 | `gh` (GitHub CLI), logged in | `intake` (tracking issue), `ship` (open PR), `install-gates` (runner check), `batonrun` | the process is written for GitHub |
@@ -109,6 +134,7 @@ Skills are called by name, `vibemaestro-sdlc:<name>`. They write into the `kb/` 
 | `bootstrap` | Sets up a machine for BatonRun in one owner-signed run: the launcher and the permission block. `coordinator-bootstrap` is its old name, which leaves in the next release. | a new machine, or the session-start permission check fails |
 | `local-parallel` | Runs several tasks at once on one machine: one subagent per task (its own worktree, `intake` to a draft PR, model `agents.worker_model`); the main session keeps the queue, relays spec approvals, post-checks each PR and merges it with `kit:merge-pr`. | the person wants several tasks done in parallel |
 | `owner-sign` | For the owner only (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): lists the baton runs a session queued for the owner's signature (`go --queue`) and opens one owner dialog per item picked, in the owner's own session. | runs wait in the queue for the owner |
+| `history` | In everyday mode: lists the quiet saves of the folder in plain words and writes the chosen one as a copy into `ban-cu/`, never over the work folder; the person takes the files they need, and a copy is removed only on their word. | the person asks what was saved or wants an earlier state of a file |
 
 Useful reads of `kb/` that do not load whole files: `kb.py find <words>`, `kb.py list [--type T] [--status S]`, `kb.py outline <file>`. All three are read-only.
 
@@ -217,6 +243,7 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 |---|---|---|
 | `schema` | `1` | Config schema number, the major version of the format. The plugin refuses a number above its own and names the update to run. |
 | `hooks` | `"auto"` | `"off"` silences every hook of the plugin. |
+| `profile` | `"auto"` | `"everyday"` or `"developer"` fixes the kit's mode in this folder; `"auto"` chooses it (see [Everyday mode](#everyday-mode)). |
 | `language` | `"vi"` | `"vi"` or `"en"`: the language of the kb content (every session writes in it) and of the story labels, spec section names, PR-body headings and flow lines. `kb.py init` records it in every new config, `"en"` unless answered, so only a config made before has the default. |
 | `update_check` | `true` | `false` turns off the update reminder of a public install in this repository, for vibemaestro-sdlc and vibemaestro-brain (see the kit README, Update). |
 | `branch.intent_prefix` | `"intent/"` | Prefix of an intent branch. |

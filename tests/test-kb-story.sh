@@ -38,6 +38,16 @@
 #                     no change; `check links` (what ship runs) runs it on the changed stories
 #   [plan-v2]         a lean plan (Row, How, Delivers, Depends on, Trust touches, Link): a Delivers cell of AC ids read against the
 #                     story's AC; an AC delivered by no row, an AC the story lacks, a cell that is not a list of AC: red
+#   [story-q-parts]   each open question of a story carries four labelled parts (vi or en, a label opening a line): why this
+#                     question, what each option means, impact, recommendation; one missing or empty is red for a story new or
+#                     whose body changed, a WARNING (also under --strict) on one on the merge base with its body unchanged; a why
+#                     with no example, a recommendation with no reason: a WARNING
+#   [story-trace]     the story's words → AC part: missing, empty, a row with no quote, a quote mapping to no AC, an AC the story
+#                     lacks, an AC in no row: red; a list or a table (its header is no row)
+#   [story-plain]     an AC not written as when … then, a short code word (D24) the story never explains: a WARNING, rc 0 under
+#                     --strict; a word explained once in (…), an AC id of the story, its focus, a code block: no warning
+#   [story-template] [story-readme]  kb.py new intent --type story writes the four labels and the words → AC part in vi and en,
+#                     naming no owner, coordinator or desk; the kb README twins describe them
 #   [replay-310]      a real drop replayed (tests/fixtures/replay-310/, a recast): a plan's Wanted 4 left the spec's Goal and nobody was
 #                     asked: AC4 missing from the Goal (red once) and 6 unquoted out-of-scope lines (WARNING each, red under
 #                     `--strict`): 7 red lines
@@ -667,7 +677,7 @@ fam_real_run() {
 
 # ── the story the owner approves (v2), the spec derived from it, the lean plan ───────────────────────────────────────────
 # mk_story <dir> — the story intent kb/intent/2026-11-12-v.md in the vi labels, AC1 to AC3 numbered across two groups. Each part
-# comes from a variable when it is set (SV_LINE, SV_CTX, SV_AC, SV_ND, SV_APP, SV_Q; empty drops the part): each case writes the
+# comes from a variable when it is set (SV_LINE, SV_CTX, SV_AC, SV_ND, SV_APP, SV_MAP, SV_Q; empty drops the part): each case writes the
 # input it needs, nothing is edited.
 mk_story() {
   mkdir -p "$1/kb/intent" "$1/kb/specs"
@@ -693,20 +703,31 @@ ${SV_CTX-**Bối cảnh.** Spec dài 20 KB, review "2–3" vòng, tốn \$85.}
 ${SV_AC-**Tiêu chí chấp nhận (AC)**
 
 *Story (anh đọc)*
-1. Khi có việc, anh nhận **một story** ngắn.
-2. Nội dung \`kb/\` mới viết tiếng Việt.
+1. Khi có việc, thì anh nhận **một story** ngắn.
+2. Khi viết mới, thì nội dung \`kb/\` là tiếng Việt.
 
 *Spec*
-3. Mỗi AC có tiêu chí trỏ về nó.}
+3. Khi có AC, thì nó có tiêu chí trỏ về nó.}
 
 ${SV_ND-**Không làm**
 - Không dịch kb cũ.}
 
 ${SV_APP-**Khẩu phần.** Khoảng 1 ngày.}
 
+${SV_MAP-**Lời người hỏi → AC**
+
+| Lời người hỏi | AC |
+|---|---|
+| “duyệt bằng một story ngắn” | AC1 |
+| “kb viết tiếng Việt, có tiêu chí” | AC2, AC3 |}
+
 ${SV_Q-}
 EOF
 }
+# M2 <row>… — the words → AC part: the label, then the table the template writes with these rows
+M2() { printf '**Lời người hỏi → AC**\n\n| Lời người hỏi | AC |\n|---|---|\n'; printf '%s\n' "$@"; }
+# Q4 <question> — one open question with its four labelled parts, an example in its why and a reason in its recommendation
+Q4() { printf '%s\n   - **Vì sao có câu hỏi này:** hai người cùng sửa, ví dụ hôm qua.\n   - **Mỗi phương án nghĩa là gì:** (a) một người viết, (b) hai.\n   - **Tác động:** (a) chậm hơn, (b) dễ lệch.\n   - **Đề xuất:** (a). Lý do: gọn.' "$1"; }
 # mk_spec2 <dir> <criteria> — the v2 spec kb/specs/2026-11-12-v.md of that story; SP_GOAL, SP_RISKS and SP_EXTRA (a section
 # after the others) from variables when set
 mk_spec2() {
@@ -777,23 +798,21 @@ fam_story_v2() {
   eq "$rc" 65 "[story-v2] AC written as bullets with no number: rc 65"
   has "$o" "- the story's AC are not numbered" "[story-v2] …named"
 
-  SV_Q=$'**Câu hỏi**\n1. Ai viết? Đề xuất: (a), lý do: nhanh.\n2. Ở đâu? Đề xuất: (a), vì gọn.\n3. Mấy vòng? Đề xuất: 1, lý do: rẻ.' mk_story "$r"
+  SV_Q="**Câu hỏi**"$'\n'"$(Q4 '1. Ai viết?')"$'\n'"$(Q4 '2. Ở đâu?')"$'\n'"$(Q4 '3. Mấy vòng?')" mk_story "$r"
   o=$(ichk "$r"); rc=$?
-  eq "$rc" 0 "[story-v2] three questions, each with a recommendation and a reason: rc 0"
+  eq "$rc" 0 "[story-v2] three questions, each with its four labelled parts: rc 0"
   hasnt "$o" 'WARNING' "[story-v2] …no warning"
   SV_Q=$'**Câu hỏi**\n1. a? Đề xuất: x, vì y.\n2. b? Đề xuất: x, vì y.\n3. c? Đề xuất: x, vì y.\n4. d? Đề xuất: x, vì y.' mk_story "$r"
   o=$(ichkr "$r"); rc=$?
   eq "$rc" 65 "[story-v2] four open questions: rc 65"
   has "$o" '- the story asks 4 questions: at most 3' "[story-v2] …named"
-  SV_Q=$'**Câu hỏi**\n1. Ai viết story?' mk_story "$r"; o=$(ichk "$r"); rc=$?
-  eq "$rc" 0 "[story-v2] a question with no recommendation and no reason only warns: rc 0"
-  has "$o" 'question 1 has no recommendation and no reason' "[story-v2] …the warning names the question"
   SV_Q=$'**Quyết định của anh**\n1. a\n2. b\n3. c\n4. d' mk_story "$r"; o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] four answered questions under the decisions: rc 0 (not counted)"
-  SV_Q=$'## Câu hỏi\n\n1. Ai viết?\n   - Đề xuất: (a)\n   - Lý do: nhanh\n2. Ở đâu?\n   - Đề xuất: (a)\n   - Lý do: gọn\n3. Mấy vòng?\n   - Đề xuất: 1\n   - Lý do: rẻ' mk_story "$r"
+  local qn=$'\n   - *Vì sao có câu hỏi này:* ví dụ x.\n   - *Mỗi phương án nghĩa là gì:* (a) x.\n   - _Tác động:_ x.\n   - *Đề xuất:* (a)\n   - Lý do: nhanh'
+  SV_Q=$'## Câu hỏi\n\n1. Ai viết?'"$qn"$'\n2. Ở đâu?'"$qn"$'\n3. Mấy vòng?'"$qn" mk_story "$r"
   o=$(ichk "$r"); rc=$?
-  eq "$rc" 0 "[story-v2] three questions under a heading, each with nested recommendation and reason bullets: rc 0 (3, not 9)"
-  hasnt "$o" 'WARNING' "[story-v2] …the nested bullets are each question's recommendation and reason"
+  eq "$rc" 0 "[story-v2] three questions under a heading, each with its parts as italic labels in bullets: rc 0 (3, not 18)"
+  hasnt "$o" 'WARNING' "[story-v2] …the nested bullets are each question's parts, Lý do the recommendation's reason"
   local nfd; nfd=$(python3 -c 'import unicodedata; print(unicodedata.normalize("NFD", "**Bối cảnh.** Spec dài."))')
   SV_CTX="$nfd" mk_story "$r"; o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] a label typed in decomposed Unicode (NFD) is the same label: rc 0"
@@ -811,9 +830,9 @@ fam_story_v2() {
   eq "$rc" 0 "[story-v2] a story over 3500 characters only warns: rc 0"
   has "$o" 'over 3500 (about one phone screen)' "[story-v2] …the warning says the limit"
 
-  SV_CTX=$'**Bối cảnh.** Sửa `kb/specs/x.md`.' SV_Q=$'**Câu hỏi**\n1. Ai viết?' mk_story "$r"
+  SV_CTX=$'**Bối cảnh.** Sửa `kb/specs/x.md`.' mk_story "$r"
   o=$(ichk "$r" --strict); rc=$?
-  eq "$rc" 0 "[story-v2] --strict (what open-pr runs) keeps a path and a bare question as warnings: rc 0"
+  eq "$rc" 0 "[story-v2] --strict (what open-pr runs) keeps a path as a warning: rc 0"
   has "$o" 'kb/specs/x.md looks like a file name' "[story-v2] …the path still warns"
 
   SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. **AC1** một\n2. **AC2** hai\n\n*Spec*\n1. **AC3** ba' mk_story "$r"; o=$(ichk "$r"); rc=$?
@@ -822,7 +841,7 @@ fam_story_v2() {
   SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. **AC1** một\n2. **AC1** hai' mk_story "$r"; o=$(ichkr "$r"); rc=$?
   eq "$rc" 65 "[story-v2] **AC1** written on two items: rc 65"
   has "$o" '- AC1 appears twice' "[story-v2] …named"
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n- **AC1:** một\n- **AC2:** hai' mk_story "$r"; o=$(ichk "$r"); rc=$?
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n- **AC1:** một\n- **AC2:** hai' SV_MAP="$(M2 '| “một và hai” | AC1, AC2 |')" mk_story "$r"; o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] AC as bullets that carry **AC<n>:** ids: rc 0"
   SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. một\n**Không làm** gì thêm thì AC sau vẫn là AC.\n2. hai\n3. ba' mk_story "$r"; o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] a sentence that opens with a bold label word inside the AC is text: rc 0"
@@ -842,15 +861,15 @@ fam_story_v2() {
   o=$(ichkr "$r"); rc=$?
   eq "$rc" 65 "[story-v2] an en heading story with no appetite: rc 65"
   has "$o" '- the story has no Appetite part' "[story-v2] …named as the story's missing part, not as the first card's"
-  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\nAs the owner, I want a short story, so that I approve fast.\n\n## Context\n\nc\n\n## Acceptance criteria\n\n1. One short story.\n\n## Not doing\n\n- Old kb.\n\n## Appetite\n\nOne day.\n' > "$r/kb/intent/2026-11-12-v.md"
+  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\nAs the owner, I want a short story, so that I approve fast.\n\n## Context\n\nc\n\n## Acceptance criteria\n\n1. One short story.\n\n## Not doing\n\n- Old kb.\n\n## Appetite\n\nOne day.\n\n## Words of the person who asked → AC\n\n| Their words | AC |\n|---|---|\n| \"a short story\" | AC1 |\n' > "$r/kb/intent/2026-11-12-v.md"
   o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] an en heading story whose out-of-scope heading is ## Not doing: the story the owner approves, rc 0"
   has "$o" 'passes its story: 1 AC (AC1).' "[story-v2] …not read as the first card"
-  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\nAs the owner, I want a short story, so that I approve fast.\n\n## Context\n\nc\n\n## Acceptance criteria\n\n1. One short story.\n\n## Out of scope\n\n- Old kb.\n\n## Appetite\n\nOne day.\n\n## Measure\n\nThe owner approves in minutes.\n' > "$r/kb/intent/2026-11-12-v.md"
+  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\nAs the owner, I want a short story, so that I approve fast.\n\n## Context\n\nc\n\n## Acceptance criteria\n\n1. One short story.\n\n## Out of scope\n\n- Old kb.\n\n## Appetite\n\nOne day.\n\n## Measure\n\nThe owner approves in minutes.\n\n## Words of the person who asked → AC\n\n| Their words | AC |\n|---|---|\n| \"a short story\" | AC1 |\n' > "$r/kb/intent/2026-11-12-v.md"
   o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] the story the owner approves with a ## Measure section added: still that story, rc 0"
   has "$o" 'passes its story: 1 AC (AC1).' "[story-v2] …its appetite outside Measure decides"
-  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\n**As** the owner, **I want** x, **so that** y.\n\n```\n## Measure\n```\n\n**Context.** c\n\n**Acceptance criteria**\n1. one\n\n**Out of scope.** none\n\n**Appetite.** a day\n' > "$r/kb/intent/2026-11-12-v.md"
+  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\n**As** the owner, **I want** x, **so that** y.\n\n```\n## Measure\n```\n\n**Context.** c\n\n**Acceptance criteria**\n1. one\n\n**Out of scope.** none\n\n**Appetite.** a day\n\n**Words of the person who asked → AC**\n\n| Their words | AC |\n|---|---|\n| \"a short story\" | AC1 |\n' > "$r/kb/intent/2026-11-12-v.md"
   o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] a ## Measure line inside a code block is not a section: the story, rc 0"
   printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\n## Story\n\nAs a maintainer, I want x, so that y.\n\n**Appetite:** a day.\n\n## Acceptance criteria\n\n1. **AC1: one.** Given, when, then. ("lời một")\n\n## Not doing\n\n- nothing ("không làm gì")\n\n## Measure\n\nm\n\n```\n## Appetite\n```\n' > "$r/kb/intent/2026-11-12-v.md"
@@ -858,11 +877,11 @@ fam_story_v2() {
   eq "$rc" 0 "[story-v2] a first card with an appetite run-in in its Story and a fenced ## Appetite in its Measure: the first card, rc 0"
   has "$o" 'passes its card' "[story-v2] …judged as the first card"
 
-  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n## Story\n\n**Là** chủ của đội, **tôi muốn** duyệt nhanh, **để** đỡ tốn.\n\n## Bối cảnh\n\nSpec dài.\n\n## Tiêu chí chấp nhận\n\n### Story (anh đọc)\n1. Anh nhận story ngắn.\n\n### Spec\n2. Mỗi AC có tiêu chí.\n\n## Không làm\n\n- Không dịch kb cũ.\n\n## Khẩu phần\n\nMột ngày.\n' > "$r/kb/intent/2026-11-12-v.md"
+  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n## Story\n\n**Là** chủ của đội, **tôi muốn** duyệt nhanh, **để** đỡ tốn.\n\n## Bối cảnh\n\nSpec dài.\n\n## Tiêu chí chấp nhận\n\n### Story (anh đọc)\n1. Anh nhận story ngắn.\n\n### Spec\n2. Khi có AC, thì nó có tiêu chí.\n\n## Không làm\n\n- Không dịch kb cũ.\n\n## Khẩu phần\n\nMột ngày.\n\n## Lời người hỏi → AC\n\n| Lời | AC |\n|---|---|\n| \"story ngắn\" | AC1, AC2 |\n' > "$r/kb/intent/2026-11-12-v.md"
   o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] parts as headings beside a ## Story heading, an AC group as a ### Story heading: rc 0"
   has "$o" '2 AC (AC1, AC2)' "[story-v2] …its AC read under the headings"
-  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# fixture\n\nAs the owner, I want a short story, so that I approve fast.\n\n## Context\n\nThe spec was 20 KB.\n\n## Acceptance criteria\n\n1. The owner gets one short story.\n\n## Out of scope\n\n- Old kb.\n\n## Appetite\n\nOne day.\n' > "$r/kb/intent/2026-11-12-v.md"
+  printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# fixture\n\nAs the owner, I want a short story, so that I approve fast.\n\n## Context\n\nThe spec was 20 KB.\n\n## Acceptance criteria\n\n1. The owner gets one short story.\n\n## Out of scope\n\n- Old kb.\n\n## Appetite\n\nOne day.\n\n## Words of the person who asked → AC\n\n| Their words | AC |\n|---|---|\n| \"a short story\" | AC1 |\n' > "$r/kb/intent/2026-11-12-v.md"
   o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] an en story written with ## headings, ## Acceptance criteria among them: the v2 story, rc 0"
   has "$o" 'passes its story: 1 AC (AC1).' "[story-v2] …not read as the first card"
@@ -885,21 +904,31 @@ description: "fixture"
 **Context.** The spec was 20 KB.
 
 **Acceptance criteria**
-1. The owner gets one short story.
-2. Each AC has a criterion.
+1. When there is work, then the owner gets one short story.
+2. When the check reads it, then each AC has a criterion.
 
 **Out of scope**
 - Old kb.
 
 **Appetite.** One day.
 
+**Words of the person who asked → AC**
+| Their words | AC |
+|---|---|
+| "one short story" | AC1 |
+| "each AC traced" | AC2 |
+
 **Questions**
-1. Who writes it? Recommend (a), because it is faster.
+1. Who writes it?
+   - **Why this question:** two people edit it, for example yesterday.
+   - **What each option means:** (a) one writer, (b) two.
+   - **Impact:** (a) is slower, (b) drifts.
+   - **Recommendation:** (a), because it is faster.
 EOF
   o=$(ichk "$r"); rc=$?
-  eq "$rc" 0 "[story-v2] the en labels: rc 0"
+  eq "$rc" 0 "[story-v2] the en labels, the words → AC part as a table: rc 0"
   has "$o" 'passes its story: 2 AC (AC1, AC2).' "[story-v2] …its AC read"
-  hasnt "$o" 'WARNING' "[story-v2] …the question has a recommendation and a reason"
+  hasnt "$o" 'WARNING' "[story-v2] …the question has its four parts, an example and a reason"
 }
 
 fam_spec_v2() {
@@ -1090,63 +1119,222 @@ fam_k2() {
   git_ -C "$w" add -A; git_ -C "$w" commit -q -m base; git_ -C "$w" push -q origin main
   o=$(ichk "$w"); rc=$?
   eq "$rc" 0 "[k2-ac-guard] control: the story on the base, unchanged: rc 0"
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n\n*Story (anh đọc)*\n1. Khi có việc, anh nhận **một story**   ngắn.\n2. Nội dung `kb/` mới viết tiếng Việt.\n\n*Spec*\n3. Mỗi AC có tiêu chí trỏ về nó.' mk_story "$w"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n\n*Story (anh đọc)*\n1. Khi có việc, thì anh nhận **một story**   ngắn.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.\n\n*Spec*\n3. Khi có AC, thì nó có tiêu chí trỏ về nó.' mk_story "$w"
   o=$(ichk "$w"); rc=$?
   eq "$rc" 0 "[k2-ac-guard] blanks moved inside an AC: not a change, rc 0"
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận một story dài.\n2. Nội dung `kb/` mới viết tiếng Việt.\n3. Mỗi AC có tiêu chí trỏ về nó.' mk_story "$w"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận một story dài.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.\n3. Khi có AC, thì nó có tiêu chí trỏ về nó.' mk_story "$w"
   o=$(ichkr "$w"); rc=$?
   eq "$rc" 65 "[k2-ac-guard] AC1 reworded, the group titles dropped, no new decision: rc 65"
   hasnt "$o" 'AC2' "[k2-ac-guard] …a group title is not part of the AC above it: AC2 is unchanged"
   has "$o" '- AC1 changed since the merge base and no new decision of the story holds the owner'"'"'s quote' "[k2-ac-guard] …it names AC1"
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận **một story** ngắn.\n2. Nội dung `kb/` mới viết tiếng Việt.' mk_story "$w"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận **một story** ngắn.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.' mk_story "$w"
   o=$(ichkr "$w"); rc=$?
   eq "$rc" 65 "[k2-ac-guard] AC3 dropped: rc 65"
   has "$o" '- AC3 changed since the merge base' "[k2-ac-guard] …it names AC3"
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận **một story** ngắn.\n2. Nội dung `kb/` mới viết tiếng Việt.\n3. Mỗi AC có tiêu chí trỏ về nó.\n4. Một AC mới.' mk_story "$w"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận **một story** ngắn.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.\n3. Khi có AC, thì nó có tiêu chí trỏ về nó.\n4. Một AC mới.' mk_story "$w"
   o=$(ichkr "$w"); rc=$?
   eq "$rc" 65 "[k2-ac-guard] AC4 added: rc 65"
-  SV_Q=$'**Quyết định của anh**\n1. AC4 thêm vào.' SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận **một story** ngắn.\n2. Nội dung `kb/` mới viết tiếng Việt.\n3. Mỗi AC có tiêu chí trỏ về nó.\n4. Một AC mới.' mk_story "$w"
+  SV_Q=$'**Quyết định của anh**\n1. AC4 thêm vào.' SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận **một story** ngắn.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.\n3. Khi có AC, thì nó có tiêu chí trỏ về nó.\n4. Một AC mới.' mk_story "$w"
   o=$(ichkr "$w"); rc=$?
   eq "$rc" 65 "[k2-ac-guard] a new decision with no quote: still rc 65"
-  SV_Q=$'**Quyết định của anh**\n1. AC4 thêm vào: "thêm AC4 đi".' SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận **một story** ngắn.\n2. Nội dung `kb/` mới viết tiếng Việt.\n3. Mỗi AC có tiêu chí trỏ về nó.\n4. Một AC mới.' mk_story "$w"
+  SV_MAP="$(M2 '| “story ngắn” | AC1 |' '| “thêm AC4 đi” | AC2–AC4 |')" SV_Q=$'**Quyết định của anh**\n1. AC4 thêm vào: "thêm AC4 đi".' SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận **một story** ngắn.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.\n3. Khi có AC, thì nó có tiêu chí trỏ về nó.\n4. Một AC mới.' mk_story "$w"
   o=$(ichk "$w"); rc=$?
   eq "$rc" 0 "[k2-ac-guard] the same change with a new decision quoting the owner: rc 0"
   o=$(ichk "$w" --strict); rc=$?
   eq "$rc" 0 "[k2-ac-guard] …and under --strict: rc 0"
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n\n*Story (anh đọc)*\n1) Khi có việc, anh nhận một story ngắn.\n2) Nội dung kb/ mới viết tiếng Việt.\n\n#### Spec\n3) Mỗi AC có tiêu chí trỏ về nó.' mk_story "$w"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n\n*Story (anh đọc)*\n1) Khi có việc, thì anh nhận một story ngắn.\n2) Khi viết mới, thì nội dung kb/ là tiếng Việt.\n\n#### Spec\n3) Khi có AC, thì nó có tiêu chí trỏ về nó.' mk_story "$w"
   o=$(ichk "$w"); rc=$?
   eq "$rc" 0 "[k2-ac-guard] bold and code marks dropped, 1) markers, a heading for a group: a reformatting, rc 0"
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n\n*Story (anh đọc)*\n1. Khi có việc, anh nhận **một story** ngắn.\n2. Nội dung `kb/` mới viết tiếng Việt.\n\n*Spec*\n3. Mỗi AC có tiêu chí trỏ về nó.\n\nAC3 chỉ áp cho story lớn.' mk_story "$w"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n\n*Story (anh đọc)*\n1. Khi có việc, thì anh nhận **một story** ngắn.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.\n\n*Spec*\n3. Khi có AC, thì nó có tiêu chí trỏ về nó.\n\nAC3 chỉ áp cho story lớn.' mk_story "$w"
   o=$(ichkr "$w"); rc=$?
   eq "$rc" 65 "[k2-ac-guard] a paragraph added to the AC part, outside the items: rc 65"
   has "$o" "the AC part's text changed since the merge base" "[k2-ac-guard] …named as the AC part"
   SV_Q=$'**Quyết định của anh**\n1. "cũ".' mk_story "$w"; git_ -C "$w" add -A; git_ -C "$w" commit -q -m base2; git_ -C "$w" push -q origin main
-  SV_Q=$'**Quyết định của anh**\n1. "cũ" và "giờ có ngoặc".' SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận một story.\n2. Nội dung `kb/` mới viết tiếng Việt.\n3. Mỗi AC có tiêu chí trỏ về nó.' mk_story "$w"
+  SV_Q=$'**Quyết định của anh**\n1. "cũ" và "giờ có ngoặc".' SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận một story.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.\n3. Khi có AC, thì nó có tiêu chí trỏ về nó.' mk_story "$w"
   o=$(ichkr "$w"); rc=$?
   eq "$rc" 65 "[k2-ac-guard] AC1 changed and only an old decision edited to carry a quote: rc 65 (a NEW decision item is needed)"
   o=$(cd "$w" && capped python3 "$KBPY" check links 2>&1); rc=$?
   eq "$rc" 65 "[k2-ac-guard] check links (what ship runs) runs the guard on the changed story: rc 65"
   has "$o" 'FAIL kb/intent/2026-11-12-v.md:1: AC1 changed since the merge base' "[k2-ac-guard] …a FAIL line naming the story"
-  SV_Q=$'**Quyết định của anh**\n1. "cũ".\n2. Đổi AC1: "được, đổi đi".' SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận một story.\n2. Nội dung `kb/` mới viết tiếng Việt.\n3. Mỗi AC có tiêu chí trỏ về nó.' mk_story "$w"
+  SV_Q=$'**Quyết định của anh**\n1. "cũ".\n2. Đổi AC1: "được, đổi đi".' SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận một story.\n2. Khi viết mới, thì nội dung `kb/` là tiếng Việt.\n3. Khi có AC, thì nó có tiêu chí trỏ về nó.' mk_story "$w"
   o=$(cd "$w" && python3 "$KBPY" check links 2>&1); rc=$?
   eq "$rc" 0 "[k2-ac-guard] …with a new decision quoting the owner, check links: rc 0"
 
   # review round 2: group titles, a wrapped `#tag`, an old decision edited to carry a quote
   w=$(mk_origin)
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận một story.\n2. Nội dung mới viết tiếng Việt.\n3. Mỗi AC có tiêu chí, như #tag.' SV_Q=$'**Quyết định của anh**\n1. Ghi lại, không trích.' mk_story "$w"; mk_spec2 "$w" "$CRIT_V2"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận một story.\n2. Khi viết mới, thì nội dung là tiếng Việt.\n3. Khi có AC, thì nó có tiêu chí, như #tag.' SV_Q=$'**Quyết định của anh**\n1. Ghi lại, không trích.' mk_story "$w"; mk_spec2 "$w" "$CRIT_V2"
   git_ -C "$w" add -A; git_ -C "$w" commit -q -m base; git_ -C "$w" push -q origin main
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n\n*Story (anh đọc)*\n1. Khi có việc, anh nhận một story.\n2. Nội dung mới viết tiếng Việt.\n\n#### Spec\n3. Mỗi AC có tiêu chí, như\n#tag.' SV_Q=$'**Quyết định của anh**\n1. Ghi lại, không trích.' mk_story "$w"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n\n*Story (anh đọc)*\n1. Khi có việc, thì anh nhận một story.\n2. Khi viết mới, thì nội dung là tiếng Việt.\n\n#### Spec\n3. Khi có AC, thì nó có tiêu chí, như\n#tag.' SV_Q=$'**Quyết định của anh**\n1. Ghi lại, không trích.' mk_story "$w"
   o=$(ichk "$w"); rc=$?
   eq "$rc" 0 "[k2-ac-guard] group titles added (an emphasis line, a heading) and AC3 rewrapped so a line opens with #tag: no AC change, rc 0"
   o=$(cd "$w" && python3 "$KBPY" check links 2>&1); rc=$?
   eq "$rc" 0 "[k2-ac-guard] …check links: rc 0"
-  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, anh nhận một story.\n2. Nội dung mới viết tiếng Việt.\n3. Mỗi AC có tiêu chí.' SV_Q=$'**Quyết định của anh**\n1. Ghi lại, giờ có "lời trích".' mk_story "$w"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận một story.\n2. Khi viết mới, thì nội dung là tiếng Việt.\n3. Khi có AC, thì nó có tiêu chí.' SV_Q=$'**Quyết định của anh**\n1. Ghi lại, giờ có "lời trích".' mk_story "$w"
   o=$(ichkr "$w"); rc=$?
   eq "$rc" 65 "[k2-ac-guard] AC3 changed and an old decision edited to carry a quote (no new item): rc 65"
   has "$o" '- AC3 changed since the merge base' "[k2-ac-guard] …it names AC3"
 }
 
-fam_trace; fam_oos; fam_plan; fam_real_run; fam_keypr; fam_story_v2; fam_spec_v2; fam_plan_v2; fam_k2
+fam_story_check() {
+  echo "== [story-q-parts] each open question carries its four labelled parts: red when new or changed, a WARNING when not =="
+  local r="$TMP/sqp" o rc
+  git_ init -q -b main "$r"
+  SV_Q="**Câu hỏi**"$'\n'"$(Q4 '1. Ai viết?')" mk_story "$r"; o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-q-parts] control: one question with its four parts, an example and a reason: rc 0"
+  hasnt "$o" 'WARNING' "[story-q-parts] …nothing warns"
+  SV_Q=$'**Câu hỏi**\n1. Ai viết?\n   - **Vì sao có câu hỏi này:** ví dụ x.\n   - **Mỗi phương án nghĩa là gì:** (a) x.\n   - **Đề xuất:** (a). Lý do: gọn.' mk_story "$r"
+  o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-q-parts] a question with no impact part, new: rc 65"
+  has "$o" '- line 41: question 1 has no `impact` part' "[story-q-parts] …it names the question, its line and the part"
+  SV_Q=$'**Câu hỏi**\n1. Ai viết?\n   - **Vì sao có câu hỏi này:** ví dụ x.\n   - **Mỗi phương án nghĩa là gì:** (a) x.\n   - **Tác động:**\n   - **Đề xuất:** (a). Lý do: gọn.' mk_story "$r"
+  o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-q-parts] an impact label with nothing after it: rc 65"
+  has "$o" '- line 41: question 1: its `impact` part is empty' "[story-q-parts] …named empty"
+  SV_Q=$'**Câu hỏi**\n1. Ai viết? Đề xuất: (a), lý do: nhanh.' mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-q-parts] the old inline shape (a recommendation in the question's line), new: rc 65"
+  for p in 'why this question' 'what each option means' 'impact' 'recommendation'; do
+    has "$o" "question 1 has no \`$p\` part" "[story-q-parts] …the $p part named missing"
+  done
+  SV_Q=$'**Câu hỏi**\n1. Ai viết?\n   - **Vì sao có câu hỏi này:** hai người cùng sửa.\n   - **Mỗi phương án nghĩa là gì:** (a) x.\n   - **Tác động:** x.\n   - **Đề xuất:** (a).' mk_story "$r"
+  o=$(ichk "$r" --strict); rc=$?
+  eq "$rc" 0 "[story-q-parts] a why with no example and a recommendation with no reason: rc 0 even under --strict"
+  has "$o" 'question 1: its why part gives no example' "[story-q-parts] …the missing example warns"
+  has "$o" 'question 1: its recommendation gives no reason' "[story-q-parts] …the missing reason warns"
+  SV_Q=$'**Câu hỏi**\n1. Ai viết?\n   **vì sao có câu hỏi này.** ví dụ x.\n   *Mỗi phương án nghĩa là gì*: (a) x.\n   - **TÁC ĐỘNG**: x.\n   - **Đề xuất**\n     (a), vì gọn.' mk_story "$r"
+  o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-q-parts] labels in any case, bold or italic, . or : inside or after, alone on a line, bullet or not: rc 0"
+  SV_Q=$'**Câu hỏi**\n1. Ai viết?\n   - **Vì sao có câu hỏi này:** ví dụ x.\n     Phương án nào cũng chậm: vd hôm qua.\n   - **Tác động** thì chưa ai đo được.\n   - **Đề xuất:** (a). Lý do: gọn.' mk_story "$r"
+  o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-q-parts] a plain 'Phương án …:' sentence and a bold word opening a sentence are no labels: rc 65"
+  has "$o" 'question 1 has no `what each option means` part' "[story-q-parts] …the options part is still missing"
+  has "$o" 'question 1 has no `impact` part' "[story-q-parts] …and the impact part"
+  SV_Q=$'**Quyết định**\n1. Ai viết? Chốt (a): "một người".' mk_story "$r"; o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-q-parts] an answered question under the decisions needs no parts: rc 0"
+
+  local w; w=$(mk_origin)
+  SV_Q=$'**Câu hỏi**\n1. Ai viết? Đề xuất: (a), lý do: nhanh.' SV_MAP='' mk_story "$w"
+  git_ -C "$w" add -A; git_ -C "$w" commit -q -m base; git_ -C "$w" push -q origin main
+  o=$(ichk "$w" --strict); rc=$?
+  eq "$rc" 0 "[story-q-parts] the same old card on the merge base, unchanged: rc 0, also under --strict"
+  has "$o" "question 1 has no \`impact\` part (a label opening its own line) (a story on the merge base whose body is unchanged only warns)" "[story-q-parts] …a WARNING saying why"
+  has "$o" 'has no `Lời người hỏi → AC` part' "[story-q-parts] …the missing words → AC part warns too"
+  python3 -c 'import sys; p=sys.argv[1]; t=open(p, encoding="utf-8").read(); open(p, "w", encoding="utf-8").write(t.replace("\ntype: story\n", "\nstatus: done\ntype: story\n", 1))' "$w/kb/intent/2026-11-12-v.md"   # not a break: a frontmatter-only edit is the input of this case
+  o=$(ichk "$w"); rc=$?
+  eq "$rc" 0 "[story-q-parts] …only its frontmatter changed (status: done): still rc 0"
+  SV_CTX='**Bối cảnh.** Spec dài, giờ thêm một câu.' SV_Q=$'**Câu hỏi**\n1. Ai viết? Đề xuất: (a), lý do: nhanh.' SV_MAP='' mk_story "$w"
+  o=$(ichkr "$w"); rc=$?
+  eq "$rc" 65 "[story-q-parts] …its body changed: rc 65"
+  has "$o" '- line 36: question 1 has no `impact` part' "[story-q-parts] …the missing part is red"
+  has "$o" '- the story has no `Lời người hỏi → AC` part' "[story-q-parts] …and the missing words → AC part"
+
+  echo "== [story-trace] the words of the person who asked map to the AC: each quote to an AC, each AC in a row =="
+  r="$TMP/str"; git_ init -q -b main "$r"
+  SV_MAP='' mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] no words → AC part, new: rc 65"
+  has "$o" '- the story has no `Lời người hỏi → AC` part' "[story-trace] …named"
+  local en="$TMP/stren"; git_ init -q -b main "$en"; mkdir -p "$en/.vibemaestro"; printf '{"schema": 1, "language": "en"}\n' > "$en/.vibemaestro/sdlc.json"
+  SV_MAP='' mk_story "$en"; o=$(ichkr "$en"); rc=$?
+  eq "$rc" 65 "[story-trace] an en repository, no words → AC part: rc 65"
+  has "$o" '- the story has no `Words of the person who asked → AC` part' "[story-trace] …named by the en label"
+  hasnt "$o" 'Lời người hỏi' "[story-trace] …not the vi one"
+  SV_MAP="$(M2)" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] the table's header alone: rc 65"
+  has "$o" "part has no row" "[story-trace] …named as having no row"
+  SV_MAP=$'**Lời người hỏi → AC**\n- “story ngắn” → AC1, AC2, AC3' mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] the words as bullets, not the table: rc 65"
+  eq "$(printf '%s\n' "$o" | grep -c '^- ')" 1 "[story-trace] …one problem"
+  has "$o" '- the story'"'"'s `Lời người hỏi → AC` part must be the table the template writes' "[story-trace] …the table the template writes"
+  SV_MAP="$(M2 '| “story ngắn” | AC1, AC2, AC3 |' '  - “có tin”')" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] a table with a nested bullet under it: rc 65, the same one line"
+  has "$o" 'part must be the table the template writes' "[story-trace] …named"
+  SV_MAP="$(M2 '| “story ngắn” | AC1, AC2, AC3 | ghi chú |')" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] a row of three cells: rc 65"
+  has "$o" 'part must be the table the template writes' "[story-trace] …named"
+  SV_MAP="$(M2 '| “story ngắn” | AC1, AC2, AC3 |' '| “và nhanh” | |')" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] a quote that maps to no AC: rc 65"
+  has "$o" '- line 38: the quote “và nhanh” maps to no AC' "[story-trace] …the quote and its line named"
+  SV_MAP="$(M2 '| “story ngắn” | AC1, AC2, AC3, AC9 |')" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] a row naming AC9, which the story lacks: rc 65"
+  has "$o" '- line 37: AC9 is not an AC of the story' "[story-trace] …named"
+  SV_MAP="$(M2 '| “story ngắn” | AC1, AC2 |')" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] AC3 in no row: rc 65"
+  has "$o" '- AC3 is in no row of the words → AC part' "[story-trace] …named"
+  hasnt "$o" 'AC1 is in no row' "[story-trace] …AC1, in a row, is not"
+  SV_MAP="$(M2 '| story ngắn | AC1, AC2, AC3 |')" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] a row with no quote: rc 65"
+  has "$o" '- line 37: a words → AC row has no quote of the person who asked' "[story-trace] …named"
+  SV_MAP="$(M2 '| “story ngắn” | AC1 và AC2, AC3 |')" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-trace] an AC cell holding prose: rc 65"
+  has "$o" '- line 37: the AC cell `AC1 và AC2, AC3` is not AC ids' "[story-trace] …named"
+  SV_MAP="$(M2 '| “story ngắn” | AC1–AC3 |')" mk_story "$r"; o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-trace] a range AC1–AC3 names AC1, AC2 and AC3: rc 0"
+  SV_MAP="$(M2 '| “story ngắn” | AC1-AC2, AC3 |')" mk_story "$r"; o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-trace] …a range with a hyphen in a comma list, AC1-AC2, AC3: rc 0"
+  SV_MAP="$(M2 '| “làm AC5 trước” | AC1, AC2, AC3 |')" mk_story "$r"; o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-trace] an AC word inside the quote is the person's words, not a mapping: rc 0"
+  SV_MAP=$'## Lời người hỏi → AC\n\n| Lời | AC |\n|:--|--:|\n| “story ngắn” | AC1 |\n| "kb tiếng Việt" | AC2, AC3 |' mk_story "$r"; o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-trace] the part as a heading and a table, aligned separator, straight and curly quotes: rc 0"
+
+  echo "== [story-plain] an AC not written as when … then and a short code word never explained only warn =="
+  r="$TMP/spl"; git_ init -q -b main "$r"
+  SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. Khi có việc, thì anh nhận story.\n2. Anh nhận story ngắn.\n3. When it is read, then each AC is traced.' mk_story "$r"
+  o=$(ichk "$r" --strict); rc=$?
+  eq "$rc" 0 "[story-plain] an AC with no when … then: rc 0 even under --strict"
+  has "$o" 'AC2 is not written as when … then' "[story-plain] …AC2 warns"
+  hasnt "$o" 'AC1 is not written' "[story-plain] …AC1 (khi … thì) does not"
+  hasnt "$o" 'AC3 is not written' "[story-plain] …AC3 (when … then) does not"
+  SV_CTX=$'**Bối cảnh.** Theo D24 và T36 (không đoán chữ), lại T36, AC2 và P1.\n\n```\nX218\n```' mk_story "$r"
+  o=$(ichk "$r" --strict); rc=$?
+  eq "$rc" 0 "[story-plain] short code words in the context: rc 0 even under --strict"
+  has "$o" 'D24 is a short code word the story never explains' "[story-plain] …D24, never explained, warns"
+  hasnt "$o" 'T36 is a short code word' "[story-plain] …T36, explained once in (…), does not"
+  hasnt "$o" 'AC2 is a short code word' "[story-plain] …an AC id of the story does not"
+  hasnt "$o" 'P1 is a short code word' "[story-plain] …the story's focus does not"
+  hasnt "$o" 'X218' "[story-plain] …a word in a code block is not judged"
+  SV_CTX=$'**Bối cảnh.** Theo D24 "theo luật" (là gì), D25: một luật, D26 `x` (y) và D27(z).' mk_story "$r"
+  o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-plain] code words followed by a quote, a colon or a code span: rc 0, warnings only"
+  has "$o" 'D24 is a short code word' "[story-plain] …a quote between the word and its ( does not explain it"
+  has "$o" 'D25 is a short code word' "[story-plain] …a colon does not explain it"
+  has "$o" 'D26 is a short code word' "[story-plain] …a code span between does not explain it"
+  hasnt "$o" 'D27 is a short code word' "[story-plain] …a ( right after the word does"
+  SV_CTX=$'**Bối cảnh.** Họ nói "làm theo Q7 nhé", sửa `T36`.' SV_MAP="$(M2 '| “làm theo Q8 nhé” | AC1, AC2, AC3 |')" mk_story "$r"
+  o=$(ichk "$r"); rc=$?
+  eq "$rc" 0 "[story-plain] code words inside a quote and a code span: rc 0"
+  hasnt "$o" 'is a short code word' "[story-plain] …the person's quoted words and a code span are not judged"
+
+  echo "== [story-template] kb.py new intent --type story starts in shape, in plain words for the person who asked =="
+  local v="$TMP/stv" e="$TMP/ste" f
+  git_ init -q -b main "$v"; mkdir -p "$v/kb/intent"
+  git_ init -q -b main "$e"; mkdir -p "$e/.vibemaestro" "$e/kb/intent"; printf '{"schema": 1, "language": "en"}\n' > "$e/.vibemaestro/sdlc.json"
+  (cd "$v" && python3 "$KBPY" new intent t --type story --focus P1 --date 2026-11-12 >/dev/null)
+  (cd "$e" && python3 "$KBPY" new intent t --type story --focus P1 --date 2026-11-12 >/dev/null)
+  f=$(cat "$v/kb/intent/2026-11-12-t.md")
+  for p in '**Vì sao có câu hỏi này:**' '**Mỗi phương án nghĩa là gì:**' '**Tác động:**' '**Đề xuất:**' '**Lời người hỏi → AC**' '| Lời người hỏi | AC |'; do
+    has "$f" "$p" "[story-template] the vi card has $p"
+  done
+  f=$(cat "$e/kb/intent/2026-11-12-t.md")
+  for p in '**Why this question:**' '**What each option means:**' '**Impact:**' '**Recommendation:**' '**Words of the person who asked → AC**' '| Words of the person who asked | AC |'; do
+    has "$f" "$p" "[story-template] the en card has $p"
+  done
+  eq "$(cat "$v/kb/intent/2026-11-12-t.md" "$e/kb/intent/2026-11-12-t.md" | grep -ciE 'owner|coordinator|desk|chủ repo')" 0 "[story-template] …neither card names an owner, a coordinator or a desk"
+
+  echo "== [story-readme] the kb README describes the four parts and the words → AC part, vi and en twins =="
+  (cd "$v" && python3 "$KBPY" init --lang vi >/dev/null 2>&1); (cd "$e" && python3 "$KBPY" init --lang en >/dev/null 2>&1)
+  f=$(cat "$v/kb/README.md")
+  for p in 'Vì sao có câu hỏi này' 'Mỗi phương án nghĩa là gì' '**Tác động**' '**Đề xuất**' 'Lời người hỏi → AC'; do
+    has "$f" "$p" "[story-readme] the vi README names $p"
+  done
+  f=$(cat "$e/kb/README.md")
+  for p in 'Why this question' 'What each option means' '**Impact**' '**Recommendation**' 'Words of the person who asked → AC'; do
+    has "$f" "$p" "[story-readme] the en README names $p"
+  done
+  local paras='BEGIN{RS=""} /^(\*\*|#)/{n++} END{print n}'   # paragraphs opening with a heading or a bold lead
+  eq "$(awk "$paras" "$v/kb/README.md")" "$(awk "$paras" "$e/kb/README.md")" "[story-readme] …the twins have the same headings and bold leads"
+  eq "$(awk "$paras" "$e/kb/README.md")" 8 "[story-readme] …eight of them (the count is read)"
+}
+
+fam_trace; fam_oos; fam_plan; fam_real_run; fam_keypr; fam_story_v2; fam_spec_v2; fam_plan_v2; fam_k2; fam_story_check
 
 # [replay-310] a real drop, replayed: a plan's Wanted 4 (one passphrase for one plan) left the spec's Goal and nobody was asked.
 # tests/fixtures/replay-310/ holds a recast of it (the public tree names no private repository or issue): the card (Wanted 1 to 5

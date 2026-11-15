@@ -33,6 +33,7 @@ import os
 import pwd
 import re
 import secrets
+import shlex
 import stat
 import string
 import subprocess
@@ -83,6 +84,7 @@ STATUS_LETTERS = ("S", "Q")                         # status, not decisions: a s
 FIELD_MAX = {"text": TEXT_MAX, "quote": QUOTE_MAX, "where": 60, "pointer": 80, "reason": 150, "anchor": 80, "link": 80,
              "done": 200, "not-doing": 200}
 FIELD_MAX.update({"differed": 150, "measure": 80})  # a broke's what-differed, a goal's progress measure
+FIELD_MAX["blocks"] = 200                           # what a queue item blocks until the owner acts
 FIELD_MAX.update({"arg": 80})                      # an extension owner verb's positional value (shown in the dialog)
 FIELD_MAX["place"] = 1000                           # the directory the owner names for backups
 WHERE_SHOWN = FIELD_MAX["where"]                    # the quote line shows the source whole (an older brain cut it at 30)
@@ -96,8 +98,10 @@ CLOSES_LETTERS = ("N", "X", "S", "Q", "R")
 # `promote` on an `owner-promote` of a lesson or a fact, which a brain of format 5 refuses to fold (the fields `goal` and
 # `no_goal` of a session and `soul` of a promotion it folds unread). An older brain wrote those last three; this one folds
 # them as it did and writes none (a plugin that extends the brain may), and an extension's `ext` entries are fields too; 7 adds the
-# op `words` (a focus's done when and not doing, in place), which a brain of format 6 refuses to fold
-FORMAT = 7
+# op `words` (a focus's done when and not doing, in place), which a brain of format 6 refuses to fold; 8 adds the op `link`
+# (`closes` added to a live item in place), which a brain of format 7 refuses to fold. This brain also folds the op `signal`
+# (a measurement, its kind in `what`) unread and writes none, so the later format that writes it does not stop it
+FORMAT = 8
 LOCK_WAIT = 1.0                                     # seconds a SessionStart waits for the lock: to read, then to close by a link
 BUDGET_N, BUDGET_WINDOW = 5, 30 * 60                # retirements per session in any 30 minutes
 SHRINK_MIN = 0.6                                    # supersede keeps ≥ 60% of the first item of its chain
@@ -331,7 +335,9 @@ def drop_session(sid):
 CONFIG_FILE = os.path.join(".vibemaestro", "brain.json")
 CONFIG_SCHEMA = 1
 CONFIG_BYTES = 65536
-RANGES = {"caps": (1, 100), "text_max": (50, 1000), "text_caps": (50, 1000), "quote_max": (100, 2000)}
+RANGES = {"caps": (1, 100), "text_max": (50, 1000), "text_caps": (50, 1000), "quote_max": (100, 2000), "untouched": (1, 365)}
+# days a right-brain item goes untouched before every load marks it (brain_stale.untouched); the left brain is never marked
+DEFAULT_UNTOUCHED = {"N": 7, "X": 14, "S": 21, "Q": 21, "R": 30, "T": 60, "F": 60}
 # the ledger's thresholds (brain_ledger), each with its default
 LEDGER_DEFAULTS = {"promote_held": 5, "promote_sessions": 3, "promote_days": 7, "promote_clean_days": 30, "drift_broke": 2,
                    "drift_sessions": 2, "drift_checks": 3, "drift_one_in": 3, "drift_days": 30, "dormant_days": 30}
@@ -413,6 +419,8 @@ def read_config(root):
     out = {"caps": dict(DEFAULT_CAPS), "text_max": TEXT_MAX, "text_caps": dict(TEXT_CAPS), "quote_max": QUOTE_MAX,
            "found": False, "warnings": [], "errors": [], "left": [], "path": os.path.join(root, CONFIG_FILE)}
     out["ledger"] = dict(LEDGER_DEFAULTS)
+    out["untouched"] = dict(DEFAULT_UNTOUCHED)
+    out["soul_file"] = None
     try:
         fd = os.open(out["path"], os.O_RDONLY | os.O_NONBLOCK)    # a FIFO opens at once instead of waiting for a writer
     except FileNotFoundError:
@@ -446,10 +454,16 @@ def read_config(root):
         out["errors"].append("schema %d is newer than this brain reads (%d): update vibemaestro-brain" % (schema, CONFIG_SCHEMA))
         return out
     for k in sorted(c):
-        if k not in ("schema", "caps", "text_max", "text_caps", "quote_max", "ledger"):
+        if k not in ("schema", "caps", "text_max", "text_caps", "quote_max", "ledger", "untouched", "soul_file"):
             out["warnings"].append("unknown key %s (ignored)" % printable(json.dumps(k))[:40])
     read_ledger(c, out)
-    for key, letters in (("caps", DEFAULT_CAPS), ("text_caps", DEFAULT_CAPS)):
+    if "soul_file" in c:                            # the file that holds the SOUL lines, relative to this file's work tree
+        v = c["soul_file"]
+        if isinstance(v, str) and 0 < len(v) <= 1024 and "\x00" not in v:
+            out["soul_file"] = v
+        else:
+            out["errors"].append("soul_file must be a path of 1 to 1024 characters")
+    for key, letters in (("caps", DEFAULT_CAPS), ("text_caps", DEFAULT_CAPS), ("untouched", DEFAULT_UNTOUCHED)):
         if key not in c:
             continue
         if not isinstance(c[key], dict):
@@ -504,6 +518,11 @@ def cap(letter):
 
 def quote_max():
     return conf()["quote_max"]
+
+
+def untouched_days(letter):
+    """Days an item of `letter` goes untouched before it is marked; None for a letter never marked (the left brain, a focus)."""
+    return conf()["untouched"].get(letter)
 
 
 def check_config():
@@ -860,12 +879,27 @@ def apply(st, op):
             raise Refused(5, "hot.jsonl line %d: words for an item that is not a focus, or with no words" % op["seq"])
         it.update(got)
         it["touched"] = op["seq"]
+    elif kind == "link":                            # `closes` added to a live item in place: same id (log format 8)
+        it = item()
+        new = op.get("closes")
+        if (it["id"][0] not in CLOSES_LETTERS or it["status"] != "live" or not isinstance(new, list) or not new
+                or not all(isinstance(c, str) for c in new)):
+            raise Refused(5, "hot.jsonl line %d: a malformed link" % op["seq"])
+        old = it.get("closes") or []
+        it["closes"] = old + [c for c in new if c not in old]
+        # when each anchor joined: work done before it was linked never closes the item (brain_stale.done_after)
+        it["closes_at"] = dict(it.get("closes_at") or {}, **{c.lower(): op["t"] for c in new if c not in old})
+        it["anchors"] = with_closes(it.get("anchors", []), new)
+        it["touched"] = op["seq"]
     elif kind == "touch":
         item()["touched"] = op["seq"]
     elif kind == "hit":
         it = item()
         it["hits"] = it.get("hits", 0) + 1
         it["touched"] = op["seq"]
+    elif kind == "signal":                          # a measurement: folded unread, no item changes (read ahead of a writer)
+        if not isinstance(op.get("what"), str) or not 0 < len(op["what"]) <= 32:
+            raise Refused(5, "hot.jsonl line %d: a malformed signal" % op["seq"])
     else:
         raise Refused(5, "hot.jsonl line %d: unknown op %r" % (op["seq"], kind))
     if "promote" in op:
@@ -1894,6 +1928,12 @@ def quote_line(it):
     return '  "%s"%s' % (q, " · " + where if where.strip() else "")
 
 
+def blocks_line(it):
+    """A queue item's `  blocks: …` line, None for one that names nothing (an item an older brain wrote)."""
+    b = clean_line(it.get("blocks") or "") if it["id"][0] == "Q" and isinstance(it.get("blocks"), str) else ""
+    return "  blocks: %s" % cut_symbols(b, FIELD_MAX["blocks"]) if b.strip() else None
+
+
 def goal_lines(it):
     """A goal's `  done when: …` and `  not doing: …` lines (each stored ≤ 200 units)."""
     return ["  %s: %s" % (label, cut_symbols(clean_line(it[key]), FIELD_MAX["done"]))
@@ -1949,6 +1989,17 @@ def titled(fmt, version, cap, body, part=""):
     return text
 
 
+def retitled(text):
+    """A string of `render_strings` with its title's size counted again (the hook added marks to it): as `titled` counts."""
+    head, nl, rest = text.partition("\n")
+    for _ in range(3):
+        new = _SIZE.sub(lambda m: " · {:,}/{} chars".format(units(text), m.group(1)), head, count=1)
+        if new == head:
+            break
+        head, text = new, new + nl + rest
+    return text
+
+
 def queue(st, letter):
     """A section's overflow queue, head first."""
     return sorted((it for it in st["items"].values() if it["id"][0] == letter and it["status"] == "queued"),
@@ -1990,8 +2041,8 @@ def item_groups(st, letter, now):
 
     out = []
     for it in sorted((i for i in st["items"].values() if i["id"][0] == letter and i["status"] == "live"), key=order):
-        q = quote_line(it)
-        out.append([item_line(it, now, st)] + ([q] if q else []) + (goal_lines(it) if letter == "G" else []))
+        q, b = quote_line(it), blocks_line(it)
+        out.append([item_line(it, now, st)] + ([q] if q else []) + ([b] if b else []) + (goal_lines(it) if letter == "G" else []))
     return out
 
 
@@ -2155,6 +2206,8 @@ def card_lines(st, now, stale=(), loss=None, ops=None, d=None):
         out.append(cut_units(" · ".join(parts), CARD_LINE))
     if led and led["dormant"]:
         out.append(led["dormant"])
+    if led and led["soul"]:
+        out.append(led["soul"])
     count = {letter: len(live(st, letter)) for letter, _ in SECTIONS}
     over = ["%s %d/%d" % (title.split(" (")[0], count[letter], cap(letter)) for letter, title in SECTIONS
             if count[letter] >= WARN_RATIO * cap(letter)]
@@ -2524,8 +2577,23 @@ def notes_text(notes):
     return "".join("\n" + n for n in notes)
 
 
+def check_blocks(letter, blocks, required=True):
+    """A queue item names the work it blocks until the owner acts: refused (64) without it on an add, and on any other
+    kind; checked as a text of at most 200."""
+    if letter != "Q":
+        if blocks is not None:
+            raise Refused(64, "--blocks is for a queue item: the work it blocks until the owner acts")
+        return
+    if blocks is None:
+        if required:
+            raise Refused(64, "a queue item names the work it blocks until the owner acts: --blocks B (an owner/name#N in it "
+                              "is checked); what blocks nothing is a Next item or an issue, not the owner queue")
+        return
+    check_text("blocks", blocks)
+
+
 def op_add(kind, text, links, anchors, expires, closes=(), quote=None, where=None, goal=None, focus=None, due=None,
-           extopts=None, done=None, not_doing=None, jira=None):
+           extopts=None, done=None, not_doing=None, jira=None, blocks=None):
     letter = KINDS.get(kind)
     if letter is None:
         raise Refused(64, "--kind must be one of %s" % ", ".join(KINDS))
@@ -2535,6 +2603,7 @@ def op_add(kind, text, links, anchors, expires, closes=(), quote=None, where=Non
     given, left = ext_options("add", kind, extopts, {"--goal": goal, "--focus": focus, "--due": due})
     goal, focus, due = left["--goal"], left["--focus"], left["--due"]
     source = layer_args(letter, quote, where, goal, focus, due)
+    check_blocks(letter, blocks)
     check_focus_words(letter, done, not_doing)
     check_jira(jira, letter == "P", "a focus (a goal's goes through `brain owner add`)")
     check_text("text", text, cap=text_max(letter))
@@ -2557,11 +2626,11 @@ def op_add(kind, text, links, anchors, expires, closes=(), quote=None, where=Non
         if closes:
             item["closes"] = closes
         item.update({k: v for k, v in (("goal", goal), ("focus", focus), ("due", due), ("done", done),
-                                       ("not_doing", not_doing), ("jira", jira)) if v is not None})
+                                       ("not_doing", not_doing), ("jira", jira), ("blocks", blocks)) if v is not None})
         op = {"op": name, "item": item}
         if up:
             op["promote"] = up
-        own = [text, quote, where, done, not_doing] + links + anchors
+        own = [text, quote, where, done, not_doing, blocks] + links + anchors     # every text the filter must see
         texts, notes = ext_check("add", kind, given, op, d, st, ops, own)
         return (op, own + texts,
                 line + moved(up) + seen + anchor_warning(letter, anchors) + notes_text(notes)
@@ -2626,7 +2695,7 @@ def revoke_charters(focus):
 
 
 def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(), focus=None, due=None, extopts=None,
-                 done=None, not_doing=None):
+                 done=None, not_doing=None, blocks=None):
     """A supersede of an S or Q item (a session's next step, a queue item's state) is status, not a decision: it spends no
     retirement budget and may shrink (spec R4 point 1); it still keeps every anchor. A focus or a request keeps the owner's
     words byte for byte (and a focus its goal); a request may change its due day, a Next item its focus."""
@@ -2635,6 +2704,7 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
     focus, due = left["--focus"], left["--due"]
     check_focus_due(iid[:1], focus, due)
     check_focus_words(iid[:1], done, not_doing)
+    check_blocks(iid[:1], blocks, required=False)
     check_text("text", text, cap=text_max(iid[:1]))
     check_text("reason", reason)
     new_closes = closes_list(iid[:1], list(closes))
@@ -2677,7 +2747,7 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
         carry = {"goal": old.get("goal"), "focus": focus or old.get("focus"), "due": due or old.get("due"),
                  "no_goal": old.get("no_goal"),           # a session's reason for no goal, as an older brain wrote it
                  "done": done or old.get("done"), "not_doing": not_doing or old.get("not_doing"),   # a focus's words
-                 "jira": old.get("jira")}
+                 "jira": old.get("jira"), "blocks": blocks or old.get("blocks")}
         item.update({k: v for k, v in carry.items() if v is not None})
         if old.get("ext"):                          # every extension's entry goes over; its own check may replace it
             item["ext"] = dict(old["ext"])
@@ -2694,9 +2764,10 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
         if up:
             op["promote"] = up
         kept = "\ncloses carried: %s" % ", ".join(carried) if carried and not new_closes else ""
-        texts, notes = ext_check("supersede", old["kind"], given, op, d, st, ops, [text, reason] + anchors)
-        ended = charters_end(iid, d, [text, reason, done, not_doing] + anchors + texts)   # a superseded focus ends too
-        return op, [text, reason, done, not_doing] + anchors + texts, "superseded %s with %s%s%s%s%s%s%s%s" % (
+        mine = [text, reason, done, not_doing, blocks] + anchors     # every text of this op: the extension and the filter see the same
+        texts, notes = ext_check("supersede", old["kind"], given, op, d, st, ops, mine)
+        ended = charters_end(iid, d, mine + texts)  # a superseded focus ends too
+        return op, mine + texts, "superseded %s with %s%s%s%s%s%s%s%s" % (
             iid, nid, where, moved(up), kept, seen, anchor_warning(iid[0], anchors), notes_text(notes), ended), None
     return write(build, ops_too=True)
 
@@ -2790,9 +2861,42 @@ def op_words(iid, done, not_doing):
     return write(build)
 
 
-def op_evidence(rule, result, pointer, differed=None, session=None, via=None, extopts=None):
+def op_link(iid, closes):
+    """`brain op link X4 --closes owner/name#N`: `closes` anchors added to a live N, X, S, Q or R item in place (same id, no
+    supersede, no retirement budget), checked as `add` checks them; an anchor the item already names is not added again, and the
+    item keeps at most CLOSES_MAX."""
+    named = closes_list(iid[:1], list(closes))
+    if not named:
+        raise Refused(64, "link needs --closes")
+
+    def fresh(it):
+        have = [c.lower() for c in it.get("closes") or []]
+        out = [c for c in named if c.lower() not in have]
+        if not out:
+            raise Refused(1, "%s already closes with %s" % (iid, ", ".join(named)))
+        if len(have) + len(out) > CLOSES_MAX:
+            raise Refused(1, "%s already names %d closes; an item keeps at most %d" % (iid, len(have), CLOSES_MAX))
+        return out
+
+    it = peek(iid)["items"][iid]
+    if it["status"] != "live":
+        raise Refused(1, "%s is queued: link it once it is live" % iid)
+    seen = closes_seen(fresh(it))                   # before the lock: the lookup may take its 2 seconds
+
+    def build(d, st):
+        it = get_live(st, iid, CLOSES_LETTERS)
+        new = fresh(it)
+        check_list("anchor", with_closes(it.get("anchors", []), new))
+        return {"op": "link", "id": iid, "closes": new}, list(new), "linked %s: closes %s%s" % (
+            iid, ", ".join(new), seen), None
+    return write(build)
+
+
+def op_evidence(rule, result, pointer, differed=None, session=None, via=None, extopts=None, as_pr=None, machine=False):
     """`brain op held|broke RULE` and a trap's `brain op hit`: one `evidence` op. RULE is a live D, T or F item or a SOUL code;
-    `session` a session item, recorded as the root of its chain."""
+    `session` a session item, recorded as the root of its chain, or else `as_pr` (`pr:owner/name#n`, brain op merge-evidence)
+    stored as it is. A `machine` write (merge-evidence, from worker text) is refused (1) when the rule already has this result
+    from this pointer (a hit is a held), and for a SOUL code no owner step promoted, or one demoted since."""
     import brain_ledger as L
     kind, value = L.rule_arg(rule, hit=via == "hit")
     check_text("pointer", pointer, required=via != "hit")
@@ -2808,9 +2912,16 @@ def op_evidence(rule, result, pointer, differed=None, session=None, via=None, ex
         op.update({k: v for k, v in (("pointer", pointer), ("differed", differed), ("via", via)) if v})
         if session is not None:
             op["session"] = L.check_session(st, session)
+        elif as_pr:
+            op["session"] = as_pr
+        key = "[%s]" % value if kind == "soul" else value
+        if machine and kind == "soul" and value not in L.soul_live(ops):
+            raise Refused(1, "%s is not a SOUL code an owner step promoted (or it was demoted)" % key)
+        if machine and any(e["result"] == result and e["pointer"] == pointer
+                           for e in (L.read(ops).get(key) or {}).get("events", [])):
+            raise Refused(1, "%s has a %s from %s already" % (key, result, pointer))
         texts, notes = ext_check(verb, None, given, op, d, st, ops, [pointer, differed])
         led = L.read(ops + [dict(op, t=now_iso(), seq=len(ops) + 1, by=by())])   # the ledger with this entry, read once
-        key = "[%s]" % value if kind == "soul" else value
         msg = "%s %s: %s" % ("hit" if via == "hit" else result, key, L.summary(led[key]["events"]))
         return op, [pointer, differed] + texts, msg + notes_text(notes), None
     return write(build, ops_too=True)
@@ -2875,6 +2986,96 @@ def owner_add_line(item):
     return 'Grant window %s until %s, from "%s": "%s"' % (iid, until, w, item["text"])
 
 
+# --- the SOUL line of an owner step -----------------------------------------------------------------------------------------
+# `--soul-line "[S14] text"` on the owner's SOUL step (promote, an extension's archive or pin): the step carries the line and
+# the file (`soul_file`, by its real path), the dialog shows both, and once the step is written vibemaestro-sdlc's kit baton
+# kit:soul-line adds the line to the file (or removes it, for a pin: the code back as a decision). The baton finds the step in
+# this log itself and uses it once.
+
+SOUL_LINE_RE = re.compile(r"\[(%s)\] (.+)" % SOUL_CODE.pattern)
+SOUL_TEXT_MAX = 600
+SOUL_RUN_SECONDS = 120
+
+
+def soul_line_of(value, action):
+    """{"code", "action", "text", "file", "sha"} of a `--soul-line` value, None without one; refused (1) for a value that is not
+    `[S14] text` on one line (no quote, no other code, at most SOUL_TEXT_MAX characters) or with no `soul_file` set."""
+    if value is None:
+        return None
+    m = SOUL_LINE_RE.fullmatch(value)
+    text = m.group(2) if m else ""
+    if (not m or text != text.strip() or len(text) > SOUL_TEXT_MAX or '"' in text or quote_like(text)
+            or any(ord(c) < 32 or ord(c) == 127 for c in text) or re.search(r"\[%s\]" % SOUL_CODE.pattern, text)):
+        raise Refused(1, '--soul-line is "[S14] its text": one line of at most %d characters, no quote, no control character and '
+                         "no other SOUL code" % SOUL_TEXT_MAX)
+    path = conf().get("soul_file")
+    if not path:
+        raise Refused(1, "--soul-line needs soul_file in %s: the file that holds the SOUL lines" % CONFIG_FILE)
+    full = os.path.realpath(path if os.path.isabs(path) else os.path.join(config_root(), path))
+    if printable(full) != full or quote_like(full):
+        raise Refused(1, "soul_file resolves to a path with a character the dialog cannot show plainly: name it in plain "
+                         "characters")
+    return {"code": m.group(1), "action": action, "text": text, "file": full,
+            "sha": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+
+
+def soul_line_for(ns):
+    """The SOUL line an owner call carries ({code, action, text, file, sha}), resolved once per call and kept on `ns`, so the
+    dialog and the digest bound to its record name the same file; None without --soul-line. A pin removes the line, a
+    promote or an archive adds it."""
+    if "_soul" not in vars(ns):
+        value = getattr(ns, "soul_line", None)
+        _, spec = ext_verb(ns.verb) if value is not None else (None, None)
+        ns._soul = None if value is None else soul_line_of(value, "remove" if spec and spec["effect"] == "pin" else "add")
+    return ns._soul
+
+
+def soul_digest(sl):
+    """What the owner's record binds of a SOUL line: its code, action, text and the resolved file, as the dialog showed them.
+    A soul_file changed (or a link swapped) between the dialog and the write gives another digest, and the write is refused."""
+    return hashlib.sha256(dumps({k: sl[k] for k in ("code", "action", "text", "file")}).encode("utf-8")).hexdigest()
+
+
+def soul_suffix(sl):
+    """The dialog's part for the SOUL line a step writes."""
+    if not sl:
+        return ""
+    return '; then kit:soul-line %s the line "- [%s] %s" %s %s' % ("adds" if sl["action"] == "add" else "removes", sl["code"],
+                                                               sl["text"], "to" if sl["action"] == "add" else "from",
+                                                               printable(sl["file"]))
+
+
+def pointer_code(pointer):
+    codes = re.findall(r"\[(%s)\]" % SOUL_CODE.pattern, pointer or "")
+    return codes[0] if len(codes) == 1 else None
+
+
+def run_soul_line(sl):
+    """Run kit:soul-line for the step just written; one line on what happened (the review card names a file and brain that
+    still differ)."""
+    tag = "[%s]" % sl["code"]
+    baton = sdlc_file(os.path.join("scripts", "baton.py"))
+    if not baton:
+        return "the SOUL line %s was not written: vibemaestro-sdlc's baton.py was not found" % tag
+    args = ["kit:soul-line", "--file", sl["file"], "--code", sl["code"], "--action", sl["action"], "--text", sl["text"]]
+    try:
+        r = subprocess.run([sys.executable, baton, "go"] + args, cwd=project_root(), capture_output=True, text=True,
+                           timeout=SOUL_RUN_SECONDS)
+        rc, last = r.returncode, ([l for l in (r.stdout + r.stderr).splitlines() if l.strip()] or [""])[-1]
+    except (OSError, subprocess.SubprocessError) as e:
+        rc, last = None, e.__class__.__name__
+    with contextlib.suppress(Refused, OSError):
+        episode_line(state_dir(), session_id(), "soul-line", code=sl["code"], action=sl["action"], rc=rc)
+    if rc == 0:
+        return "the SOUL line %s %s %s (kit:soul-line)" % (tag, "added to" if sl["action"] == "add" else "removed from",
+                                                           printable(sl["file"]))
+    if rc == 8:
+        return ("the SOUL line %s waits for a signature (this machine's baton mode): the session runs `baton go %s` alone in "
+                "a Bash call" % (tag, " ".join(shlex.quote(a) for a in args)))
+    return "the SOUL line %s was not written (kit:soul-line %s: %s); the review card names the difference" % (
+        tag, "rc %s" % rc if rc is not None else "did not run", printable(last)[:200])
+
+
 def owner_line(ns, st, ops=(), d=None, session=None):
     """The one line of the dialog. Every field the session wrote is quoted, the source (or pointer) before the text, and the
     store refuses `"` in them, so no field can end its quotes and imitate another (round 4: a label blocklist could not keep
@@ -2910,7 +3111,7 @@ def owner_line(ns, st, ops=(), d=None, session=None):
     if ns.verb == "supersede":
         return 'Replace %s%s%s with: "%s"' % (ns.id, " (%s)" % DECISION_KIND if ns.id[0] == "D" else "",
                                               " (scope %s)" % ns.scope if getattr(ns, "scope", None) else "", ns.text)
-    return 'Promote owner %s %s to "%s": "%s"' % (noun, ns.id, ns.pointer, text)
+    return 'Promote owner %s %s to "%s": "%s"%s' % (noun, ns.id, ns.pointer, text, soul_suffix(soul_line_for(ns)))
 
 def owner_op(st, ops, verb, ns, confirm):
     """(op, texts for the filter, message) of one of brain's own owner items (add, unpin, promote, supersede) against `st`; an
@@ -2935,8 +3136,11 @@ def owner_op(st, ops, verb, ns, confirm):
     if verb == "unpin":
         return {"op": "owner-unpin", "id": ns.id, "confirm": confirm}, [], "unpinned %s" % ns.id
     if verb == "promote":
-        return ({"op": "owner-promote", "id": ns.id, "pointer": ns.pointer, "confirm": confirm}, [ns.pointer],
-                "promoted %s to %s" % (ns.id, ns.pointer))
+        op = {"op": "owner-promote", "id": ns.id, "pointer": ns.pointer, "confirm": confirm}
+        sl = soul_line_of(getattr(ns, "soul_line", None), "add")
+        if sl:
+            op["soul_line"] = sl
+        return op, [ns.pointer] + ([sl["text"]] if sl else []), "promoted %s to %s" % (ns.id, ns.pointer)
     nid = next_id(st, ns.id[0])
     item = {"id": nid, "kind": old["kind"], "pinned": old.get("pinned", False), "text": old["text"] if ns.text is None
             else ns.text, "source": {"type": "owner", "quote": None, "where": "supersedes %s" % ns.id},
@@ -2980,9 +3184,16 @@ def owner(args, verb, ns):
         confirm = {"asked": True, "mode": rec["mode"], "record": rec["id"]}
         after = lambda: os.path.exists(path) and os.unlink(path)
         if ext is not None:                         # an extension's verb: one of brain's own two owner writes
-            return ext_owner(ns, d, st, ops, confirm, after)
-        op, texts, msg = owner_op(st, ops, verb, ns, confirm)
-        return op, texts, msg, after
+            out = ext_owner(ns, d, st, ops, confirm, after)
+        else:
+            op, texts, msg = owner_op(st, ops, verb, ns, confirm)
+            out = op, texts, msg, after
+        sl = out[0].get("soul_line")
+        if sl and rec.get("plan") != soul_digest(sl):
+            raise Refused(6, "the SOUL line's text or file (soul_file %s) is not the one the dialog showed: nothing written; "
+                             "ask the owner again" % printable(sl["file"]))
+        written["soul_line"] = sl
+        return out
 
     if verb == "batch":
         return owner_batch(args, ns)
@@ -2991,7 +3202,11 @@ def owner(args, verb, ns):
         return (brain_transfer.owner_import if verb == "import" else brain_transfer.owner_backup)(args, ns)
     ext, _ = ext_verb(verb)
     owner_check(verb, ns)
-    return write(build, ops_too=True)
+    written = {}
+    msg = write(build, ops_too=True)
+    if written.get("soul_line"):                    # the step is in the log: the baton carries it out, outside the lock
+        msg += "\n" + run_soul_line(written["soul_line"])
+    return msg
 
 
 def ext_owner(ns, d, st, ops, confirm, after):
@@ -3008,6 +3223,15 @@ def ext_owner(ns, d, st, ops, confirm, after):
     e, spec, data = brain_ext.owner_write(ns, d, st, ops)
     ext = {e["name"]: data} if isinstance(data, dict) else {}
     texts = brain_ext.strings(data) if ext else []
+    sl = soul_line_of(getattr(ns, "soul_line", None), "remove" if spec["effect"] == "pin" else "add")
+    if sl:                                          # the code the step moves: the extension's, or the pointer's
+        named = (data or {}).get("demoted_from" if sl["action"] == "remove" else "soul") or (
+            pointer_code(ns.pointer) if sl["action"] == "add" else None)
+        if named != sl["code"]:
+            raise Refused(1, "--soul-line names [%s], but this step %s %s" % (
+                sl["code"], "demotes" if sl["action"] == "remove" else "promotes to",
+                "[%s]" % named if isinstance(named, str) else "no SOUL code"))
+        texts.append(sl["text"])
     if spec["effect"] == "pin":
         item = {"id": iid, "kind": "decision", "pinned": True, "text": ns.text,
                 "source": {"type": "owner", "quote": ns.owner_quote, "where": ns.where},
@@ -3015,13 +3239,15 @@ def ext_owner(ns, d, st, ops, confirm, after):
         if ext:
             item["ext"] = ext
         args = [getattr(ns, "ext_arg_" + a) for a in spec["args"]]
-        return ({"op": "owner-add", "item": item, "confirm": confirm},
+        return (dict({"op": "owner-add", "item": item, "confirm": confirm}, **({"soul_line": sl} if sl else {})),
                 [ns.text, ns.owner_quote, ns.where] + args + ns.link + ns.anchor + texts,
                 "pinned %s (%s %s)%s%s" % (iid, e["name"], ns.verb, "\n" + warn if warn else "", anchor_warning("D", ns.anchor)),
                 after)
     op = {"op": "owner-promote", "id": ns.id, "pointer": ns.pointer, "confirm": confirm}
     if ext:
         op["ext"] = ext
+    if sl:
+        op["soul_line"] = sl
     letter = ns.id[0]
     up = moves_up(st, letter, len(live(st, letter)) - 1) if letter not in LEFT_LETTERS else []
     if up:                                          # a lesson or a fact leaves a right-brain section: room for its queue
@@ -3076,7 +3302,12 @@ def owner_check(verb, ns):
             check_text("text", ns.text, cap=text_max(ns.id[:1]))
     elif verb == "promote" or spec and spec["effect"] == "archive":
         check_text("pointer", ns.pointer)
+        sl = soul_line_of(get("soul_line"), "add")
+        if sl and verb == "promote" and pointer_code(ns.pointer) != sl["code"]:
+            raise Refused(1, "--soul-line names [%s]: the pointer names that one code, like \"CLAUDE.md [%s]\"" % (sl["code"],
+                                                                                                             sl["code"]))
     elif spec:                                      # an extension's pin: a decision's fields, and its own values
+        soul_line_of(get("soul_line"), "remove")
         for field, value in args:
             check_text(field, value)
         check_text("text", ns.text, cap=text_max("D"))
@@ -3455,7 +3686,7 @@ def format_lines(d, now=None):
         if n < FORMAT:
             out.append(("warn", "session %s… last started on an older brain (log format %d, this one writes %d): restart it on "
                                 "this version (after /reload-plugins, any `brain` command in it clears this), since an older brain refuses to write to a log that holds a goal, focus, request, "
-                                "session, queue or fact item, an item closed by a link, a queued item, or a held, broke, "
+                                "session, queue or fact item, an item closed by a link, closes added later (link), a queued item, or a held, broke, "
                                 "progress or demotion entry, and stops injecting hot memory whenever it must read the log "
                                 "again" % (sid[:8], n, FORMAT)))
     return out
@@ -3511,6 +3742,15 @@ def _older_layout(md, st, seq, then=None):
     return False
 
 
+def _older_blocks(md, st, seq):
+    """hot.md is the render of this very state, at the head's version, by an older brain that wrote no `  blocks:` line under
+    a queue item (log format 8 before the owner queue named what it blocks)."""
+    v = _MD_VERSION.match(md)
+    if not v or int(v.group(1)) != seq or not any(isinstance(it.get("blocks"), str) for it in st["items"].values()):
+        return False
+    return render_key(md, st) == [l for l in render_key(render_all(st), st) if not l.startswith("  blocks: ")]
+
+
 def _older_rules_render(md, st, seq):
     """hot.md is the render of this very state, at the head's version, by an older brain (`older_rules`)."""
     v = _MD_VERSION.match(md)
@@ -3535,7 +3775,8 @@ def worst_case(now=None):
                   "source": {"type": "owner", "quote": "q" * quote_max(), "where": "w" * 60},
                   "expires": now_iso(now + 86400 * 9) if letter == "W" else None}
             extra = {"G": {"done": "d" * 200, "not_doing": "n" * 200, "review": soon, "scope": "project"},
-                     "D": {"scope": "global"}, "P": {"goal": "G1"}, "R": {"due": soon}, "X": {"focus": "P1"}}
+                     "D": {"scope": "global"}, "P": {"goal": "G1"}, "R": {"due": soon}, "X": {"focus": "P1"},
+                     "Q": {"blocks": "b" * FIELD_MAX["blocks"]}}
             it.update(extra.get(letter, {}))
             st["items"][it["id"]] = it
     for i in range(1, DONE_SHOWN + 2):
@@ -3555,6 +3796,7 @@ def config_lines():
     changed += ["text_caps.%s %d" % (k, v) for k, v in sorted(c["text_caps"].items()) if TEXT_CAPS.get(k) != v]
     changed += ["quote_max %d" % c["quote_max"]] if c["quote_max"] != QUOTE_MAX else []
     changed += ["ledger.%s %d" % (k, v) for k, v in sorted(c["ledger"].items()) if v != LEDGER_DEFAULTS[k]]
+    changed += ["untouched.%s %d" % (k, v) for k, v in sorted(c["untouched"].items()) if v != DEFAULT_UNTOUCHED[k]]
     out = [("ok", "config: %s" % ("%s: %s" % (CONFIG_FILE, ", ".join(changed) or "the defaults") if c["found"]
                                   else "no %s, the defaults" % CONFIG_FILE))]
     config_root()
@@ -3603,7 +3845,8 @@ def doctor():
                                     "write") if (md.startswith(OLDER_TITLE) and v and int(v.group(1)) == head["seq"]
                                                  or _older_layout(md, st, head["seq"], _caps_of(d))
                                                  or _older_tags(md, st, head["seq"])
-                                                 or _older_rules_render(md, st, head["seq"])) else
+                                                 or _older_rules_render(md, st, head["seq"])
+                                                 or _older_blocks(md, st, head["seq"])) else
                            ("warn", "hot.md was rendered under other caps or lengths (%s changed); `brain render` rewrites "
                                     "it, and so does the next write" % CONFIG_FILE) if _rendered_then(md, st, _caps_of(d)) else
                            ("problem", "hot.md does not match a fresh render of the log: it was edited or is stale"))

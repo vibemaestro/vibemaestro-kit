@@ -139,6 +139,8 @@ clean_env() {
   export GIT_CONFIG_GLOBAL="$t/gitconfig"; : > "$GIT_CONFIG_GLOBAL"; export GIT_CONFIG_NOSYSTEM=1
   export FIXTURE_SCRATCH; FIXTURE_SCRATCH=$(cd -P -- "$t" && pwd -P)   # the root git_ is pinned to
   export HOME="$t/home"; mkdir -p "$HOME"
+  # Python on Windows takes the home folder from USERPROFILE, never HOME: the scratch home must be both
+  if [ "${OS:-}" = Windows_NT ]; then export USERPROFILE; USERPROFILE=$(cygpath -w "$HOME"); fi
   export TMPDIR="$t/tmpd"; mkdir -p "$TMPDIR"
   unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES   # a suite's git must not be sent elsewhere
   # CLAUDE_CONFIG_DIR too: the hooks read the plugin registry under it (rule packs), and a suite must not see the real one
@@ -273,8 +275,12 @@ mk_app() {
 }
 
 # payload JSON cho từng loại hook
-p_edit() { printf '{"session_id":"%s","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" "$2"; }
-p_nb()   { printf '{"session_id":"%s","hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":"%s"}}' "$1" "$2"; }
+# a path inside a payload: on Windows in the form Claude Code sends (C:/…), which Python reads; a POSIX /c/… would be C:\c\…
+wpath() { if [ "${OS:-}" = Windows_NT ]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+p_edit() { printf '{"session_id":"%s","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" "$(wpath "$2")"; }
+p_nb()   { printf '{"session_id":"%s","hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":"%s"}}' "$1" "$(wpath "$2")"; }
+# can_link — 0 when `ln -s` makes a real link here (Git Bash copies the target instead, unless Windows symlinks are switched on)
+can_link() { local d; d=$(mktemp -d "${TMPDIR:-/tmp}/lnk.XXXXXX") && : > "$d/t" && ln -s "$d/t" "$d/l" 2>/dev/null && [ -L "$d/l" ]; local rc=$?; rm -rf "$d"; return $rc; }
 p_bash() { printf '{"session_id":"%s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" "$2"; }
 p_start() { printf '{"session_id":"%s","hook_event_name":"SessionStart","source":"startup"}' "$1"; }
 

@@ -28,7 +28,9 @@ description: "Use when: a long-running session must keep a goal, a decision, a d
    nothing in it closes when its PR merges. Running work is an `S` item, what waits on the owner a `Q` item, a path or fact in
    use an `F` item. `S`: one per running task, such as a subagent of `local-parallel` working toward its PR,
    `<task name>: <next step>`, ≤ 600 characters, with pointers (PR, intent, record) instead of copied state, and `--closes`
-   its PR; the main session writes it, never the subagent. `Q`: `--closes` the PR or issue it waits on, or `close` it when the owner answers. `F`: paths
+   its PR; the main session writes it, never the subagent. `Q`: only what is blocked until the owner acts, with `--blocks` naming the work it blocks (refused without it: what blocks nothing is a Next item or an issue); `--closes` the PR or issue it waits on, or `close` it when the owner answers.
+   An item about a PR or issue names it with `--closes` when it is made; when the issue or PR comes later, `brain op link ID
+   --closes A` adds it in place (same id, no retirement budget). `F`: paths
    as `~/…` or relative to a plugin root (a home path is refused as sensitive). Done is never written: it is what the log
    closed in the last 24 hours, with the anchor and merge commit first.
 5. **Write through, in the turn.** What the owner asks goes into a request in the turn it is said, the owner's words verbatim:
@@ -56,12 +58,14 @@ description: "Use when: a long-running session must keep a goal, a decision, a d
    decision: its supersede (a new next step) spends no budget and may be shorter, and still keeps every anchor.
 8. **Anchors are the exact strings a summary must keep** (a PR number, a 7-hex SHA, a path, a code word): add them with
    `--anchor`. The loss score of every compaction counts how many of them the summary dropped.
-9. **A `stale:` mark is a question, not an order.** `· stale: #7 closed 2026-10-20` after an item means its anchor is a closed
+9. **A `stale:` or `untouched` mark is a question, not an order.** `· stale: #7 closed 2026-10-20` after an item means its anchor is a closed
    issue or a merged PR. A bare `#7` is checked only in its item's own repository (the one its `owner/name#N`, URL and
    `closes` anchors name); with none or several it is not checked, and the write warns: write `owner/name#N`. Check, then `close` (with `--pointer`) or `supersede` it with `brain op`; for a pinned `D` item tell the owner, since only
    `brain owner unpin` or `supersede` changes it (`owner retires it`). An item with `closes` closes itself, in the writer's
    SessionStart (and in the background at a prompt, at most every 10 minutes), once its PR is merged or its issue completed (`auto-closed now:`); never name a dependency or a tracking issue
-   in `closes`. `brain doctor` lists them fresh.
+   in `closes`. `brain doctor` lists them fresh. `· untouched 9 d` means no op touched a right-brain item for its kind's
+   threshold. One `sweep: N items to clean (~C chars)` line in string 1 counts the closed and untouched ones: run `brain
+   sweep`, then close what is done (`--bulk` for a deliberate sweep) or `brain op touch` what still holds. Nothing closes for age.
 10. **One writer per project.** After `/clear` or `--fork-session` the session id changes: run `brain claim --take-over`
    (logged). A subagent never writes: it reports back, and the main session runs `brain op`.
 11. **Evidence, in the turn.** When a PR or a task's result is checked, `brain op held RULE --pointer P --session S4` for each
@@ -85,9 +89,11 @@ description: "Use when: a long-running session must keep a goal, a decision, a d
 | Command | Use |
 |---|---|
 | `brain op add --kind now\|next\|trap --text T [--anchor A]… [--link L]…` | the current task (≤ 5), next steps (≤ 30), traps (≤ 20) |
-| `brain op add --kind session\|queue\|fact --text T …` | running tasks (≤ 20), what waits on the owner (≤ 15), facts and paths in use (≤ 25) |
+| `brain op add --kind session\|queue\|fact --text T …` | running tasks (≤ 20), what is blocked until the owner acts (≤ 15, `--blocks B` required), facts and paths in use (≤ 25) |
 | `brain op add --kind now\|next\|session\|queue … --closes owner/name#N` | the issue or PR whose close means this item is done (≤ 2, `owner/name#N` or a URL) |
+| `brain op link ID --closes owner/name#N` | add `closes` to a live Now, Next, session, queue or request item in place (≤ 2 in all) |
 | `brain op close-linked` | after `auto-close held` and `brain doctor`: close every item whose `closes` are done |
+| `brain op merge-evidence` | the held and hit of the PRs merged since the last run, from their `Rules applied:` and `Traps met:` lines (the writer's prompt runs it in the background) |
 | `brain op close ID --reason R [--pointer P]` | done or dropped |
 | `brain op supersede ID --text T --reason R` | the meaning changed |
 | `brain op touch ID`, `brain op hit T5 [--pointer P] [--session S4]` | still current; a trap was met again (a held for it) |
@@ -101,6 +107,7 @@ description: "Use when: a long-running session must keep a goal, a decision, a d
 | `brain owner add --kind window --text T --owner-quote Q --where W --expires 2026-10-17T22:00:00Z` | the owner delegated until a time |
 | `brain owner unpin ID`, `owner supersede ID [--text T]`, `owner promote ID POINTER` | the owner retires or replaces one (a goal's supersede may change `--done`, `--not-doing`, `--review`, `--scope`; a decision's `--scope`; without `--text` the words carry over), or moves it out of hot memory to a pointer |
 | `brain ledger [RULE]`, `brain ledger --record` | held and broke per rule, with `promote?` and `drift`, goals' progress; one rule's events; the monthly record |
+| `brain ledger --drift` | the rules in drift nobody handled since their last broke: a trap or fact to fix, narrow or drop now; a decision or SOUL code to put before the owner as a queue item naming it (rc 8 while one is left, in the writer's session while writes are allowed) |
 | `brain ext NAME [ARG…]` | what a plugin that extends the brain prints (it writes nothing) |
 | `brain export --out FILE [--scope global\|project]`, `brain doctor --bundle FILE` | one bundle of the brain; check a bundle |
 | `brain owner import FILE`, then `brain import FILE [--only LETTERS]` | import a bundle: the owner's items through one dialog, then the right brain and its ledger |

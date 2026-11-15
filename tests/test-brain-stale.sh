@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# vibemaestro-brain: stale anchors — a live Now/Next/pinned item whose anchor names a closed issue or a merged/closed PR
+# vibemaestro-brain: stale anchors — a live Now/Next/trap/fact/pinned item whose anchor names a closed issue or a merged/closed PR
 # =============================================================================
 # Run: bash tests/test-brain-stale.sh
 #
 # Offline: a stub `gh` first on PATH answers `gh api repos/<o>/<r>/issues/<n>` from files, logs every call, and can fail, answer
 # garbage or sleep; the brain and sdlc are copied into the scratch tree, each case gets its own git project and state root.
 #   [M] marks: a closed issue, a merged PR and a closed-unmerged PR are marked in the SessionStart block ("stale: acme/app¤258 closed
-#       2026-10-20"); an open item, a trap, a window and a loose anchor ("PR ¤258") are not; a pinned item is; an item with a stale and an
+#       2026-10-20"); an open item, a window and a loose anchor ("PR ¤258") are not; a trap and a pinned item are; an item with a stale and an
 #       open anchor shows the stale one only; two stale anchors are both shown; the lookups are deduplicated
 #   [I] the log, head and hot.md are byte-identical after SessionStart and doctor; `brain render` carries no mark; the episode counts them
 #   [D] a bare #N whose item names no single repository: skipped with one note, whatever BRAIN_DEFAULT_REPO holds;
@@ -30,6 +30,15 @@
 #   [O] a bare ¤N resolves only against the one repository its item's other anchors and
 #       closes name, never against BRAIN_DEFAULT_REPO (doctor warns once that it is not read); none or two: not checked
 #   [K] doctor lists each unchecked live item and anchor by ID, at most 20 lines, then a count of the rest
+#   [V] untouched and the sweep: every load marks a live right-brain item untouched for its kind's threshold (N 7, X 14, S 21,
+#       Q 21, R 30, T 60, F 60 d; one minute short is not), never the left brain; a touch clears it; `untouched` in brain.json
+#       moves a threshold, a wrong value or a left letter keeps the default and says so; string 1 holds one `sweep:` line when
+#       anything is worth cleaning and none otherwise, also with no gh; `brain sweep` groups the candidates by reason with the
+#       UTF-16 units each frees, leaves out a pin with a closed anchor, and writes nothing (log, head, hot.md, cache)
+#   [Q] the owner queue: an add with no --blocks is refused (64) and says where such an item goes, --blocks on another kind and
+#       an empty or 201-unit one are refused, the log unchanged; the item shows `  blocks: …` under its line, a supersede keeps it
+#       or replaces it; the owner/name¤N it names closed: marked, and `blocked work done` in the sweep line and brain sweep; a
+#       queue item an older brain wrote with no blocks still loads, as `queue without blocks`
 # =============================================================================
 set -uo pipefail
 if [ -z "${BRAIN_SUITE_REEXEC:-}" ]; then
@@ -135,7 +144,7 @@ seed() {
   add --kind next --text "loose anchor" --anchor 'PR ¤258'                                # X5 not an anchor
   add --kind now --text "closed unmerged pr" --anchor 'acme/app¤77'                                # N1
   add --kind now --text "dot segments are no repository" --anchor '../x¤1' --anchor './x¤2'  # N2 never looked up
-  add --kind trap --text "a trap on a done issue" --anchor 'acme/app¤258'                          # T1 never checked
+  add --kind trap --text "a trap on a done issue" --anchor 'acme/app¤258'                          # T1 checked too
   pin "pinned on a done issue" 'acme/app¤258'                                                       # D1
   ans 'acme/app¤258' closed 2026-10-20T00:03:04Z ""
   ans 'acme/other¤12' closed 2026-10-21T08:00:00Z 2026-10-21T08:00:00Z
@@ -157,14 +166,14 @@ case_marks() {
   c_has "$(line N1)" "stale: acme/app¤77 closed unmerged 2026-10-18" "[M] a PR closed unmerged is marked 'closed unmerged' with closed_at"
   c_hasnt "$(line N2)" "stale" "[M] an anchor with a dot segment ('../x¤1') is not an anchor"
   c_hasnt "$(cat "$STUB/calls")" ".." "[M] and no lookup went out with a '..' in its path"
-  c_hasnt "$(line T1)" "stale" "[M] a trap is not checked"
+  c_has "$(line T1)" "stale: acme/app¤258 closed 2026-10-20" "[M] a trap is checked too"
   c_has "$(line D1)" "stale: acme/app¤258 closed 2026-10-20" "[M] a pinned item is checked"
   c_eq "$(ncalls)" 4 "[M] four distinct anchors, four lookups (¤258 once across four items)"
   c_hasnt "$(grep -F -e '¤258' "$STUB/calls" | grep -F 'PR' || true)" "PR" "[M] the loose anchor was never looked up"
   c_has "$(cat "$STUB/calls")" "repos/acme/app/issues/""258" "[M] a full anchor resolves as written (acme/app)"
   c_has "$(cat "$STUB/calls")" "repos/acme/other/issues/""12" "[M] a full anchor resolves as written"
   c_eq "$(notes)" 0 "[M] nothing to say, no note line"
-  c_eq "$(epfield stale)" 5 "[M] the episode line counts the marked items (X1 X2 X4 N1 D1)"
+  c_eq "$(epfield stale)" 6 "[M] the episode line counts the marked items (X1 X2 X4 N1 T1 D1)"
 }
 
 case_inert() {
@@ -426,11 +435,12 @@ case_size() {
   for i in 1 2 3 4 5 6 7 8 9 10 11 12; do ans "acme/app#$i" closed 2026-10-20T00:00:00Z ""; done
   start startup; local c n n3; c=$(ctx1); n=$(nchars "$c"); n3=$(nchars "$(ctx2)")
   c_has "$c" "stale: acme/app#" "[Z] marks are there"
-  c_has "$c" "more stale: run brain doctor" "[Z] the rest collapse into one summary"
+  c_has "$c" "more marks: brain sweep, brain doctor" "[Z] the rest collapse into one summary"
   c_eq "$([ $((n - open_n)) -le 450 ] && echo within)" within "[Z] in string 1 the marks and the summary add $((n - open_n)) ≤ 450 characters"
   c_eq "$([ $((n - open_n)) -ge 200 ] && echo real)" real "[Z] instrument: the marks are really there ($((n - open_n)) ≥ 200 characters added)"
   c_eq "$([ $((n3 - open3)) -le 450 ] && [ $((n3 - open3)) -ge 50 ] && echo within)" within "[Z] in string 2 (Now, Next) they add $((n3 - open3)), within its own 450"
   c_eq "$([ "$n" -le 9500 ] && echo within)" within "[Z] string 1 with a stale anchor on every pin and the full Shelf: $n ≤ 9,500"
+  c_has "$c" "sweep: 8 items to clean" "[Z] string 1 holds the sweep line, inside the same 450"
   c_hasnt "$c" "[brain: cut" "[Z] the hard cut does not fire"
   c_has "$c" "## Shelf index" "[Z] the Shelf index is intact"
   unset CLAUDE_CONFIG_DIR
@@ -467,7 +477,7 @@ case_doctor() {
   c_has "$OUT" "stale anchor: X3 acme/app¤300 closed 2026-10-23" "[R] fresh lookups: an answer newer than the cache is seen"
   c_has "$OUT" "stale anchor: N1 acme/app¤77 closed unmerged 2026-10-18" "[R] a Now item"
   c_has "$OUT" "stale anchor: D1 acme/app¤258" "[R] a pinned decision"
-  c_hasnt "$OUT" "stale anchor: T1" "[R] a trap is not listed"
+  c_has "$OUT" "stale anchor: T1 acme/app¤258" "[R] a trap is listed too"
   c_hasnt "$OUT" "stale anchor: X5" "[R] a loose anchor is not listed"
   c_hasnt "$OUT" "problem" "[R] no problem line"
   c_eq "$(ncalls)" 4 "[R] four distinct anchors, four fresh lookups"
@@ -532,13 +542,13 @@ case_warn() {
      --anchor 'acme/app¤531' --anchor 'acme/app¤40'
   c_rc 0 "[W] the fix the warning asked for (drop the bare, add the full): rc 0"
   c_hasnt "$OUT" "warning" "[W] and no warning"
-  # a trap and a window are never checked: nothing to warn about
+  # a trap is checked too, so it warns; a window is never checked: nothing to warn about
   stale_np; unset BRAIN_DEFAULT_REPO
   add --kind trap --text "bare on a trap" --anchor '¤7'
   c_rc 0 "[W] op add of a trap with a bare anchor: rc 0"
-  c_hasnt "$OUT" "warning" "[W] a trap is not checked, so no warning"
+  c_has "$OUT" "warning: ¤7 is not checked" "[W] a trap is checked, so it warns"
   br op supersede T1 --text "bare on a trap" --reason retext
-  c_hasnt "$OUT" "warning" "[W] nor when a trap is superseded"
+  c_has "$OUT" "warning" "[W] and when a trap is superseded"
   owner_ok add --kind window --text "bare on a window" --owner-quote q --where w --expires 2099-01-01T00:00:00Z --anchor '¤7'
   c_rc 0 "[W] owner add of a window with a bare anchor: rc 0"
   c_hasnt "$OUT" "warning" "[W] a window is not checked, so no warning"
@@ -633,13 +643,13 @@ case_list() {
   ans 'acme/other¤12' open
   br doctor
   c_rc 0 "[K] doctor rc 0"
-  c_has "$OUT" "info     stale anchors: 4 bare anchors on 3 items naming no single repository are not checked" "[K] the summary counts anchors and items"
+  c_has "$OUT" "info     stale anchors: 5 bare anchors on 4 items naming no single repository are not checked" "[K] the summary counts anchors and items"
   c_eq "$(printf '%s\n' "$OUT" | grep -o 'not checked: [A-Z0-9]* ¤[0-9]*' | tr '\n' ',')" \
-       "not checked: N1 ¤227,not checked: N1 ¤228,not checked: X1 ¤231,not checked: D1 ¤77," "[K] one line per unchecked item and anchor, in lookup order"
+       "not checked: N1 ¤227,not checked: N1 ¤228,not checked: X1 ¤231,not checked: T1 ¤9,not checked: D1 ¤77," "[K] one line per unchecked item and anchor, in lookup order"
   c_has "$OUT" "info     not checked: N1 ¤227" "[K] the line is an info"
   c_hasnt "$OUT" "not checked: X2" "[K] a full anchor is not listed"
   c_hasnt "$OUT" "not checked: X4" "[K] a loose anchor is not listed"
-  c_hasnt "$OUT" "not checked: T1" "[K] a trap is not listed"
+  c_has "$OUT" "not checked: T1 ¤9" "[K] a trap is listed too"
   c_hasnt "$OUT" "problem" "[K] no problem line"
   PATH="$TMP/nogh" br doctor
   c_has "$OUT" "info     not checked: X1 ¤231" "[K] the list does not need gh"
@@ -705,7 +715,186 @@ case_ownrepo() {  # a bare ¤N resolves only against the item's own repository
 
 echo "== cases =="
 
-for c in case_ownrepo case_marks case_inert case_nodefault case_ghfail case_slow case_cache case_hostile case_size case_limit case_doctor case_warn case_url case_full case_list; do run_case $c; done
+# --- [V] -----------------------------------------------------------------------------------------------------------------------
+# seedt <spec>… — items appended through the store library at fixed times, as the writer sA. A spec is
+#   ID@DAYS_AGO[;text=T][;anchors=A,B][;closes=A][;queued]   the item written DAYS_AGO days before now (a float); `queued`
+#   writes it as an overflow-add (its section full); a queue item blocks "the release cut" unless `noblocks`
+seedt() {
+  CLAUDE_CODE_SESSION_ID="$SID" python3 - "$BROOT/scripts" "$@" <<'PY'
+import json, sys, time
+sys.path.insert(0, sys.argv[1])
+import brain_store as s
+d = s.state_dir()
+kinds = {v: k for k, v in s.KINDS.items()}
+by = {"session": "sA", "agent": None}
+at = lambda days: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - float(days) * 86400))
+with s.locked(d):
+    raw, ops = s.verify(d)
+    st = s.fold(ops)
+    def put(op):
+        global raw
+        raw = s.append(d, raw, op)
+        s.apply(st, json.loads(raw[-1].decode("utf-8")))
+    if st["writer"] is None:
+        put({"op": "claim", "t": at(400), "by": by, "takeover": False})
+    for spec in sys.argv[2:]:
+        head, *opts = spec.split(";")
+        iid, _, days = head.partition("@")
+        o = dict((x.split("=", 1) + [""])[:2] for x in opts)
+        closes = [a for a in o.get("closes", "").split(",") if a]
+        item = {"id": iid, "kind": kinds[iid[0]], "pinned": iid[0] == "D", "text": o.get("text", "item " + iid),
+                "source": {"type": "owner" if iid[0] == "D" else "coordinator"}, "expires": None, "links": [],
+                "anchors": [a for a in o.get("anchors", "").split(",") if a] + closes, "supersedes": None}
+        if closes:
+            item["closes"] = closes
+        if iid[0] == "Q" and "noblocks" not in o:  # `blocks=` names it
+            item["blocks"] = o.get("blocks", "the release cut")
+        kind = "owner-add" if iid[0] == "D" else "overflow-add" if "queued" in o else "add"
+        put({"op": kind, "item": item, "t": at(days), "by": by})
+    s.write_caches(d, st, s.head_of(raw))
+PY
+}
+sweepline() { printf '%s\n' "$(ctx1)" | grep -E '^sweep: ' || true; }
+case_sweep() {
+  stale_np
+  local m=0.0007   # one minute short of a threshold, in days
+  seedt "N1@7" "N2@$(python3 -c "print(7 - $m)")" "X1@14" "X2@$(python3 -c "print(14 - $m)")" "S1@21" "Q1@21" "R1@30" \
+        "T1@60" "T2@$(python3 -c "print(60 - $m)")" "F1@60" "D1@400"
+  start startup
+  local i; for i in N1 X1 S1 Q1 R1 T1 F1; do c_has "$(line "$i")" "untouched " "[V] $i at its kind's threshold: marked"; done
+  c_has "$(line N1)" "untouched 7 d" "[V] the mark says the whole days"
+  for i in N2 X2 T2; do c_hasnt "$(line "$i")" "untouched" "[V] $i one minute short: not marked"; done
+  c_hasnt "$(line D1)" "untouched" "[V] a pin 400 days old: the left brain is never marked"
+  c_eq "$(sweepline | grep -c '')" 1 "[V] string 1 holds one sweep line"
+  c_has "$(sweepline)" "sweep: 7 items to clean (~" "[V] it counts the seven"
+  c_has "$(sweepline)" "chars): 7 untouched 7+ d; brain sweep lists them" "[V] by reason, the lowest threshold named"
+  br op touch N1; c_rc 0 "[V] touch N1"
+  start startup
+  c_hasnt "$(line N1)" "untouched" "[V] a touched item is no longer marked"; c_has "$(sweepline)" "sweep: 6 items" "[V] nor counted"
+  start_nogh
+  c_has "$(line X1)" "untouched 14 d" "[V] no gh: the untouched marks stay"; c_has "$(sweepline)" "sweep: 6 items" "[V] and the sweep line"
+  local before cache; before=$(sums); cache=$(ls "$(sdir)" | grep -c stale-cache || true)
+  br sweep; c_rc 0 "[V] brain sweep: rc 0"
+  c_has "$OUT" "untouched (6):" "[V] it groups by reason"
+  c_has "$OUT" "  X1 (~" "[V] each item with its characters"
+  c_has "$OUT" "untouched 14 d (Next: 14 d)" "[V] and why"
+  c_hasnt "$OUT" "D1" "[V] never a left-brain item"
+  c_has "$OUT" "keep: brain op touch ID" "[V] it says how to close or keep"
+  c_eq "$(sums) $(ls "$(sdir)" | grep -c stale-cache || true)" "$before $cache" "[V] brain sweep writes nothing: log, head, hot.md, no cache"
+  # the threshold from brain.json; a wrong value or a left letter keeps the default and says so
+  stale_np; seedt "N1@4" "N2@8"
+  mkdir -p "$P/.vibemaestro"; printf '{"untouched": {"N": 3}}\n' > "$P/.vibemaestro/brain.json"
+  start startup; c_has "$(line N1)" "untouched 4 d" "[V] untouched.N 3: an item 4 days old is marked"
+  br doctor; c_has "$OUT" "untouched.N 3" "[V] doctor names the changed threshold"
+  local bad; for bad in '"x"' 0 366 true -1; do
+    printf '{"untouched": {"N": %s}}\n' "$bad" > "$P/.vibemaestro/brain.json"
+    start startup
+    c_hasnt "$(line N1)" "untouched" "[V] untouched.N $bad: the default 7 is used (4 days: no mark)"
+    c_has "$(line N2)" "untouched 8 d" "[V] untouched.N $bad: (8 days: marked)"
+    c_has "$(ctx1)" "brain config: 1 error, defaults used and writes refused: brain doctor" "[V] untouched.N $bad: string 1 says so"
+    br doctor; c_has "$OUT" "untouched.N must be an integer from 1 to 365" "[V] untouched.N $bad: doctor names it"
+  done
+  printf '{"untouched": {"D": 1, "P": 1}}\n' > "$P/.vibemaestro/brain.json"; br doctor
+  c_has "$OUT" "unknown key untouched.\"D\" (ignored)" "[V] a left letter is an unknown key: ignored, with a warning"
+  start startup; c_has "$(ctx1)" "brain config: 2 warnings: brain doctor" "[V] string 1 says so"
+  # nothing to clean: no line; a pin with a closed anchor is no candidate
+  stale_np; seedt "X1@1;anchors=acme/app¤5" "D1@1;anchors=acme/app¤6"; ans 'acme/app¤5' open; ans 'acme/app¤6' closed 2026-10-20T00:00:00Z ""
+  start startup; c_has "$(line D1)" "stale" "[V] instrument: the pin is marked stale"
+  c_eq "$(sweepline)" "" "[V] nothing to clean: no sweep line"
+  rm -f "$(sdir)/stale-cache.json"; ans 'acme/app¤5' closed 2026-10-20T00:00:00Z ""
+  start startup; c_has "$(sweepline)" "sweep: 1 item to clean (~" "[V] one closed anchor: one line"
+  c_has "$(sweepline)" "1 closed anchor; brain sweep" "[V] by its reason"
+  local before cache; before=$(sums); cache=$(sha256sum "$(sdir)/stale-cache.json"); : > "$STUB/calls"
+  br sweep; c_has "$OUT" "closed anchors (1):" "[V] brain sweep groups it"; c_hasnt "$OUT" "D1" "[V] the pin is left out"
+  c_eq "$(ncalls)" 1 "[V] instrument: brain sweep looked the right brain's anchor up"
+  c_eq "$(sums) $(sha256sum "$(sdir)/stale-cache.json")" "$before $cache" "[V] and still wrote nothing: log, head, hot.md, cache"
+  br op close X1 --reason done --pointer acme/app¤5 --bulk; start startup
+  c_eq "$(sweepline)" "" "[V] closed with --bulk: the next load names nothing"
+  # an item a link-close moves up from the queue in this very load is not untouched
+  stale_np; mkdir -p "$P/.vibemaestro"; printf '{"caps": {"X": 1}}\n' > "$P/.vibemaestro/brain.json"
+  seedt "X1@0.5;closes=acme/app¤7" "X2@30;queued"
+  ans_raw 'acme/app¤7' "$(printf 'closed\t%s\t\tcompleted\tissue' "$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')")"
+  start startup
+  c_has "$(ctx)" "auto-closed now: X1" "[V] instrument: X1 closed, X2 moved up"
+  c_has "$(line X2)" "- X2 " "[V] instrument: X2 is live in the block"
+  c_hasnt "$(line X2)" "untouched" "[V] the item moved up in this load is not marked untouched"
+  c_eq "$(sweepline)" "" "[V] nor counted"
+  # untouched items in the render's section order (Sessions before the Owner queue), not by letter
+  stale_np; seedt "Q1@30" "S1@30"; br sweep
+  c_eq "$(printf '%s\n' "$OUT" | sed -n 's/^  \([QS]1\) (~.*/\1/p' | tr '\n' ' ')" "S1 Q1 " "[V] in the render's section order"
+  # the characters are UTF-16 units: an emoji counts two
+  stale_np; seedt "X1@20;text=abc a" "X2@20;text=abc 😀"
+  br sweep
+  local a b; a=$(printf '%s\n' "$OUT" | sed -n 's/^  X1 (~\([0-9]*\) chars).*/\1/p'); b=$(printf '%s\n' "$OUT" | sed -n 's/^  X2 (~\([0-9]*\) chars).*/\1/p')
+  c_eq "$((b - a))" 1 "[V] an emoji in place of a letter frees one unit more ($a, $b)"
+}
+
+# --- [Q] -----------------------------------------------------------------------------------------------------------------------
+case_queue() {
+  stale_np; seedt "X1@1"
+  local before; before=$(sums)
+  br op add --kind queue --text "owner: approve the budget"
+  c_rc 64 "[Q] a queue item with no --blocks: refused (64)"; c_has "$OUT" "a Next item or an issue" "[Q] it says where such an item goes"
+  br op add --kind next --text "a next step" --blocks "the release cut"; c_rc 64 "[Q] --blocks on a Next item: refused (64)"
+  br op add --kind queue --text "owner: approve" --blocks ""; c_rc 1 "[Q] an empty --blocks: refused (1)"
+  br op add --kind queue --text "owner: approve" --blocks "$(rep b 201)"; c_rc 1 "[Q] a 201-unit --blocks: refused (1)"
+  c_eq "$(sums)" "$before" "[Q] every refusal left the log unchanged"
+  br op add --kind queue --text "owner: approve" --blocks "$(rep b 200)"; c_rc 0 "[Q] 200 units: accepted"
+  br op add --kind queue --text "owner: sign the release" --blocks "the cut of acme/app¤5, then the tag"
+  c_rc 0 "[Q] a queue item with --blocks: rc 0"
+  ans 'acme/app¤5' open; start startup
+  c_has "$(ctx)" $'- Q2 owner: sign the release · since' "[Q] instrument: Q2 in the block"
+  c_has "$(printf '%s\n' "$(ctx)" | grep -A1 -F -e '- Q2 ')" "  blocks: the cut of acme/app¤5, then the tag" "[Q] what it blocks, under its line"
+  c_hasnt "$(line Q2)" "stale" "[Q] its blocked work still open: no mark"
+  br show Q2; c_has "$OUT" "blocks: the cut of acme/app¤5, then the tag" "[Q] brain show prints it"
+  br op supersede Q2 --text "owner: sign the release today" --reason status
+  br show Q3; c_has "$OUT" "blocks: the cut of acme/app¤5, then the tag" "[Q] a supersede keeps it"
+  br op supersede Q3 --text "owner: sign the release today" --reason status --blocks "the tag of acme/app¤5"
+  br show Q4; c_has "$OUT" "blocks: the tag of acme/app¤5" "[Q] --blocks on a supersede replaces it"
+  rm -f "$(sdir)/stale-cache.json"; ans 'acme/app¤5' closed 2026-10-20T00:00:00Z 2026-10-20T00:00:00Z
+  start startup
+  c_has "$(line Q4)" "stale: acme/app¤5 merged 2026-10-20" "[Q] its blocked work done: marked"
+  c_has "$(sweepline)" "sweep: 1 item to clean (~" "[Q] one candidate"; c_has "$(sweepline)" "1 blocked work done" "[Q] by its reason"
+  br sweep; c_has "$OUT" "blocked work done (1):" "[Q] brain sweep groups it"; c_has "$OUT" "  Q4 (~" "[Q] with its characters"
+  # what it blocks passes the sensitive-value filter, as the text does
+  before=$(sums); local tk; tk="g$(printf 'h')p_$(rep a1B2c3D4e5 3)a1B2c3"
+  br op add --kind queue --text "owner: rotate" --blocks "the deploy, token $tk"; c_rc 1 "[Q] a secret in --blocks: refused (1)"
+  c_has "$OUT" "sensitive" "[Q] as a sensitive value"
+  br op supersede Q4 --text "owner: sign the release today" --reason status --blocks "token $tk"; c_rc 1 "[Q] in a supersede too"
+  br op supersede Q4 --text "owner: sign the release today" --reason status --blocks ""; c_rc 1 "[Q] an empty --blocks on a supersede: refused"
+  c_has "$OUT" "blocks is empty" "[Q] as empty"
+  c_eq "$(sums)" "$before" "[Q] and the log unchanged"
+  # every anchor it names must be done; at most two are looked up; a bare #N there is a number; prose around an anchor
+  stale_np; seedt "Q1@1;blocks=acme/app¤20 and acme/app¤21" "Q2@1;blocks=\"acme/app¤30\", acme/app¤31's and acme/app¤32" \
+        "Q3@1;blocks=the review of acme/app¤40 and #7;anchors=¤8"
+  ans 'acme/app¤20' closed 2026-10-20T00:00:00Z 2026-10-20T00:00:00Z; ans 'acme/app¤21' open
+  ans 'acme/app¤30' closed 2026-10-20T00:00:00Z ""; ans 'acme/app¤31' closed 2026-10-20T00:00:00Z ""; ans 'acme/app¤32' open; ans 'acme/app¤40' open
+  start startup
+  c_has "$(line Q1)" "stale: acme/app¤20 merged" "[Q] one of two blocked anchors merged: marked"
+  c_hasnt "$(sweepline)" "Q1" "[Q] instrument: the line names no id"
+  br sweep; c_hasnt "$OUT" "  Q1 (" "[Q] but not a candidate while acme/app¤21 is open"
+  c_has "$OUT" "blocked work done (1):" "[Q] a quoted anchor and a possessive one, both done: blocked work done"
+  c_has "$OUT" "  Q2 (" "[Q] that is Q2"
+  c_eq "$(grep -c "acme/app/issues/""32" "$STUB/calls" || true)" 0 "[Q] a third anchor in blocks is not looked up"
+  c_eq "$(grep -c "/issues/""7 \|/issues/""8 " "$STUB/calls" || true)" 0 "[Q] a bare #N in blocks is a number; the item's own bare ¤8 does not resolve against its blocks' repository"
+  # one issue spelled twice (a markdown link and owner/name¤N, or the item's own URL) counts once, by its key
+  stale_np; seedt "Q1@1;blocks=[acme/app¤50]($GH/acme/app/$IS/50) and acme/app¤51" \
+        "Q2@1;anchors=$GH/acme/app/$IS/60;blocks=Acme/App¤60 then acme/app¤61"
+  ans 'acme/app¤50' closed 2026-10-20T00:00:00Z ""; ans 'acme/app¤51' open; ans 'acme/app¤60' closed 2026-10-20T00:00:00Z ""; ans 'acme/app¤61' open
+  start startup; br sweep
+  c_hasnt "$OUT" "  Q1 (" "[Q] a link and owner/name¤N of one issue: ¤51 still open, no candidate"
+  c_eq "$(grep -c "acme/app/issues/""51 " "$STUB/calls" || true)" 2 "[Q] ¤51 is looked up (at the load and by brain sweep)"
+  c_hasnt "$OUT" "  Q2 (" "[Q] the item's own URL of ¤60 and Acme/App¤60 in blocks: one key, ¤61 open, no candidate"
+  stale_np; seedt "Q1@1;blocks=acme/app¤70 then x/..¤2"; ans 'acme/app¤70' closed 2026-10-20T00:00:00Z ""
+  br sweep; c_has "$OUT" "blocked work done (1):" "[Q] an anchor no lookup would take (x/..¤2) is no anchor: ¤70 done is the blocked work done"
+  stale_np; seedt "Q1@1;noblocks" "Q2@1"
+  start startup; c_rc 0 "[Q] a queue item an older brain wrote with no blocks: the load works"
+  c_has "$(ctx)" "- Q1 " "[Q] and shows it"
+  c_has "$(sweepline)" "1 queue without blocks" "[Q] counted as a queue item without blocks"
+  br sweep; c_has "$OUT" "queue without blocks (1):" "[Q] brain sweep groups it"; c_hasnt "$OUT" "Q2" "[Q] the one with blocks is not listed"
+}
+
+for c in case_ownrepo case_marks case_inert case_nodefault case_ghfail case_slow case_cache case_hostile case_size case_limit case_doctor case_warn case_url case_full case_list case_sweep case_queue; do run_case $c; done
 cd "$TMP" || exit 1
 
 summary

@@ -145,7 +145,7 @@ hookcmd() { hook_cmds "$1/hooks/hooks.json" SessionStart "" | grep -F 'update' ;
 us() {
   local root=$1 data=$2 c t0; shift 2
   c=$(hookcmd "$root")
-  APP="$TMP/app"; mkdir -p "$APP"
+  APP="$TMP/app"; mkdir -p "$APP"; [ -e "$APP/.git" ] || git -C "$APP" init -q   # a developer's repository: the line is the person's
   t0=$(python3 -c 'import time; print(int(time.time()*1000))')
   if [ "$data" = - ]; then
     OUT=$(env -u CLAUDE_PLUGIN_DATA CLAUDE_PLUGIN_ROOT="$root" CLAUDE_PROJECT_DIR="$APP" \
@@ -268,6 +268,10 @@ fam_uc() { local S=$1 P D V
   quiet "[S7] no CLAUDE_PLUGIN_DATA" "$P" -
   D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D"
   has "$(sysm "$OUT")" "9.9.9 is available" "[S0] control: the seeded cache, with nothing turning it off, shows the line"
+  EV="$TMP/everyday-folder"; mkdir -p "$EV"; printf 'x\n' > "$EV/notes.md"
+  D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D" CLAUDE_PROJECT_DIR="$EV"
+  eq "$RC $(keys "$OUT") $(sysm "$OUT")" "0 hookSpecificOutput " "[V1] the kit's everyday mode (a plain folder): the person sees no line in a fixed language"
+  has "$(ctx "$OUT")" "9.9.9 is available" "[V1] …the line goes to Claude's context, which says it in the person's language"
   D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D" VIBEMAESTRO_ROLE=solo
   has "$(sysm "$OUT")" "9.9.9 is available" "[S3] control: VIBEMAESTRO_ROLE=solo is no worker session, the line shows"
   D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D" INTENT_SLUG=x "SEAT=  "
@@ -364,6 +368,10 @@ fam_brain() { local S=$1 B="$TMP/b/plugins/vibemaestro-brain" Q="$TMP/b/plugins/
   eq "$(keys "$OUT")" "systemMessage" "[B2] …and only systemMessage"
   D=$(fresh)/data; seed "$D" '"9.9.9"' vibemaestro-brain; us "$B" "$D"
   has "$(sysm "$OUT")" "vibemaestro-brain 9.9.9 is available" "[B0] control: brain's seeded cache shows the line"
+  EB="$TMP/everyday-folder-brain"; mkdir -p "$EB"; printf 'x\n' > "$EB/notes.md"
+  D=$(fresh)/data; seed "$D" '"9.9.9"' vibemaestro-brain; us "$B" "$D" CLAUDE_PROJECT_DIR="$EB"
+  eq "$RC $(keys "$OUT") $(sysm "$OUT")" "0 hookSpecificOutput " "[V2] brain in the kit's everyday mode: the person sees no line in a fixed language"
+  has "$(ctx "$OUT")" "vibemaestro-brain 9.9.9 is available" "[V2] …brain's line goes to Claude's context"
   D=$(fresh)/data; seed "$D" '"9.9.9"' vibemaestro-brain; srv "$(tags vibemaestro-brain 9.9.9)"; quiet "[B3] BRAIN_OFF" "$B" "$D" BRAIN_OFF=1
   D=$(fresh)/data; seed "$D" '"9.9.9"' vibemaestro-brain; quiet "[B3] a pod" "$B" "$D" INTENT_SLUG=x SEAT=y
   mkp "$TMP/b/plugins/vibemaestro-brain" "$BRAIN" vibemaestro-brain - "$REPO_URL"

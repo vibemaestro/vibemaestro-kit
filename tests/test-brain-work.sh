@@ -20,7 +20,7 @@
 #   [h] S 20, Q 15, X 30, T 20, F 25 accepted, the next add queued (never refused); S text 600 accepted, 601 refused
 #   [i] a fact with a home path refused by sanitize, `~/…` accepted
 #   [j] D and W still refused by `brain op`; the owner path unchanged; no `brain op` option takes an owner quote
-#   [k] the session-start episode line: format 7, injected (string 1), injected_strings (strings 2 …) as printed
+#   [k] the session-start episode line: format 8, injected (string 1), injected_strings (strings 2 …) as printed
 #   [l] the hand-over: every other string is string 1's pass; alone, a string's command renders its own string after its wait;
 #       an older hand-over is never used; SessionEnd removes it; strings packed in UTF-16 units
 #   [m] a log from before the migration (D W N X T, a link-close): every item shown, N, X and T in the right brain; a brain of
@@ -219,7 +219,7 @@ case_kinds() {
   np; pr 'acme/app¤5' open; pr 'acme/app¤6' open
   br op add --kind session --text "w-auth: review round 2; PR acme/app¤5" --closes acme/app¤5
   c_rc 0 "[a] --kind session with --closes: rc 0"; c_has "$OUT" "added S1" "[a] it is S1"
-  br op add --kind queue --text "owner: approve the budget" --closes acme/app¤6
+  br op add --kind queue --text "owner: approve the budget" --blocks "the release cut" --closes acme/app¤6
   c_rc 0 "[a] --kind queue with --closes: rc 0"; c_has "$OUT" "added Q1" "[a] it is Q1"
   br op add --kind fact --text "kit CLI: ~/bin/kit"
   c_rc 0 "[a] --kind fact: rc 0"; c_has "$OUT" "added F1" "[a] it is F1"
@@ -251,7 +251,7 @@ case_status() {
   br op supersede S9 --text "$(rep s 300)" --reason r --drop-anchor acme/app¤9
   c_rc 1 "[b] an S supersede still refuses a drop of an anchor it does not hold"
   c_eq "$(grep -c '"op":"supersede"' "$(sdir)/hot.jsonl")" 8 "[b] each is logged"
-  br op add --kind queue --text "$(rep q 100)"
+  br op add --kind queue --text "$(rep q 100)" --blocks "the release cut"
   br op supersede Q1 --text "$(rep q 10)" --reason answered-in-part; c_rc 0 "[b] a Q supersede may shrink too"
   br op add --kind next --text "$(rep x 100)"
   for i in 1 2 3 4 5; do br op supersede "X$i" --text "$(rep x 100)" --reason "r$i"; c_rc 0 "[b] X supersede $i: rc 0"; done
@@ -388,12 +388,13 @@ case_quote() {
 
 # --- [h] -----------------------------------------------------------------------------------------------------------------------
 case_caps() {
-  np; local k n i
+  np; local k n i B
   for k in session:20 queue:15 next:30 trap:20 fact:25; do
     n=${k#*:}; k=${k%%:*}
-    for i in $(seq 1 "$n"); do br op add --kind "$k" --text "$k $i"; [ "$RC" = 0 ] || break; done
+    B=(); [ "$k" = queue ] && B=(--blocks "the release cut")
+    for i in $(seq 1 "$n"); do br op add --kind "$k" --text "$k $i" "${B[@]}"; [ "$RC" = 0 ] || break; done
     c_rc 0 "[h] $k: $n accepted"; c_hasnt "$OUT" "queued" "[h] $k: the last of them live"
-    br op add --kind "$k" --text "$k one more"
+    br op add --kind "$k" --text "$k one more" "${B[@]}"
     c_rc 0 "[h] $k: the next add is not refused"; c_has "$OUT" "queued" "[h] $k: it is queued"
   done
   np
@@ -433,7 +434,7 @@ case_episode() {
   startall compact
   local ep; ep=$(eplines session-start | tail -n 1)
   c_eq "$(eplines session-start | wc -l | tr -d ' ')" 1 "[k] one session-start line for all the commands"
-  c_has "$ep" '"format":7' "[k] format 7"
+  c_has "$ep" '"format":8' "[k] format 8"
   c_has "$ep" "\"injected\":$(clen session-start)," "[k] injected: string 1's length"
   c_has "$ep" "\"injected_strings\":[$(clen session-start-2)]" "[k] injected_strings: string 2's (the right brain)"
   c_has "$ep" '"cut":0,"cut_strings":[0]' "[k] the cuts, 0"
@@ -576,7 +577,7 @@ print(s.render_key(md, st, now=later) == s.render_key(s.render_all(st, now=later
   bpy 'import json
 d = s.state_dir(); f = open(d + "/episodes.jsonl", "a")
 f.write(json.dumps({"t": s.now_iso(), "kind": "session-start", "session": "older-two", "format": 2}) + "\n")'
-  br doctor; c_has "$OUT" "log format 2, this one writes 7" "[m] doctor warns on a session last started on format 2"
+  br doctor; c_has "$OUT" "log format 2, this one writes 8" "[m] doctor warns on a session last started on format 2"
 }
 
 # --- [n] -----------------------------------------------------------------------------------------------------------------------

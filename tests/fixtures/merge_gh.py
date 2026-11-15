@@ -7,9 +7,13 @@ every argv as one JSON line. It never touches the network.
         "repo"     owner/name every `pr` call must name with --repo, and every `api` path under repos/ must start with
         "pr"       the object `pr view` prints (only the --json fields asked for); "mergeable_seq": a list served one value per
                    call, the last one repeated; "merge_head": the head GitHub sees at merge time (default: headRefOid);
-                   "after_merge_head": the head `pr view` reports once merged (default: headRefOid);
+                   "after_merge_head", "after_merge_base": the head and base `pr view` reports once merged (default: as before);
                    "merge_mode": "queue" (`pr merge` exits 0 and nothing merges, as with a merge queue) or "auto" (the same,
-                   and `pr view` then shows an autoMergeRequest)
+                   and `pr view` then shows an autoMergeRequest); "merge_5xx": one fault per `pr merge` call, the first first, a 5xx
+                   in the words of gh's GraphQL client (`non-200 OK status code: 502 …`): "landed" merges and then answers 502 (the
+                   answer was lost), "lost" answers 502 and merges nothing, "dropped" merges
+                   and then loses the connection (gh: `http2: client connection lost`), "raced" has another hand merge the PR just before the
+                   call; "queue_head": the head a queued PR reads (another hand moved it, its auto-merge dropped); on a PR merged already `pr merge` does as gh does: `! Pull request … was already merged`, exit 0, no pin
         "fail_after_merge"  like "fail", for the calls made once the PR merged
         "api"      {path: value}; the path is the call's, without a leading `/`, query included. A string is served raw; an object
                    {"__pages__": [p1, p2, ...]} is served page by page; a list is served one element per page; any other value is
@@ -73,9 +77,14 @@ def pr_view():
     seq = pr.pop("mergeable_seq", None)
     pr.pop("merge_head", None)
     pr.pop("after_merge_head", None)
+    pr.pop("after_merge_base", None)
     pr.pop("merge_hang_s", None)
+    pr.pop("merge_5xx", None)
     mode = pr.pop("merge_mode", None)
     pr["autoMergeRequest"] = {"mergeMethod": "SQUASH"} if mode == "auto" and STATE and os.path.exists(STATE + ".auto") else None
+    qhead = pr.pop("queue_head", None)
+    if qhead and STATE and os.path.exists(STATE + ".auto"):
+        pr["headRefOid"], pr["autoMergeRequest"] = qhead, None
     if seq:
         cnt = os.environ["FAKE_GH_LOG"] + ".mergeable"
         n = int(open(cnt).read()) if os.path.exists(cnt) else 0
@@ -85,6 +94,7 @@ def pr_view():
         st = json.load(open(STATE))
         pr["state"], pr["mergeCommit"] = "MERGED", {"oid": st["merge_sha"]}
         pr["headRefOid"] = FX["pr"].get("after_merge_head") or pr["headRefOid"]
+        pr["baseRefName"] = FX["pr"].get("after_merge_base") or pr.get("baseRefName")
     fields = (opt("--json") or "").split(",")
     sys.stdout.write(json.dumps({k: pr.get(k) for k in fields if k}) + "\n")
 
@@ -94,8 +104,19 @@ def pr_merge():
         die("HTTP 500: %s" % FAIL["pr merge"])
     if opt("--repo") != FX["repo"]:
         die("fake gh: pr merge without --repo %s" % FX["repo"])
+    faults, fault = FX["pr"].get("merge_5xx") or [], None
+    if faults:
+        cnt = os.environ["FAKE_GH_LOG"] + ".merge5xx"
+        n = int(open(cnt).read()) if os.path.exists(cnt) else 0
+        open(cnt, "w").write(str(n + 1))
+        fault = faults[n] if n < len(faults) else None
+    if fault == "lost":
+        die("non-200 OK status code: 502 Bad Gateway body: \"<html><body><h1>502 Server Error</h1></body></html>\"")
+    if fault == "raced" and STATE:
+        json.dump({"merge_sha": "e" * 40, "args": ["raced"]}, open(STATE, "w"))
     if merged():
-        die("GraphQL: Pull Request is not mergeable (mergePullRequest)")
+        sys.stderr.write("! Pull request %s/#%s was already merged\n" % (FX["repo"], A[2]))
+        return
     want = opt("--match-head-commit")
     head = FX["pr"].get("merge_head") or FX["pr"]["headRefOid"]
     if want is not None and want != head:
@@ -109,6 +130,10 @@ def pr_merge():
         return
     if STATE:
         json.dump({"merge_sha": "f" * 40, "args": A}, open(STATE, "w"))
+    if fault == "dropped":
+        die("Post \"https://api.github.com/graphql\": http2: client connection lost")
+    if fault == "landed":
+        die("non-200 OK status code: 502 Bad Gateway body: \"<html><body><h1>502 Server Error</h1></body></html>\"")
     sys.stdout.write("Squashed and merged pull request #%s\n" % A[2])
 
 

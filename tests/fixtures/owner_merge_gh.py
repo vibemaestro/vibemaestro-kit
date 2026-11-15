@@ -6,7 +6,9 @@ Usage: owner_merge_gh.py <world.json> <log> <gh args...>
 
 The world:
   "prs": {"<owner/repo>#<n>": {"state", "isDraft", "head", "mergeable", "base", "files": [...], "unknown_reads": <n>,
-          "queue": <bool>, "on_merge": {"<owner/repo>#<n>": {field: value}}}}
+          "queue": <bool>, "on_merge": {"<owner/repo>#<n>": {field: value}}, "merge_5xx": ["landed"|"lost", ...],
+          "merged_head": <sha>, "merged_base": <branch>, "late_reads": <n>, "after_call": {field: value}}}
+  "view_fail": <n>   the next n `pr view` calls fail with GitHub's 502; a PR's "view_fail_after_merge": <n> sets it when it merges
   "checks": {"<owner/repo>@<sha>": [[name, started_at, status, conclusion, workflow?]]}   (workflow defaults to "ci")
   "workflow_runs": {"<owner/repo>@<sha>/<workflow>": {"status", "conclusion"}}               (else completed, red when a run is)
   "statuses": {"<owner/repo>@<sha>": [[context, state, created_at]]}
@@ -14,7 +16,13 @@ GitHub's own answers: check-runs without `filter=all` lists only the newest run 
 `pr view` prints the kit's seven fields joined by the unit separator; `pr merge` is refused unless the PR is OPEN, MERGEABLE and its head is --match-head-commit; then it reads MERGED with a merge
 commit, mergeability UNKNOWN, and the PR's on_merge changes apply to the others; a PR with "queue" is only queued (an auto-merge
 request, exit 0), as on a base that requires a merge queue. An open PR with unknown_reads > 0 reads UNKNOWN that many more
-times. Each merge GitHub accepted is one log line `merge|queued <owner/repo>#<n> match <sha> admin yes|no`; any other call exits 2.
+times. "merge_5xx" serves one fault per `pr merge` call, the first first, a 5xx in the words of gh's GraphQL client
+(`non-200 OK status code: 502 Bad Gateway body: …`): "landed" merges and then answers 502 (GitHub merged, the answer was lost),
+"lost" answers 502 and merges nothing, "refused" is GitHub's GraphQL refusal (no status), "blocked" gh's own refusal before any request, "timeout" GitHub's own query timeout (status 200, merges nothing), "raced" has another hand merge the PR
+just before the call, "dropped" merges and then loses the connection (gh: `http2: client connection lost`), "late" merges but reads OPEN for "late_reads" (default 1) more `pr view` calls, then MERGED, and
+answers 502. "after_call" changes the PR itself once a call exits 0 (a queued PR whose head another hand moves). On a PR merged already `pr merge` does as gh does: `! Pull request … was already merged`, exit 0, no pin. "merged_head" and "merged_base" are the head and base the PR
+reads once merged (another head merged, or into another base). Each merge GitHub accepted is one log line `merge|queued <owner/repo>#<n> match <sha> admin yes|no`, each lost,
+refused, blocked or timed-out one `502|refused|blocked|timeout <owner/repo>#<n> match <sha>`; any other call exits 2.
 """
 import hashlib
 import json
@@ -55,7 +63,17 @@ def commit_runs(repo, sha):
 
 
 if args[:2] == ["pr", "view"]:
+    if world.get("view_fail", 0) > 0:
+        world["view_fail"] -= 1
+        save()
+        fail("non-200 OK status code: 502 Bad Gateway body: \"<html><body><h1>502 Server Error</h1></body></html>\"")
     p = world["prs"].get(pr_key()) or fail("GraphQL: Could not resolve to a PullRequest")
+    if "pending_merge" in p:
+        if p["late_views"] > 0:
+            p["late_views"] -= 1
+        else:
+            p.update(p.pop("pending_merge"))
+        save()
     mergeable = p["mergeable"]
     if p["state"] == "OPEN" and p.get("unknown_reads", 0) > 0:
         p["unknown_reads"] -= 1
@@ -99,22 +117,58 @@ elif args[:2] == ["pr", "diff"] and "--name-only" in args:
 elif args[:2] == ["pr", "merge"]:
     key, match = pr_key(), opt("--match-head-commit")
     p = world["prs"].get(key) or fail("no such pull request")
+    fault = p["merge_5xx"].pop(0) if p.get("merge_5xx") else None
+    if fault == "timeout":
+        save()
+        with open(log_path, "a") as f:
+            f.write("timeout %s match %s\n" % (key, match))
+        fail("GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a "
+             "GitHub bug. Please include `C0DE:1234:5678` when reporting this issue.")
+    if fault == "blocked":
+        save()
+        with open(log_path, "a") as f:
+            f.write("blocked %s match %s\n" % (key, match))
+        fail("X Pull request %s is not mergeable: the base branch policy prohibits the merge." % key)
+    if fault in ("lost", "refused"):
+        save()
+        with open(log_path, "a") as f:
+            f.write("%s %s match %s\n" % ("502" if fault == "lost" else "refused", key, match))
+        fail("non-200 OK status code: 502 Bad Gateway body: \"<html><body><h1>502 Server Error</h1></body></html>\"" if fault == "lost"
+             else "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)")
+    if fault == "raced":
+        p.update(state="MERGED", mergeable="UNKNOWN", mergeCommit=hashlib.sha1(key.encode()).hexdigest(), head=p.get("merged_head", p["head"]))
+        save()
+    if p["state"] == "MERGED":
+        sys.stderr.write("! Pull request %s was already merged\n" % key)
+        sys.exit(0)
     if p["state"] != "OPEN":
-        fail("Pull request %s is not open" % key)
+        fail("GraphQL: Pull request %s is not open (mergePullRequest)" % key)
     if match != p["head"]:
-        fail("Head branch was modified. Review and try the merge again.")
+        fail("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)")
     if p["mergeable"] != "MERGEABLE":
-        fail("Pull request %s is not mergeable: the merge commit cannot be cleanly created." % key)
+        fail("X Pull request %s is not mergeable: the merge commit cannot be cleanly created." % key)
+    merged = dict(state="MERGED", mergeable="UNKNOWN", mergeCommit=hashlib.sha1(key.encode()).hexdigest(),
+                  head=p.get("merged_head", p["head"]), base=p.get("merged_base", p["base"]))
     if p.get("queue"):
         p["autoMerge"] = True
         word = "queued"
+    elif fault == "late":
+        p.update(pending_merge=merged, late_views=p.get("late_reads", 1))
+        word = "merge"
     else:
-        p.update(state="MERGED", mergeable="UNKNOWN", mergeCommit=hashlib.sha1(key.encode()).hexdigest())
+        p.update(merged)
+        world["view_fail"] = p.get("view_fail_after_merge", 0)
         for other, change in p.get("on_merge", {}).items():
             world["prs"][other].update(change)
         word = "merge"
     save()
     with open(log_path, "a") as f:
         f.write("%s %s match %s admin %s\n" % (word, key, match, "yes" if "--admin" in args else "no"))
+    if fault == "dropped":
+        fail("Post \"https://api.github.com/graphql\": http2: client connection lost")
+    if fault in ("landed", "late"):
+        fail("non-200 OK status code: 502 Bad Gateway body: \"<html><body><h1>502 Server Error</h1></body></html>\"")
+    p.update(p.pop("after_call", {}))
+    save()
 else:
     fail("fake gh: unexpected %s" % " ".join(args), 2)

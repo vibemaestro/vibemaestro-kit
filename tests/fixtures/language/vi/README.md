@@ -26,9 +26,14 @@ Check: `kb.py check [--strict]`.
 **Finding things without reading them:** `kb.py find <words>` (superseded/done hidden unless `--all`), `kb.py list
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
-**Story** (intent loại story, viết bằng ngôn ngữ repo đặt): dòng "Là / tôi muốn / để", bối cảnh, AC đánh số, phần không làm,
-khẩu phần, tối đa 3 câu hỏi mỗi câu kèm đề xuất và lý do; vừa một màn hình điện thoại, không lệnh, tên tệp hay code.
-Kiểm: `kb.py check intent <ngày>-<slug>`.
+**Story** (intent loại story, viết bằng ngôn ngữ repo đặt): dòng "Là / tôi muốn / để", bối cảnh, AC đánh số (mỗi AC "khi … thì
+…"), phần không làm, khẩu phần, phần **Lời người hỏi → AC** (đúng bảng khuôn viết: mỗi hàng một lời trích nguyên văn | các AC
+nó đòi, AC1, AC2 hay AC1–AC3; mọi AC có mặt ở ít nhất một hàng), tối đa 3 câu hỏi; vừa một màn hình điện thoại, không lệnh,
+tên tệp hay code. Mỗi câu hỏi có bốn phần có nhãn, mỗi nhãn mở một dòng: **Vì sao có câu hỏi này** (kèm một ví dụ),
+**Mỗi phương án nghĩa là gì**, **Tác động**, **Đề xuất** (kèm lý do). Kiểm: `kb.py check intent <ngày>-<slug>`: thiếu phần, phần rỗng,
+phần lời → AC không phải bảng ấy, lời không trỏ AC, AC không có hay AC không nằm hàng nào thì đỏ với story mới hoặc đổi thân;
+story đã có trên merge base, thân không đổi, chỉ bị cảnh báo. Mã ngắn không giải thích trong ngoặc ngay sau nó (D24 (…)) và
+AC không viết "khi … thì" chỉ bị cảnh báo.
 
 **Khuôn spec của một intent:** năm mục `## `, thứ tự tuỳ ý — `## Mục tiêu` (mỗi mục trỏ về AC, `→ AC<n>`), `## Ràng buộc`
 (bảo mật, chi phí, tương thích; không phải cách làm), `## Tiêu chí chấp nhận` (theo hành vi, "khi … thì …", mỗi tiêu chí trỏ về AC),

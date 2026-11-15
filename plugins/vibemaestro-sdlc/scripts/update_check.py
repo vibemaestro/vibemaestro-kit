@@ -197,6 +197,21 @@ def line(name, installed, latest, owner, repo):
             "Release notes: https://github.com/%s/%s/releases/tag/%s--v%s" % (name, latest, installed, owner, repo, name, latest))
 
 
+def for_claude():
+    """True in the kit's everyday mode (vsdlc.session_mode): a hook cannot know the person's language, so the line goes to Claude's
+    context and Claude says it in that language; developer mode, and any doubt, keep the line for the person as before."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        if here not in sys.path:
+            sys.path.insert(0, here)               # brain loads this file into its own process, where sdlc's scripts are not on the path
+        import sdlc_config as C
+        import vsdlc
+        troot = vsdlc.project_root({})
+        return vsdlc.session_mode(os.path.dirname(here), troot, C.load(troot, quiet=True)[0])[0] == "everyday"   # sdlc's root, not brain's
+    except Exception:                              # noqa: BLE001 — the reminder never fails the session
+        return False
+
+
 def spawn(root, data):
     import subprocess
     kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True, "cwd": data}
@@ -239,7 +254,10 @@ def session_start(root):
         return 0
     if show:
         try:
-            sys.stdout.write(json.dumps({"systemMessage": line(name, installed, cache["latest"], owner, repo)}) + "\n")
+            text = line(name, installed, cache["latest"], owner, repo)
+            out = ({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}} if for_claude()
+                   else {"systemMessage": text})
+            sys.stdout.write(json.dumps(out) + "\n")
             sys.stdout.flush()
         except Exception:                          # noqa: BLE001 — a closed stdout: the lock is still released below
             pass

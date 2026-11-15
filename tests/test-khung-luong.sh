@@ -237,7 +237,9 @@ has "$INK" 'Condition: the repo already has `kb/` — if not, do `vibemaestro-sd
 
 echo "== solo: ngoài cây làm việc git — không lời nhắc luồng, không lời khuyên init-kb; repo git chưa có kb/ vẫn có cả hai =="
 unset PL      # the cases above left PL on a trimmed copy of the plugin; these use the real one
-# a plain folder, not a repository: the hook is run on it as it is run on an app
+# a plain folder, not a repository: the hook is run on it as it is run on an app. A plain folder is in everyday mode by default
+# (tests/test-everyday-mode.sh); these cases are a developer's plain folder, the person's choice VIBEMAESTRO_PROFILE=developer
+export VIBEMAESTRO_PROFILE=developer
 PLAIN="$TMP/plain-folder"; mkdir -p "$PLAIN/notes"; : > "$PLAIN/notes/a.md"
 git -C "$PLAIN" rev-parse --is-inside-work-tree >/dev/null 2>&1 && bad "đối chứng dụng cụ: thư mục trơn lại nằm trong cây git" || ok "đối chứng dụng cụ: thư mục trơn không nằm trong cây git"
 O=$(boi "$PLAIN"); C=$(ctx "$O")
@@ -260,6 +262,7 @@ git -C "$PLAINKB" rev-parse --is-inside-work-tree >/dev/null 2>&1 && bad "đối
 C=$(ctx "$(boi "$PLAINKB")")
 has "$C" 'This repo has a `kb/`' "thư mục trơn có kb/: con trỏ tới kb/ còn"
 hasnt "$C" "$FLOW_HEAD" "thư mục trơn có kb/: vẫn không có lời nhắc luồng"
+unset VIBEMAESTRO_PROFILE
 # a git repository without kb/ still gets both (same hook, same plugin)
 C=$(ctx "$(boi "$NOKB")")
 has "$C" "$FLOW_HEAD" "repo git chưa có kb/: có lời nhắc luồng"

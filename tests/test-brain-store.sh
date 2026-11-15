@@ -47,6 +47,9 @@
 #   [Q] the CLI in a session with a project record writes that project from another directory and names both; no session id:
 #       the cwd, as before; a damaged record, or one whose state is not right under the state root: rc 1 naming the record and
 #       the shell's directory, nothing written anywhere
+#   [V] a `signal` op (a measurement a later brain writes) is folded unread: a write, render and doctor after it work, the items
+#       are as before it, a `what` of 32 characters passes; no `what`, a `what` that is not text, empty or over 32, or a
+#       `promote` on it: rc 5 naming the line
 # =============================================================================
 set -uo pipefail
 # the answerer check reads ancestors' CLAUDE_CONFIG_DIR and HOME from their initial environment, which forked subshells share:
@@ -300,7 +303,7 @@ PY
 
 case_render() {
   newp
-  local i k t L
+  local i k t L B
   L="--link #1001 --link #1002 --link #1003 --link #1004 --link #1005 --link #1006 --link #1007 --link #1008"
   for i in $(seq 1 20); do t=$(python3 -c "print(('D$i ' + 'd' * 300)[:300])")
     owner_ok add --kind decision --text "$t" --owner-quote "q$i" --where "prompt $i" $L; done
@@ -309,7 +312,8 @@ case_render() {
     owner_ok add --kind window --text "$t" --owner-quote "q$i" --where "prompt $i" --expires 2099-01-01T00:00:00Z $L; done
   c_rc 0 "[R] instrument: the tenth window is written"
   for k in "now 5 300" "next 30 300" "trap 20 300" "session 20 600" "queue 15 300" "fact 25 300"; do set -- $k
-    for i in $(seq 1 "$2"); do t=$(python3 -c "print(('$1$i ' + 'n' * $3)[:$3])"); br op add --kind "$1" --text "$t" $L; done
+    B=(); [ "$1" = queue ] && B=(--blocks "$(python3 -c "print('b' * 200)")")       # a queue item's blocked work at its cap
+    for i in $(seq 1 "$2"); do t=$(python3 -c "print(('$1$i ' + 'n' * $3)[:$3])"); br op add --kind "$1" --text "$t" $L "${B[@]}"; done
     c_rc 0 "[R] instrument: the last $1 item is written"; c_hasnt "$OUT" "queued" "[R] instrument: and it is live"; done
   br op hit T1
   br render; c_rc 0 "[R] render rc 0"
@@ -904,9 +908,42 @@ print("project-" + hashlib.sha256(c.encode()).hexdigest()[:16])' "$P")
   c_eq "$(card | head -n 1)" "P1: not counted yet" "[focus-counts] another directory's file (same state base): not counted yet"
 }
 
+case_signal() {
+  newp
+  br op add --kind now --text "alpha"; br op add --kind trap --text "a nested claude is not logged in here"
+  sig() {  # sig <op JSON> — append it as the store appends any op, under the lock: a later brain's line, an input, not a break
+    SIG=$1 bpy 'import json, os
+d = s.state_dir()
+with s.locked(d):
+    raw, ops = s.verify(d)
+    s.append(d, raw, dict(json.loads(os.environ["SIG"]), t=s.now_iso(), by=s.by()))'
+  }
+  items() { bpy 'import json; print(json.dumps(s.fold(s.verify(s.state_dir())[1])["items"], sort_keys=True))'; }
+  brc() { OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped "$BROOT/bin/brain" "$@" 2>&1); RC=$?; }
+  local before; before=$(items)
+  sig '{"op": "signal", "what": "recall", "item": "T1", "note": "an extra field"}'
+  c_eq "$(items)" "$before" "[V] the items are as before the signal"
+  sig "{\"op\": \"signal\", \"what\": \"$(printf 'x%.0s' $(seq 32))\"}"
+  br op add --kind next --text "beta"; c_rc 0 "[V] a write after two signals: rc 0"
+  br render; c_rc 0 "[V] render after a signal: rc 0"
+  br doctor; c_rc 0 "[V] doctor after a signal: rc 0"
+  R=$(bpy 'st = s.fold(s.verify(s.state_dir())[1])["items"]; print(sorted(st), st["T1"]["hits"])')
+  c_eq "$R" "['N1', 'T1', 'X1'] 0" "[V] the signal named T1 and changed nothing of it"
+  local bad
+  for bad in '{"op": "signal"}' '{"op": "signal", "what": 42}' '{"op": "signal", "what": ""}' \
+             "{\"op\": \"signal\", \"what\": \"$(printf 'x%.0s' $(seq 33))\"}"; do
+    newp; br op add --kind now --text "alpha"; sig "$bad"
+    brc op add --kind next --text "beta"; c_rc 5 "[V] $bad: a write is refused, rc 5"
+    c_has "$OUT" "line 3: a malformed signal" "[V] $bad: the line is named"
+  done
+  newp; br op add --kind now --text "alpha"; sig '{"op": "signal", "what": "recall", "promote": ["N1"]}'
+  brc op add --kind next --text "beta"; c_rc 5 "[V] a signal with a promote: rc 5"
+  c_has "$OUT" "line 3: a malformed promote" "[V] a signal with a promote: the line is named"
+}
+
 echo "== cases =="
 for c in case_focus_words case_jira case_focus_counts case_focus_done_when case_paths case_where case_joiners case_selbits case_mdlinks case_selectors case_timeleft case_ignorable case_mdtail case_flap case_cachefail case_blank case_nonchar case_abbrev case_repair case_reset case_wipe case_hotmd case_damage case_chars2 case_modes case_fold case_supersede case_shrink case_dw case_budget case_cap case_sensitive case_nofilter case_writer case_edit \
-         case_tail case_cache case_control case_archive case_render case_lock case_record; do run_case $c; done
+         case_tail case_cache case_control case_archive case_render case_lock case_record case_signal; do run_case $c; done
 cd "$TMP" || exit 1
 
 summary

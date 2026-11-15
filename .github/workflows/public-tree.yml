@@ -1,11 +1,12 @@
 name: public-tree
 # The public-tree check (scripts/public-tree.py): every tracked file outside the root kb/ and public.private is published, so none may
 # carry a kb pointer, an issue, PR or row number, a dated decision or diary line, an e-mail, a home path or a private term (the
-# repository secret KIT_TERMS, read through scripts/scan-internal-terms.sh). Hits recorded in scripts/public-tree.baseline are
-# tolerated, and that baseline only shrinks against the base of the change. Fail closed: an empty or missing secret, a missed control
-# or a base that does not resolve is red. No term and no line text is printed: findings are path, line and class.
-# The secret is in the one step's environment only, written to a 0600 file under RUNNER_TEMP and unset before the check runs.
-# Its own file, not a job of test.yml: that file reads the secret exactly once (tests/test-scan-ci-workflow.sh). Only where the term
+# repository variable KIT_TERMS, read through scripts/scan-internal-terms.sh). Hits recorded in scripts/public-tree.baseline are
+# tolerated, and that baseline only shrinks against the base of the change. Fail closed: an empty or missing variable, a missed control
+# or a base that does not resolve is red. No step prints a term or a line text: findings are path, line and class.
+# The runner log does show the list (the step header prints `env:`, and a variable is not masked): only people with access to this private repository see it.
+# The variable is in the one step's environment only, written to a 0600 file under RUNNER_TEMP and unset before the check runs.
+# Its own file, not a job of test.yml: that file reads the variable exactly once (tests/test-scan-ci-workflow.sh). Only where the term
 # list and kb/ live: a public copy of this file skips the job.
 # No CI on a draft: a PR runs it when it is marked ready, then on each new commit; only a new commit cancels a running check.
 on:
@@ -40,13 +41,13 @@ jobs:
       # base.sha when main moved), for a push the commit before it. Event data comes through env, never into the script text.
       - name: Check the published tree
         env:
-          KIT_TERMS: ${{ secrets.KIT_TERMS }}
+          KIT_TERMS: ${{ vars.KIT_TERMS }}
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
         run: |
           set -uo pipefail
           if [ -z "${KIT_TERMS:-}" ] || [ -z "${KIT_TERMS//[[:space:]]/}" ]; then
-            echo "::error::The KIT_TERMS secret is empty or missing: the public-tree check cannot look for private terms, and a check that did not scan must not pass."
+            echo "::error::The KIT_TERMS variable is empty or missing: the public-tree check cannot look for private terms, and a check that did not scan must not pass."
             exit 1
           fi
           umask 077

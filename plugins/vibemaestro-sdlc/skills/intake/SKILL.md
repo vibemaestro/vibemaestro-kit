@@ -40,11 +40,16 @@ Condition: the repo already has `kb/` — if not, do `vibemaestro-sdlc:init-kb` 
    and `P<n>`, the open focus of the brain it serves (`brain show P<n>`; ask the person when it is not clear which one). The command writes
    both into the frontmatter and the card of the type. A story's card is the story the owner approves, in the repository's
    `language` (`sdlc_config.py get language`), and it is the request itself: the As / I want / so that line, context, numbered AC
-   that say what the owner sees (no command, file name or code), out of scope, appetite, at most 3 open questions each with a
-   recommendation and why; it fits a phone screen. With a coordinator, the coordinator writes it after brainstorming with the owner
+   that say what the owner sees, each as when … then (no command, file name or code), out of scope, appetite, the words of the
+   person who asked mapped to the AC (`Lời người hỏi → AC` / `Words of the person who asked → AC`: the template's table, each quote | its AC ids), at
+   most 3 open questions, each with four labelled parts, each label opening a line: why this question (with one example), what
+   each option means, impact, recommendation (and why); it fits a phone screen. With a coordinator, the coordinator writes it after brainstorming with the owner
    and hands it over verbatim; in a solo session, write it with the person (`vibemaestro-sdlc:brainstorm`). A task gets `## What`,
    `## Why` and `## Check`; a bug `## Reproduce`, `## Expected` and `## Test`. `kb.py check intent <date>-<slug>` judges the card:
-   red for a missing part or more than 3 open questions, a warning for code, a path or a long story. An older intent with the first
+   red for a missing part or more than 3 open questions; for a story new or whose body changed, also red for a question part
+   missing or empty, a quote mapping to no AC, an AC the story lacks or an AC in no row (on a story on the merge base with its
+   body unchanged these only warn); a warning for code, a path, a long story, an AC not written as when … then or a short code
+   word (D24) never explained. An older intent with the first
    story card (`## Story`, `## Acceptance criteria`, `## Not doing`, `## Measure`) is still read.
    The command prints the file path and a line `slug for intent-branch.sh: <date>-<slug>`. The slug is lower case, no accents,
    digits, hyphens. Delete every blank marked `<FILL: …>` (in a repo with the default `vi` language the blank carries the Vietnamese placeholder word that `tokens.spec.placeholder` holds); the `description:` line in the frontmatter becomes the description of the issue.

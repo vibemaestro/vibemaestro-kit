@@ -418,6 +418,33 @@ print(h.state_root() == s.state_root())' "$BROOT/scripts")
 
 echo "== cases =="
 for c in case_root case_caps case_shelf case_compact case_guards case_session case_end case_off case_corrupt case_cut case_live case_pick; do run_case $c; done
+
+echo "== [NW] the store cannot load (Windows: no fcntl, no pwd): Claude is told, the person sees no fixed line, the guards refuse =="
+# A sitecustomize on PYTHONPATH takes fcntl and pwd out of the module table: what Windows Python lacks
+NW="$TMP/nowin"; mkdir -p "$NW"; printf 'import sys\nsys.modules["fcntl"] = None\nsys.modules["pwd"] = None\n' > "$NW/sitecustomize.py"
+nw() { PYTHONPATH="$NW" hk "$@"; }
+eq "$(PYTHONPATH="$NW" python3 -c 'import fcntl' >/dev/null 2>&1; echo $?)" 1 "instrument: under the stand-in, fcntl cannot be imported"
+NWP="$TMP/nowin-proj"; mkdir -p "$NWP"; git_ -C "$NWP" init -q
+nw session-start "$(hin session_id=sNW cwd="$NWP" hook_event_name=SessionStart source=startup)"
+has "$(ctx)" "vibemaestro-brain cannot run on this machine yet" "[NW] the session start tells Claude, in its context, that the brain cannot run here (main: nothing, the hook died on import)"
+has "$(ctx)" "tell them in their own language" "[NW] …and to tell the person in their own language only when it matters"
+eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print("systemMessage" in json.loads(sys.stdin.read() or "{}"))')|$RC" "False|0" "[NW] …with no line shown to the person, rc 0"
+nw guard-owner "$(hin session_id=sNW cwd="$NWP" hook_event_name=PreToolUse tool_name=Bash tool_input="$(hin command='brain owner pin --text x')")"
+eq "$(hfield permissionDecision)" deny "[NW] an owner call is refused when the store cannot load (main: let through)"
+nw guard-owner "$(hin session_id=sNW cwd="$NWP" hook_event_name=PreToolUse tool_name=Bash tool_input="$(hin command='git log --grep "brain owner"')")"
+eq "$(hfield permissionDecision)" "" "[NW] …a command that only mentions it is not"
+nw guard-edit "$(hin session_id=sNW cwd="$NWP" hook_event_name=PreToolUse tool_name=Edit tool_input="$(hin file_path="$XDG_STATE_HOME/vibemaestro/brain/x/hot.jsonl")")"
+eq "$(hfield permissionDecision)" deny "[NW] an edit inside the brain's state folder is refused when the store cannot load (main: let through)"
+nw guard-edit "$(hin session_id=sNW cwd="$NWP" hook_event_name=PreToolUse tool_name=Edit tool_input="$(hin file_path="$NWP/notes.md")")"
+eq "$(hfield permissionDecision)" "" "[NW] …an edit of the person's own file is not"
+nw guard-bash "$(hin session_id=sNW agent_id=a1 cwd="$NWP" hook_event_name=PreToolUse tool_name=Bash tool_input="$(hin command='brain op add --kind now --text x')")"
+eq "$(hfield permissionDecision)" deny "[NW] a subagent's brain op is still refused (that guard never needed the store)"
+NF="$TMP/nofcntl"; mkdir -p "$NF"; printf 'import sys\nsys.modules["fcntl"] = None\n' > "$NF/sitecustomize.py"   # no fcntl, pwd still there (a broken POSIX install)
+AH=$(python3 -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')
+OUT=$(printf '%s' "$(hin session_id=sNW cwd="$NWP" hook_event_name=PreToolUse tool_name=Edit tool_input="$(hin file_path="$AH/.local/state/vibemaestro/brain/x/hot.jsonl")")" \
+      | env -u XDG_STATE_HOME HOME= PYTHONPATH="$NF" python3 "$BROOT/scripts/brain_hook.py" guard-edit 2>/dev/null)
+eq "$(hfield permissionDecision)" deny "[NW] with HOME empty, the store's folder under the account's home is refused too, as the store places it (expanduser gave /)"
+
 cd "$TMP" || exit 1
 
 summary

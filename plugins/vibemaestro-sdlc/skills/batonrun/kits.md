@@ -14,7 +14,10 @@ Rehearse is the guard's dry run: every condition with its verdict, and the plan 
 the guard the signed plan (`BATON_PLAN`), so a world that moved since signing is refused before anything merges. A PR the guard
 refuses fails at rehearse and cannot be signed: fix the PR, never the guard's arguments to fit it. The header says `Stops: none`,
 so in mode `auto` the session signs it. A merge is not reversible: when the run fails after
-GitHub merged, `run` exits 5 and the way back is a revert PR, which the owner is told about at once. Accepted red steps
+GitHub merged, `run` exits 5 and the way back is a revert PR, which the owner is told about at once. A merge call that fails
+with anything but GitHub's refusal (a 5xx, a timeout, a dropped connection) may have landed: the PR, read back, decides (merged
+at the signed head and base: the merge done, run ok; still open there: one more call; else the state is unknown), and a stop
+from there is logged pending, so the undo advises no revert for a merge at the signed head. Accepted red steps
 (`--accept '<check>:<step prefix>'`), base files that may stay behind (`--behind-ok <globs>`), an image that must exist
 (`--require-image <tag>`) and the image-bump lane (`--image-bump`) are arguments, so the signature binds them.
 `--behind-ok-clean <docs globs>` (each ends in `.md`, starts with a literal folder) also accepts a docs file main and the PR both changed, when git's 3-way merge and GitHub's test merge agree it is clean and a merged current-state still passes its check.
@@ -96,6 +99,11 @@ hand-written batons, signed by the owner.
 absent) in one run the owner signs (`Stops: security-boundary`); it takes no argument. Follow the skill `bootstrap`:
 on a new machine there is no launcher yet, so it runs through the plugin's `baton.py`, and the owner types the signature.
 A session whose sdlc is not the installed one (started before a plugin update) is refused at rehearse with one line naming both versions: restart Claude Code, then run it again.
+
+`kit:soul-line` adds or removes one SOUL line (`- [S14] text`) in a project's SOUL file, only as an owner step of that
+project's brain names it (code, action, text and file), each step once: `--file <absolute path> --code <S14> --action
+add|remove --text <text>`; `Stops: none`. vibemaestro-brain runs it right after the owner's `--soul-line` step; a session
+runs the same call only when the brain says the line waits (mode manual). It reads the step from the brain's log itself.
 
 `kit:permissions-upgrade` replaces the ask rules of the permission block printed before the anchored rules (each started with
 `*`, so it asked for any command that only mentioned a sign or a mode call) in the user settings: it removes exactly those
@@ -322,7 +330,10 @@ owner --seal …` dialog and one `run` merges them in order, each read again jus
 mergeable, has a red check run or commit status it does not accept (read as the guarded merge reads them: every run, the latest
 per workflow and name), no check run that passed (only skipped runs or statuses), an accepted red that is absent or not red, a check run under `--no-checks`, or a
 required image missing. A later pull request of the same repository merges once GitHub reports it mergeable again (it waits while
-GitHub answers UNKNOWN). A conflict, a moved head or a refused merge stops the run there: the merges before it stay, the run and its
+GitHub answers UNKNOWN). A merge call that fails with anything but GitHub's refusal (a 5xx, a timeout, a dropped connection) may
+have landed: the PR, read back, decides (merged at the signed head and base: merged, the run goes on; still open there: one more
+call; else the state is unknown), and a stop from there leaves that PR to the owner in the undo when it is unread, open or merged
+at its signed head (no revert advice). A conflict, a moved head or a refused merge stops the run there: the merges before it stay, the run and its
 undo name each (a merge GitHub only queued too), the result says the state is unknown, and the way back is a revert PR each, told to the owner.
 
 `kit:label-create` creates new labels in one repository (`kit:gh-write`'s `issue-labels` only sets labels the repository already

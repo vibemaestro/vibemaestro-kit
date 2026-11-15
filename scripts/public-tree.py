@@ -553,7 +553,7 @@ def main():
             print("public-tree: wrote %d line(s) to %s" % (write_baseline(root, hits), BASELINE))
             return 0
         if a.ci and not (a.terms and a.base):
-            raise Broken("--ci needs --terms (the KIT_TERMS secret) and --base: a check that did not scan must not pass")
+            raise Broken("--ci needs --terms (the KIT_TERMS variable) and --base: a check that did not scan must not pass")
         if a.terms is not None and not os.path.isfile(a.terms):
             raise Broken("the term file does not exist")
         base = a.base or git(root, "merge-base", "HEAD", "origin/main").stdout.decode().strip()

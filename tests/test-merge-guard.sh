@@ -22,7 +22,9 @@
 #       bootstrap lane (same checks); every other PR against that base is still rc 65; the head may only add the merge section
 #   [I] image: --require-image by tag and by full reference, missing, another image; the image-bump lane and its faults
 #   [O] options: --admin without admin_bypass (64), a short head (64), deny globs unset (65), the head's config has no effect
-#   [M] dry run makes no merge call; --merge makes one, pinned; a moved head; the merge log, one line per run, no title or body
+#   [M] dry run makes no merge call; --merge makes one, pinned; a moved head; the merge log, one line per run, no title or body;
+#       an HTTP 502 on the merge call may have landed: merged at the head is merged; at another head, unreadable or refused on the
+#       one more try at the head, rc 2 logged merge-pending; a second call's exit 0 is read again
 #   [Q] the deny floor follows rules.dirs: the config init writes for a rules folder under .vibemaestro/ with another name refuses
 #       its files, so does the floor of a first PR; .vibemaestro/batons still merges
 #   [L] the back-merge lane: a backmerge/* PR into the default branch (whatever its name) with its head on release merges with
@@ -34,7 +36,8 @@
 #       run from the base only (a PR's planner or map is never read), with no token, PATH or socket; no planner (or bootstrap):
 #       every base file must be docs
 #   [T] the kit baton through baton.py: check, rehearse = dry run, sign and run = one merge, a deny PR cannot be signed, a
-#       second run is refused, a merged PR read back as open is rc 5, an escape from batons/ is refused
+#       second run is refused, a merged PR read back as open is rc 5, an escape from batons/ is refused; a 502 on a merge that
+#       landed is run ok, and undo advises no revert for a merge at the signed head
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -493,7 +496,9 @@ for l in open(sys.argv[1]): d = json.loads(l); assert {"time", "repo", "pr", "he
   d=$(mkfx merge-mode=auto); guard "$PL" "$d" "${STD[@]}" --merge; guard "$PL" "$d" --repo acme/app --pr 7 --head "$H" --status
   eq "$OUT" "queued head $H" "[M] an auto-merge request: --status says queued"
   d=$(mkfx merge-hang=5); GENV=(MERGE_GUARD_GH_TIMEOUT_S=1); guard "$PL" "$d" "${STD[@]}" --merge; GENV=()
-  eq "$RC" 2 "[M] gh pr merge does not answer in time: rc 2"
+  eq "$RC:$(merges "$d")" "2:2" "[M] gh pr merge does not answer in time: read back (open at the head), one more try, rc 2"
+  has "$OUT" "gh pr merge failed (no answer: gh pr merge timed out after 1s) and the PR, read again after 0s, is still open at head $H: one more try" \
+      "[M] …a call gh did not answer may have landed: read back like a 5xx"
   has "$(tail -n 1 "$d/state/vibemaestro/merge-log.jsonl")" '"result": "merge-pending"' "[M] …logged as merge-pending (the request may have reached GitHub)"
   guard "$PL" "$d" --repo acme/app --pr 7 --head "$H" --status
   eq "$OUT" "pending head $H" "[M] …--status says pending"
@@ -516,6 +521,48 @@ PY
   guard "$PL" "$d" "${STD[@]}" --merge; guard "$PL" "$d" --repo acme/app --pr 7 --head "$H" --status
   eq "$OUT" "merged ffffffffffffffffffffffffffffffffffffffff head $H" "[M] --status of a merged PR"
   eq "$(loglines "$d")" 1 "[M] --status writes no merge-log line"
+  d=$(mkfx merge-5xx=landed); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "0:1" "[M] gh pr merge answers HTTP 502, but the merge landed at the head: rc 0, one pr merge call"
+  has "$OUT" "gh pr merge failed (HTTP 502), but the PR reads MERGED at head $H: the merge landed" "[M] …it names the 502 and the read-back"
+  has "$(tail -n 1 "$d/state/vibemaestro/merge-log.jsonl")" '"result": "merged"' "[M] …logged as merged"
+  d=$(mkfx merge-5xx=landed after-merge-head); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:1" "[M] HTTP 502, and the PR reads merged at another head: rc 2, not tried again"
+  has "$OUT" "gh pr merge failed (HTTP 502) and the PR reads MERGED at head $H2 into main: not merged at the head and base; the state is unknown, tell the owner" \
+      "[M] …it names what it read, the state unknown"
+  d=$(mkfx merge-5xx=landed view-fails-after-merge); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:1" "[M] HTTP 502, and the PR cannot be read back (asked 3 times): rc 2"
+  has "$OUT" "gh pr merge failed (HTTP 502) and the PR cannot be read back: it may have merged; the state is unknown, tell the owner" \
+      "[M] …it says it may have merged, not refused"
+  has "$(tail -n 1 "$d/state/vibemaestro/merge-log.jsonl")" '"result": "merge-pending"' "[M] …logged as merge-pending"
+  d=$(mkfx merge-5xx=lost,raced after-merge-head); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:2" "[M] HTTP 502, then another hand merges another head and the retry exits 0 (already merged): rc 2"
+  has "$OUT" "gh pr merge exited 0 on the second try and the PR reads MERGED at head $H2 into main" "[M] …the retry's exit 0 is read again"
+  d=$(mkfx merge-5xx=lost,lost); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:2" "[M] HTTP 502 twice, the PR still open at the head: one more try, then rc 2"
+  has "$OUT" "gh pr merge failed (HTTP 502) and the PR, read again after 0s, is still open at head $H: one more try" "[M] …it names the retry"
+  has "$OUT" "an earlier call may still land: tell the owner" "[M] …the refused stop says an earlier call may still land"
+  has "$(tail -n 1 "$d/state/vibemaestro/merge-log.jsonl")" '"result": "merge-pending"' "[M] …logged as merge-pending (N1a: it may still land)"
+  guard "$PL" "$d" --repo acme/app --pr 7 --head "$H" --status
+  eq "$OUT" "pending head $H" "[M] …--status says pending, never open"
+  d=$(mkfx merge-5xx=dropped); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "0:1" "[M] the merge lands, then gh loses the connection (http2: client connection lost): rc 0 (B1)"
+  has "$OUT" "gh pr merge failed (an error that is not GitHub's refusal), but the PR reads MERGED at head $H: the merge landed" \
+      "[M] …any error but GitHub's refusal may have landed"
+  d=$(mkfx merge-5xx=lost merge-mode=queue queue-head); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:2" "[M] HTTP 502, the second call queues it, then its head moves: rc 2 (D1)"
+  has "$OUT" "gh pr merge exited 0 on the second try and the PR reads OPEN at head $H2 into main: not merged at the head and base; the state is unknown" \
+      "[M] …the state unknown, not a queued merge"
+  has "$(tail -n 1 "$d/state/vibemaestro/merge-log.jsonl")" '"result": "merge-pending"' "[M] …logged as merge-pending"
+  d=$(mkfx merge-5xx=lost merge-mode=queue); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:2" "[M] HTTP 502, then the second call only queues it: rc 2"
+  has "$(tail -n 1 "$d/state/vibemaestro/merge-log.jsonl")" '"result": "merge-pending"' "[M] …logged as merge-pending, as a first call that queues"
+  guard "$PL" "$d" --repo acme/app --pr 7 --head "$H" --status
+  eq "$OUT" "pending head $H" "[M] …--status says pending"
+  d=$(mkfx after-merge-base=release); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:1" "[M] gh pr merge exits 0, but the PR reads merged into another base: rc 2"
+  has "$OUT" "gh pr merge exited 0, but the PR reads merged at head $H into release, not $H into main: tell the owner" "[M] …naming the base"
+  d=$(mkfx merge-5xx=lost); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "0:2" "[M] HTTP 502 once, the PR still open: the second try merges, rc 0"
 }
 
 # bt <plugin> <case dir> <baton args...> — baton.py from the case directory, the fake gh, mode state in <case>/state; OUT, RC
@@ -562,6 +609,16 @@ fam_baton() {
   bt "$PL" "$d" sign --by coordinator-auto --seal "${seal:-none}" "${KA[@]}"; bt "$PL" "$d" run "${KA[@]}"
   eq "$RC" 5 "[T] merged, but the post-check reads another head: rc 5 (undo cannot un-merge: tell the owner)"
   has "$OUT" "revert" "[T] …undo says the way back is a revert PR"
+  d=$(mkfx merge-5xx=landed); bt "$PL" "$d" mode auto; bt "$PL" "$d" rehearse "${KA[@]}"; seal=$(seal_of)
+  bt "$PL" "$d" sign --by coordinator-auto --seal "${seal:-none}" "${KA[@]}"; bt "$PL" "$d" run "${KA[@]}"
+  eq "$RC:$(merges "$d")" "0:1" "[T] gh pr merge answers HTTP 502, but the merge landed at the head: run rc 0, one merge call"
+  has "$OUT" "run: ok" "[T] …run: ok"
+  # undo of a run that failed after its merge landed at the signed head: the phase alone, on that merged state
+  OUT=$(cd "$d" && cenv XDG_STATE_HOME="$d/state" FAKE_GH_FX="$d/fx.json" FAKE_GH_LOG="$d/gh.log" FAKE_GH_STATE="$d/merged.json" \
+        BATON_PHASE=undo BATON_PLUGIN_ROOT="$PL" bash "$PL/batons/merge-pr.sh" "${KA[@]:1}" 2>&1); RC=$?
+  eq "$RC" 1 "[T] undo, the PR merged at the signed head: rc 1 (tell the owner)"
+  has "$OUT" "merged at the signed head $H, by this run or another hand (the base is not read here): the run did not confirm it; tell the owner, who decides whether it stays (no revert before that)" "[T] …it leaves the decision to the owner"
+  hasnt "$OUT" "open a revert PR" "[T] …and advises no revert"
   d=$(mkfx moved-head); bt "$PL" "$d" mode auto; bt "$PL" "$d" rehearse "${KA[@]}"; seal=$(seal_of)
   bt "$PL" "$d" sign --by coordinator-auto --seal "${seal:-none}" "${KA[@]}"; bt "$PL" "$d" run "${KA[@]}"
   eq "$RC" 4 "[T] the head moved before the run's merge: GitHub refuses, nothing merged, undo confirms it (rc 4)"

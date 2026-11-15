@@ -21,6 +21,7 @@ import time
 
 sys.dont_write_bytecode = True      # không đẻ __pycache__ vào thư mục plugin (có thể là bản cài trong cache)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import everyday  # noqa: E402
 import rules as R  # noqa: E402
 import rule_packs  # noqa: E402
 import sdlc_config as C  # noqa: E402
@@ -60,7 +61,8 @@ def read_text(path):
 def git_out(cwd, *args):
     """stdout đã strip nếu rc 0, None ở mọi nhánh lỗi (git thiếu, treo, repo lạ)."""
     try:
-        r = subprocess.run(("git", "-C", cwd) + args, capture_output=True, text=True, timeout=GIT_TIMEOUT)
+        r = subprocess.run(("git", "-C", cwd) + args, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape",
+                           timeout=GIT_TIMEOUT)   # git prints paths in UTF-8, whatever the system's code page
     except Exception:
         return None
     return r.stdout.strip() if r.returncode == 0 else None
@@ -108,7 +110,7 @@ def project_root(payload):
     d = os.environ.get("CLAUDE_PROJECT_DIR") or (cwd if _path_str(cwd) else "") or os.getcwd()
     d = os.path.realpath(d)
     top = git_out(d, "rev-parse", "--show-toplevel") if os.path.isdir(d) else None
-    return os.path.realpath(top) if top else d
+    return os.path.realpath(os.fsdecode(top.encode("utf-8", "surrogateescape"))) if top else d   # git's UTF-8 path, in the OS's form
 
 
 def hook_state(troot, sid):
@@ -406,6 +408,49 @@ def pages_for_path(troot, cfg, rel, dirs=()):
         return []
 
 
+# ── everyday mode (scripts/everyday.py chooses it) ─────────────────────────────────────────────────────────
+EVERYDAY_CORE = "templates/everyday-core.md"
+MODE_WHY = {"folder": 'this folder\'s .vibemaestro/sdlc.json sets "profile": "everyday"',
+            "person": "the person's setting VIBEMAESTRO_PROFILE=everyday",
+            "default": "this folder is not connected to a Git remote and is not a developer's repository"}
+MODE_CHANGE = {"folder": 'for the developer flow, set "profile": "developer" in .vibemaestro/sdlc.json',
+               "person": 'for the developer flow, connect the folder to GitHub, set "profile": "developer" in .vibemaestro/sdlc.json, '
+                         'or set VIBEMAESTRO_PROFILE=developer',
+               "default": 'for the developer flow, connect the folder to GitHub or set "profile": "developer" in .vibemaestro/sdlc.json'}
+
+
+def session_mode(root, troot, cfg):
+    """(mode, reason) for this hook (everyday.mode); a worker or coordinated session stays developer: its brief, its first steps and
+    rule coordinated-work are developer work."""
+    m = everyday.mode(troot, cfg["profile"])
+    return ("developer", "coordinated") if m[0] == "everyday" and coordinated_session(root, troot) else m
+
+
+def everyday_rules(rules, paths, root, troot, cfg):
+    """`rules` as delivered; in everyday mode without the plugin's own rules (the developer process), the repo's and the packs' stay."""
+    if session_mode(root, troot, cfg)[0] != "everyday":
+        return rules
+    mine = os.path.join(root, R.RULES_DIR) + os.sep
+    return [(n, t) for n, t in rules if not (paths.get(n) or "").startswith(mine)]
+
+
+def everyday_core(root, reason=None, troot=None):
+    """(context, system message) of the everyday core; with `reason`, the mode line first, and with `troot` one more line when the
+    last quiet save of that folder did not keep the work (everyday.save_trouble). Both lines go to Claude's context only: the hook
+    cannot know the person's language, so Claude says them in it (the core tells it when); the person sees no fixed-language line."""
+    path = os.path.join(root, *EVERYDAY_CORE.split("/"))
+    text = read_text(path)
+    line = "%s: everyday mode, because %s; %s." % (PLUGIN_NAME, MODE_WHY[reason], MODE_CHANGE[reason]) if reason else ""
+    trouble = everyday.save_trouble(troot) if troot else ""
+    if trouble:
+        line += " %s: %s." % (PLUGIN_NAME, trouble)
+    if text is None:
+        msg = "cannot read the everyday core %s" % path
+        return warn_text([msg]) + ("\n\n" + line if line else ""), short_warn([msg])
+    body = strip_front(text).strip()
+    return (line + "\n\n" + body if line else body), ""
+
+
 def pretool_path(raw):
     payload = read_payload(raw)
     if not payload:
@@ -429,6 +474,7 @@ def pretool_path(raw):
         up = repo_upstream(troot, cfg, sid)
         packs, _w = rule_packs.load(troot, _project(troot))   # the pack warnings are said once, at SessionStart
         rules, paths, notes = R.load_all(root, troot, cfg["rules"], keep=(CORE_NAME,), up=up, packs=packs)
+        rules = everyday_rules(rules, paths, root, troot, cfg)
         dirs, stale, mine = R.repo_dirs(cfg["rules"], cfg.get("public")), _stale(notes), R.pack_of(notes)
         # a page of the ledger gets the rules the index gets (its shape rule), on top of its own path's
         led = cfg["current_state"]["path"] if _is_page(cfg, rel) else None
@@ -735,6 +781,7 @@ def pretool_command(raw):
     up = repo_upstream(troot, cfg, sid) if R.repo_dirs(cfg["rules"]) else None
     packs, _w = rule_packs.load(troot, _project(troot))   # the pack warnings are said once, at SessionStart
     rules, paths, notes = R.load_all(root, troot, cfg["rules"], keep=(CORE_NAME,), up=up, packs=packs)
+    rules = everyday_rules(rules, paths, root, troot, cfg)
     stale, mine = _stale(notes), R.pack_of(notes)
     why, first = stdin_go(cmd)              # the one-call baton's body is stdin data, not commands: rules read its first line only
     rcmd = first if why == "" else cmd
@@ -1048,7 +1095,7 @@ def kb_reminder(troot, injected=False, rel="kb/current-state.md", lang="vi"):
 
 
 # Skill directories the "Skills of the plugin" line leaves out on purpose (an old skill name that forwards to its new one for one release).
-SKILLS_NOT_LISTED = ("coordinator-bootstrap",)
+SKILLS_NOT_LISTED = ("coordinator-bootstrap", "history")   # an old name; an everyday skill the everyday core names itself
 
 
 def all_skills():
@@ -1378,6 +1425,12 @@ def session_index_start(payload):
 
 
 CORE_MODES = ("core", "loi")        # `loi`: the hook argument's old name, still read (a session started before an update)
+# Python is there (this hook runs) but Git is not: the machine check of the core hook (pyrun.sh says it when Python is missing too).
+# Guidance, not fixed install steps: Claude proposes the way that fits the person's machine.
+GIT_MISSING = ("vibemaestro: this machine has no Git. The kit needs Git to keep the history of the work. Tell the person, in their "
+               "own language and in plain words without jargon: what is missing and why the kit needs it, how they can check (a new "
+               "terminal and `git --version`), and the way to install it that fits this machine best. Ask before you install anything.",
+               "vibemaestro: this machine has no Git; ask Claude how to set it up on this machine")
 
 
 def session_start(mode):
@@ -1397,7 +1450,12 @@ def session_start(mode):
     if bad:
         ctx, sysmsg = warn_text(bad), short_warn(bad)
     elif mode in CORE_MODES:
-        ctx, sysmsg = session_core(root, coordinated_session(root, troot))
+        m, why = session_mode(root, troot, cfg)
+        ctx, sysmsg = everyday_core(root, why, troot) if m == "everyday" else session_core(root, coordinated_session(root, troot))
+        if shutil.which("git") is None:
+            ctx, sysmsg = with_warn(GIT_MISSING, ctx, sysmsg)
+    elif session_mode(root, troot, cfg)[0] == "everyday":
+        ctx, sysmsg = "", ""                      # the everyday core says it all: no flow, no rule catalogue
     else:
         ctx, sysmsg = session_context(root, troot, cfg, session_key(payload), payload.get("source") or "")
     ctx, sysmsg = with_warn(warn, ctx, sysmsg)    # lời cảnh báo config hỏng đứng trước, cùng một JSON
@@ -1439,7 +1497,12 @@ def subagent_start():
     if silent:
         return 0                                   # `hooks: off`
     bad = plugin_problems(root)
-    ctx, sysmsg = (warn_text(bad), short_warn(bad)) if bad else subagent_core(root)
+    if bad:
+        ctx, sysmsg = warn_text(bad), short_warn(bad)
+    elif session_mode(root, troot, cfg)[0] == "everyday":
+        ctx, sysmsg = everyday_core(root)
+    else:
+        ctx, sysmsg = subagent_core(root)
     ctx, sysmsg = with_warn(warn, ctx, sysmsg)
     emit("SubagentStart", ctx, sysmsg)
     return 0

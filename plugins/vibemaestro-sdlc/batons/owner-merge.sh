@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Purpose: squash-merge 1 to 8 pull requests kit:merge-pr refuses by design, under one owner signature, each pinned to its head; per PR its accepted red checks, a required image and the admin bypass are bound by the signature
-# Targets: the pull requests named by the arguments (repository, number), and their base branches
+# Targets: the pull requests named by the arguments (repository, number), and their base branches; a record under <state-dir>/records of a merge the run could not confirm, kept only for its undo
 # Blast: one squash merge per PR, into its base branch, in the given order; nothing else
 # Undo: none: a merge is not reversible. A run that stops half way keeps the merges before the stop; the run and its undo name each of them, and the way back is a revert PR for each, opened at once and told to the owner
 # Pre: for every PR: it is open, not draft, its head is the given SHA, GitHub reports it MERGEABLE, every check run and status on that head (the latest per workflow and name) is green except the checks named by --accept-red (which must exist and be red), or with --no-checks the head has none, the --require-image tag exists, and the changed files hash to the value in its plan line; read again before each merge, the plan line equal to the signed one
@@ -18,6 +18,10 @@
 # decoded. Run merges in the given order and reads each PR again just before its merge: a later PR of the same repository merges
 # when GitHub reports it MERGEABLE after the earlier merge (it answers UNKNOWN while it recomputes: read again, up to 6 times 5 s
 # apart). A conflict, a moved head, a changed plan line or a refused merge stops the run at that PR; the merges before it stay.
+# A merge call that fails with anything but GitHub's refusal (a 5xx, a timeout, a dropped connection) may have landed: the PR,
+# read back, decides (merged at the signed head and base: done; open there: one more call; else the state is unknown), and a stop
+# from there names the PR in a record its undo reads (and a PR a second call only queued stays in it as the run goes on), so the
+# undo leaves that PR to the owner when it reads it unread, open or merged at its signed head, instead of advising a revert.
 # bash 3.2 (macOS) runs this file: no associative arrays, no ${var,,}, no mapfile.
 set -euo pipefail
 PHASE=${BATON_PHASE:-rehearse}
@@ -231,21 +235,138 @@ EOF
 }
 
 MERGED=""                                 # the PRs this run merged, in order; only merge() adds to it
-# merge <i> — the squash merge of PR i, pinned to its head, only while the plan line just computed is the signed one
+UNSETTLED=""                              # the PRs a second call only queued after a call that may have landed
+# unsettled — on stdin gh's error text of a failed merge call; prints why the call may still have reached GitHub (a 5xx, a
+# timeout, a dropped connection, any text that is not GitHub's refusal), or fails on GitHub's refusal (a GraphQL error, a 4xx):
+# the guard's own reading (gates/backends); "-" for a refusal, so a helper that cannot run fails toward "may have landed"
+unsettled() {
+  python3 -I -B -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import backends
+print(backends.unsettled(sys.stdin.read()) or "-")' "$BATON_PLUGIN_ROOT/gates"
+}
+# wait_s — the wait before a failed merge call's read-back, and between its reads: the guard's (backends.retry_waits, 5 s)
+wait_s() {
+  python3 -I -B -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import backends
+print("%g" % backends.retry_waits()[0])' "$BATON_PLUGIN_ROOT/gates"
+}
+# readback <i> <wait> — view PR i, asked again up to 3 times <wait> s apart while it cannot be read
+readback() {
+  local r
+  for r in 1 2 3; do
+    view "$1" && return 0
+    [ "$r" = 3 ] || sleep "$2"
+  done
+  return 1
+}
+STOP_WHY=""                               # why merge() stopped, for the stop line; set by merge()
+# every PR whose merge call may still land is named in a record kept only for its undo (BATON_UNDO_ONLY): added before its first
+# call, dropped once the run settles it (merged at its signed head; its first call refused; its first call's exit 0, taken as
+# before, the post-check judging it), the file removed when it names
+# none; a stop, or a queued second call, leaves it there, so the undo leaves that PR to the owner rather than advising a revert
+# of a merge that may be the signed one
+case "${XDG_STATE_HOME:-}" in
+  /*) STATE_BASE=$XDG_STATE_HOME ;;
+  *) STATE_BASE="$HOME/.local/state" ;;
+esac
+UNCONFIRMED="$STATE_BASE/vibemaestro/baton/records/kit-owner-merge-unconfirmed-$$-$RANDOM$RANDOM"
+LISTED=no
+# in_flight <id> — the record names PR <id> too (a signed run only); fails when it cannot be written
+in_flight() {
+  [ -n "${BATON_UNDO_ONLY:-}" ] || return 0
+  mkdir -p "${UNCONFIRMED%/*}" && printf '%s\n' "$1" >> "$UNCONFIRMED" || return 1
+  [ "$LISTED" = yes ] || { printf '%s\n' "$UNCONFIRMED" >> "$BATON_UNDO_ONLY" && LISTED=yes; }
+}
+# settled <id> — the run settles PR <id> (merged at its signed head; its first call refused, or exited 0 as before): the record
+# drops it, and is removed when it names no other
+settled() {
+  local rest g=0
+  [ "$LISTED" = yes ] || return 0
+  rest=$(grep -vxF "$1" "$UNCONFIRMED") || g=$?
+  case $g in
+    0) { printf '%s\n' "$rest" > "$UNCONFIRMED.new" && mv -f "$UNCONFIRMED.new" "$UNCONFIRMED"; } \
+         || { rm -f "$UNCONFIRMED.new"; false; } ;;    # the other ids survive a failed write
+    1) rm -f "$UNCONFIRMED" ;;
+    *) false ;;
+  esac || echo "the undo record $UNCONFIRMED cannot be updated after $1 settled: the undo may hold $1, or not read the record; tell the owner" >&2
+}
+# unconfirmed_ids — in undo: the PRs its run's records name, one per line
+unconfirmed_ids() {
+  local p
+  { [ -n "${BATON_UNDO_ONLY:-}" ] && [ -f "$BATON_UNDO_ONLY" ]; } || return 0
+  while IFS= read -r p; do
+    case "$p" in */kit-owner-merge-unconfirmed-*) [ ! -f "$p" ] || cat "$p" ;; esac
+  done < "$BATON_UNDO_ONLY"
+}
+# merge <i> — the squash merge of PR i, pinned to its head, only while the plan line just computed is the signed one. The first
+# call's answer is taken as before (0: merged or queued, the post-check judges; GitHub's refusal: the refused stop); any other
+# failure (a 5xx, a timeout, a dropped connection) may have landed, and from there on one place decides, on the PR read
+# back after a short wait (gh exits 0 on a PR merged already, without the head pin, so a second call's exit 0 is read back too):
+# merged at the signed head into the signed base, the merge is done; open at the signed head and base, one more call, or, after
+# the second, a queued merge (exit 0) for the post-check or the refused stop; anything else, the state unknown. The undo record
+# names the PR from before its first call until the run settles it, so every stop after a call that may have landed leaves it
+# there, and a PR the second call only queued stays in it as the run goes on; a record that cannot be written stops the run
+# before the call
 merge() {
-  [ "$PLAN_LINE" = "$(sed -n "$(($1 + 1))p" "${BATON_PLAN:?no signed plan}")" ] \
-    || { echo "REFUSE ${G_REPO[$1]}#${G_PR[$1]}: its plan line is not the signed one (the world moved)" >&2; return 3; }
-  if [ "${G_ADMIN[$1]}" = yes ]; then
-    gh pr merge "${G_PR[$1]}" -R "${G_REPO[$1]}" --squash --admin --match-head-commit "${G_HEAD[$1]}"
-  else
-    gh pr merge "${G_PR[$1]}" -R "${G_REPO[$1]}" --squash --match-head-commit "${G_HEAD[$1]}"
-  fi || return
-  MERGED="${MERGED:+$MERGED, }${G_REPO[$1]}#${G_PR[$1]}"
+  local i=$1 id="${G_REPO[$1]}#${G_PR[$1]}" base=$BASE head=${G_HEAD[$1]} try out rc why said wait at admin=()
+  STOP_WHY="the merge was refused"
+  [ "$PLAN_LINE" = "$(sed -n "$((i + 1))p" "${BATON_PLAN:?no signed plan}")" ] \
+    || { echo "REFUSE $id: its plan line is not the signed one (the world moved)" >&2; return 3; }
+  [ "${G_ADMIN[$i]}" = no ] || admin=(--admin)
+  in_flight "$id" || { STOP_WHY="the undo record $UNCONFIRMED cannot be written: no merge call made"; return 1; }
+  for try in 1 2; do
+    rc=0
+    out=$(gh pr merge "${G_PR[$i]}" -R "${G_REPO[$i]}" --squash ${admin[@]+"${admin[@]}"} --match-head-commit "$head" 2>&1) || rc=$?
+    why=""
+    if [ "$rc" = 0 ]; then
+      [ -z "$out" ] || printf '%s\n' "$out"
+      [ "$try" = 2 ] || break
+      said="exited 0 on the second try"
+    else
+      [ -z "$out" ] || printf '%s\n' "$out" >&2
+      why=$(printf '%s\n' "$out" | unsettled) || why="an error the kit could not read"
+      [ "$why" != - ] || why=""
+      [ -n "$why" ] || [ "$try" = 2 ] || { settled "$id"; return 1; }    # a refusal of the first call: nothing may have landed
+      said="failed (${why:-rc $rc})"
+    fi
+    # the call may have landed: the PR, read back, decides
+    wait=$(wait_s) || wait=5
+    [ -z "$why" ] || sleep "$wait"
+    if ! readback "$i" "$wait"; then
+      STOP_WHY="the merge call $said and the PR cannot be read back: it may have merged, the state is unknown"
+      return 1
+    fi
+    at=no
+    [ "$R_HEAD" != "$head" ] || [ "$BASE" != "$base" ] || at=yes
+    if [ "$ST" = MERGED ] && [ -n "$MC" ] && [ "$at" = yes ]; then
+      if [ "$rc" = 0 ]; then said="$said and"; else said="$said, but"; fi
+      echo "$id: the merge call $said the PR reads merged at its signed head as $MC: the merge landed"
+      break
+    fi
+    if [ "$ST" = OPEN ] && [ "$at" = yes ]; then
+      if [ "$try" = 1 ]; then
+        echo "$id: the merge call $said and the PR, read again after ${wait} s, is still open at its signed head: one more try"
+        continue
+      fi
+      if [ "$rc" = 0 ]; then                       # the second call only queued it: the post-check judges, and the first call may
+        UNSETTLED="${UNSETTLED:+$UNSETTLED, }$id"  # still land, so the record keeps it
+        return 0
+      fi
+      STOP_WHY="the merge call $said on one more try, the PR open at its signed head; a merge call may still land, the state is unknown"
+      return 1
+    fi
+    STOP_WHY="the merge call $said and the PR reads $ST at head $R_HEAD into $BASE, merge commit ${MC:-none}: not merged at its signed head and base, the state is unknown"
+    return 1
+  done
+  settled "$id"
+  MERGED="${MERGED:+$MERGED, }$id"
 }
 
 # ── the act: PR by PR in the given order, each read and checked just before its write; a stop names every merge before it ──
 stopped() {
-  echo "STOPPED at ${G_REPO[$1]}#${G_PR[$1]}: $2; merged before the stop: ${MERGED:-none}" >&2
+  echo "STOPPED at ${G_REPO[$1]}#${G_PR[$1]}: $2; merged before the stop: ${MERGED:-none}${UNSETTLED:+; queued after a failed call, may still land: $UNSETTLED (the owner decides)}" >&2
   [ -z "$MERGED" ] || echo "a merge is not undone: open a revert PR for each merged PR, and tell the owner now" >&2
   return 3
 }
@@ -253,7 +374,7 @@ act() {
   local i
   for ((i = 0; i < N; i++)); do
     check "$i" || { stopped "$i" "a precondition fails"; return 3; }
-    write "$PLAN_LINE" merge "$i" || { stopped "$i" "the merge was refused"; return 3; }
+    write "$PLAN_LINE" merge "$i" || { stopped "$i" "${STOP_WHY:-the merge was refused}"; return 3; }
   done
   echo "PLAN-COUNT $N"
 }
@@ -269,20 +390,52 @@ postcheck() {
 }
 
 # ── undo: a merge cannot be undone; name each PR that merged ──
+# signed_base <i> — the base PR i's signed plan line names
+signed_base() {
+  sed -n "$(($1 + 1))p" "${BATON_PLAN:-/dev/null}" | sed -n 's/^squash-merge [^ ]* head [0-9a-f]* into \(.*\) ([0-9]* files sha .*/\1/p'
+}
 undo() {
-  local i left=""
+  local i id rd left="" held="" mine sbase
+  mine=$(unconfirmed_ids)
   for ((i = 0; i < N; i++)); do
-    if ! view "$i"; then
-      left="${left:+$left, }${G_REPO[$i]}#${G_PR[$i]} (unread)"
+    id="${G_REPO[$i]}#${G_PR[$i]}"
+    rd=yes
+    view "$i" || rd=no
+    if printf '%s\n' "$mine" | grep -qxF "$id"; then
+      # a merge call of the run on this PR may still land (the PR it stopped on, or one a second call only queued): never revert
+      # advice, the owner decides
+      if [ "$rd" = no ]; then
+        echo "unread, and the run's merge call may have landed: $id: the state is unknown"
+        held="${held:+$held, }$id (unread)"
+        continue
+      elif [ "$ST" = MERGED ] && [ "$R_HEAD" = "${G_HEAD[$i]}" ]; then
+        sbase=$(signed_base "$i")
+        if [ "$BASE" = "$sbase" ]; then
+          echo "merged at its signed head, not confirmed by the run: $id as ${MC:-?}: the owner decides whether it stays"
+        else
+          echo "merged at its signed head into $BASE, not the signed ${sbase:-base}, not confirmed by the run: $id as ${MC:-?}: the owner decides"
+        fi
+        held="${held:+$held, }$id"
+        continue
+      elif [ "$ST" = OPEN ] && [ "$QUEUED" != true ] && [ "$R_HEAD" = "${G_HEAD[$i]}" ]; then
+        echo "open at its signed head, and the run's merge call may still land: $id: the state is unknown (a merge queue may hold it: take it out if the owner says so)"
+        held="${held:+$held, }$id (open)"
+        continue
+      fi
+    fi
+    if [ "$rd" = no ]; then
+      left="${left:+$left, }$id (unread)"
     elif [ "$ST" = MERGED ]; then
-      echo "merged, not undone: ${G_REPO[$i]}#${G_PR[$i]} as $MC: open a revert PR"
-      left="${left:+$left, }${G_REPO[$i]}#${G_PR[$i]}"
+      echo "merged, not undone: $id as $MC: open a revert PR"
+      left="${left:+$left, }$id"
     elif [ "$ST" = OPEN ] && [ "$QUEUED" = true ]; then
-      echo "queued, may still merge: ${G_REPO[$i]}#${G_PR[$i]}: disable its auto-merge or take it out of the queue now"
-      left="${left:+$left, }${G_REPO[$i]}#${G_PR[$i]} (queued)"
+      echo "queued, may still merge: $id: disable its auto-merge or take it out of the queue now"
+      left="${left:+$left, }$id (queued)"
     fi
   done
+  [ -z "$held" ] || echo "a merge call of this run may still land: $held; tell the owner now, who decides whether it stays (no revert before that)" >&2
   [ -z "$left" ] || { echo "a merge cannot be undone here: $left; the way back is a revert PR each (a queued one taken out first), told to the owner now" >&2; return 1; }
+  [ -z "$held" ] || return 1
   echo "nothing merged: nothing to undo"
 }
 

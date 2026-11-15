@@ -31,6 +31,7 @@ Não phải giữ **P** focus (trọng tâm), **R** request (yêu cầu), Now, N
 - Một request chỉ đóng khi có con trỏ tới thứ đã trả lời nó (một PR, một commit, một file, một tin nhắn), hoặc theo anchor `--closes` của nó.
 - Một focus trỏ tới một goal và xếp thứ tự Next: các mục Next gắn với một focus đi trước.
 - Một mục đầy tràn vào hàng chờ của nó, trong log. Một lần thêm không bao giờ bị từ chối hay bỏ đi vì thiếu chỗ.
+- Hàng chờ owner chỉ giữ cái bị chặn tới khi owner ra tay, và mỗi mục nêu việc nó chặn (`--blocks`); cái không chặn gì là một mục Next hay một issue. Mục mà việc nó chặn đã xong thì được đánh dấu và vào lần dọn.
 - Sessions giữ các việc đang chạy, mỗi việc một mục, ví dụ một subagent của `local-parallel` đang làm tới pull request của nó: bước kế tiếp và các con trỏ, đóng theo pull request của nó. Phiên chính ghi chúng; một subagent không bao giờ ghi brain.
 
 ## 4. Phân luồng lúc ghi
@@ -83,6 +84,6 @@ Một quan sát (một bẫy, một sự thật) thành một bài học với l
 
 ## 10. Dọn dẹp và sao lưu
 
-Các mục tự đóng theo anchor của chúng (`--closes`). Một mục không ai đụng tới trong 30 ngày là ngủ quên, và thẻ rà soát nêu tên nó: đề xuất đóng hay nâng nó lên, như các mục của một phần đã đầy. Mỗi tháng một lần, `brain ledger --record` in ra một bản ghi đo đạc của sổ (số đếm của từng luật, những gì vượt ngưỡng, tiến độ của từng goal, các mục ngủ quên, sức chứa, các lần compact, và một mục của từng plugin mở rộng brain): giữ nó cùng các bản ghi của dự án, và chỉnh các ngưỡng theo nó. Auto-memory là của riêng Claude Code: brain không bao giờ sửa nó, chỉ báo một mâu thuẫn cho owner.
+Các mục tự đóng theo anchor của chúng (`--closes`). Mỗi lần nạp đánh dấu một mục não phải chưa động quá ngưỡng của loại nó, và dòng `sweep:` của chuỗi 1 đếm những gì nên dọn: `brain sweep` liệt kê chúng, phiên đóng hay chạm từng mục; không gì đóng vì tuổi. Một mục không ai đụng tới trong 30 ngày là ngủ quên, và thẻ rà soát nêu tên nó: đề xuất đóng hay nâng nó lên, như các mục của một phần đã đầy. Mỗi tháng một lần, `brain ledger --record` in ra một bản ghi đo đạc của sổ (số đếm của từng luật, những gì vượt ngưỡng, tiến độ của từng goal, các mục ngủ quên, sức chứa, các lần compact, và một mục của từng plugin mở rộng brain): giữ nó cùng các bản ghi của dự án, và chỉnh các ngưỡng theo nó. Auto-memory là của riêng Claude Code: brain không bao giờ sửa nó, chỉ báo một mâu thuẫn cho owner.
 
 Một brain được xuất thành một gói (`brain export`): nhật ký từng dòng cùng head của chuỗi, các mục, hàng đợi và sổ, các đường dẫn của máy thành chỗ giữ chỗ, không có gì nhạy cảm. `--scope global` chỉ mang các goal và decision đúng ở mọi dự án. Gói là dữ liệu: việc nhập đưa não phải vào như `brain op` sẽ làm (`brain import`) và chỉ đưa não trái vào qua một hộp thoại của owner liệt kê đủ từng mục (`brain owner import`), mỗi mục giữ lời của owner và một dòng nguồn gốc. Owner chỉ định một nơi riêng tư cho các bản sao lưu (`brain owner backup DIR`), ngoài mọi repository; brain ghi một bản vào đó khi đến hạn. Khôi phục là nhập một bản sao lưu vào một brain trống, chuỗi của nó được kiểm tra.

@@ -2,6 +2,27 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.5.1
+
+Released together: vibemaestro-sdlc 0.7.2, vibemaestro-brain 0.5.1
+
+- patch: The brain does not run on Windows yet: there it stays idle and tells Claude so, instead of failing silently, and its guards refuse a change to its memory instead of letting it through.
+- patch: On Windows the kit no longer goes silent when a message holds a character the machine's code page lacks: a developer session gets its process again, a rule written in Vietnamese blocks again, the kit's commands print Vietnamese without an error, and removing an old copy that holds a read-only file works instead of stopping with an error.
+
+## 0.5.0
+
+Released together: vibemaestro-sdlc 0.7.0, vibemaestro-brain 0.5.0
+
+- minor: Everyday mode, for ordinary work that is not a software project: Claude talks in plain words and keeps your notes in a notebook folder (kb/); your folder is saved quietly after each turn, on this computer only; the history skill brings back an earlier save as a copy in a ban-cu/ folder and never writes over your work; it is made to run on Windows and in VS Code too (the README has a Windows / VS Code section; Windows is not tested yet) and says in one line when Python or Git is missing. A folder that is not a git repository, or one the kit created, gets this mode; a folder that already had git, or one connected to GitHub, gets the developer mode; the folder's `profile` setting overrides both.
+- minor: The brain keeps itself tidy: each load marks items left untouched too long and counts what is worth cleaning (`brain sweep` lists them and writes nothing; nothing closes by age), `brain op link` ties a live item to the issue or pull request that closes it so it closes by itself once that is done (work done before the link does not close it), and an owner queue item names the work it blocks and is marked once that work is done.
+- minor: The brain learns from merged work: each pull request the merge guard merged counts for the rules and traps its body names (`Rules applied:`, `Traps met:`); `brain ledger --drift` lists the rules drifting with nobody on them, and a promoted SOUL code unused for 30 days shows as dormant; with `soul_file` set, the review card names where the SOUL file and the brain differ, and the owner's SOUL step can carry its line (`brain owner promote … --soul-line`), which the new kit baton `kit:soul-line` adds to that file.
+- patch: The brain can now load a log written by a newer brain that records measurements, and keeps working with it.
+
+### Upgrade notes
+
+- A session in a folder that is not a git repository now gets the everyday mode instead of the developer process; set "profile": "developer" in .vibemaestro/sdlc.json, or VIBEMAESTRO_PROFILE=developer, to keep the developer process there. On a machine without Python the hooks no longer fail one by one: the session gets one line saying what is missing.
+- Update the plugin on every machine that uses a brain before any session there writes its first `brain op link`: the log format is now 8, and an older brain refuses such a log (and stops injecting hot memory until it is updated), refuses any bundle this version exports, and drops `blocks` when it supersedes a queue item; `brain doctor` names a session still started on an older brain. `brain op add --kind queue` now needs `--blocks B`: a script or plugin that adds queue items without it is refused (64), queue items written before keep loading and `brain sweep` lists them as `queue without blocks`, and a plugin that declared its own `--blocks` option no longer loads until it drops it.
+
 ## 0.4.0
 
 Released together: vibemaestro-sdlc 0.6.0, vibemaestro-brain 0.4.0

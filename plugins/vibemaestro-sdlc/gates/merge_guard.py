@@ -10,7 +10,9 @@ Dry run by default: it prints one line per condition (`ok`, `FAIL`, `n/a`, `??` 
 `merge-plan:` line. `--merge` then merges once, through `gh pr merge --squash --match-head-commit <head>` (`--merge`, a merge
 commit, in the back-merge lane below), so a push between the check and the merge makes GitHub refuse it; with `--expect-plan <file>` it first refuses a plan line other than the one in the
 file (the signed plan, which the kit baton passes), and it reads the PR's base again just before the merge call (gh pins the
-head, not the base). `--status` only reads the PR's state (`merged <sha>`, `queued` for an auto-merge request, `pending` when a
+head, not the base). A merge call that fails with anything but GitHub's refusal (a 5xx, a timeout, a dropped connection) may have landed: the PR,
+read back, decides (merged at the head into the base: merged; open there: one more call; else the state is unknown), and a stop
+from there is logged merge-pending. `--status` only reads the PR's state (`merged <sha>`, `queued` for an auto-merge request, `pending` when a
 merge run of this head was left pending and none merged since, else `open` or `closed`; then the head; rc 2 when the base config
 or the merge log cannot be read).
 `--help`, alone, prints the usage (rc 0); with other arguments it is misuse.
@@ -1920,21 +1922,58 @@ class Run(object):
         args = ["pr", "merge", a.pr, "--repo", a.repo, "--merge" if self.merge_commit else "--squash", "--match-head-commit", a.head]
         if a.admin:
             args.append("--admin")
-        try:
-            rc, out, err = B.gh(args)
-        except G.Infra as e:
-            say("gh pr merge did not answer (%s): the request may have reached GitHub and the merge may still land; tell the owner" % e)
+        for attempt in (1, 2):
+            try:
+                rc, out, err = B.gh(args)
+                why = B.unsettled(err or out) if rc else None
+            except G.Infra as e:                        # gh did not answer: the request may have reached GitHub
+                rc, out, err, why = -1, "", str(e), "no answer: %s" % e
+            if rc == 0 and attempt == 1:
+                st = None
+                break
+            if rc and not why and attempt == 1:         # GitHub refused the first call: nothing may have landed
+                say("gh pr merge refused (rc %d): %s" % (rc, (err or out).strip()[:300]))
+                self.log("merge-failed")
+                return INFRA
+            # the call may have landed (anything but GitHub's refusal: a 5xx, a timeout, a dropped connection; or a second call after one, whose exit 0
+            # may be gh finding the PR merged, without the head pin): the PR, read back, decides, and every stop from here is
+            # logged merge-pending, so --status and the kit's undo never call it open
+            said = ("failed (%s)" % (why or "rc %d" % rc)) if rc else "exited 0 on the second try"
+            wait = B.retry_waits()[0]
+            if why:
+                time.sleep(wait)                        # GitHub may still be merging: let it settle before the read-back
+            st = read_back(a)
+            if st is None:
+                say("gh pr merge %s and the PR cannot be read back: it may have merged; the state is unknown, tell the owner" % said)
+                self.log("merge-pending")
+                return INFRA
+            at = st.get("headRefOid") == a.head and st.get("baseRefName") == self.base
+            if st.get("state") == "MERGED" and at and (st.get("mergeCommit") or {}).get("oid"):
+                say("gh pr merge %s%s the PR reads MERGED at head %s: the merge landed" % (said, ", but" if rc else " and", a.head))
+                break
+            if st.get("state") == "OPEN" and at:
+                if attempt == 1:
+                    say("gh pr merge %s and the PR, read again after %gs, is still open at head %s: one more try" % (said, wait, a.head))
+                    continue
+                if rc == 0:
+                    break                               # the second call only queued it, as a first may: pending below
+                say("gh pr merge %s on the one more try%s; the PR is open at head %s, and an earlier call may still land: tell the owner"
+                    % (said, "" if why else ": " + (err or out).strip()[:300], a.head))
+            else:
+                say("gh pr merge %s and the PR reads %s at head %s into %s: not merged at the head and base; the state is unknown, tell the owner"
+                    % (said, st.get("state"), st.get("headRefOid") or "?", st.get("baseRefName") or "?"))
             self.log("merge-pending")
             return INFRA
-        if rc != 0:
-            say("gh pr merge refused (rc %d): %s" % (rc, (err or out).strip()[:300]))
-            self.log("merge-failed")
-            return INFRA
         try:
-            st = pr_view(a, "state,mergeCommit,headRefOid")
+            st = st or pr_view(a, "state,mergeCommit,headRefOid,baseRefName")
         except G.Infra as e:
             say("gh pr merge exited 0, but the PR cannot be read back (%s): it is probably merged; check it now" % e)
             self.log("merged-unconfirmed")
+            return INFRA
+        if st.get("state") == "MERGED" and (st.get("headRefOid"), st.get("baseRefName")) != (a.head, self.base):
+            say("gh pr merge exited 0, but the PR reads merged at head %s into %s, not %s into %s: tell the owner"
+                % (st.get("headRefOid"), st.get("baseRefName"), a.head, self.base))
+            self.log("merge-failed")
             return INFRA
         self.merge_sha = (st.get("mergeCommit") or {}).get("oid")
         if st.get("state") != "MERGED":
@@ -1992,6 +2031,18 @@ def backmerge(a, pr, base, V):
     V.cond("backmerge", not on, "the head is %son %s %s%s" % ("" if on else "not ", RELEASE_BRANCH, rel[:12],
            ": a squash of it would cut %s off %s; open it from a %s* branch" % (RELEASE_BRANCH, base, BACKMERGE_PREFIX) if on else ": squash"))
     return False
+
+
+def read_back(a):
+    """The PR as a failed merge call is judged by, asked again while it cannot be read (the first waits of api_retry); None when
+    it never can."""
+    for wait in B.retry_waits()[:2] + (None,):
+        try:
+            return pr_view(a, "state,mergeCommit,headRefOid,baseRefName")
+        except G.Infra:
+            if wait is None:
+                return None
+            time.sleep(wait)
 
 
 def mergeable(a, pr, V):

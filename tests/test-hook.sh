@@ -1015,10 +1015,10 @@ fam_skill_list() {  # fam_skill_list <plugin dir> — the "Skills of the plugin"
   local p=$1 c line want got
   c=$(hook_cmds "$HOOKS" SessionStart '' | sed -n 2p)
   line=$(ctx "$(printf '%s' "$(p_start "$(sid)")" | CLAUDE_PROJECT_DIR="$APP" CLAUDE_PLUGIN_ROOT="$p" bash -c "$c" 2>/dev/null)" | grep -F 'Skills of the plugin')
-  want=$(for f in "$p"/skills/*/SKILL.md; do [ -f "$f" ] && basename "$(dirname "$f")"; done | grep -vxF coordinator-bootstrap | sort)
+  want=$(for f in "$p"/skills/*/SKILL.md; do [ -f "$f" ] && basename "$(dirname "$f")"; done | grep -vxF -e coordinator-bootstrap -e history | sort)
   got=$(printf '%s' "$line" | grep -oE 'vibemaestro-sdlc:[a-z0-9-]+' | sed 's/^vibemaestro-sdlc://' | sort)
   nonempty "$want" "[S0] instrument: the plugin has skill directories"
-  eq "$got" "$want" "[S1] the skill line names every skills/<name>/SKILL.md but the old name coordinator-bootstrap, no more"
+  eq "$got" "$want" "[S1] the skill line names every skills/<name>/SKILL.md but the old name coordinator-bootstrap and the everyday skill history, no more"
   printf '%s\n' "$got" | grep -qxF bootstrap && ok "[S1] …the skill bootstrap is listed" || bad "[S1] …the skill bootstrap is listed"
   hasnt "$line" 'vibemaestro-sdlc:coordinator-bootstrap' "[S1] …its old name is not"
 }

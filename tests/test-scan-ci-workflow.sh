@@ -1,22 +1,22 @@
 #!/bin/bash
 # =============================================================================
-# The CI job that runs the internal-term scanner with the KIT_TERMS secret (.github/workflows/test.yml, job scan-terms)
+# The CI job that runs the internal-term scanner with the KIT_TERMS variable (.github/workflows/test.yml, job scan-terms)
 # =============================================================================
 # Run: bash tests/test-scan-ci-workflow.sh
 #
 # The scanner has its own suite (tests/test-scan-internal-terms.sh); this one checks the
 # WIRING around it, which a right scanner cannot save:
 #   [S] shape, read with a YAML parser: only pull_request and push, never pull_request_target; permissions contents: read and nothing wider;
-#       the secret named once, in the `env` of the one scan step; no xtrace, no `${{ }}` inside a `run:`, no artifact, no job summary, no
+#       the variable named once, in the `env` of the one scan step; no xtrace, no `${{ }}` inside a `run:`, no artifact, no job summary, no
 #       add-mask; checkout without persisted credentials; the step calls the scanner with --ci, --terms and --exclude kb/ over --tree;
 #       the job's only `if` is `github.event.repository.private` (always true here; a public copy skips it, having no term list)
-#   [R] the step's real `run:` block is RUN (bash, RUNNER_TEMP, the secret in KIT_TERMS) in a scratch repository with the real scanner and
+#   [R] the step's real `run:` block is RUN (bash, RUNNER_TEMP, the term list in KIT_TERMS) in a scratch repository with the real scanner and
 #       MADE-UP terms: clean is green with `control: found 1/1; hits: 0`; a hit outside kb/ is red; a hit only in kb/ is green and counted;
-#       an empty, blank or absent secret is red with a clear message; a missing RUNNER_TEMP is red; a scanner that exits 0 without the control
-#       line is red; the term file is mode 0600 while the scanner runs and gone afterwards; the secret is not in the scanner's environment
+#       an empty, blank or absent variable is red with a clear message; a missing RUNNER_TEMP is red; a scanner that exits 0 without the control
+#       line is red; the term file is mode 0600 while the scanner runs and gone afterwards; the term list is not in the scanner's environment
 #   [T] no output line of any run holds a made-up term (the log, the only place the job prints)
 # Then each fault is planted in a copy of the workflow and the shape check must go red (a check that cannot go red proves nothing).
-# No network, no real secret, no repository other than the scratch ones.
+# No network, no real term list, no repository other than the scratch ones.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -65,13 +65,13 @@ else:
     if "continue-on-error" in j: err("the job has continue-on-error")
 scan = [s for s in steps if "scripts/scan-internal-terms.sh" in str(s.get("run", ""))]
 if len(scan) != 1: err("want exactly one step that runs the scanner, found %d" % len(scan))
-if text.count("secrets.KIT_TERMS") != 1: err("secrets.KIT_TERMS appears %d times, want 1" % text.count("secrets.KIT_TERMS"))
-if re.search(r"secrets\.(?!KIT_TERMS)", text): err("another secret is read")
+if text.count("vars.KIT_TERMS") != 1: err("vars.KIT_TERMS appears %d times, want 1" % text.count("vars.KIT_TERMS"))
+if "secrets." in text: err("a secret is read")
 run = ""
 if scan:
     s = scan[0]
     run = s["run"]
-    if (s.get("env") or {}).get("KIT_TERMS") != "${{ secrets.KIT_TERMS }}": err("the secret is not in the scan step's env as KIT_TERMS")
+    if (s.get("env") or {}).get("KIT_TERMS") != "${{ vars.KIT_TERMS }}": err("the variable is not in the scan step's env as KIT_TERMS")
     if "if" in s: err("the scan step has an `if`")
     if s.get("continue-on-error"): err("the scan step has continue-on-error")
     for need in ("--ci", "--terms", "--exclude kb/", "--tree", "!= \"control: found 1/1; hits: 0\"", "chmod 600", "RUNNER_TEMP"):
@@ -120,8 +120,8 @@ plant target 's.replace("  pull_request:\n", "  pull_request_target:\n", 1)'
 plant extra-trigger 's.replace("on:\n", "on:\n  workflow_dispatch:\n", 1)'
 plant perm-write 's.replace("permissions:\n  contents: read", "permissions:\n  contents: write", 1)'
 plant xtrace 's.replace("set -uo pipefail", "set -xuo pipefail", 1)'
-plant expr-in-run 's.replace("terms=$(mktemp", "echo ${{ secrets.KIT_TERMS }}; terms=$(mktemp", 1)'
-plant no-env 's.replace("          KIT_TERMS: ${{ secrets.KIT_TERMS }}\n", "          KIT_TERMS: nothing\n", 1)'
+plant expr-in-run 's.replace("terms=$(mktemp", "echo ${{ vars.KIT_TERMS }}; terms=$(mktemp", 1)'
+plant no-env 's.replace("          KIT_TERMS: ${{ vars.KIT_TERMS }}\n", "          KIT_TERMS: nothing\n", 1)'
 plant no-ci 's.replace("--ci --terms", "--terms", 1)'
 plant no-exclude 's.replace(" --exclude kb/", "", 1)'
 plant no-control 's.replace("control: found 1/1; hits: 0", "hits: 0", 1)'
@@ -148,7 +148,7 @@ mkrepo() {  # mkrepo <name>: a scratch repository with the real scanner tracked 
 put() { mkdir -p "$(dirname "$1/$2")"; printf '%s\n' "$3" > "$1/$2"; git -C "$1" add -A; git -C "$1" commit -q -m "plant"; }
 SECRET=$'zorblax\nw:glim\nquuxcorp'   # made-up terms, in the scanner's term-file format
 OUT=""; RC=0
-step() {  # step <repo> [secret]: runs the real block; secret defaults to SECRET; "-" leaves KIT_TERMS unset
+step() {  # step <repo> [terms]: runs the real block; terms default to SECRET; "-" leaves KIT_TERMS unset
   local r=$1 sec=${2-$SECRET} rt=$TMP/rt-$((N=N+1))
   mkdir -p "$rt"
   if [ "$sec" = "-" ]; then
@@ -168,7 +168,7 @@ no_terms() {  # no_terms <what>: no line of the last output holds a made-up term
 
 R=$(mkrepo r-clean)
 step "$R"
-eq "$RC" 0 "R1 clean tree, good secret: green"
+eq "$RC" 0 "R1 clean tree, good term list: green"
 eq "${OUT##*$'\n'}" "control: found 1/1; hits: 0" "R1 the scan line is the last line of the log"
 has "$OUT" "control: found 1/1; hits: 0" "R1 the log has the scan line"
 has "$OUT" "excluded under kb/: 0 hits" "R1 the log has the exclusion count"
@@ -216,19 +216,19 @@ eq "$RC" 1 "R6 KB/ is not kb/: red (a hit)"
 
 R=$(mkrepo r-empty)
 step "$R" ""
-ne "$RC" 0 "R7 an empty secret: red"
-has "$OUT" "KIT_TERMS secret is empty or missing" "R7 the message says why"
+ne "$RC" 0 "R7 an empty variable: red"
+has "$OUT" "KIT_TERMS variable is empty or missing" "R7 the message says why"
 hasnt "$OUT" "control: found 1/1" "R7 and no scan ran"
 step "$R" $' \n\t\n'
-ne "$RC" 0 "R7 a blank secret: red"
-has "$OUT" "KIT_TERMS secret is empty or missing" "R7 the message says why (blank)"
+ne "$RC" 0 "R7 a blank variable: red"
+has "$OUT" "KIT_TERMS variable is empty or missing" "R7 the message says why (blank)"
 step "$R" "-"
 ne "$RC" 0 "R7 no KIT_TERMS in the environment at all: red"
-has "$OUT" "KIT_TERMS secret is empty or missing" "R7 the message says why (unset)"
+has "$OUT" "KIT_TERMS variable is empty or missing" "R7 the message says why (unset)"
 step "$R" $'allow: README.md something'
-ne "$RC" 0 "R7 a secret with only an allow line: red (the scanner refuses a list with no term)"
+ne "$RC" 0 "R7 a term list with only an allow line: red (the scanner refuses a list with no term)"
 step "$R"
-eq "$RC" 0 "R7 the same repository with a good secret is green (control)"
+eq "$RC" 0 "R7 the same repository with a good term list is green (control)"
 
 R=$(mkrepo r-rt)
 OUT=$(cd "$R" && env -u RUNNER_TEMP KIT_TERMS="$SECRET" bash -c "$(cat "$TMP/step.sh")" 2>&1); RC=$?
@@ -260,7 +260,7 @@ exec bash "$SCAN" "\${args[@]}"
 SPY
 step "$R"
 eq "$(cat "$TMP/spy.mode" 2>/dev/null)" 600 "R10 the term file is mode 0600 while the scanner runs"
-eq "$(cat "$TMP/spy.env" 2>/dev/null)" no "R10 the secret is not in the scanner's environment"
+eq "$(cat "$TMP/spy.env" 2>/dev/null)" no "R10 the term list is not in the scanner's environment"
 eq "$(cat "$TMP/spy.where" 2>/dev/null)" under "R10 the term file is under RUNNER_TEMP"
 eq "$(cat "$TMP/spy.tmpdir" 2>/dev/null)" "$TMP/rt-$N" "R10 TMPDIR is RUNNER_TEMP: the scanner's scratch copy of the terms is cleaned with it"
 eq "$(cat "$TMP/spy.args" 2>/dev/null)" "--ci --terms FILE --exclude kb/ --tree" "R10 the scanner is called with --ci, --terms, --exclude kb/ and --tree"

@@ -1,6 +1,9 @@
-"""vibemaestro-brain stale anchors and auto-close: a live Now (N), Next (X), session (S), queue (Q), request (R) or pinned (D) item
-whose anchor names a closed issue or a merged or closed PR on GitHub is marked, and a live N, X, S, Q or R item whose declared
-`closes` anchors are all done closes itself.
+"""vibemaestro-brain stale anchors, auto-close and the sweep: a live Now (N), Next (X), session (S), queue (Q), request (R), trap
+(T), fact (F) or pinned (D) item whose anchor names a closed issue or a merged or closed PR on GitHub is marked, a live N, X, S, Q
+or R item whose declared `closes` anchors are all done closes itself, and a live right-brain item untouched past its kind's
+threshold (`untouched` in .vibemaestro/brain.json) is marked; nothing closes for age. A queue item's `blocks` anchors are
+checked as its own: once every one is closed, its blocked work is done. The marked right-brain items are the sweep's
+candidates: one `sweep:` line in string 1, and `brain sweep` lists them with the characters each would free.
 
 An anchor counts only as a whole string: `#N` (against the item's own repository: the one repository its `owner/name#N`
 anchors, URLs and `closes` name, when they name exactly one; else it is not checked), `owner/name#N` (as written) or a GitHub
@@ -10,7 +13,7 @@ several repositories it resolved an item's `#N` against the wrong one. Each one 
 `state_reason` for an issue). A merged PR that would close an item is also looked up at `…/pulls/<n>`: it closes only when it was
 merged into its repository's default branch.
 
-    annotate(parts, st, d, sid)  SessionStart: the three parts of the render (one string each) with ` · stale: #7 closed 2026-10-20`
+    annotate(parts, st, d, sid, ops)  SessionStart: the three parts of the render (one string each) with ` · stale: #7 closed 2026-10-20`
                                after each stale item and note lines, each in the part that holds its item; answers come from a
                                cache (600 s; a failed lookup 120 s), the rest are looked up in parallel under one 2.0 s deadline, ≤ 12
                                anchors, least recently checked first; in the writer's SessionStart (`sid` is the last claim) an item
@@ -21,6 +24,8 @@ merged into its repository's default branch.
     close_linked()             `brain op close-linked`: the same checks with fresh lookups under doctor's bounds, no cap of 5
     closes_form(a), closes_check(anchors)   `--closes`: the stored form of an anchor, and its write-time lookup
     bare_warning(anchors)      the line `brain op` and `brain owner` print after a write that leaves a bare `#N` its item cannot resolve
+    sweep_cmd()                `brain sweep`: the candidates by reason, each with the characters it would free; fresh lookups
+                               under doctor's bounds, nothing written
 
 The only log write is `link-close`, by the store's writer, at its SessionStart or in `close-linked`; besides it this module writes
 `stale-cache.json` (not part of the log). Standard library only, Python 3.8.
@@ -31,6 +36,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import time
 
 import brain_store as s
@@ -55,7 +61,7 @@ CACHE_BYTES = 262144        # 200 entries are about 40 KB: a larger file is not 
 MARKS_MAX = 450             # characters the marks, the summary and the note add to one string (test [S] holds the worst case)
 NOTE_MAX = 250              # characters of one string's auto-close line (closed now, reopened, held)
 PER_ITEM = 2                # anchors named in one item's mark
-LETTERS = ("N", "X", "S", "Q", "R", "D")   # the order of the lookups
+LETTERS = ("N", "X", "S", "Q", "R", "T", "F", "D")   # the order of the lookups
 HOST = ["--hostname", "github.com"]
 JQ = '[.state, .closed_at, (.pull_request.merged_at // ""), (.state_reason // ""), (if .pull_request then "pr" else "issue" end)] | @tsv'
 JQ_TITLE = JQ.replace('] | @tsv', ', (.title // "")] | @tsv')
@@ -70,7 +76,7 @@ REF = re.compile(r"[A-Za-z0-9._/-]{1,40}")
 SHA = re.compile(r"[0-9a-f]{40}")
 SHA12 = re.compile(r"[0-9a-f]{12}")
 SET_IT = "write owner/name#N (a bare #N resolves only against the one repository its item's other anchors name)"
-NOTHING = {"closed": [], "held": 0, "error": None, "noted": (), "stale": []}
+NOTHING = {"closed": [], "held": 0, "error": None, "noted": (), "stale": [], "sweep": ""}
 
 
 # --- which anchors ------------------------------------------------------------------------------------------------------------
@@ -111,6 +117,29 @@ def label(a, key):
     return a if ANCHOR.fullmatch(a) else key
 
 
+BLOCKS_ANCHORS = 2           # anchors of a queue item's `blocks` looked up, as many as `closes` may name
+
+
+def blocks_anchors(it):
+    """The first BLOCKS_ANCHORS `owner/name#N` anchors and GitHub URLs a queue item's `blocks` names, in prose (quoted, in
+    brackets, a link, a possessive); a bare `#N` there is a number, not an anchor."""
+    words = re.split(r"[\s()\[\]<>\"'`]+", str(it.get("blocks") or "")) if it["id"][0] == "Q" else []
+    out, keys = [], []
+    for w in (x.strip(",;:.!?") for x in words):
+        k = anchor_key(w)
+        if k and k not in keys:                 # one issue or PR once, however it is spelled
+            out.append(w)
+            keys.append(k)
+    return out[:BLOCKS_ANCHORS]
+
+
+def anchor_key(a):
+    """`owner/name#n` in lower case for an anchor that names a repository `candidates` would look up (as written, or a URL);
+    None otherwise."""
+    m = parse_anchor(a)
+    return ("%s#%s" % m).lower() if m and m[0] and repo_ok(m[0]) else None
+
+
 def candidates(st):
     """[(item id, anchor as written, key or None)] of the live items of LETTERS in lookup order; key is `owner/name#n` in lower
     case, None for a bare `#n` whose item names no single repository (`own_repo`). An anchor of any other shape is not listed."""
@@ -120,7 +149,8 @@ def candidates(st):
                          key=lambda i: int(i["id"][1:])):
             anchors = list(it.get("anchors") or [])
             every = [c for c in it.get("closes") or [] if c not in anchors] + anchors
-            default = own_repo(every)
+            default = own_repo(every)                   # a bare #N resolves against the item's own anchors, never its blocks
+            every += [b for b in blocks_anchors(it) if b not in every]
             for a in every:
                 m = parse_anchor(a)
                 if not m:
@@ -467,14 +497,18 @@ def is_final(r, fresh_now):
 
 def done_after(st, it, key, at):
     """`at` (a full UTC stamp) is later than the `created` of the earliest item of `it`'s supersede chain whose `closes` holds
-    `key` without a gap (an item of the chain that dropped it ends the walk): an item first written about work already done is
-    never closed."""
+    `key` without a gap (an item of the chain that dropped it, or the item it was linked to by `brain op link`, ends the walk)
+    and, for a linked `key`, than the time it was linked: an item first written, or linked, about work already done is never closed."""
     first, seen = it, set()
     while it is not None and it["id"] not in seen and key in [c.lower() for c in it.get("closes") or []]:
         seen.add(it["id"])
         first = it
+        if isinstance(it.get("closes_at"), dict) and key in it["closes_at"]:
+            break                                   # the key joined the chain here, by a link
         it = st["items"].get(it.get("supersedes") or "")
     t, c = s.parse_iso(at or ""), s.parse_iso(first.get("created") or "")
+    linked = s.parse_iso((first.get("closes_at") or {}).get(key)) if isinstance(first.get("closes_at"), dict) else None
+    c = max(c, linked) if c is not None and linked is not None else c
     return t is not None and c is not None and t > c
 
 
@@ -555,11 +589,11 @@ def card_stale(cands, answers, gone):
     return out
 
 
-def lay_out(part, marks, note, auto=""):
-    """One part of the render with each mark after its item's line; the marks, a summary and the note together stay ≤ MARKS_MAX
-    characters, and the auto-close line (≤ NOTE_MAX) comes last."""
-    room = MARKS_MAX - (len(note) + 1 if note else 0)
-    summary = "(+%d more stale: run brain doctor)"
+def lay_out(part, marks, note, auto="", reserve=0):
+    """One part of the render with each mark after its item's line; the marks, a summary, the note and `reserve` (string 1's sweep
+    line, which the hook puts higher up) together stay ≤ MARKS_MAX characters, and the auto-close line (≤ NOTE_MAX) comes last."""
+    room = MARKS_MAX - (len(note) + 1 if note else 0) - reserve
+    summary = "(+%d more marks: brain sweep, brain doctor)"
     if sum(len(text) + 3 for _, text in marks) > room:
         room -= len(summary % 999) + 1
     shown, used = {}, 0
@@ -609,15 +643,138 @@ def auto_line(closed, reopened, held, error):
     return fit(parts) if parts else ""
 
 
-def annotate(strings, st, d, sid=None):
+def last_touched(it, ops, now):
+    """When `it` was last written, touched, hit or linked: the time of the op its `touched` names, else its `created`; `now`
+    for an op past `ops` (written in this SessionStart after the log was read, as a promotion by a link-close)."""
+    seq = it.get("touched")
+    if isinstance(seq, int) and not isinstance(seq, bool) and seq > len(ops):
+        return now
+    op = ops[seq - 1] if isinstance(seq, int) and not isinstance(seq, bool) and 0 < seq else {}
+    return s.parse_iso(op.get("t") or "") or s.parse_iso(it.get("created") or "")
+
+
+def untouched(st, ops, now):
+    """[(item id, whole days untouched)] of the live right-brain items untouched for their kind's threshold or longer, in the
+    render's section order."""
+    out, order = [], [letter for letter, _ in s.SECTIONS]
+    for it in sorted(st["items"].values(), key=lambda i: (order.index(i["id"][0]), int(i["id"][1:]))):
+        days = s.untouched_days(it["id"][0])
+        t = last_touched(it, ops, now) if days and it["status"] == "live" else None
+        if t is not None and now - t >= days * 86400:
+            out.append((it["id"], int((now - t) // 86400)))
+    return out
+
+
+def item_units(strings):
+    """{item id: UTF-16 units of its rendered line and the lines under it} over the render's strings: what closing it frees."""
+    out, here = {}, None
+    for _, text in strings:
+        for line in text.splitlines(True):
+            m = s._ITEM.match(line)
+            if m:
+                here = m.group(1)
+            elif not line.startswith("  "):
+                here = None
+            if here:
+                out[here] = out.get(here, 0) + s.units(line)
+    return out
+
+
+REASONS = ("blocked work done", "closed anchors", "queue without blocks", "untouched")
+
+
+def sweep_rows(st, cands, answers, idle, sizes):
+    """[(reason, item id, why, units)] in REASONS order: each live right-brain item once, under its first reason (a queue item
+    whose `blocks` anchor closed, any other closed anchor, a queue item an older brain wrote with no `blocks`, untouched); the
+    left brain never."""
+    rows, seen = [], set()
+    shut = lambda k: (answers.get(k) or {}).get("state") in ("closed", "merged")
+    keys = {iid: {anchor_key(a) for a in blocks_anchors(st["items"][iid])} for iid in {c[0] for c in cands}}
+    keys = {iid: ks for iid, ks in keys.items() if ks}   # by key: a queue item's blocked work is done once every one is
+    done = {iid for iid, ks in keys.items() if all(shut(k) for k in ks)}
+    closed = {}
+    for iid, _, k in cands:
+        if k and shut(k):
+            closed.setdefault(iid, set()).add(k)
+    for iid, why in stale_items(cands, answers):
+        part = iid in keys and iid not in done and closed.get(iid, set()) <= keys[iid]
+        if s.half_of(iid[0]) == "right" and not part:   # part of a queue item's blocked work done: a mark, no candidate
+            rows.append(("blocked work done" if iid in done else "closed anchors", iid, why, sizes.get(iid, 0)))
+            seen.add(iid)
+    rows += [("queue without blocks", it["id"], "names no work it blocks: supersede it with --blocks, or close it",
+              sizes.get(it["id"], 0)) for it in sorted(s.live(st, "Q"), key=lambda i: int(i["id"][1:]))
+             if it["id"] not in seen and not isinstance(it.get("blocks"), str)]
+    seen |= {r[1] for r in rows}
+    rows += [("untouched", iid, "untouched %d d (%s: %d d)" % (n, dict(s.SECTIONS)[iid[0]], s.untouched_days(iid[0])),
+              sizes.get(iid, 0)) for iid, n in idle if iid not in seen and s.half_of(iid[0]) == "right"]
+    return sorted(rows, key=lambda r: REASONS.index(r[0]))
+
+
+def sweep_line(rows):
+    """String 1's one line when anything is worth cleaning, "" otherwise."""
+    if not rows:
+        return ""
+    n = {r: [x for x in rows if x[0] == r] for r in REASONS}
+    parts = ["%d blocked work done" % len(n["blocked work done"])] if n["blocked work done"] else []
+    if n["closed anchors"]:
+        parts.append("%d closed anchor%s" % (len(n["closed anchors"]), "" if len(n["closed anchors"]) == 1 else "s"))
+    if n["queue without blocks"]:
+        parts.append("%d queue without blocks" % len(n["queue without blocks"]))
+    if n["untouched"]:
+        parts.append("%d untouched %d+ d" % (len(n["untouched"]), min(s.untouched_days(x[1][0]) for x in n["untouched"])))
+    return "sweep: %d item%s to clean (~{:,} chars): %s; brain sweep lists them".format(sum(x[3] for x in rows)) % (
+        len(rows), "" if len(rows) == 1 else "s", ", ".join(parts))
+
+
+def merged_marks(marks, idle):
+    """The stale marks and the untouched marks, one text per item, in the block's order of the stale ones first."""
+    by = dict(marks)
+    for iid, n in idle:
+        by[iid] = (by[iid] + " · " if iid in by else "") + "untouched %d d" % n
+    order = [i for i, _ in marks] + [i for i, _ in idle if i not in dict(marks)]
+    return [(i, by[i]) for i in order]
+
+
+def sweep_cmd():
+    """`brain sweep`: every candidate by reason with the characters it would free, from fresh lookups (doctor's bounds); it
+    writes nothing, not even the lookup cache."""
+    d = s.state_dir()
+    if not os.path.isdir(d):
+        raise s.Refused(1, "no brain state for this project yet")
+    with s.locked(d):
+        st, ops = s.load_ops(d)[1:]
+    now, answers, note = time.time(), {}, ""
+    cands = candidates(st)
+    keys, total = distinct([c for c in cands if s.half_of(c[0][0]) == "right"], MAX_DOCTOR)
+    if keys and shutil.which("gh") is None:
+        note = "closed anchors not checked: gh not found\n"
+    elif keys:
+        answers = {k: r for k, r in fetch(keys, DOCTOR_DEADLINE).items() if r is not None}
+        if len(answers) < total:
+            note = "closed anchors: %d of %d anchors answered\n" % (len(answers), total)
+    rows = sweep_rows(st, cands, answers, untouched(st, ops, now), item_units(s.render_strings(st, now=now)))
+    out = [sweep_line(rows) or "sweep: nothing to clean"]
+    for reason in REASONS:
+        mine = [r for r in rows if r[0] == reason]
+        if mine:
+            out.append("%s (%d):" % (reason, len(mine)))
+            out += ["  %s (~%d chars): %s" % (iid, n, s.clean_line(why)) for _, iid, why, n in mine]
+    if rows:
+        out.append("close: brain op close ID --reason R [--pointer P] [--bulk]; keep: brain op touch ID")
+    sys.stdout.write(note + "".join(s.printable(l) + "\n" for l in out))
+    return None
+
+
+def annotate(strings, st, d, sid=None, ops=None):
     """([(half, text to inject)], the number of stale items, what auto-close did: {"closed": [(id, anchors)], "held": n, "error":
     text or None, "noted": {indexes of the strings given a note line}, "stale": [(id, its first closed anchor)] for the review
-    card}, the state after). `strings` is the render's
+    card, "sweep": string 1's sweep line or ""}, the state after). With the log's `ops`, an item untouched past its kind's
+    threshold is marked too, without any lookup. `strings` is the render's
     (`brain_store.render_strings`); a mark goes after its item's line, an auto-close line in the first string of the item's
     half, and the check's own note, a held burst and an error in string 1. Never raises: an error is no marks and one note line
     in string 1."""
     try:
-        return _annotate(strings, st, d, sid)
+        return _annotate(strings, st, d, sid, ops)
     except Exception as e:  # noqa: BLE001 — a SessionStart must never fail for a lookup
         out = list(strings)
         out[0] = (out[0][0], out[0][1] + "stale-anchor check: skipped (%s)\n" % e.__class__.__name__)
@@ -653,7 +810,7 @@ def round_two(cache, linked, burst, looked, left, now):
     return due
 
 
-def _annotate(strings, st, d, sid):
+def _annotate(strings, st, d, sid, ops=None):
     t0 = time.monotonic()
     cands = candidates(st)
     keys, total = distinct(cands, None)
@@ -711,8 +868,11 @@ def _annotate(strings, st, d, sid):
         notes.append("skipped for %s: no single repository of its item" % _short([s.clean_line(a) for a in bare]))
     note = "stale-anchor check: " + "; ".join(notes) if notes else ""
     gone = {iid for iid, _ in did["closed"]}
-    marks = [m for m in stale_items(cands, answers) if m[0] not in gone]
+    stale = [m for m in stale_items(cands, answers) if m[0] not in gone]
     did["stale"] = card_stale(cands, answers, gone)
+    idle = untouched(st, ops, now) if ops is not None else []
+    did["sweep"] = sweep_line(sweep_rows(st, [c for c in cands if c[0] not in gone], answers, idle, item_units(strings)))
+    marks = merged_marks(stale, idle)
     first = {}                                      # each half's first string: where its auto-close lines go
     for i, (half, _) in enumerate(strings):
         first.setdefault(half, i)
@@ -725,9 +885,10 @@ def _annotate(strings, st, d, sid):
         pnote = note if i == 0 else ""
         if pnote or auto:
             noted.add(i)
-        out.append((half, lay_out(text, [m for m in marks if m[0] in held], pnote, auto)))
+        laid = lay_out(text, [m for m in marks if m[0] in held], pnote, auto, len(did["sweep"]) + 1 if i == 0 and did["sweep"] else 0)
+        out.append((half, s.retitled(laid) if laid != text else text))
     did["noted"] = noted
-    return out, len(marks), did, st
+    return out, len(stale), did, st
 
 
 # --- brain op close-linked ----------------------------------------------------------------------------------------------------
@@ -775,6 +936,238 @@ def close_linked():
             s.episode_line(d, s.session_id(), "auto-close", cmd="close-linked", ids=done,
                            anchors=[a["anchor"] for iid, an in closing if iid in done for a in an])
     return "\n".join(lines) if lines else "close-linked: nothing to close"
+
+
+# --- evidence from merged PRs -------------------------------------------------------------------------------------------------
+# A PR that vibemaestro-sdlc's merge guard merged (a `merged` line of its merge log) names the rules it applied in its body, as
+# plain lines the worker copies from its brief: `Rules applied: D3, T5, [S07]` and `Traps met: T2`. Each code that is a live
+# rule gets one held (a trap met, one hit), pointing to the PR. The body is worker text: only those two lines, outside a fenced
+# code block, are read, and nothing but a held or a hit for a code of this brain is ever written.
+
+MERGE_FILE = "merge-evidence.json"      # the merge log's offset read so far and the PRs whose body is still to read
+MERGE_LOOK = 10                         # PRs looked up per run; the rest wait for the next one
+MERGE_TRIES = 5                         # reads of one PR's body that may fail before it is dropped, named
+MERGE_WAIT = 200                        # PRs kept waiting at most; past it the oldest are dropped, each named
+LABELS = {"Rules applied:": "held", "Traps met:": "hit"}
+CODES_MAX, LABEL_LINE = 12, 300         # codes on one line, characters of one line: past either, the line is not read
+END = "--end--"                         # the answer's last line: an answer cut short (a pipe read stops at 4096 bytes) lacks it
+PR_KEY = re.compile(r"[a-z0-9_.-]+/[a-z0-9_.-]+#[1-9][0-9]{0,8}")
+BODY_JQ = ('(.body // "" | split("\\n") | .[] | sub("\\r$"; "") | select(test("^ {0,3}(```|~~~)") or startswith("Rules applied:") '
+           'or startswith("Traps met:")) | .[0:400]), "%s"' % END)
+
+
+def merge_log():
+    """The merge guard's log beside the brain's state root (its default name, as `brain matrix` reads it)."""
+    # shortcut: a merge log renamed by the base config's merge.log is not read; read that key when someone sets it
+    return os.path.join(os.path.dirname(s.state_root()), "merge-log.jsonl")
+
+
+def merged_since(offset):
+    """(new offset, [owner/name#n]) of the `merged` lines of the merge log after byte `offset`, in log order; a log shorter
+    than `offset` (rotated) is read from its start, a line cut at the end is left for the next read."""
+    try:
+        with open(merge_log(), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell() < offset:
+                offset = 0
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return offset, []
+    keys = []
+    whole = data[:data.rfind(b"\n") + 1]
+    for b in whole.split(b"\n"):
+        try:
+            o = json.loads(b)
+        except ValueError:
+            continue
+        if not isinstance(o, dict) or o.get("mode") != "merge" or o.get("result") != "merged":
+            continue
+        pr, repo = o.get("pr"), o.get("repo")
+        if isinstance(pr, int) and not isinstance(pr, bool) and pr > 0 and isinstance(repo, str) and repo_ok(repo):
+            keys.append("%s#%d" % (repo.lower(), pr))
+    return offset + len(whole), keys
+
+
+def label_codes(text):
+    """({"held": [codes], "hit": [codes]}, [notes]) of the plain label lines of a PR body (the --jq lines: fences and label
+    lines): a line inside a fence, a label given twice, a line over LABEL_LINE characters or CODES_MAX codes is not read."""
+    fence, seen, notes = None, {}, []
+    for ln in text.split("\n"):
+        m = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", ln)
+        if m:
+            if fence is None:
+                fence = m.group(1)
+            elif m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
+                fence = None                        # a closing fence: the opening's character, as long or longer, no info
+            continue
+        label = next((k for k in LABELS if ln.startswith(k)), None)
+        if label is None or fence:
+            continue
+        seen.setdefault(label, []).append(ln[len(label):])
+    out = {"held": [], "hit": []}
+    for label, rows in seen.items():
+        if len(rows) > 1:
+            notes.append("%s given %d times: not read" % (label, len(rows)))
+            continue
+        codes = [c.strip() for c in rows[0].split(",") if c.strip()]
+        if len(rows[0]) + len(label) > LABEL_LINE or len(codes) > CODES_MAX:
+            notes.append("%s over %d characters or %d codes: not read" % (label, LABEL_LINE, CODES_MAX))
+            continue
+        out[LABELS[label]] = codes
+    return out, notes
+
+
+def pr_session(st, key):
+    """The session item (its chain's root) whose `closes` names the PR `key`, else the PR itself as `pr:owner/name#n`: the
+    session a held from that PR counts under, so three PRs are three sessions."""
+    for it in sorted(st["items"].values(), key=lambda i: int(i["id"][1:])):
+        if it["id"][0] == "S" and key in [str(c).lower() for c in it.get("closes") or []]:
+            return s.chain_root(st, it)["id"], None
+    return None, "pr:" + key
+
+
+def known_repos(st):
+    """The repositories (lower case) this brain knows: its project's `origin` on GitHub and every one an item's anchors or
+    `closes` name. A PR of another repository is not read: the merge log is the machine's, item ids are the brain's."""
+    out = set()
+    for it in st["items"].values():
+        for a in list(it.get("anchors") or []) + list(it.get("closes") or []):
+            m = parse_anchor(a)
+            if m and m[0]:
+                out.add(m[0].lower())
+    url = s._git(s.project_root(), "remote", "get-url", "origin") or ""
+    m = re.search(r"github\.com[:/]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?\s*$", url)
+    if m:
+        out.add(m.group(1).lower())
+    return out
+
+
+def read_mem(path):
+    """(offset or None, {PR: failed reads}) of `merge-evidence.json`: a bad waiting entry is left out alone, an offset that is
+    not a whole number ≥ 0 (or no file) is None, a first run."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            mem = json.loads(f.read())
+    except (OSError, ValueError):
+        return None, {}
+    mem = mem if isinstance(mem, dict) else {}
+    offset = mem.get("offset")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        offset = None
+    wait = {}
+    for e in mem.get("wait") if isinstance(mem.get("wait"), list) else []:
+        if (isinstance(e, list) and len(e) == 2 and isinstance(e[0], str) and PR_KEY.fullmatch(e[0])
+                and repo_ok(e[0].split("#")[0]) and isinstance(e[1], int) and not isinstance(e[1], bool) and 0 <= e[1] < MERGE_TRIES):
+            wait[e[0]] = e[1]
+    return offset, wait
+
+
+def rule_skip(st, ops, led, code, pr, via, done):
+    """(why `code` of the PR `pr` is not written whatever the moment, its ledger key): not a live rule, a SOUL code no owner step
+    promoted, a held from that PR already (in the log, or `done` in this run); why None when it may be written: a refusal after
+    this check is the moment's (a take-over, the filter)."""
+    import brain_ledger as L
+    try:
+        kind, value = L.rule_arg(code, hit=via == "hit")
+        if kind == "id":
+            L.check_rule_item(st, value, hit=via == "hit")
+        elif value not in L.soul_live(ops):
+            return "[%s] is not a SOUL code an owner step promoted (or it was demoted)" % value, None
+    except s.Refused as e:
+        return e.msg.split("\n")[0], None
+    key = "[%s]" % value if kind == "soul" else value
+    if key in done or any(e["result"] == "held" and e["pointer"] == pr for e in (led.get(key) or {}).get("events", [])):
+        return "%s has a held from %s already" % (key, pr), key
+    return None, key
+
+
+def write_codes(d, k, codes, session, pr, lines):
+    """Write the hits, then the helds, of the PR `k`; a code a rule check refuses is skipped and named. False when a write is
+    refused for another reason (the others are still tried): the PR is read again at the next run, and what it wrote already is
+    not written twice."""
+    import brain_ledger as L
+    st, ops, led = L.snapshot(d)
+    done, ok = set(), True
+    for via, cs in (("hit", codes["hit"]), (None, codes["held"])):    # a trap met and applied: its hit is the PR's held
+        for c in cs:
+            why, key = rule_skip(st, ops, led, c, k, via, done)
+            if why:
+                lines.append("skipped %s %s: %s" % (s.printable(c)[:20], k, why))
+                continue
+            try:
+                msg = s.op_evidence(c, "held", k, session=session, via=via, as_pr=pr, machine=True)
+            except s.Refused as e:
+                lines.append("waiting %s: %s %s was refused (%s)" % (k, s.printable(c)[:20], "hit" if via else "held",
+                                                                    e.msg.split("\n")[0]))
+                ok = False
+                continue
+            lines.append("%s (%s)" % (msg.split("\n")[0], k))
+            done.add(key)
+    return ok
+
+
+def merge_evidence():
+    """`brain op merge-evidence`: the held and hit of every PR of a known repository merged since the last run, by fresh body
+    lookups (MERGE_LOOK per run, DOCTOR_DEADLINE seconds). Refused (3) when this session does not write the project's hot
+    memory. A first run starts at the log's end: PRs merged before it are not read. Returns what it wrote and what it skipped,
+    with why."""
+    s.check_caller()
+    s.check_config()
+    d = s.state_dir()
+    if not os.path.isdir(d):
+        raise s.Refused(1, "no brain state for this project yet")
+    _, st = s.load(d)
+    if st["writer"] != s.session_id():
+        raise s.Refused(3, "merge-evidence: this session does not write this project's hot memory (%s); nothing was read"
+                        % ("no session has written it yet" if st["writer"] is None else "another session does"))
+    path = os.path.join(d, MERGE_FILE)
+    offset, wait = read_mem(path)
+    if offset is None:                              # the first run (or a damaged file, said so): from now on
+        damaged = os.path.exists(path)
+        offset, _ = merged_since(0)
+        s._write_file(path, json.dumps({"offset": offset, "wait": [[k, n] for k, n in wait.items()]}) + "\n")
+        return "merge-evidence: %sstarted at the end of the merge log; PRs merged from now on are read%s" % (
+            "%s held no offset: " % MERGE_FILE if damaged else "", "; %d waiting kept" % len(wait) if wait else "")
+    offset, new = merged_since(offset)
+    known, lines = known_repos(st), []
+    for k in new:
+        if k.split("#")[0] not in known:
+            lines.append("skipped %s: not a repository this brain names" % k)
+        else:
+            wait.setdefault(k, 0)
+    queue = list(wait)
+    look = queue[:MERGE_LOOK] if shutil.which("gh") else []
+    got = run({k: api_argv(k, "pulls", BODY_JQ) for k in look}, DOCTOR_DEADLINE) if look else {}
+    for k in look:
+        r = got.get(k)
+        body = r[1] if r and r[0] == 0 else None
+        if body is None or not (body.endswith("\n" + END + "\n") or body == END + "\n"):
+            wait[k] += 1
+            why = "no answer" if not r else "gh rc %d" % r[0] if r[0] else "an answer cut short"
+            if wait[k] >= MERGE_TRIES:
+                del wait[k]
+                lines.append("dropped %s: its body was not read in %d tries (%s)" % (k, MERGE_TRIES, why))
+            else:
+                lines.append("waiting %s: its body was not read (%s)" % (k, why))
+            continue
+        codes, notes = label_codes(body[:-len(END) - 1])
+        lines += ["%s: %s" % (k, n) for n in notes]
+        session, pr = pr_session(st, k)
+        if not write_codes(d, k, codes, session, pr, lines):
+            wait[k] += 1                            # the moment refused (a take-over, the filter): read again next run
+            if wait[k] >= MERGE_TRIES:
+                del wait[k]
+                lines.append("dropped %s: a write was refused in %d tries" % (k, MERGE_TRIES))
+            continue
+        del wait[k]
+    for k in list(wait)[:-MERGE_WAIT] if len(wait) > MERGE_WAIT else []:
+        del wait[k]
+        lines.append("dropped %s: past %d PRs waiting" % (k, MERGE_WAIT))
+    s._write_file(path, json.dumps({"offset": offset, "wait": [[k, n] for k, n in wait.items()]}) + "\n")
+    if not lines:
+        return "merge-evidence: no PR merged since the last run" if not queue else "merge-evidence: no gh, %d PR(s) wait" % len(queue)
+    return "\n".join(lines)
 
 
 # --- --closes at write time ---------------------------------------------------------------------------------------------------

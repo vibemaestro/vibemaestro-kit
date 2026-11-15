@@ -14,6 +14,9 @@ by its spelling alone: it must answer as one of the two shapes of the kit,
 only probe variables and visibility, so a shortcut keyed on another context (an event, an input) would pass them. A literal label, a list,
 a missing `runs-on` (a job that calls a reusable workflow) and a self-hosted label list are red on purpose: the kit has none, and a new one is
 added here knowingly. The check reads *.yml and *.yaml, as Actions does.
+The one exception added knowingly is HOSTED_OK: the owner allowed a GitHub-hosted runner once, for a test no runner of ours can give
+("chỉ làm ngoại lệ khi cần test", then "ok, làm cả 2"): the Windows test of the everyday mode. It holds for that file and job only, with
+that exact label, and only while the workflow is run by hand (workflow_dispatch its sole trigger); anything else is judged as above.
 """
 import glob
 import os
@@ -37,6 +40,8 @@ GATE = [({"CI_GATE_RUNNER": "gate", "CI_RUNNER": "our-runner"}, PRIVATE, "gate")
         ({"CI_RUNNER": "our-runner"}, PRIVATE, "our-runner"), ({"CI_RUNNER": "our-runner"}, PUBLIC, "our-runner"),
         ({}, PUBLIC, "ubuntu-latest"), ({}, PRIVATE, FAILS), ({}, INTERNAL, FAILS), ({"CI_RUNNER": "", "CI_GATE_RUNNER": ""}, PRIVATE, FAILS)]
 # the spelling of each shape (the guard answers ubuntu-latest in a public repository only, and fails otherwise)
+# (workflow file, job) -> the hosted label the owner allowed for it, by hand only (see the docstring)
+HOSTED_OK = {("windows-everyday.yml", "windows-everyday"): "windows-latest"}
 GUARD = "(github.repository_visibility == 'public' && 'ubuntu-latest' || fromJSON('CI_RUNNER is not set in a private repository'))"
 CANON = {"${{ vars.CI_RUNNER || %s }}" % GUARD, "${{ vars.CI_GATE_RUNNER || vars.CI_RUNNER || %s }}" % GUARD}
 
@@ -72,13 +77,27 @@ def judge(runs_on):
     return None
 
 
+def by_hand_only(doc):
+    """The workflow's sole trigger is workflow_dispatch (in any of the forms Actions reads)."""
+    on = doc.get("on", doc.get(True))           # YAML 1.1 reads the bare key `on` as True
+    return on == "workflow_dispatch" or on == ["workflow_dispatch"] or (isinstance(on, dict) and list(on) == ["workflow_dispatch"])
+
+
 def main(d):
     errs, n = [], 0
     for f in sorted(glob.glob(os.path.join(d, "*.yml")) + glob.glob(os.path.join(d, "*.yaml"))):
-        jobs = (yaml.safe_load(open(f, encoding="utf-8")) or {}).get("jobs") or {}
-        for name, job in jobs.items():
+        doc = yaml.safe_load(open(f, encoding="utf-8")) or {}
+        for name, job in (doc.get("jobs") or {}).items():
             n += 1
-            why = judge((job or {}).get("runs-on"))
+            runs_on = (job or {}).get("runs-on")
+            allowed = HOSTED_OK.get((os.path.basename(f), name))
+            if allowed is not None and runs_on == allowed:
+                if by_hand_only(doc):
+                    continue
+                errs.append("FAIL %s %s: the owner's hosted exception holds only while workflow_dispatch is the sole trigger"
+                            % (os.path.basename(f), name))
+                continue
+            why = judge(runs_on)
             if why:
                 errs.append("FAIL %s %s: %s" % (os.path.basename(f), name, why))
     print("jobs=%d" % n)

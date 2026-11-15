@@ -31,6 +31,7 @@ The right brain holds **P** focus, **R** requests, Now, Next, Sessions, the owne
 - A request closes only with a pointer to what answered it (a PR, a commit, a file, a message), or by its `--closes` anchor.
 - A focus points to one goal and orders Next: the Next items tied to a focus come first.
 - A full section overflows into its queue, in the log. An add is never refused or dropped for room.
+- The owner queue holds only what is blocked until the owner acts, and each item names what it blocks (`--blocks`); what blocks nothing is a Next item or an issue. An item whose blocked work is done is marked and swept.
 - Sessions hold the running tasks, one item each, such as a subagent of `local-parallel` working toward its pull request: its next step and pointers, closed by its pull request. The main session writes them; a subagent never writes the brain.
 
 ## 4. Routing at write time
@@ -83,6 +84,6 @@ The way back exists at every step: a lesson that drifts is superseded (fixed or 
 
 ## 10. Tidy and backup
 
-Items close by their anchors (`--closes`). An item untouched for 30 days is dormant, and the review card names it: propose it for closing or promotion, as a full section's items. Once a month, `brain ledger --record` prints a measurement record of the ledger (each rule's counts, what crossed a threshold, each goal's progress, dormant items, capacity, compactions, and a section from each plugin that extends the brain): keep it with the project's records, and tune the thresholds from it. Auto-memory is Claude Code's own: the brain never edits it and only reports a contradiction to the owner.
+Items close by their anchors (`--closes`). Every load marks a right-brain item untouched past its kind's threshold, and string 1's `sweep:` line counts what is worth cleaning: `brain sweep` lists it, the session closes or touches each; nothing closes for age. An item untouched for 30 days is dormant, and the review card names it: propose it for closing or promotion, as a full section's items. Once a month, `brain ledger --record` prints a measurement record of the ledger (each rule's counts, what crossed a threshold, each goal's progress, dormant items, capacity, compactions, and a section from each plugin that extends the brain): keep it with the project's records, and tune the thresholds from it. Auto-memory is Claude Code's own: the brain never edits it and only reports a contradiction to the owner.
 
 A brain is exported as one bundle (`brain export`): its log line by line with its chain head, its items, queue and ledger, the machine's paths as placeholders, nothing sensitive. `--scope global` carries only the goals and decisions valid in every project. A bundle is data: an import lands the right brain as `brain op` would (`brain import`) and the left brain only through one owner dialog that lists every item (`brain owner import`), each item keeping the owner's words and a provenance line. The owner names a private place for backups (`brain owner backup DIR`), outside every repository; the brain writes one there when it is due. Restore is an import of a backup into an empty brain, its chain checked.

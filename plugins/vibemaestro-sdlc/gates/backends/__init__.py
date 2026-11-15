@@ -41,7 +41,12 @@ BUILTIN = {"ci": {"github-actions": "github_actions"}, "registry": {"ghcr": "ghc
 GH_TIMEOUT_S = 120                              # MERGE_GUARD_GH_TIMEOUT_S shortens it for tests: a number in (0, 120]
 RETRY_WAITS_S = (5, 10, 10)                     # api_retry: four attempts, these waits between them (25 s); MERGE_GUARD_RETRY_WAIT_S in [0, 10] replaces each
 # gh's own words for a connection that failed (DNS, dial, reset, TLS, EOF); an answer with an HTTP status is judged by that status
-CONNECTION = re.compile(r"error connecting to|dial tcp|connection reset|TLS handshake timeout|\bEOF\b")
+CONNECTION = re.compile(r"error connecting to|dial tcp|connection reset|TLS handshake timeout|i/o timeout|context deadline exceeded|\bEOF\b")
+# gh's GraphQL client (pr merge, pr view) states a status other than 200 this way, not as `HTTP <code>`
+GRAPHQL_STATUS = re.compile(r"non-200 OK status code: (\d{3})")
+GRAPHQL_TIMEOUT = "Something went wrong while executing your query"
+# gh's own refusal, printed before it sends any request (the PR blocked, behind or conflicting)
+GH_REFUSAL = re.compile(r"Pull request \S+ is not mergeable: ")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -81,14 +86,42 @@ def gh(args, raw=False):
     return p.returncode, p.stdout if raw else p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace").strip()
 
 
+def transient(err):
+    """"HTTP 5xx", "GitHub timeout" or "connection error" when gh's stderr says the call met a server fault, GitHub's own query
+    timeout or a dropped connection, else None."""
+    if GRAPHQL_TIMEOUT in err:                            # GitHub's own timeout of a query, answered with 200
+        return "GitHub timeout"
+    gql = GRAPHQL_STATUS.search(err)                      # the first is gh's own; its quoted body comes after it
+    if gql:
+        return "HTTP " + gql.group(1) if gql.group(1)[0] == "5" else None
+    codes = re.findall(r"HTTP (\d{3})", err)             # gh's own status closes the text; a body may quote another one
+    if codes[-1:] and codes[-1][0] == "5":
+        return "HTTP " + codes[-1]
+    if not codes and CONNECTION.search(err):
+        return "connection error"
+    return None
+
+
+def unsettled(err):
+    """Why a write call that failed may still have reached GitHub, or None when gh's text is a refusal (a GraphQL error other
+    than GitHub's timeout, a 4xx, or gh's own refusal before any request): a 5xx, a timeout, a dropped connection, and any text not known as a refusal."""
+    why = transient(err)
+    if why:
+        return why
+    gql = GRAPHQL_STATUS.search(err)
+    codes = re.findall(r"HTTP (\d{3})", err)
+    status = gql.group(1) if gql else (codes[-1] if codes else "")
+    if status.startswith("4") or (not status and ("GraphQL: " in err or GH_REFUSAL.search(err))):
+        return None
+    return "an error that is not GitHub's refusal"
+
+
 def _fail(path, err):
     if "HTTP 404" in err:
         raise NotFound("not found: %s" % path)
-    codes = re.findall(r"HTTP (\d{3})", err)             # gh's own status closes the text; a body may quote another one
-    if codes[-1:] and codes[-1][0] == "5":
-        raise Transient("gh api %s failed: %s" % (path, err[:200]), "HTTP " + codes[-1])
-    if not codes and CONNECTION.search(err):
-        raise Transient("gh api %s failed: %s" % (path, err[:200]), "connection error")
+    why = transient(err)
+    if why:
+        raise Transient("gh api %s failed: %s" % (path, err[:200]), why)
     raise Infra("gh api %s failed: %s" % (path, err[:200]))
 
 
@@ -118,15 +151,19 @@ def api(path):
     return vals[0]
 
 
-def api_retry(path):
-    """api(path), asked again after a 5xx or a connection error (a 4xx is not): a transient fault that outlasts the waits stays a
-    Transient that says so, with the attempts, so the caller's "could not conclude" tells the reader to run it again."""
+def retry_waits():
+    """RETRY_WAITS_S, each replaced by MERGE_GUARD_RETRY_WAIT_S when it is a number in [0, 10]."""
     try:
         w = float(os.environ.get("MERGE_GUARD_RETRY_WAIT_S", ""))
     except ValueError:
         w = -1
-    waits = (w,) * len(RETRY_WAITS_S) if 0 <= w <= 10 else RETRY_WAITS_S
-    for n, wait in enumerate(waits + (None,)):
+    return (w,) * len(RETRY_WAITS_S) if 0 <= w <= 10 else RETRY_WAITS_S
+
+
+def api_retry(path):
+    """api(path), asked again after a 5xx or a connection error (a 4xx is not): a transient fault that outlasts the waits stays a
+    Transient that says so, with the attempts, so the caller's "could not conclude" tells the reader to run it again."""
+    for n, wait in enumerate(retry_waits() + (None,)):
         try:
             return api(path)
         except Transient as e:

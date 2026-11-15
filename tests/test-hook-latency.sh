@@ -137,7 +137,7 @@ def run():
     r = subprocess.run(["bash", "-c", cmd], input='{"hook_event_name": "SessionStart", "source": "startup"}', text=True, env=env,
                        capture_output=True, timeout=30)
     ms = (time.perf_counter() - t) * 1000
-    if r.returncode != 0 or "systemMessage" not in r.stdout:
+    if r.returncode != 0 or "9.9.9 is available" not in r.stdout:   # the line, for the person or (everyday mode, as here) for Claude
         print("%s: the hook did not answer (rc %d, %d characters of output): its time is not a measurement" % (label, r.returncode, len(r.stdout)))
         sys.exit(2)
     return ms

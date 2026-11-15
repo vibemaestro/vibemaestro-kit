@@ -25,7 +25,7 @@
 #                   case-sensitively: KB/x and sub/kb/x are not under kb/, and a tracked link is never followed.
 #                   Unlike --skip (per term file, silent) this one is counted and is checked by the control.
 #   --ci            CI mode: the term file must come from --terms (KIT_TERMS_FILE is not read) and must hold a term. A missing,
-#                   unreadable or empty term file is exit 2 with a message naming the KIT_TERMS secret: a CI scan with no
+#                   unreadable or empty term file is exit 2 with a message naming the KIT_TERMS variable: a CI scan with no
 #                   terms never passes and never skips. A file with a NUL byte is read as text (grep -a), not skipped.
 #   --history [X]   scan every commit reachable from all refs: messages, author and committer names and e-mails,
 #                   diff text including deleted lines, annotated tag objects, and branch and tag names.
@@ -538,7 +538,7 @@ done
 [ "${#EXCL[@]}" -eq 0 ] || [ "$DO_TREE" = 1 ] || die "--exclude needs --tree"
 if [ "$CI" = 1 ]; then
   BINF=-a   # a NUL byte must not hide a text file from the gate
-  DIE_HINT="CI mode: a scan with no usable terms must not pass (is the KIT_TERMS secret set and not empty?)"
+  DIE_HINT="CI mode: a scan with no usable terms must not pass (is the KIT_TERMS variable set and not empty?)"
   [ "${#TERM_FILES[@]}" -gt 0 ] || die "CI mode wants --terms FILE (KIT_TERMS_FILE is not read)"
 fi
 if [ "${#TERM_FILES[@]}" -eq 0 ]; then

@@ -6,23 +6,34 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.py\" core",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" --say \"scripts/session-start.py\" core",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.py\" context",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/session-start.py\" context",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.py\" index",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/session-start.py\" index",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/update_check.py\" session-start",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/update_check.py\" session-start",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/quiet_save.py\" save",
+            "async": true
           }
         ]
       }
@@ -33,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.py\" subagent",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/session-start.py\" subagent",
             "timeout": 10
           }
         ]
@@ -45,7 +56,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-edit.py\"",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/pre-edit.py\"",
             "timeout": 10
           }
         ]
@@ -55,7 +66,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-bash.py\"",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/pre-bash.py\"",
             "timeout": 10
           }
         ]
@@ -65,7 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/baton-guard.py\"",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/baton-guard.py\"",
             "timeout": 20
           }
         ]
@@ -75,7 +86,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/settings-guard.py\"",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/settings-guard.py\"",
             "timeout": 10
           }
         ]

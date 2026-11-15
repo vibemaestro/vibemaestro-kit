@@ -13,9 +13,9 @@
 #   4. the allow file: an exact string covers its hit, a stale entry is red, a term class is refused, a line half covered is red;
 #   5. the output names path, line and class, never the line text or a term; the instrument's control runs first;
 #   6. the CI job (.github/workflows/public-tree.yml): its shape read with a YAML parser, each planted fault seen; its real run block
-#      run in a scratch repository with a made-up secret: green on a clean tree, red on a planted term (never printed), red on an
-#      empty secret, the term file gone afterwards.
-# Real git on throw-away repositories under the suite's scratch tree; no network, no real secret. Every planted string is built here from
+#      run in a scratch repository with a made-up term list: green on a clean tree, red on a planted term (never printed), red on an
+#      empty variable, the term file gone afterwards.
+# Real git on throw-away repositories under the suite's scratch tree; no network, no real term list. Every planted string is built here from
 # pieces, so this file carries no hit of its own (the check reads it too).
 # =============================================================================
 set -uo pipefail
@@ -499,12 +499,12 @@ if len(co) != 1 or (co[0].get("with") or {}).get("persist-credentials") is not F
 if co and not re.fullmatch(r"actions/checkout@[0-9a-f]{40}", co[0]["uses"]): errs.append("checkout is not pinned to a commit")
 run = [x for x in steps if "scripts/public-tree.py" in str(x.get("run", ""))]
 if len(run) != 1: errs.append("want exactly one step that runs the check")
-if text.count("secrets.") != 1 or text.count("secrets.KIT_TERMS") != 1: errs.append("the file reads a secret other than KIT_TERMS once")
+if "secrets." in text or text.count("vars.KIT_TERMS") != 1: errs.append("the file reads a secret, or does not read vars.KIT_TERMS exactly once")
 block = ""
 if run:
     st = run[0]; block = st["run"]
     env = st.get("env") or {}
-    if env.get("KIT_TERMS") != "${{ secrets.KIT_TERMS }}": errs.append("the secret is not in the step's env as KIT_TERMS")
+    if env.get("KIT_TERMS") != "${{ vars.KIT_TERMS }}": errs.append("the variable is not in the step's env as KIT_TERMS")
     if env.get("EVENT") != "${{ github.event_name }}" or env.get("BEFORE") != "${{ github.event.before }}": errs.append("EVENT or BEFORE is not the event's")
     if "git rev-parse --verify --quiet 'HEAD^1'" not in block: errs.append("a pull request's base is not the test-merge commit's first parent")
     if "if" in st or st.get("continue-on-error"): errs.append("the step can be skipped")
@@ -533,7 +533,7 @@ wplant creds 's.replace("persist-credentials: false", "persist-credentials: true
 wplant shallow 's.replace("fetch-depth: 0", "fetch-depth: 1", 1)'
 wplant no-ci 's.replace("public-tree.py --ci ", "public-tree.py ", 1)'
 wplant not-isolated 's.replace("python3 -I -B scripts/public-tree.py", "python3 scripts/public-tree.py", 1)'
-wplant expr-in-run 's.replace("umask 077", "echo ${{ secrets.KIT_TERMS }}; umask 077", 1)'
+wplant expr-in-run 's.replace("umask 077", "echo ${{ vars.KIT_TERMS }}; umask 077", 1)'
 wplant target 's.replace("  pull_request:\n", "  pull_request_target:\n", 1)'
 wplant perm 's.replace("  contents: read", "  contents: write", 1)'
 wplant xtrace 's.replace("set -uo pipefail", "set -xuo pipefail", 1)'
@@ -545,14 +545,14 @@ nonempty "$(cat "$TMP/step.sh")" "W2 the step's run block was extracted"
 W="$TMP/wrepo"; mk_repo "$W"; mkdir -p "$W/scripts"
 cp "$CHECK" "$W/scripts/public-tree.py"; cp "$SRC_ROOT/scripts/scan-internal-terms.sh" "$W/scripts/"; cm "$W" "the real check"
 WB=$(head_ "$W")
-step() {  # step <secret|-> — the real run block in W; OUT, RC, LEFT (files left in RUNNER_TEMP)
+step() {  # step <terms|-> — the real run block in W; OUT, RC, LEFT (files left in RUNNER_TEMP)
   local rt; rt=$(mktemp -d "$TMP/rt.XXXXXX")
   if [ "$1" = - ]; then OUT=$(cd "$W" && env -u KIT_TERMS RUNNER_TEMP="$rt" EVENT="${EVENT_:-push}" BEFORE="${BEFORE_:-$WB}" bash -c "$(cat "$TMP/step.sh")" 2>&1); RC=$?
   else OUT=$(cd "$W" && KIT_TERMS="$1" RUNNER_TEMP="$rt" EVENT="${EVENT_:-push}" BEFORE="${BEFORE_:-$WB}" bash -c "$(cat "$TMP/step.sh")" 2>&1); RC=$?; fi
   LEFT=$(ls -A "$rt" | wc -l | tr -d ' ')
 }
 step "$PRIVLINE"
-eq "$RC" 0 "W3 the run block on a clean tree with a made-up secret is green (rc $RC)"
+eq "$RC" 0 "W3 the run block on a clean tree with a made-up term list is green (rc $RC)"
 has "$OUT" "control: 6/6" "W3 …the term class is checked"
 eq "$LEFT" 0 "W3 the term file is gone afterwards"
 printf 'x\n%s\n' "$TERMLINE" > "$W/src/t.txt"; cm "$W" "a term"
@@ -561,9 +561,9 @@ eq "$RC" 1 "W4 a planted term is red (rc $RC)"; has "$OUT" "::error::" "W4 …wi
 hasnt "$OUT" "$PRIVLINE" "W4 …and the term is not in the log"
 eq "$LEFT" 0 "W4 the term file is gone after a failure too"
 step " "
-eq "$RC" 1 "W5 a blank secret is red (rc $RC)"; has "$OUT" "KIT_TERMS secret is empty" "W5 …and says why"
+eq "$RC" 1 "W5 a blank variable is red (rc $RC)"; has "$OUT" "KIT_TERMS variable is empty" "W5 …and says why"
 step -
-eq "$RC" 1 "W6 an absent secret is red (rc $RC)"
+eq "$RC" 1 "W6 an absent variable is red (rc $RC)"
 git_ -C "$W" rm -q src/t.txt; printf '%s\n' "$ISSUE" > "$W/src/t.txt"
 printf 'import sys\nprint("control: 6/6")\nprint("hits: 0 baselined, 0 allowed, 0 new")\nsys.exit(0)\n' > "$W/scripts/secrets.py"; cm "$W" "a shadow module"
 step "$PRIVLINE"

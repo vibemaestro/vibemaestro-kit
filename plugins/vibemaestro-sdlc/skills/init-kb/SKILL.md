@@ -1,6 +1,6 @@
 ---
 name: init-kb
-description: "Use when: a repo app has no kb/ or lacks one of its directories, or a repo adopts the plugin and needs its per-repo config — scaffolds kb/ (intent/specs/plans/decisions, a self-contained README, current-state.md in the current-state-only shape) and per-repo config (.vibemaestro/sdlc.json, a rules directory with an example rule); safe to re-run, overwrites nothing; --adopt for a repo that already has process files."
+description: "Use when: a repo app has no kb/ or lacks one of its directories, or a repo adopts the plugin and needs its per-repo config — scaffolds kb/ (intent/specs/plans/decisions, a self-contained README, current-state.md in the current-state-only shape) and per-repo config (.vibemaestro/sdlc.json, a rules directory with an example rule); safe to re-run, overwrites nothing; --adopt for a repo that already has process files; in the kit's everyday mode, the person's notebook set up in place with no git flow."
 ---
 
 # init-kb — scaffold `kb/` and per-repo config
@@ -10,6 +10,35 @@ a repo without `.vibemaestro/sdlc.json` runs the plugin on its defaults only. Th
 and writes the per-repo config.
 
 The scaffold is **self-contained**: `kb/README.md` carries the directory table, the file-name convention, the story, spec and plan shapes and the shape of `current-state.md`; it points to no other repo. Read the repo's own `kb/README.md` for the shapes.
+
+## Everyday mode
+
+When the session runs in the kit's everyday mode (its session start delivered the everyday core instead of the process core), the
+person keeps a notebook of ordinary work, not a software repo: skip the questions and the steps below, and set the notebook up in
+place, in the person's folder. No worktree, no branch, no commit of your own, no fetch or push, no gates, and no question about
+merge, CI, gates, branches or pull requests.
+
+1. The notebook lives in the folder's quiet-save history. If the folder has none yet (`git config --local --get
+   vibemaestro.quietsave` does not print `true`), have the kit save it once, with the quiet-save hook's own command, in the
+   person's folder (named in the command: a shell that stands in a sub-folder would make a history there instead):
+
+   ```bash
+   cd "<the person's folder>" && printf '{}' | /bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh" "scripts/quiet_save.py" save
+   ```
+
+   It prints nothing. Check the line again. Still no `true`: when the folder holds no file of the person's yet, say in one plain line
+   that the notebook is set up as soon as the folder has its first file; otherwise say in one plain line that the kit does not keep a
+   history in this folder, so the notebook cannot be set up here, and that the next session start says why.
+2. Set it up:
+
+   ```bash
+   cd "<the person's folder>" && /bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh" "scripts/kb.py" init --everyday
+   ```
+
+   `--everyday` makes only `kb/current-state.md` and `kb/preferences.md`, empty, and never overwrites one that exists: no config, no
+   rules, no other folder (make a folder of `kb/` only when you first write in it). Write where the work stands into
+   `kb/current-state.md`, and into `kb/preferences.md` only what the person said they like, in their words; both in their language.
+   Tell the person in plain words that the notebook is ready; the kit's next quiet save keeps it.
 
 ## Questions (seven, five more for the guarded merge, then the script does the rest)
 

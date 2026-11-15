@@ -520,6 +520,10 @@ def vet_item(it):
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
             raise s.Refused(1, "its %s are not texts" % field)
         s.check_list(field[:-1], v)
+    if it.get("blocks") is not None:              # a queue item's blocked work, as `brain op add --blocks` checks it
+        if letter != "Q" or not isinstance(it["blocks"], str):
+            raise s.Refused(1, "its blocks is not a queue item's text")
+        s.check_text("blocks", it["blocks"])
     closes = it.get("closes")
     if closes is not None:
         if not (isinstance(closes, list) and all(isinstance(x, str) for x in closes) and s.closes_list(letter, closes) == closes):
@@ -1104,7 +1108,12 @@ def plan_right(ctx, st, ops, raw, letters, now):
                     "anchors": list(it.get("anchors") or []), "supersedes": None}
             if it.get("closes"):
                 item["closes"] = list(it["closes"])
-            item.update({k: it[k] for k in ("due", "no_goal", "jira") + (("done", "not_doing") if letter == "P" else ())
+                at = it.get("closes_at") if isinstance(it.get("closes_at"), dict) else {}
+                at = {k: v for k, v in at.items() if k in [c.lower() for c in it["closes"]] and isinstance(v, str)
+                      and s.parse_iso(v) is not None}
+                if at:                              # when a linked anchor joined at the source: it still never closes on older work
+                    item["closes_at"] = at
+            item.update({k: it[k] for k in ("due", "no_goal", "jira", "blocks") + (("done", "not_doing") if letter == "P" else ())
                          if it.get(k) is not None})
             item.update(refs)
             item["import"] = provenance(ctx, sid, now)
@@ -1188,6 +1197,8 @@ def imported_label(session, key):
     this brain, and never text from the bundle longer than those 8."""
     if IMPORTED_LABEL.fullmatch(session):
         return session
+    if session.startswith("pr:"):                   # a PR as its session (merge-evidence): its prefix is the same for every PR
+        return "~imported@%s:%s" % (key, s.digest(session)[:8])
     return "~imported@%s:%s" % (key, re.sub(r"[^A-Za-z0-9-]", "", session.lstrip("~"))[:8] or "unknown")
 
 

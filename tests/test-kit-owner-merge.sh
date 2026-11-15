@@ -19,6 +19,10 @@
 #                         same name, a newer skipped run, a red commit status and a green run of a cancelled workflow run hide no
 #                         red; any red conclusion (startup_failure) can be accepted
 #   [queued]              a merge GitHub only queues: the post-check fails, and the undo names it as one that may still merge
+#   [merge-5xx]           GitHub answers HTTP 502 to a merge call: merged at the signed head on the read-back is a merge (the run
+#                         goes on, run ok, no revert advice); merged at another head stops it, the state unknown (rc 5); still open
+#                         at the signed head is tried once more (merged then, or refused); a GraphQL refusal is not tried again;
+#                         another base, a PR that stays unreadable, or a retry's exit 0 on a PR another hand merged: rc 5
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -72,7 +76,7 @@ b() {
   local BT_ENV=(HOME="$M/home" CLAUDE_CONFIG_DIR="$M/home/.claude" CLAUDE_PROJECT_DIR="$M/proj")
   [ "${1:-} ${2:-} ${3:-}" = "sign --by owner" ] && owner_asked "$MP" "$M/proj" "$M/state" s-owner "${@:2}" >/dev/null
   ( export PATH="$M/bin:$PATH"; cd "$M/proj" && cenv HOME="$M/home" CLAUDE_CONFIG_DIR="$M/home/.claude" XDG_STATE_HOME="$M/state" \
-      CLAUDE_PROJECT_DIR="$M/proj" CLAUDE_CODE_SESSION_ID=s-owner python3 "$MP/scripts/baton.py" "$@" ) > "$OUT" 2>&1
+      CLAUDE_PROJECT_DIR="$M/proj" CLAUDE_CODE_SESSION_ID=s-owner MERGE_GUARD_RETRY_WAIT_S=0 python3 "$MP/scripts/baton.py" "$@" ) > "$OUT" 2>&1
   echo $?
 }
 # signed <args...> — rehearse, then the owner signs with the seal it printed; prints the sign rc
@@ -169,6 +173,8 @@ fam_conflict() {
   has "$(cat "$OUT")" "merged, not undone: o/r#1 as b7938c3cf2ad172b2df04fedf29404ac96d9509c: open a revert PR" "[stop-at-conflict] …the undo names it too"
   has "$(cat "$OUT")" "run FAILED (run-failed) and undo FAILED: the state is unknown, tell the owner" "[stop-at-conflict] …baton reports the state unknown"
   hasnt "$(cat "$OUT")" "run ok" "[stop-at-conflict] …never run ok"
+  empty "$(ls "$M/state/vibemaestro/baton/records" 2>/dev/null | grep '^kit-owner-merge-unconfirmed-')" "[stop-at-conflict] …no undo record left: the merge before the stop was settled (R3-2)"
+  hasnt "$(cat "$OUT")" "kept for putting the state back by hand" "[stop-at-conflict] …and baton keeps nothing for it"
 }
 
 fam_checks_read() {
@@ -230,6 +236,166 @@ merge o/r#2 match $H2 admin no" "[queued] …GitHub queued the first, merged the
   has "$(cat "$OUT")" "run FAILED (postcheck-failed) and undo FAILED: the state is unknown, tell the owner" "[queued] …never undo ok"
 }
 
+fam_5xx() {
+  machine "o/r#1=$H1" "o/r#2=$H2"
+  wset 'w["prs"]["o/r#1"]["merge_5xx"] = ["landed"]'
+  eq "$(signed o/r 1 "$H1" o/r 2 "$H2")" 0 "[merge-5xx] the owner signs both"
+  eq "$(b run "$K" o/r 1 "$H1" o/r 2 "$H2")" 0 "[merge-5xx] 502 on the first merge, which landed at its signed head: run rc 0"
+  has "$(cat "$OUT")" "run: ok" "[merge-5xx] …run: ok"
+  eq "$(merges)" "merge o/r#1 match $H1 admin no
+merge o/r#2 match $H2 admin no" "[merge-5xx] …one call each: the run went on to the second PR"
+  has "$(runlog)" "o/r#1: the merge call failed (HTTP 502), but the PR reads merged at its signed head as b7938c3cf2ad172b2df04fedf29404ac96d9509c: the merge landed" \
+      "[merge-5xx] …the run names the 502 and the merge it read back"
+  hasnt "$(cat "$OUT"; runlog)" "open a revert PR" "[merge-5xx] …no revert advice (the header's Undo line names one only in general)"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["landed"], merged_head="'"$HX"'")'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502, and the PR reads merged at another head: rc 5, the state unknown"
+  has "$(cat "$OUT")" "STOPPED at o/r#1: the merge call failed (HTTP 502) and the PR reads MERGED at head $HX into main, merge commit b7938c3cf2ad172b2df04fedf29404ac96d9509c: not merged at its signed head and base, the state is unknown; merged before the stop: none" \
+      "[merge-5xx] …the run stops there, naming what it read and the state unknown"
+  has "$(cat "$OUT")" "run FAILED (run-failed) and undo FAILED: the state is unknown, tell the owner" "[merge-5xx] …never run ok"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["landed"], merged_base="release")'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502, and the PR reads merged at its head but into another base: rc 5"
+  has "$(cat "$OUT")" "the PR reads MERGED at head $H1 into release" "[merge-5xx] …the base is part of the signed merge"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["landed"], view_fail_after_merge=2)'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(b run "$K" o/r 1 "$H1")" 0 "[merge-5xx] 502 on a merge that landed, and the PR unreadable twice: read again, run rc 0"
+  eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["view_fail"])' "$M/world.json")" 0 "[merge-5xx] …both failed reads were spent"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["landed"], view_fail_after_merge=9)'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502, and the PR stays unreadable: rc 5, the state unknown"
+  has "$(cat "$OUT")" "STOPPED at o/r#1: the merge call failed (HTTP 502) and the PR cannot be read back: it may have merged, the state is unknown; merged before the stop: none" \
+      "[merge-5xx] …the stop says it may have merged, not that it was refused"
+  has "$(cat "$OUT")" "unread, and the run's merge call may have landed: o/r#1: the state is unknown" "[merge-5xx] …the undo, unable to read it, holds it as unknown (N1b)"
+  hasnt "$(cat "$OUT")" "the way back is a revert PR each" "[merge-5xx] …with no revert advice"
+
+  machine "o/r#1=$H1" "o/r#2=$H2"
+  wset 'w["prs"]["o/r#2"].update(merge_5xx=["landed"], view_fail_after_merge=3)'
+  eq "$(signed o/r 1 "$H1" o/r 2 "$H2")" 0 "[merge-5xx] the owner signs both"
+  eq "$(bc run "$K" o/r 1 "$H1" o/r 2 "$H2")" 5 "[merge-5xx] the second merge lands with a 502 and stays unreadable through the run: rc 5"
+  has "$(cat "$OUT")" "merged, not undone: o/r#1 as b7938c3cf2ad172b2df04fedf29404ac96d9509c: open a revert PR" \
+      "[merge-5xx] …the undo keeps the revert line for the merge before the stop"
+  has "$(cat "$OUT")" "merged at its signed head, not confirmed by the run: o/r#2 as ff3375404e9f892364ea66c74d4f553d7540944a: the owner decides whether it stays" \
+      "[merge-5xx] …and leaves the merge the run could not confirm to the owner"
+  hasnt "$(cat "$OUT")" "o/r#2 as ff3375404e9f892364ea66c74d4f553d7540944a: open a revert PR" "[merge-5xx] …no revert advice for it"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["lost", "late"])'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502 twice, the second merge lands but reads open until after the run: rc 5 (N1a)"
+  has "$(cat "$OUT")" "STOPPED at o/r#1: the merge call failed (HTTP 502) on one more try, the PR open at its signed head; a merge call may still land, the state is unknown; merged before the stop: none" \
+      "[merge-5xx] …the run stops refused, as it read, and says a call may still land"
+  has "$(cat "$OUT")" "merged at its signed head, not confirmed by the run: o/r#1 as b7938c3cf2ad172b2df04fedf29404ac96d9509c: the owner decides whether it stays" \
+      "[merge-5xx] …the undo, reading it merged, leaves it to the owner"
+  hasnt "$(cat "$OUT")" "open a revert PR" "[merge-5xx] …no revert advice for the run's own merge (the symptom this fixes)"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["lost", "late"], late_reads=2)'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502 twice, the second merge reads open through the run and its undo: rc 5, the state unknown (R1)"
+  has "$(cat "$OUT")" "open at its signed head, and the run's merge call may still land: o/r#1: the state is unknown" "[merge-5xx] …the undo holds it"
+  hasnt "$(cat "$OUT")" "nothing merged: nothing to undo" "[merge-5xx] …never 'nothing merged'"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"]["merge_5xx"] = ["dropped"]'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(b run "$K" o/r 1 "$H1")" 0 "[merge-5xx] the merge lands, then gh loses the connection (http2: client connection lost): run rc 0 (B1)"
+  has "$(runlog)" "o/r#1: the merge call failed (an error that is not GitHub's refusal), but the PR reads merged at its signed head as b7938c3cf2ad172b2df04fedf29404ac96d9509c: the merge landed" \
+      "[merge-5xx] …any error but GitHub's refusal may have landed"
+
+  machine "o/r#1=$H1" "o/r#2=$H2"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["lost"], queue=True, after_call={"head": "'"$HX"'", "autoMerge": False})'
+  eq "$(signed o/r 1 "$H1" o/r 2 "$H2")" 0 "[merge-5xx] the owner signs both"
+  eq "$(bc run "$K" o/r 1 "$H1" o/r 2 "$H2")" 4 "[merge-5xx] 502, the second call queues it, then its head moves (the queue drops it): the run stops, undo confirms nothing merged, rc 4 (D1)"
+  has "$(cat "$OUT")" "STOPPED at o/r#1: the merge call exited 0 on the second try and the PR reads OPEN at head $HX into main" \
+      "[merge-5xx] …the run stops there, the state unknown"
+  eq "$(merges)" "502 o/r#1 match $H1
+queued o/r#1 match $H1 admin no" "[merge-5xx] …and does not go on to merge the second PR"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["lost"], queue=True, after_call={"autoMerge": False})'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502, the second call queues it with no auto-merge request (a merge queue), the post-check fails: rc 5 (R3-1)"
+  has "$(cat "$OUT")" "open at its signed head, and the run's merge call may still land: o/r#1: the state is unknown" "[merge-5xx] …the undo holds it"
+  hasnt "$(cat "$OUT")" "nothing merged: nothing to undo" "[merge-5xx] …never 'nothing merged'"
+
+  machine "o/r#1=$H1" "o/r#2=$H2"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["lost"], queue=True, after_call={"autoMerge": False}); w["prs"]["o/r#2"]["merge_5xx"] = ["refused"]'
+  eq "$(signed o/r 1 "$H1" o/r 2 "$H2")" 0 "[merge-5xx] the owner signs both"
+  eq "$(bc run "$K" o/r 1 "$H1" o/r 2 "$H2")" 5 "[merge-5xx] the first queued after a 502, the second refused: rc 5"
+  has "$(cat "$OUT")" "STOPPED at o/r#2: the merge was refused; merged before the stop: none; queued after a failed call, may still land: o/r#1 (the owner decides)" \
+      "[merge-5xx] …the stop line names the queued PR as one that may still land, not as one to revert"
+  hasnt "$(cat "$OUT")" "open a revert PR" "[merge-5xx] …no revert advice"
+  has "$(cat "$OUT")" "open at its signed head, and the run's merge call may still land: o/r#1: the state is unknown" "[merge-5xx] …the undo holds the first"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["lost"], queue=True)'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502, then the second call only queues it: rc 5, as a first call that queues"
+  has "$(cat "$OUT")" "queued, may still merge: o/r#1: disable its auto-merge or take it out of the queue now" "[merge-5xx] …the undo names it queued"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"].update(merge_5xx=["lost", "raced"], merged_head="'"$HX"'")'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502, then another hand merges another head and the retry exits 0 (already merged): rc 5"
+  has "$(cat "$OUT")" "STOPPED at o/r#1: the merge call exited 0 on the second try and the PR reads MERGED at head $HX into main" \
+      "[merge-5xx] …the retry's exit 0 is read again, not taken as the merge"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"]["merge_5xx"] = ["lost", "lost"]'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 5 "[merge-5xx] 502 twice, the PR still open at its head: the run fails, and its undo, the calls maybe still landing, says the state unknown (rc 5)"
+  eq "$(merges)" "502 o/r#1 match $H1
+502 o/r#1 match $H1" "[merge-5xx] …exactly one more try"
+  has "$(cat "$OUT")" "o/r#1: the merge call failed (HTTP 502) and the PR, read again after 0 s, is still open at its signed head: one more try" \
+      "[merge-5xx] …names the retry"
+  has "$(cat "$OUT")" "STOPPED at o/r#1: the merge call failed (HTTP 502) on one more try, the PR open at its signed head; a merge call may still land, the state is unknown; merged before the stop: none" \
+      "[merge-5xx] …then the refused stop"
+  has "$(cat "$OUT")" "open at its signed head, and the run's merge call may still land: o/r#1: the state is unknown" "[merge-5xx] …the undo holds it open, never 'nothing merged' (R1)"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"]["merge_5xx"] = ["lost"]'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(b run "$K" o/r 1 "$H1")" 0 "[merge-5xx] 502 once, the PR still open: the second try merges, run rc 0"
+  eq "$(merges)" "502 o/r#1 match $H1
+merge o/r#1 match $H1 admin no" "[merge-5xx] …a lost call, then the merge"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"]["merge_5xx"] = ["timeout"]'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(b run "$K" o/r 1 "$H1")" 0 "[merge-5xx] GitHub's own query timeout (status 200), the PR still open: tried once more, run rc 0"
+  eq "$(merges)" "timeout o/r#1 match $H1
+merge o/r#1 match $H1 admin no" "[merge-5xx] …a timed-out call, then the merge"
+
+  machine "o/r#1=$H1"
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  : > "$M/state/vibemaestro/baton/records"      # not a break: the run's input, a records path that is a file, so no record can be written
+  eq "$(bc run "$K" o/r 1 "$H1")" 4 "[merge-5xx] the undo record cannot be written: no merge call, nothing merged (rc 4)"
+  empty "$(merges)" "[merge-5xx] …no merge call made"
+  has "$(cat "$OUT")" "cannot be written: no merge call made; merged before the stop: none" "[merge-5xx] …the stop says why"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"]["merge_5xx"] = ["blocked"]'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 4 "[merge-5xx] gh's own refusal before any request (not mergeable: base branch policy): nothing merged (rc 4)"
+  eq "$(merges)" "blocked o/r#1 match $H1" "[merge-5xx] …not tried again"
+  has "$(cat "$OUT")" "STOPPED at o/r#1: the merge was refused; merged before the stop: none" "[merge-5xx] …the refused stop"
+
+  machine "o/r#1=$H1"
+  wset 'w["prs"]["o/r#1"]["merge_5xx"] = ["refused"]'
+  eq "$(signed o/r 1 "$H1")" 0 "[merge-5xx] the owner signs"
+  eq "$(bc run "$K" o/r 1 "$H1")" 4 "[merge-5xx] a GraphQL refusal, no HTTP status: the run fails, nothing merged (rc 4)"
+  eq "$(merges)" "refused o/r#1 match $H1" "[merge-5xx] …not tried again"
+}
+
 # usage_case <label> <needle> <args...> — rehearse refused with the kit's rc 64, naming why
 usage_case() {
   local label=$1 needle=$2; shift 2
@@ -267,6 +433,7 @@ fam_conflict
 fam_usage
 fam_checks_read
 fam_queued
+fam_5xx
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

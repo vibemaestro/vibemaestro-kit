@@ -324,7 +324,7 @@ c13() {
   scan "$r" --ci --terms "$TERMS" --exclude kb/ --tree; clean_run "--ci with a good term file (control)"
   : > "$TMP/ci-empty.txt"
   scan "$r" --ci --terms "$TMP/ci-empty.txt" --exclude kb/ --tree; want_rc 2 "--ci with an empty term file"
-  [ -f "$TMP/stderr" ] && case $(cat "$TMP/stderr") in *KIT_TERMS*) ;; *) note "the --ci message does not name the KIT_TERMS secret" ;; esac
+  [ -f "$TMP/stderr" ] && case $(cat "$TMP/stderr") in *KIT_TERMS*) ;; *) note "the --ci message does not name the KIT_TERMS variable" ;; esac
   printf '\n \n\t\n' > "$TMP/ci-blank.txt"
   scan "$r" --ci --terms "$TMP/ci-blank.txt" --exclude kb/ --tree; want_rc 2 "--ci with a blank term file"
   printf 'allow: README.md something\n' > "$TMP/ci-allow.txt"

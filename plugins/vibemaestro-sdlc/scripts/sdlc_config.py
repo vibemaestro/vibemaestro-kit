@@ -150,6 +150,9 @@ SPEC_SECTIONS = ("context", "goal", "out_of_scope", "criteria", "design")   # th
 DEFAULTS = {
     "schema": 1,
     "hooks": "auto",
+    # the kit's mode in this folder (scripts/everyday.py): `auto` chooses by the folder (a git remote means developer), the
+    # person's VIBEMAESTRO_PROFILE, then the default; `everyday` or `developer` fixes it here
+    "profile": "auto",
     "language": "vi",
     # the update reminder of a public install (scripts/update_check.py): false turns it off in this repository, for sdlc and brain
     "update_check": True,
@@ -375,6 +378,7 @@ def time_boxed(fn, seconds):
 SCHEMA_TREE = {
     "schema": ("int", 1),
     "hooks": ("enum", ("auto", "off")),
+    "profile": ("enum", ("auto", "everyday", "developer")),
     "language": ("enum", LANGUAGES),
     "update_check": ("bool",),
     "branch": ("obj", {
@@ -1250,4 +1254,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    for _s in filter(None, (sys.stdout, sys.stderr)):   # Windows writes a pipe in the system code page, which lacks Vietnamese and the arrows
+        _s.reconfigure(encoding="utf-8", errors="backslashreplace")
     sys.exit(main(sys.argv[1:]))

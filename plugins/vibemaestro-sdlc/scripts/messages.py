@@ -488,4 +488,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    for _s in filter(None, (sys.stdout, sys.stderr)):   # Windows writes a pipe in the system code page, which lacks Vietnamese and the arrows
+        _s.reconfigure(encoding="utf-8", errors="backslashreplace")
     sys.exit(main(sys.argv[1:]))

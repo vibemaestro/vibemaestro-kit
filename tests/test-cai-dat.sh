@@ -44,7 +44,7 @@ ents = {e["name"]: e for e in m["plugins"]}
 assert ents["vibemaestro-sdlc"]["source"] == "./plugins/vibemaestro-sdlc", ents
 assert m.get("description")
 hk = h["hooks"]
-assert set(hk) == {"SessionStart", "SubagentStart", "PreToolUse"}, set(hk)
+assert set(hk) == {"SessionStart", "SubagentStart", "PreToolUse", "Stop"}, set(hk)
 PY
 N=$(find "$SRC_ROOT" -path "$SRC_ROOT/.git" -prune -o -type l -print | wc -l | tr -d " ")
 eq "$N" 0 "repo không có symlink (symlink trỏ ra ngoài plugin bị bỏ khi cài vào cache)"
@@ -82,8 +82,8 @@ WF="$SRC_ROOT/.github/workflows/test.yml"
 if [ -f "$WF" ]; then
   has "$(cat "$WF")" 'bash tests/run-all.sh' "workflow chạy 'bash tests/run-all.sh'"
   has "$(cat "$WF")" 'pull_request' "workflow chạy trên pull_request"
-  # the one secret is KIT_TERMS, read by the scan-terms job only (tests/test-scan-ci-workflow.sh)
-  hasnt "$(sed -e 's/secrets\.KIT_TERMS//g' "$WF")" 'secrets.' "workflow không dùng secret nào ngoài KIT_TERMS"
+  # no job reads a secret; KIT_TERMS is a variable, read by the scan-terms job only (tests/test-scan-ci-workflow.sh)
+  hasnt "$(cat "$WF")" 'secrets.' "workflow không dùng secret nào"
   python3 -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); assert "secrets." not in str(d["jobs"]["tests"])' "$WF" && ok "job tests không dùng secret nào" || bad "job tests dùng một secret"
   hasnt "$(cat "$WF")" 'token:' "workflow không truyền token tự chọn"
   has "$(cat "$WF")" 'PLUGIN_REQUIRE_CLAUDE' "workflow buộc phần CLI claude phải chạy (thiếu CLI thì đỏ, không bỏ qua êm)"

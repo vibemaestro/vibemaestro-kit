@@ -272,12 +272,28 @@ echo "== the kit's own workflows: no job can land on a hosted runner of a privat
 RON="$HERE/fixtures/runs_on_check.py"
 O=$(python3 "$RON" "$SRC_ROOT/.github/workflows" 2>&1); rc=$?
 eq "$rc" 0 "runs-on: every job of .github/workflows answers a runner of ours, or fails, in a private repository ($(printf '%s' "$O" | grep -c '^FAIL') jobs red)"
-has "$O" "jobs=8" "runs-on: the checker saw all 8 jobs (an empty glob cannot pass)"
+has "$O" "jobs=9" "runs-on: the checker saw all 9 jobs (an empty glob cannot pass)"
 mkdir -p "$TMP/ron"
+# the one hosted exception (HOSTED_OK: windows-everyday.yml, run by hand on windows-latest) holds only by hand, for that file and job
+ronw() {  # ronw <file name> <on: value> — a workflows directory holding only that file: the Windows test job with that trigger
+  rm -rf "$TMP/ron/wf"; mkdir -p "$TMP/ron/wf"
+  printf 'on: %s\njobs:\n  windows-everyday:\n    runs-on: windows-latest\n    steps: []\n' "$2" > "$TMP/ron/wf/$1"
+}
+ronw windows-everyday.yml '[workflow_dispatch, push]'
+RC=0; O=$(capped python3 "$RON" "$TMP/ron/wf" 2>&1) || RC=$?
+eq "$RC" 1 "runs-on break hosted-on-push: the Windows test with a push trigger as well is red (a hosted runner on every push)"
+has "$O" "FAIL windows-everyday.yml windows-everyday: the owner's hosted exception holds only while workflow_dispatch is the sole trigger" "…naming why"
+ronw windows-everyday.yml '{pull_request: {}}'
+RC=0; O=$(capped python3 "$RON" "$TMP/ron/wf" 2>&1) || RC=$?
+eq "$RC" 1 "runs-on break hosted-on-pr: the Windows test run on pull requests instead is red"
+ronw other-windows.yml workflow_dispatch
+RC=0; O=$(capped python3 "$RON" "$TMP/ron/wf" 2>&1) || RC=$?
+eq "$RC" 1 "runs-on break hosted-elsewhere: the same job by hand in another file is red (the exception names one file)"
+has "$O" "FAIL other-windows.yml windows-everyday: runs-on is 'windows-latest'" "…as a literal label"
 # a workflow file named *.yaml is run by Actions too: the checker must read it, and must see its jobs
 rm -rf "$TMP/ron/wf"; cp -R "$SRC_ROOT/.github/workflows" "$TMP/ron/wf"; printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps: []\n' > "$TMP/ron/wf/zz.yaml"
 O=$(python3 "$RON" "$TMP/ron/wf" 2>&1); rc=$?
 [ "$rc" = 1 ] && has "$O" "FAIL zz.yaml x" "runs-on break yaml-extension: red (a job of a *.yaml file is judged)" || bad "runs-on break yaml-extension: the checker does not read *.yaml, the probe is blind"
-has "$O" "jobs=9" "runs-on break yaml-extension: …and it counted the extra job"
+has "$O" "jobs=10" "runs-on break yaml-extension: …and it counted the extra job"
 
 echo; summary
