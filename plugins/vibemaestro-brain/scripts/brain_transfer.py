@@ -11,7 +11,6 @@ backup`, and guard-owner for those two): no SessionStart command imports it, so 
 in brain_store. Standard library only.
 """
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -133,16 +132,28 @@ def machine_paths():
             q = (q or "").rstrip(os.sep)
             if os.path.isabs(q) and len(q) > 1:
                 out.setdefault(q, ph)
+                for v in other_spellings(q):
+                    out.setdefault(v, ph)
     return sorted(out.items(), key=lambda kv: (-len(kv[0]), kv[0]))
+
+
+def other_spellings(q):
+    """The other ways a session writes the path `q` on Windows (C:\\x): C:/x, /c/x as Git Bash shows it, and C:\\\\x as a JSON or
+    code text holds it; none elsewhere. A path there matches in any case (redacted)."""
+    if not s.WINDOWS:
+        return []
+    f = q.replace("\\", "/")
+    return [f, q.replace("\\", "\\\\")] + (["/" + f[0].lower() + f[2:]] if len(f) > 2 and f[1] == ":" else [])
 
 
 def redacted(obj, paths, used):
     """`obj` with each of this machine's paths in a string replaced by its placeholder (a path ends where no path character
     follows); the placeholders used go into `used`."""
     if isinstance(obj, str):
+        ci = re.I if s.WINDOWS else 0                    # Windows: a path in another case names the same folder
         for p, ph in paths:
-            if p in obj:
-                obj, n = re.subn(re.escape(p) + r"(?![A-Za-z0-9._-])", lambda _: ph, obj)
+            if p in obj or ci and p.lower() in obj.lower():
+                obj, n = re.subn(re.escape(p) + r"(?![A-Za-z0-9._-])", lambda _: ph, obj, flags=ci)
                 if n:
                     used.add(ph)
         return obj
@@ -233,7 +244,7 @@ def build_bundle(d, scope="all", now=None):
 
 def write_new(path, data):
     """`data` into a new file, 0600; FileExistsError when anything is at `path`, a symlink included."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | s.O_BINARY, 0o600)
     try:
         view = memoryview(data)
         while view:
@@ -297,7 +308,7 @@ def read_bundle(path):
     if not stat.S_ISREG(st_.st_mode):
         raise s.Refused(1, "%s is not a regular file" % name)
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | s.O_BINARY)
         with os.fdopen(fd, "rb") as f:
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                 raise s.Refused(1, "%s is not a regular file" % name)
@@ -1264,7 +1275,8 @@ def place_problem(place, project=None):
     never a repository, the kit's public export included), the project's work tree and the brain's state root."""
     if not isinstance(place, str) or not os.path.isabs(place):
         return "it is not an absolute path"
-    if os.path.normpath(place) != (place.rstrip("/") or "/") or place.startswith("//"):
+    plain = place.replace("/", os.sep)              # Windows: Git Bash hands a path over as C:/…, the same path
+    if os.path.normpath(plain) != (plain.rstrip(os.sep) or os.sep) or place.startswith("//"):
         return "name it plainly, with no `.`, `..` or `//` (the system and a lexical reading could part at a link)"
     place = os.path.normpath(place)                 # `link/` would make lstat follow the link
     try:
@@ -1275,9 +1287,16 @@ def place_problem(place, project=None):
         return "it is a symlink: name the directory itself"
     if not stat.S_ISDIR(st_.st_mode):
         return "it is not a directory"
-    if st_.st_uid != os.getuid():
+    if s.WINDOWS:                                   # no mode: its owner and access list, as the brain's own directories
+        try:
+            why = s.access_problem(place)
+        except OSError as e:
+            why = "its owner and access list cannot be read (%s)" % e
+        if why:
+            return why
+    elif st_.st_uid != os.getuid():
         return "it is not this account's"
-    if st_.st_mode & 0o077:
+    elif st_.st_mode & 0o077:
         return "group or others can use it (mode %04o): chmod 700 makes it private" % (st_.st_mode & 0o7777)
     if "true" in (s._git(place, "rev-parse", "--is-inside-work-tree"), s._git(place, "rev-parse", "--is-inside-git-dir")):
         return "it lies in a git repository: a backup never goes where a commit could publish it"
@@ -1300,7 +1319,8 @@ def backup_prune(place, me, keep=BACKUP_KEEP):
         p = os.path.join(place, name)
         with contextlib.suppress(OSError):
             st_ = os.lstat(p)
-            if stat.S_ISREG(st_.st_mode) and st_.st_uid == os.getuid():
+            if stat.S_ISREG(st_.st_mode) and (s.access_problem(p, owner_only=True) is None if s.WINDOWS
+                                              else st_.st_uid == os.getuid()):
                 mine.append((m.group("t"), int(m.group("seq")), p))
     for _, _, p in sorted(mine, reverse=True)[keep:]:
         with contextlib.suppress(OSError):
@@ -1321,11 +1341,11 @@ def backup(if_due=False, now=None):
         if if_due:
             return None
         raise s.Refused(1, "no backup place is named: the owner names one through the dialog (`brain owner backup DIR`)")
-    fd = os.open(os.path.join(d, BACKUP_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(os.path.join(d, BACKUP_LOCK), os.O_RDWR | os.O_CREAT | s.O_BINARY, 0o600)
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+            s.lock_nb(fd)
+        except s.HELD:
             if if_due:
                 return None
             raise s.Refused(1, "another backup of this brain is running")
@@ -1359,6 +1379,7 @@ def backup(if_due=False, now=None):
         s.episode_line(d, s.session_id(), "backup", ok=True, seq=b["head"]["seq"], file=name)
         return "backed up seq %d (head %s…) to %s" % (b["head"]["seq"], b["head"]["sha256"][:12], os.path.join(conf["dir"], name))
     finally:
+        s.unlock(fd)
         os.close(fd)
 
 
@@ -1393,8 +1414,8 @@ def owner_backup_line(d, ns, project=None):
     why = place_problem(place, project)
     if why:
         raise s.Refused(1, "the backup place is refused: %s" % why)
-    return ('Back up this project\'s brain to "%s" every %d h (a private directory: yours, mode 0700, outside every git work '
-            'tree)' % (place, hours))
+    return ('Back up this project\'s brain to "%s" every %d h (a private directory: %s, outside every git work tree)'
+            % (place, hours, "yours alone" if s.WINDOWS else "yours, mode 0700"))
 
 
 def owner_backup(args, ns):

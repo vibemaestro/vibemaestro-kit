@@ -1,6 +1,6 @@
 name: windows-everyday
 
-# The everyday mode on real Windows: Git for Windows' bash and the runner's own Python, which no runner of ours has.
+# The everyday mode and the brain on real Windows: Git for Windows' bash and the runner's own Python, which no runner of ours has.
 # Run by hand only (Actions > windows-everyday > Run workflow on main): the one GitHub-hosted runner of the kit, because no runner
 # of ours runs Windows; never on push, PR or a schedule (tests/fixtures/runs_on_check.py, HOSTED_OK, is red otherwise). No secret,
 # no variable, no Claude: nothing here logs in anywhere.
@@ -13,9 +13,31 @@ permissions:
 
 jobs:
   windows-everyday:
-    name: windows everyday (run by hand)
+    name: windows ${{ matrix.part }} (run by hand)
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.minutes }}
+    strategy:
+      fail-fast: false
+      # One job, four parts side by side: the everyday suites, then the brain's in three parts of about 3 minutes each on Linux.
+      # Each suite carries its cap (name:seconds), and the summary prints the seconds each took. The everyday caps are about 2.5
+      # times what each suite took on this runner (37, 14, 135, 66, 53 s). devmode-same runs 532 hook runs for real (151 s on
+      # Linux) and prints nothing until they all end, so a cut log cannot say how far it got: its cap is twelve times its Linux
+      # time. The brain's suites took 5 to 8 times their Linux time here; their caps are about ten times it. Close, stale and
+      # merge-evidence skip at once here (their gh is a stub script).
+      matrix:
+        include:
+          - part: everyday
+            minutes: 50
+            suites: windows-everyday:100 pyrun:60 quiet-save:340 everyday-mode:170 init-setup:150 devmode-same:1800
+          - part: brain-a
+            minutes: 60
+            suites: brain-layers:1500 brain-hooks:300 brain-ledger:300 brain-drift-soul:120 brain-soul-line:120 brain-close:120 brain-stale:120 brain-merge-evidence:120
+          - part: brain-b
+            minutes: 60
+            suites: brain-matrix:900 brain-extension:900 brain-owner:600
+          - part: brain-c
+            minutes: 60
+            suites: brain-transfer:900 brain-store:900 brain-work:900
     defaults:
       run:
         shell: bash   # Git for Windows' bash, the shell Claude Code runs hooks with on Windows
@@ -42,20 +64,24 @@ jobs:
           fi
 
       # Each run's output goes to a file and is printed whole: a suite killed by its time cap cannot hold the log open.
-      # The Windows-only cases first, then the everyday suites. Each cap is about 2.5 times what the suite took on this runner
-      # (38, 18, 131, 38, 57 s; devmode-same more than 140): 1070 s of caps within the job's 20 minutes.
-      - name: Windows-only cases, then the everyday suites
+      - name: The suites of this part, each under its cap
+        env:
+          PART: ${{ matrix.part }}
+          SUITES: ${{ matrix.suites }}
         run: |
+          # Git Bash's ps gives no sizes: capped.sh cannot measure memory here, and would say so on stderr inside what a brain case
+          # reads. Its time cap holds.
+          case $PART in brain-*) export PLANT_CAP_MEM_MB=0;; esac
           out=$(cygpath -u "$RUNNER_TEMP")/out; mkdir -p "$out"; red=0; lines=()
-          for s in windows-everyday pyrun quiet-save everyday-mode init-setup devmode-same; do
-            case $s in windows-everyday|everyday-mode) cap=100;; pyrun) cap=60;; quiet-save) cap=240;; init-setup) cap=150;; *) cap=420;; esac
+          for e in $SUITES; do
+            s=${e%%:*}; cap=${e##*:}
             echo "::group::$s"
-            rc=0; timeout "$cap" bash "tests/test-$s.sh" </dev/null > "$out/$s.txt" 2>&1 || rc=$?
+            rc=0; t0=$SECONDS; timeout "$cap" bash "tests/test-$s.sh" </dev/null > "$out/$s.txt" 2>&1 || rc=$?; dt=$((SECONDS - t0))
             cat "$out/$s.txt"; echo "::endgroup::"
             last=$(tail -n 1 "$out/$s.txt" | tr -d '\r')
             if [ "$rc" = 124 ]; then lines+=("FAIL suite $s: stopped by its ${cap}s cap (this runner's speed, not a kit result; its output above is cut)"); red=1
-            elif [ "$rc" = 0 ]; then lines+=("ok   suite $s: $last")
-            else lines+=("FAIL suite $s (rc $rc): $last"); red=1; fi
+            elif [ "$rc" = 0 ]; then lines+=("ok   suite $s: $last · ${dt} s")
+            else lines+=("FAIL suite $s (rc $rc): $last · ${dt} s"); red=1; fi
           done
           echo "== every case that is not ok =="
           grep -h -E '^  (FAIL|SKIP) ' "$out"/*.txt || echo "(none)"

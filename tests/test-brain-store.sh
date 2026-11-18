@@ -50,6 +50,29 @@
 #   [V] a `signal` op (a measurement a later brain writes) is folded unread: a write, render and doctor after it work, the items
 #       are as before it, a `what` of 32 characters passes; no `what`, a `what` that is not text, empty or over 32, or a
 #       `promote` on it: rc 5 naming the line
+#   Windows (the port of the POSIX-only store; each case also runs on Linux and macOS unless it says Windows):
+#   [WS] the security descriptor reader: a profile folder's rules pass; another owner, any rule for another account (one only
+#        children inherit too), no DACL, an allow rule of another kind, and every offset or length that does not fit are
+#        refused; no cut descriptor passes and no damaged one raises
+#   [WK] a child that started a grandchild: kill_tree ends both, also after the child itself has ended
+#   [WH] brain_stale's harvest of a gh that exited while a child it left holds the pipe: the answer is read at once and the
+#        child is ended (Windows ends the job before it reads, so nothing holds the pipe)
+#   [WD] a lock holder that ends without giving the lock back: a waiting write goes on once it is gone; while it held the lock a
+#        bounded wait was refused
+#   [WB] the store's files are the same bytes on every system: no CR (Windows text mode) in the log, head, caches or episodes
+#   [WO] the Windows check of the brain's folders runs before anything is made inside them: a refused root holds no project
+#        folder and no sessions/ after the refusal; a sessions/ or pending/ another account made gets no record or marker
+#        (Windows' own call stood in by a check that refuses that folder)
+#   [WR] a rename over a file another handle holds open is tried again until the handle is gone (Windows refuses it at once)
+#   [WE] a text the system code page lacks reaches the sensitive-value filter in UTF-8, and a token in it is still caught
+#        (Windows' pipes take the code page: the write stopped with an internal error; here the locale call stands in for it,
+#        which subprocess reads from Python 3.11 on)
+#   [WT] one folder spelled two ways (Windows: C:/… from Git Bash, C:\… from Python; here a doubled /) is one folder: the
+#        CLI in the session's own project prints no note that the shell left it
+#   [WV] a text that starts with / is stored as typed (Git Bash rewrites such an argument when it runs Windows' own Python)
+#   [WA] Windows only: a root that Everyone may change, or that another account owns, is refused rc 1 naming the SID and nothing
+#        is written; the brain's own folders under the user's profile pass, and doctor reads their access rules
+#   [WP] Windows only: the account's home is the profile folder of the process token, not USERPROFILE
 # =============================================================================
 set -uo pipefail
 # the answerer check reads ancestors' CLAUDE_CONFIG_DIR and HOME from their initial environment, which forked subshells share:
@@ -214,7 +237,7 @@ case_edit() {
   python3 - "$D/hot.jsonl" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(s.replace("beta two", "beta 2!!", 1))
+open(p, "w", encoding="utf-8", newline="").write(s.replace("beta two", "beta 2!!", 1))
 PY
   br doctor; c_rc 1 "[H] a hand-edited middle line: doctor rc 1"
   c_has "$OUT" "chain" "[H] doctor names the chain"
@@ -229,7 +252,7 @@ case_tail() {
   python3 - "$D/hot.jsonl" <<'PY'
 import sys
 p = sys.argv[1]; lines = open(p, encoding="utf-8").read().splitlines(True)
-open(p, "w", encoding="utf-8").write("".join(lines[:-1]))
+open(p, "w", encoding="utf-8", newline="").write("".join(lines[:-1]))
 PY
   br doctor; c_rc 1 "[H] the last line removed: doctor rc 1"
   c_has "$OUT" "head" "[H] doctor names head.json"
@@ -247,7 +270,7 @@ case_cache() {
   python3 - "$D/hot.json" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(s.replace("the real text", "an edited text"))
+open(p, "w", encoding="utf-8", newline="").write(s.replace("the real text", "an edited text"))
 PY
   br render; c_rc 0 "[K] render rc 0"
   c_has "$OUT" "the real text" "[K] the render shows the logged text"
@@ -255,7 +278,7 @@ PY
   python3 - "$D/hot.json" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(s.replace("the real text", "an edited text"))
+open(p, "w", encoding="utf-8", newline="").write(s.replace("the real text", "an edited text"))
 PY
   br doctor; c_rc 1 "[K] doctor rc 1 on an edited cache"
   c_has "$OUT" "hot.json" "[K] doctor names hot.json"
@@ -338,17 +361,18 @@ print(units(parts[0]) + 2800 <= 9500 - 710, all(units(p) <= 9500 - 710 for p in 
 
 case_record() {  # the CLI reads this session's project record; one it cannot trust is refused, never another project
   newp
-  local A=$P B="$TMP/other$NP" dA f
+  local A=$P B="$TMP/other$NP" dA f wA wB
   mkdir -p "$B"; git_ -C "$B" init -q -b main
+  wA=$(wpath "$A"); wB=$B; [ "${OS:-}" != Windows_NT ] || wB=$(cygpath -w "$B")   # Windows: the record's form, the cwd Python sees
   br op add --kind now --text "in A"
   dA=$(sdir)
-  bpy "s.record_session('sA', '$A', s.state_dir('$A'))"
+  bpy "s.record_session('sA', '$wA', s.state_dir('$wA'))"
   f=$(bpy 'print(s.session_file("sA"))')
   cd "$B" || return 1
   br op add --kind next --text "from B"
   c_rc 0 "[Q] a recorded session in B: rc 0"
   c_has "$(cat "$dA/hot.jsonl")" "from B" "[Q] it writes the recorded project"
-  c_has "$OUT" "this session's project is $A; the shell is in $B" "[Q] and names both"
+  c_has "$OUT" "this session's project is $wA; the shell is in $wB" "[Q] and names both"
   OUT=$(env -u CLAUDE_CODE_SESSION_ID "$BROOT/bin/brain" doctor --path 2>&1)
   c_eq "$OUT" "$(env -u CLAUDE_CODE_SESSION_ID python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import brain_store as s, os; print(s.state_dir(os.getcwd()))' "$BROOT/scripts")" "[Q] no session id in B: today's rule, B's state directory"
   c_hasnt "$OUT" "this session's project" "[Q] and no note"
@@ -356,15 +380,16 @@ case_record() {  # the CLI reads this session's project record; one it cannot tr
   br op add --kind next --text "damaged"
   c_rc 1 "[Q] a damaged record: refused"
   c_has "$OUT" "$f" "[Q] naming the record"
-  c_has "$OUT" "the shell is in $B" "[Q] and the shell's directory"
+  c_has "$OUT" "the shell is in $wB" "[Q] and the shell's directory"
   c_hasnt "$(cat "$dA/hot.jsonl")" "damaged" "[Q] nothing written to A"
   c_eq "$(cd "$B" && env -u CLAUDE_CODE_SESSION_ID python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import brain_store as s, os; print(os.path.isdir(s.state_dir(os.getcwd())))' "$BROOT/scripts")" False "[Q] nor to B"
   printf '{"project": "%s", "state": "%s"}\n' "$A" "$TMP/elsewhere" > "$f"
   br doctor --path
   c_rc 1 "[Q] a record whose state is not under the state root: refused"
   c_has "$OUT" "does not name a project and its brain state directory" "[Q] with the reason"
-  printf '{"project": "%s", "state": "%s"}\n' "$A" "$dA" > "$f"
+  printf '{"project": "%s", "state": "%s"}\n' "$wA" "$(printf '%s' "$dA" | sed 's#\\#\\\\#g')" > "$f"
   br doctor --path; c_eq "$(printf '%s\n' "$OUT" | tail -n 1)" "$dA" "[Q] the record mended: doctor --path in B is A's"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[Q] the shell's directory deleted under it" "Windows keeps a folder in use as a working directory"; cd "$TMP" || return 1; return; fi
   mkdir -p "$TMP/gone$NP"; cd "$TMP/gone$NP" && rmdir "$TMP/gone$NP"
   br doctor --path
   c_rc 0 "[Q] the shell's directory deleted under it: rc 0, no internal error"
@@ -423,10 +448,12 @@ case_damage() {
   br op add --kind now --text "beta"; c_rc 5 "[G] a head.json with seq 1e400: rc 5"; c_hasnt "$OUT" "Traceback" "[G] no traceback"
   br doctor; c_rc 1 "[G] doctor rc 1 on it"; c_hasnt "$OUT" "internal error" "[G] doctor: no internal error on it"
   cp "$TMP/head$NP" "$D/head.json"
-  ln -s "$TMP/nowhere" "$D/asked/dangling.json"; printf '[1]\n' > "$D/asked/list.json"
+  if can_link; then ln -s "$TMP/nowhere" "$D/asked/dangling.json"; fi; printf '[1]\n' > "$D/asked/list.json"
   br doctor; c_hasnt "$OUT" "Traceback" "[G] a dangling link and a non-object record: doctor gives no traceback"
-  c_hasnt "$OUT" "internal error" "[G] nor an internal error"; c_has "$OUT" "symlink" "[G] doctor names the symlink"
-  rm "$D/asked/dangling.json" "$D/asked/list.json"
+  c_hasnt "$OUT" "internal error" "[G] nor an internal error"
+  if can_link; then c_has "$OUT" "symlink" "[G] doctor names the symlink"
+  else c_skip "[G] doctor names the symlink" "ln -s copies here instead of linking"; fi
+  rm -f "$D/asked/dangling.json" "$D/asked/list.json"
   mv "$D/hot.jsonl" "$TMP/log$NP"; mkdir "$D/hot.jsonl"
   br op add --kind now --text "gamma"; c_rc 5 "[G] hot.jsonl as a directory: rc 5"; c_hasnt "$OUT" "Traceback" "[G] no traceback"
 }
@@ -447,6 +474,7 @@ case_chars2() {
 case_modes() {
   newp
   (umask 022; br op add --kind now --text "make the directories")   # under umask 077 a default mkdir is 0700 anyway
+  if [ "${OS:-}" = Windows_NT ]; then echo "  SKIP [G] 0700: Windows has no mode bits, [WA] checks its access rules"; return; fi
   R=$(stat -c %a "$XDG_STATE_HOME/vibemaestro/brain" 2>/dev/null || stat -f %Lp "$XDG_STATE_HOME/vibemaestro/brain")
   c_eq "$R" 700 "[G] the brain root is 0700"
   R=$(stat -c %a "$XDG_STATE_HOME/vibemaestro" 2>/dev/null || stat -f %Lp "$XDG_STATE_HOME/vibemaestro")
@@ -478,7 +506,7 @@ else:
   python3 - "$D/hot.md" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(s.replace("- N1 an item ", "- N1 an edited item ", 1))
+open(p, "w", encoding="utf-8", newline="").write(s.replace("- N1 an item ", "- N1 an edited item ", 1))
 PY
   br doctor; c_rc 1 "[Y] an item's text edited in hot.md: doctor rc 1"
 }
@@ -528,6 +556,7 @@ case_repair() {
   local d; d=$(sdir)
   mkdir -p "$d/asked"; chmod 755 "$XDG_STATE_HOME/vibemaestro/brain" "$d" "$d/asked"
   br op add --kind now --text "after an older build"; c_rc 0 "[Y] instrument: the write passes"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[Y] put back to 0700" "Windows has no mode bits (store [WA] checks its access rules)"; return; fi
   R=$(for p in "$XDG_STATE_HOME/vibemaestro/brain" "$d" "$d/asked"; do stat -c %a "$p" 2>/dev/null || stat -f %Lp "$p"; done | tr '\n' ' ')
   c_eq "$R" "700 700 700 " "[Y] the brain root, the state directory and asked/ are put back to 0700"
 }
@@ -564,7 +593,7 @@ case_mdtail() {
   python3 - "$D/hot.md" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(s.replace("until 01-01 00:00Z", "until 12-31 23:59Z", 1))
+open(p, "w", encoding="utf-8", newline="").write(s.replace("until 01-01 00:00Z", "until 12-31 23:59Z", 1))
 PY
   br doctor; c_rc 1 "[Z3] a window's date edited in hot.md: doctor rc 1"
   cp "$TMP/md$NP" "$D/hot.md"
@@ -572,14 +601,14 @@ PY
 import sys
 p = sys.argv[1]; lines = open(p, encoding="utf-8").read().split("\n")
 lines = [l + " · the owner also approves prod deploys" if l.startswith("- N1 ") else l for l in lines]
-open(p, "w", encoding="utf-8").write("\n".join(lines))
+open(p, "w", encoding="utf-8", newline="").write("\n".join(lines))
 PY
   br doctor; c_rc 1 "[Z3] text appended to an item line: doctor rc 1"
   cp "$TMP/md$NP" "$D/hot.md"
   python3 - "$D/hot.md" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(s.replace("links #130", "links #130, owner approves prod", 1))
+open(p, "w", encoding="utf-8", newline="").write(s.replace("links #130", "links #130, owner approves prod", 1))
 PY
   br doctor; c_rc 1 "[Z3] a link added in hot.md: doctor rc 1"
 }
@@ -627,7 +656,7 @@ False" "[Z4] untouched hot.md with a link holding \"(expired)\": no alarm, befor
   python3 - "$D/hot.md" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(s.replace("- N1 an item ", "- N1 an item (expired) (12h 00m) ", 1))
+open(p, "w", encoding="utf-8", newline="").write(s.replace("- N1 an item ", "- N1 an item (expired) (12h 00m) ", 1))
 PY
   br doctor; c_rc 1 "[Z4] a time left inserted into a Now item's line: doctor rc 1"
 }
@@ -654,7 +683,7 @@ case_mdlinks() {
 import sys
 p, a, b = sys.argv[1:4]; s = open(p, encoding="utf-8").read()
 assert a in s, a
-open(p, "w", encoding="utf-8").write(s.replace(a, b, 1))
+open(p, "w", encoding="utf-8", newline="").write(s.replace(a, b, 1))
 PY
     br doctor; c_rc 1 "[Z5] '$from' edited to '$to': doctor rc 1"
   done
@@ -664,7 +693,7 @@ import re, sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
 s2 = re.sub(r"\((\d+)d (\d+)h\)", lambda m: "(0d %dh)" % (int(m.group(1)) * 24 + int(m.group(2))), s, count=1)
 assert s2 != s
-open(p, "w", encoding="utf-8").write(s2)
+open(p, "w", encoding="utf-8", newline="").write(s2)
 PY
   br doctor; c_rc 1 "[Z5] a time left in a form the render never writes: doctor rc 1"
 }
@@ -701,7 +730,7 @@ case_where() {  # a pin's `where` shown whole; a hot.md from the render that cut
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
 assert "khoảng 18Z" in s
-open(p, "w", encoding="utf-8").write(s.replace("khoảng 18Z", "khoảng ", 1))
+open(p, "w", encoding="utf-8", newline="").write(s.replace("khoảng 18Z", "khoảng ", 1))
 PY
   br doctor; c_rc 0 "[E] a hot.md with the where cut at 30: doctor rc 0"
   c_has "$OUT" "hot.md holds an older brain's render" "[E] doctor calls it an older brain's render, not an edit"
@@ -711,6 +740,10 @@ PY
 
 case_paths() {  # a project path that is not UTF-8, and a working directory deleted under the shell
   newp
+  if [ "${OS:-}" = Windows_NT ]; then
+    c_skip "[P] a path that is not UTF-8, a deleted working directory" "NTFS names are UTF-16, and Windows keeps a folder in use as a working directory"
+    return
+  fi
   local np="$TMP/p-$(printf '\377')" gone="$P/gone"
   git_ init -q -b main "$np"; mkdir "$np/sub"; cd "$np/sub" || return 1
   br doctor; c_rc 0 "[P] a project whose path is not UTF-8: doctor rc 0"
@@ -741,6 +774,7 @@ print(d.endswith(hashlib.sha1(os.fsencode(p)).hexdigest()[:12]))')" True "[P] th
 }
 
 case_focus_done_when() {  # a focus takes done when and not doing
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[focus-done-when] a focus's done when and not doing across its supersedes" "a focus is retired, and a SOUL line written, through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl)"; return; fi
   newp
   owner_ok add --kind goal --text "ship the layers" --owner-quote q --where chat --done "the PR merged" --not-doing "the ledger" \
     --review "$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=30))')" --scope project
@@ -814,9 +848,40 @@ case_focus_words() {  # a live focus gets its done when and not doing in place: 
   br op words P3 --done-when "$TOKEN"; c_rc 1 "[focus-words-not-focus] a token-shaped done when: refused"
   c_hasnt "$OUT" "$TOKEN" "[focus-words-not-focus] the token is not printed"
   br op words P3 --not-doing "a$(printf '\001')b"; c_rc 1 "[focus-words-not-focus] a control character: refused"
-  br op close P3 --reason "dropped"; c_rc 0 "[focus-words-not-focus] instrument: P3 closed"
-  br op words P3 --done-when "x"; c_rc 1 "[focus-words-not-focus] a closed focus: refused"
+  if [ "${OS:-}" = Windows_NT ]; then   # README, On Windows: a focus retires through vibemaestro-sdlc's baton, which does not run there yet
+    br op close P3 --reason "dropped"; c_rc 1 "[focus-words-not-focus] Windows: closing a focus is refused, its charters cannot be revoked there"
+    c_has "$OUT" "P3 cannot be closed or superseded: vibemaestro-sdlc's baton, which revokes its charters, does not run on Windows yet; nothing was written, and the rest of the brain works" "[focus-words-not-focus] Windows: one line saying why, that nothing was written and that the rest works"
+    br show P3 --json; c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["status"])')" live "[focus-words-not-focus] Windows: P3 is still live"
+  else
+    br op close P3 --reason "dropped"; c_rc 0 "[focus-words-not-focus] instrument: P3 closed"
+    br op words P3 --done-when "x"; c_rc 1 "[focus-words-not-focus] a closed focus: refused"
+  fi
   br doctor; c_rc 0 "[focus-words-not-focus] doctor rc 0 after the refusals"
+}
+
+case_baton_windows() {  # where vibemaestro-sdlc's baton cannot run (Windows: it imports fcntl), the brain says so in one line
+  newp
+  mkdir -p "$TMP/nofcntl$NP"
+  cat > "$TMP/nofcntl$NP/sitecustomize.py" <<'PY'
+import sys
+class NoFcntl:                                      # what the baton meets on Windows, which has no fcntl (a bad input, not a break)
+    def find_spec(self, name, path=None, target=None):
+        if name == "fcntl":
+            raise ModuleNotFoundError("No module named 'fcntl'", name="fcntl")
+sys.meta_path.insert(0, NoFcntl())
+PY
+  R=$(bpya 'import os
+s.WINDOWS = True
+os.environ["PYTHONPATH"] = sys.argv[2]
+try:
+    s.revoke_charters("P1")
+    print("revoked")
+except s.Refused as e:
+    print(e.rc, e.msg)
+print(s.run_soul_line({"code": "S1", "file": "SOUL.md", "action": "add", "text": "a line"}))' "$TMP/nofcntl$NP" | tr -d '\r')
+  c_eq "$R" "1 P1 cannot be closed or superseded: vibemaestro-sdlc's baton, which revokes its charters, does not run on Windows yet; nothing was written, and the rest of the brain works
+the SOUL line [S1] was not written: vibemaestro-sdlc's baton, which writes it, does not run on Windows yet; the rest of the brain works" \
+    "[WN] Windows, the baton unable to run: a focus close or supersede refused and a SOUL line not written, each saying why in one line"
 }
 
 case_jira() {  # a goal and a focus take a Jira key: stored, shown, refused when malformed
@@ -842,11 +907,18 @@ print(json.dumps({"session_id": sys.argv[1], "cwd": sys.argv[2], "hook_event_nam
   c_rc 0 "[jira] a focus with --jira: written"
   br show P1 --json
   c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the focus holds the key"
-  br op supersede P1 --text "capacity first, again" --reason wording; c_rc 0 "[jira] a focus superseded"
-  br show P2 --json
-  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the key goes over to the superseding focus"
+  local nx=P3
+  if [ "${OS:-}" = Windows_NT ]; then   # README, On Windows: a focus retires through vibemaestro-sdlc's baton, which does not run there yet
+    br op supersede P1 --text "capacity first, again" --reason wording; c_rc 1 "[jira] Windows: superseding a focus is refused, its charters cannot be revoked there"
+    c_has "$OUT" "P1 cannot be closed or superseded: vibemaestro-sdlc's baton" "[jira] Windows: saying why"
+    br show P2 --json; c_rc 1 "[jira] Windows: no P2 was made"; nx=P2
+  else
+    br op supersede P1 --text "capacity first, again" --reason wording; c_rc 0 "[jira] a focus superseded"
+    br show P2 --json
+    c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the key goes over to the superseding focus"
+  fi
   br op add --kind focus --text "second" --owner-quote q2 --where chat --goal G3
-  br show P3 --json
+  br show "$nx" --json
   c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print("jira" in json.load(sys.stdin))')" "False" "[jira] a focus without it stores no jira field"
   # refused: the shape of an intent's jira: key, and the kinds that take it
   local bad
@@ -919,7 +991,7 @@ with s.locked(d):
     s.append(d, raw, dict(json.loads(os.environ["SIG"]), t=s.now_iso(), by=s.by()))'
   }
   items() { bpy 'import json; print(json.dumps(s.fold(s.verify(s.state_dir())[1])["items"], sort_keys=True))'; }
-  brc() { OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped "$BROOT/bin/brain" "$@" 2>&1); RC=$?; }
+  brc() { wargs "$@"; OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped "$BROOT/bin/brain" ${WARGS[@]+"${WARGS[@]}"} 2>&1); RC=$?; OUT=$(nocr "$OUT"); }
   local before; before=$(items)
   sig '{"op": "signal", "what": "recall", "item": "T1", "note": "an extra field"}'
   c_eq "$(items)" "$before" "[V] the items are as before the signal"
@@ -941,9 +1013,292 @@ with s.locked(d):
   c_has "$OUT" "line 3: a malformed promote" "[V] a signal with a promote: the line is named"
 }
 
+bpya() {  # bpya <python code> <arg>… — bpy with arguments: sys.argv[2:]
+  local c=$1; shift
+  CLAUDE_CODE_SESSION_ID="$SID" python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import brain_store as s
+$c" "$BROOT/scripts" "$@"
+}
+
+case_win_sd() {  # the reader of a Windows security descriptor, fed bytes built by tests/fixtures/brain_sd.py
+  R=$(python3 "$HERE/fixtures/brain_sd.py" "$BROOT/scripts" 2>&1)
+  c_eq "$R" "$(cat <<'EOF'
+profile: None
+another owner: it is not this account's (its owner is S-1-5-18)
+everyone may change: S-1-1-0 can use it (access 0x001301bf)
+users may read: S-1-5-32-545 can use it (access 0x001200a9)
+no dacl: it has no access list, so everyone can use it
+inherit-only everyone: S-1-1-0 can use it (access 0x10000000)
+creator owner: None
+deny everyone: None
+everyone synchronize: None
+callback allow: it has an access rule of a kind this check does not read (type 9)
+python 3.13 mkdir 0o700: None
+elevated, owner administrators: None
+not elevated, owner administrators: it is not this account's (its owner is S-1-5-32-544)
+acl revision 4: None
+empty dacl: None
+sd revision 2: its security descriptor does not add up
+not self-relative: its security descriptor does not add up
+owner offset past the end: its security descriptor does not add up
+owner with 16 sub-authorities: its security descriptor does not add up
+dacl offset past the end: its security descriptor does not add up
+acl size past the end: its security descriptor does not add up
+one ace more than there is: its security descriptor does not add up
+ace size past the acl: its security descriptor does not add up
+ace size below an allow ace: its security descriptor does not add up
+ace sid past its ace: its security descriptor does not add up
+prefixes answered None: 0 of 136
+fuzzed descriptors that raised: 0
+owner only, another owner: it is not this account's (its owner is S-1-5-18)
+owner only, no dacl: None
+EOF
+)" "[WS] each descriptor gets its answer: another owner, another account's rule (also one only children inherit), no DACL, an unread rule kind and every length that does not fit are refused; no cut descriptor passes, no damaged one raises"
+}
+
+case_tree() {  # a child that started a grandchild which writes a beat every 50 ms (for at most 30 s, so a red run ends too)
+  newp
+  local beat="$TMP/beat$NP" r
+  r=$(bpya '
+import os, subprocess, sys, time
+beat, alive = sys.argv[2], sys.argv[3] == "alive"
+gc = "import sys, time\nfor _ in range(600):\n    open(sys.argv[1], \"a\").write(\".\")\n    time.sleep(0.05)\n"
+c = "import subprocess, sys, time\nsubprocess.Popen([sys.executable, \"-c\", %r, sys.argv[1]])\n%s\n" % (gc, "time.sleep(60)" if alive else "")
+p = s.spawn([sys.executable, "-c", c, beat])
+end = time.time() + 20
+while time.time() < end and (not os.path.exists(beat) or os.path.getsize(beat) < 3):
+    time.sleep(0.05)
+started = os.path.exists(beat) and os.path.getsize(beat) >= 3
+if not alive:
+    p.wait()
+s.kill_tree(p)
+p.wait()
+time.sleep(0.5)
+n = os.path.getsize(beat)
+time.sleep(1.0)
+print(started, os.path.getsize(beat) == n)' "$beat" alive 2>&1)
+  c_eq "$r" "True True" "[WK] a hung child and the grandchild it started: kill_tree ends both (the beat stops)"
+  r=$(bpya '
+import os, subprocess, sys, time
+beat = sys.argv[2]
+gc = "import sys, time\nfor _ in range(600):\n    open(sys.argv[1], \"a\").write(\".\")\n    time.sleep(0.05)\n"
+p = s.spawn([sys.executable, "-c", "import subprocess, sys\nsubprocess.Popen([sys.executable, \"-c\", %r, sys.argv[1]])\n" % gc, beat])
+p.wait()
+end = time.time() + 20
+while time.time() < end and (not os.path.exists(beat) or os.path.getsize(beat) < 3):
+    time.sleep(0.05)
+started = os.path.exists(beat) and os.path.getsize(beat) >= 3
+s.kill_tree(p)
+time.sleep(0.5)
+n = os.path.getsize(beat)
+time.sleep(1.0)
+print(started, os.path.getsize(beat) == n)' "$beat.2" 2>&1)
+  c_eq "$r" "True True" "[WK] a child that ended and left its grandchild running: kill_tree still ends the grandchild"
+}
+
+case_harvest() {  # a "gh" that wrote its answer and exited, leaving a child that holds its stdout and beats every 50 ms
+  newp
+  local r
+  r=$(bpya '
+import os, subprocess, sys, threading, time
+import brain_stale
+beat = sys.argv[2]
+gc = "import sys, time\nfor _ in range(600):\n    open(sys.argv[1], \"a\").write(\".\")\n    time.sleep(0.05)\n"
+child = ("import subprocess, sys\nsys.stdout.buffer.write(b\"answer\")\nsys.stdout.flush()\n"
+         "subprocess.Popen([sys.executable, \"-c\", %r, sys.argv[1]])\n" % gc)
+p = s.spawn([sys.executable, "-c", child, beat], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+while p.poll() is None:
+    time.sleep(0.02)
+end = time.time() + 20
+while time.time() < end and (not os.path.exists(beat) or os.path.getsize(beat) < 3):
+    time.sleep(0.05)
+box = []
+t = threading.Thread(target=lambda: box.append(brain_stale._harvest(p)), daemon=True)
+t.start()
+t.join(10)
+time.sleep(0.5)
+n = os.path.getsize(beat)
+time.sleep(1.0)
+print(box[0] if box else "hung", os.path.getsize(beat) == n)' "$TMP/hbeat$NP" 2>&1)
+  c_eq "$r" "(0, 'answer', '') True" "[WH] a gh that exited while its child holds the pipe: the answer is read, no hang, and the child is ended"
+}
+
+case_lockdeath() {  # one writer at a time, and a lock that ends with its process
+  newp
+  br op add --kind now --text "before the holder"
+  local held="$TMP/held$NP" hp t0 t1 r
+  bpya '
+import os, sys, time
+d = s.state_dir()
+fd = os.open(os.path.join(d, "lock"), os.O_RDWR | os.O_CREAT | s.O_BINARY, 0o600)
+s.lock_nb(fd)
+open(sys.argv[2], "w", newline="").close()
+time.sleep(3)
+os._exit(0)                                         # ends holding the lock: no unlock, no close' "$held" & hp=$!
+  t0=$(python3 -c 'import time; print(time.time())')
+  while [ ! -e "$held" ] && python3 -c "import sys, time; sys.exit(time.time() - $t0 > 15)"; do sleep 0.05; done
+  c_eq "$([ -e "$held" ] && echo held || echo none)" held "instrument: the holder took the store lock"
+  r=$(bpy '
+try:
+    with s.locked(s.state_dir(), wait=0.3):
+        print("taken")
+except s.Refused as e:
+    print("refused", e.rc, e.msg)' 2>&1)
+  c_eq "$r" "refused 1 the store lock is held by another process" "[WD] a second writer with a bounded wait (a hook's) is refused while the lock is held"
+  t0=$(python3 -c 'import time; print(time.time())')
+  br op add --kind next --text "after the holder"; t1=$(python3 -c 'import time; print(time.time())')
+  c_rc 0 "[WD] a write that waits goes on once the holder has ended without giving the lock back"
+  c_eq "$(python3 -c "print($t1 - $t0 > 0.5)")" True "[WD] …and it did wait for the holder"
+  wait "$hp"
+  br doctor; c_rc 0 "[WD] the chain is intact after it"
+  c_eq "$(grep -c '"op":"add"' "$(sdir)/hot.jsonl")" 2 "[WD] both writes are in the log"
+}
+
+case_lf() {  # the bytes a store holds, written here, are the bytes every system reads
+  newp
+  br op add --kind now --text "Nguyễn Văn: một dòng có dấu cách"
+  br op add --kind next --text "second line"
+  R=$(python3 -c 'import os, sys
+d = sys.argv[1]
+names = ("hot.jsonl", "head.json", "hot.json", "owner.json", "archive.jsonl", "episodes.jsonl", "hot.md")
+print(" ".join("%s:%s" % (n, b"\r" in open(os.path.join(d, n), "rb").read()) for n in names if os.path.exists(os.path.join(d, n))))' "$(sdir)")
+  c_eq "$R" "hot.jsonl:False head.json:False hot.json:False owner.json:False archive.jsonl:False hot.md:False" "[WB] no CR in the log, the head, the caches or hot.md (Windows text mode writes CRLF and breaks the chain)"
+  R=$(python3 -c 'import sys; print(repr(open(sys.argv[1], "rb").read()[-2:]))' "$(sdir)/head.json")
+  c_eq "$R" "b'}\\n'" "[WB] head.json ends in one LF"
+  br doctor; c_rc 0 "[WB] doctor reads the chain as intact"
+}
+
+case_order() {
+  newp
+  R=$(bpy '
+import os
+_root = s.state_root(); s.state_root = lambda: _root   # the Linux spelling: only the order of the checks is under test
+s.WINDOWS = True                                    # the order of the Windows path, with the root refused as private() would
+def refuse_root(p):
+    if p == s.state_root():
+        raise s.Refused(1, "refused")
+s.private = refuse_root
+d = s.state_dir()
+for call in (lambda: s.ensure_dir(d), lambda: s.record_session("sO", os.getcwd(), d)):
+    try:
+        call()
+        print("written")
+    except s.Refused as e:
+        print(e.msg, sorted(os.listdir(s.state_root())))')
+  c_eq "$R" "$(printf 'refused []\nrefused []')" "[WO] a refused brain root holds nothing after the refusal: no project folder, no asked/, no sessions/"
+  R=$(bpya '
+import os, sys
+sys.path.insert(0, sys.argv[2])
+import brain_hook as h
+_root = s.state_root(); s.state_root = lambda: _root   # the Linux spelling: only the order of the checks is under test
+s.WINDOWS = True
+def refuse(name):
+    def private(p):
+        if os.path.basename(p) == name:
+            raise s.Refused(1, "refused " + name)
+    return private
+d = s.state_dir()
+for name, folder, call in (("sessions", os.path.join(s.state_root(), "sessions"), lambda: s.record_session("sO", os.getcwd(), d)),
+                           ("pending", h.pending_dir(), lambda: h.mark_pending(s, "sO", d))):
+    os.makedirs(folder, exist_ok=True)              # made while the root was open: another account would own it
+    s.private = refuse(name)
+    try:
+        call()
+        print("written", sorted(os.listdir(folder)))
+    except s.Refused as e:
+        print(e.msg, sorted(os.listdir(folder)))' "$BROOT/scripts")
+  c_eq "$R" "$(printf 'refused sessions []\nrefused pending []')" "[WO] a sessions/ or pending/ that is not the account's alone gets no record and no marker"
+  R=$(bpy '
+import json, os
+sd = os.path.join(s.state_root(), "sessions")
+os.makedirs(sd, exist_ok=True)
+open(s.session_file("sR"), "w", newline="").write(json.dumps({"project": os.getcwd(), "state": s.state_dir()}))
+_root = s.state_root(); s.state_root = lambda: _root   # the Linux spelling: only the order of the checks is under test
+s.WINDOWS = True
+def private(p):
+    if p == sd:
+        raise s.Refused(1, "refused sessions")
+s.private = private
+try:
+    print(s.read_session("sR"))
+except s.Refused as e:
+    print(e.msg)')
+  c_eq "$R" "refused sessions" "[WO] a record in a sessions/ another account may change is not trusted"
+}
+
+case_replace() {
+  newp
+  R=$(bpy '
+import os, threading, time
+src, dst = os.path.join(os.getcwd(), "new"), os.path.join(os.getcwd(), "head.json")
+open(dst, "w", newline="").write("old\n")
+open(src, "w", newline="").write("new\n")
+held = open(dst)                                    # another handle on it: Windows refuses to rename over it while it is open
+threading.Timer(0.3, held.close).start()
+s.replace(src, dst)
+print(open(dst).read().strip(), os.path.exists(src))')
+  c_eq "$R" "new False" "[WR] a rename over a file held open goes through once the handle is gone"
+}
+
+case_encoding() {
+  newp
+  # not bpya: on Windows the suites' helpers run in UTF-8 mode, which would hand the filter UTF-8 whatever the code page
+  R=$(nocr "$(CLAUDE_CODE_SESSION_ID="$SID" command python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import brain_store as s
+import locale
+locale.getencoding = locale.getpreferredencoding = lambda *a: "cp1252"   # a pipe in the system code page, as on Windows
+for t in ("Nguyễn Văn: một dòng có dấu", "mã của anh " + sys.argv[2]):
+    try:
+        s.sanitize(s.state_dir(), [t])
+        print("clean")
+    except s.Refused as e:
+        print("refused", "a sensitive value" in e.msg)
+    except Exception as e:
+        print(type(e).__name__)' "$BROOT/scripts" "$TOKEN" 2>&1)")
+  c_eq "$R" "$(printf 'clean\nrefused True')" "[WE] a Vietnamese text reaches the filter through a code-page pipe, and a token in it is still caught"
+}
+
+case_spelled() {
+  newp
+  export XDG_STATE_HOME="$TMP/st$NP//x"
+  bpy 's.record_session(s.session_id(), s.project_root(), s.state_dir())'
+  br op add --kind now --text "same project"; c_rc 0 "[WT] instrument: written"
+  c_hasnt "$OUT" "this session's project is" "[WT] the shell in the session's own project, its folder spelled two ways: no note that it left"
+}
+
+case_verbatim() {
+  newp
+  br op add --kind next --text "/clear wipes the context; see /docs/adr.md"
+  c_rc 0 "[WV] instrument: the write is taken"
+  c_eq "$(bpy 'print(s.fold(s.verify(s.state_dir())[1])["items"]["X1"]["text"])')" "/clear wipes the context; see /docs/adr.md" \
+    "[WV] a text that starts with / is stored as typed, not rewritten into a Windows path"
+}
+
+case_winacl() {  # Windows only: the real access rules of the brain's folders
+  if [ "${OS:-}" != Windows_NT ]; then echo "  SKIP [WA]: not Windows (POSIX keeps its folders 0700: [G] case_modes)"; return; fi
+  newp
+  br op add --kind now --text "under the user's own folder"; c_rc 0 "[WA] under the scratch profile the store opens and writes"
+  c_eq "$(bpy 'print(s.access_problem(s.state_root()), s.access_problem(s.state_dir()))')" "None None" "[WA] its root and state folder are this account's alone"
+  br doctor; c_has "$OUT" "files and folders: this account's alone" "[WA] doctor reads the access rules, not the mode bits"
+  c_eq "$(bpy 'import os; print(s.win_profile() != os.environ["USERPROFILE"], os.path.isdir(s.win_profile()))')" "True True" \
+    "[WP] the account's home is the token's profile folder, not the scratch USERPROFILE"
+  MSYS_NO_PATHCONV=1 icacls "$(cygpath -w "$(sdir)/asked")" /grant "*S-1-1-0:(OI)(CI)RX" >/dev/null
+  br doctor; c_has "$OUT" "another account can use it, or a symlink: asked/" "[WA] doctor names a folder another account may read"
+  local w rc
+  newp; mkdir -p "$XDG_STATE_HOME/vibemaestro/brain"; w=$(cygpath -w "$XDG_STATE_HOME/vibemaestro/brain")
+  MSYS_NO_PATHCONV=1 icacls "$w" /grant "*S-1-1-0:(OI)(CI)M" >/dev/null; c_eq "$?" 0 "instrument: icacls lets Everyone change the brain root"
+  br op add --kind now --text "x"; c_rc 1 "[WA] a brain root Everyone may change: rc 1"
+  c_has "$OUT" "is refused: S-1-1-0 can use it" "[WA] the refusal names the SID"
+  c_eq "$(ls "$XDG_STATE_HOME/vibemaestro/brain" | grep -c .)" 0 "[WA] nothing is written under it"
+  newp; mkdir -p "$XDG_STATE_HOME/vibemaestro/brain"; w=$(cygpath -w "$XDG_STATE_HOME/vibemaestro/brain")
+  MSYS_NO_PATHCONV=1 icacls "$w" /setowner "*S-1-5-18" >/dev/null 2>&1; rc=$?
+  if [ "$rc" != 0 ]; then echo "  SKIP [WA] another owner: icacls /setowner gave rc $rc on this runner (the reader's answer is [WS])"; return; fi
+  br op add --kind now --text "x"; c_rc 1 "[WA] a brain root another account owns: rc 1"
+  c_has "$OUT" "it is not this account's (its owner is S-1-5-18)" "[WA] the refusal names the owner"
+}
+
 echo "== cases =="
-for c in case_focus_words case_jira case_focus_counts case_focus_done_when case_paths case_where case_joiners case_selbits case_mdlinks case_selectors case_timeleft case_ignorable case_mdtail case_flap case_cachefail case_blank case_nonchar case_abbrev case_repair case_reset case_wipe case_hotmd case_damage case_chars2 case_modes case_fold case_supersede case_shrink case_dw case_budget case_cap case_sensitive case_nofilter case_writer case_edit \
-         case_tail case_cache case_control case_archive case_render case_lock case_record case_signal; do run_case $c; done
+for c in case_focus_words case_jira case_baton_windows case_focus_counts case_focus_done_when case_paths case_where case_joiners case_selbits case_mdlinks case_selectors case_timeleft case_ignorable case_mdtail case_flap case_cachefail case_blank case_nonchar case_abbrev case_repair case_reset case_wipe case_hotmd case_damage case_chars2 case_modes case_fold case_supersede case_shrink case_dw case_budget case_cap case_sensitive case_nofilter case_writer case_edit \
+         case_tail case_cache case_control case_archive case_render case_lock case_record case_signal \
+         case_win_sd case_tree case_harvest case_lockdeath case_lf case_order case_replace case_encoding case_spelled case_verbatim case_winacl; do run_case $c; done
 cd "$TMP" || exit 1
 
 summary

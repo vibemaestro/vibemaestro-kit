@@ -407,7 +407,7 @@ Another plugin may add to the brain through one declared script: a check on a `b
 
 A manifest that breaks a rule, or two extensions that share a name, an owner verb or an option, are skipped, and `brain doctor` says why.
 
-**How the brain calls it.** `python -I -B <script>` in the plugin root, one JSON object on stdin and one on stdout (at most 64 KiB), within 1 second in a hook and 3 in the CLI, and all extensions of one event within 2 seconds in a hook and 6 in the CLI; the process group is killed past its time. Every call runs under the store lock. The call gets no `CLAUDE_CODE_SESSION_ID` and an empty `XDG_STATE_HOME`, so a `brain` write it starts is refused (rc 4). Every input holds `schema`, `call`, `extension`, `now`, `project`, `config` (the `ledger` thresholds and the caps) and `state` (every item by id); every call but a start without the card also holds `ops`, the log's operations as stored.
+**How the brain calls it.** `python -I -B -X utf8 <script>` in the plugin root, one JSON object on stdin and one on stdout (at most 64 KiB), within 1 second in a hook and 3 in the CLI, and all extensions of one event within 2 seconds in a hook and 6 in the CLI; the process group is killed past its time. Every call runs under the store lock. The call gets no `CLAUDE_CODE_SESSION_ID` and an empty `XDG_STATE_HOME`, so a `brain` write it starts is refused (rc 4). Every input holds `schema`, `call`, `extension`, `now`, `project`, `config` (the `ledger` thresholds and the caps) and `state` (every item by id); every call but a start without the card also holds `ops`, the log's operations as stored.
 
 | Call | When | Also given | Answer |
 |---|---|---|---|
@@ -500,6 +500,14 @@ Two more directories sit next to the project directories under `…/vibemaestro/
 
 Never edit these files. A guard denies the edit, and a hand change breaks the hash chain and stops every write.
 
+### On Windows
+
+The brain runs with Windows' own Python under Git for Windows' bash, the shell Claude Code uses there.
+
+- **Private folders.** Windows has no file modes. Before it writes, the brain checks its root, the project's directory and `asked/`: this account must own each one, and no other account may use it (SYSTEM and Administrators aside). Otherwise the write is refused (rc 1), naming the folder and the account (its SID) that may use it, or its owner. A folder under your user profile is private already, so the simplest fix is to point `XDG_STATE_HOME` at one. To keep the folder, run in a Command Prompt `icacls "<folder>" /inheritance:d`, then `icacls "<folder>" /remove *<SID> /t` with the SID the refusal names (`/t`: the folders inside it too). A folder owned by another account (one an elevated prompt made is owned by `S-1-5-32-544`, Administrators) becomes yours, with what is inside it, through `takeown /f "<folder>" /r`. The backup place is checked the same way.
+- **Arguments as typed.** `brain` gets its arguments exactly as you type them, so a text that starts with `/` is stored as written. Give it a path as `C:/…` or relative to the project, not as Git Bash's `/c/…`.
+- **Limits.** The check for something that could answer the permission dialog in place of a person reads the managed settings files (`C:\Program Files\ClaudeCode\managed-settings.json` and the older `C:\ProgramData\ClaudeCode\managed-settings.json`), not the registry policy, and it reads the command line of each process that started the session (Windows 8.1 or later): one it cannot read (another account's, for example) refuses owner items and names it. It does not read their working directory or environment, so a settings file only a parent process reads (another config directory, another project) is not seen, and a parent's `--settings` or `--plugin-dir` given as a relative path refuses owner items. It tells a parent from a later process that took its id by their start times, so an administrator who sets the clock back can blind it; such an account can change the brain's files directly, which this check does not guard against. Where the processes above the brain pass through a Git Bash process whose Git Bash parent is gone, the program above it cannot be known, so owner items are refused and the line names the process: Claude Code started from the MSYS2 terminal (its launcher exits), inside tmux or screen, or through `setsid`, or a `python3` first on PATH that is a shell script (pyenv-win's shims). Start Claude Code from Git Bash's own window, PowerShell, Windows Terminal or VS Code, with a Python program, not a script, first on PATH. Two hooks writing the Episode Log at the same instant can overwrite one of its lines. Closing or superseding a focus revokes its charters through vibemaestro-sdlc's baton, and a promote's SOUL line is written through it too; while the baton does not run on Windows, the brain refuses to close or supersede a focus rather than leave a charter in force, writes no SOUL line, and says so in one line; the rest of the brain works.
+
 ## Dependency on vibemaestro-sdlc
 
 `plugin.json` declares a dependency on `vibemaestro-sdlc`. The brain uses two things from it:
@@ -516,7 +524,7 @@ Each public release of the brain requires the vibemaestro-sdlc version it was re
 - Claude Code. Owner items need version 2.1.211 or later when the session runs in `auto` mode; `brain doctor` checks this.
 - `vibemaestro-sdlc`, installed with the brain.
 - Python 3.8 or later and `git` on the `PATH`. The scripts use the standard library only.
-- A POSIX system: the store takes `fcntl` file locks.
+- Linux, macOS, or Windows with Git for Windows (see [On Windows](#on-windows)).
 
 ## Limits
 

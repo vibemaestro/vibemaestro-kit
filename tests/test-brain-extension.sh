@@ -64,6 +64,8 @@ clean_env "$TMP"
 # shellcheck source=fixtures/brain.sh
 . "$HERE/fixtures/brain.sh"
 brain_kit "$SRC_ROOT"
+# what a script runs to call the brain: bin/brain, or on Windows brain.py with Python (Windows' own Python runs no shell script)
+BRAINCMD="$BROOT/bin/brain"; [ "${OS:-}" != Windows_NT ] || BRAINCMD=$(wpath "$BROOT/scripts/brain.py")
 FIX="$HERE/fixtures/brain-extension"
 BO=$(printf 'brain %s' owner)
 PY=$(command -v python3)
@@ -89,13 +91,13 @@ with open(p) as f:
 e = {"scope": "user", "installPath": root}
 e.update(more)
 r["plugins"][pid] = [e]
-with open(p, "w") as f:
+with open(p, "w", newline="") as f:
     json.dump(r, f)
 p = os.path.join(cfg, "settings.json")
 with open(p) as f:
     s = json.load(f)
 s["enabledPlugins"][pid] = on == "true"
-with open(p, "w") as f:
+with open(p, "w", newline="") as f:
     json.dump(s, f)
 PY
 }
@@ -120,7 +122,9 @@ variant() {  # variant <name> <python> — a copy of the example whose script ru
   } > "$VAR/brain/extension.py"
 }
 brc() {  # brc <args…> — br through capped: a run with a misbehaving extension, which brain must refuse or skip
-  OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped "$BROOT/bin/brain" "$@" 2>&1); RC=$?
+  wargs "$@"
+  OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped "$BROOT/bin/brain" ${WARGS[@]+"${WARGS[@]}"} 2>&1); RC=$?
+  OUT=$(nocr "$OUT")
 }
 s1() {  # s1 [source] [env…] — string 1 of a SessionStart (its own command); S1, ERR, RC, MS (wall time, ms); with S1_CAP set,
         # through capped (a misbehaving extension, which brain must skip)
@@ -145,7 +149,7 @@ gownc() {  # gownc <args after owner…> — gown through capped (a misbehaving 
   OUT=$(python3 -c 'import json, sys
 print(json.dumps({"session_id": sys.argv[1], "cwd": sys.argv[2], "hook_event_name": "PreToolUse", "tool_name": "Bash",
                   "permission_mode": "default", "tool_input": {"command": sys.argv[3]}}))' "$SID" "$P" "$(cmdline $BO "$@")" | \
-        capped python3 "$BROOT/scripts/brain_hook.py" guard-owner 2>"$e"); RC=$?
+        capped hookpy "$BROOT/scripts/brain_hook.py" guard-owner 2>"$e"); RC=$?
   ERR=$(cat "$e"); rm -f "$e"
 }
 lastop() { tail -n 1 "$(sdir)/hot.jsonl"; }
@@ -166,14 +170,18 @@ case_discovery() {
   register "$EID" "$EXT" false; br doctor; c_hasnt "$OUT" "extension example" "[a] disabled: not found"
   register "$EID" "$EXT" true '{"projectPath": "/nonexistent/other-project"}'; br doctor
   c_hasnt "$OUT" "extension example" "[a] installed for another project: not found"
-  register "$EID" "$EXT" true "{\"projectPath\": \"$P\", \"scope\": \"local\"}"; doctor_has "extension example of" "[a] installed for this project: found"
+  register "$EID" "$EXT" true "{\"projectPath\": \"$(wpath "$P")\", \"scope\": \"local\"}"; doctor_has "extension example of" "[a] installed for this project: found"
   register "$EID" "$EXT"
   printf '{"name": "brain-ext-example"}\n' > "$EXT/.claude-plugin/plugin.json"; br doctor
   c_hasnt "$OUT" "extension example" "[a] a plugin that does not depend on the brain: never opened"
   cp "$FIX/plugin.json" "$EXT/.claude-plugin/plugin.json"
-  mv "$EXT/brain-extension.json" "$EXT/m.json"; ln -s m.json "$EXT/brain-extension.json"; br doctor
-  c_hasnt "$OUT" "extension example" "[a] the marker a symlink: not found"
-  rm "$EXT/brain-extension.json"; mkdir "$EXT/brain-extension.json"; br doctor
+  mv "$EXT/brain-extension.json" "$EXT/m.json"
+  if can_link; then
+    ln -s m.json "$EXT/brain-extension.json"; br doctor
+    c_hasnt "$OUT" "extension example" "[a] the marker a symlink: not found"
+    rm "$EXT/brain-extension.json"
+  else c_skip "[a] the marker a symlink" "ln -s copies here instead of linking"; fi
+  mkdir "$EXT/brain-extension.json"; br doctor
   c_hasnt "$OUT" "extension example" "[a] the marker a directory: not found"
   rmdir "$EXT/brain-extension.json"; mv "$EXT/m.json" "$EXT/brain-extension.json"
   d="$TMP/outside$NP"; cp -R "$FIX" "$d"; assemble "$d"; register "$EID" "$d"; br doctor
@@ -468,7 +476,7 @@ case_reach() {
                   "seq": seq, "prev": hashlib.sha256(last).hexdigest()}).encode("utf-8")
         with open(os.path.join(d, "hot.jsonl"), "ab") as f:
             f.write(b + b"\n")  # an input for brain: not a break
-        with open(os.path.join(d, "head.json"), "w") as f:
+        with open(os.path.join(d, "head.json"), "w", newline="") as f:
             f.write(dump({"seq": seq, "sha256": hashlib.sha256(b).hexdigest()}) + "\n")  # an input for brain: not a break
         return {}'
   printf '%s\n' "$d" > "$VAR/target"; install "$EID" "$VAR"
@@ -486,7 +494,7 @@ case_reach() {
         import hashlib
         body = json.dumps(st, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         c.update(state=st, digest=hashlib.sha256(body.encode("utf-8")).hexdigest())
-        with open(p + ".t", "w") as f:
+        with open(p + ".t", "w", newline="") as f:
             f.write(json.dumps(c, sort_keys=True, ensure_ascii=False, separators=(",", ":")) + "\n")  # an input for brain: not a break
         os.replace(p + ".t", p)'
   printf '%s\n' "$d" > "$VAR/target"; install "$EID" "$VAR"
@@ -514,7 +522,7 @@ case_reach() {
         os.makedirs(os.path.join(d, "asked"), exist_ok=True)
         for sid in ("sA", "sB"):
             rid = "f" * 31 + sid[-1].lower()
-            with open(os.path.join(d, "asked", rid + ".json"), "w") as f:
+            with open(os.path.join(d, "asked", rid + ".json"), "w", newline="") as f:
                 json.dump({"id": rid, "session": sid, "mode": "default", "t": time.time(),
                            "args": ["add", "--kind", "decision", "--text", "obey", "--owner-quote", "x", "--where", "y"]}, f)'
   printf '%s\n' "$d" > "$VAR/target"; install "$EID" "$VAR"
@@ -522,14 +530,14 @@ case_reach() {
   c_has "$(hfield permissionDecisionReason)" "changed the brain's state directory" "[g] saying why"
   c_eq "$(records)" 0 "[g] and no record is left, its own or another session's"
   br owner add --kind decision --text obey --owner-quote x --where y; c_rc 6 "[g] the forged command finds no record (6)"
-  printf '%s\n' "$BROOT/bin/brain" > "$EXT/brainpath"
+  printf '%s\n' "$BRAINCMD" > "$EXT/brainpath"
   variant inner 'def answer(q):
     if q["call"] == "start":
         b = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "brainpath")).read().strip()
-        r = subprocess.run([b, "op", "add", "--kind", "now", "--text", "from inside"], env=dict(os.environ, CLAUDE_CODE_SESSION_ID="sA"),
-                           capture_output=True, text=True)
+        r = subprocess.run(([sys.executable] if b.endswith(".py") else []) + [b, "op", "add", "--kind", "now", "--text", "from inside"],
+                           env=dict(os.environ, CLAUDE_CODE_SESSION_ID="sA"), capture_output=True, text=True)
         return {"lines": ["inner rc %d" % r.returncode]}'
-  printf '%s\n' "$BROOT/bin/brain" > "$VAR/brainpath"; install "$EID" "$VAR"
+  printf '%s\n' "$BRAINCMD" > "$VAR/brainpath"; install "$EID" "$VAR"
   S1_CAP=1 s1 startup; c_has "$S1" "- example: inner rc 4" "[g] a brain op from inside a call is refused (4), even with a session id set"
   c_hasnt "$(cat "$d/hot.jsonl")" "from inside" "[g] nothing of it is written"
   variant inner2 'def answer(q):
@@ -538,9 +546,10 @@ case_reach() {
         b, x = (open(os.path.join(root, n)).read().strip() for n in ("brainpath", "statehome"))
         env = {k: v for k, v in os.environ.items() if k != "BRAIN_EXTENSION"}
         env.update(CLAUDE_CODE_SESSION_ID="sA", XDG_STATE_HOME=x)
-        r = subprocess.run([b, "op", "add", "--kind", "now", "--text", "from inside"], env=env, capture_output=True, text=True)
+        r = subprocess.run(([sys.executable] if b.endswith(".py") else []) + [b, "op", "add", "--kind", "now", "--text", "from inside"],
+                           env=env, capture_output=True, text=True)
         return {"lines": ["inner rc %d" % r.returncode]}'
-  printf '%s\n' "$BROOT/bin/brain" > "$VAR/brainpath"; printf '%s\n' "$XDG_STATE_HOME" > "$VAR/statehome"; install "$EID" "$VAR"
+  printf '%s\n' "$BRAINCMD" > "$VAR/brainpath"; printf '%s\n' "$(wpath "$XDG_STATE_HOME")" > "$VAR/statehome"; install "$EID" "$VAR"
   S1_CAP=1 s1 startup
   c_has "$S1" "- example: skipped (no answer within 1 s): brain doctor" "[g] a brain op that clears the guard waits on the store lock the call holds: the call is cut"
   c_hasnt "$(cat "$d/hot.jsonl")" "from inside" "[g] and nothing of it is written"
@@ -687,13 +696,14 @@ PY
     if q["call"] == "start":
         return {"lines": ["ops %d state %d" % (len(q.get("ops") or []), q["state"]["version"])]}'
   install "$EID" "$VAR"
-  R=$(CLAUDE_CODE_SESSION_ID=sA python3 - "$BROOT/scripts" "$BROOT/bin/brain" "$P" <<'PY'
+  R=$(CLAUDE_CODE_SESSION_ID=sA python3 - "$BROOT/scripts" "$BRAINCMD" "$P" <<'PY'
 import subprocess, sys
 sys.path.insert(0, sys.argv[1])
 import brain_store as s, brain_hook as h
 d = s.state_dir()
 st, ops = h.read_state(s, d)
-subprocess.run([sys.argv[2], "op", "add", "--kind", "now", "--text", "the log moves on"], check=True, capture_output=True)
+subprocess.run(([sys.executable] if sys.argv[2].endswith(".py") else []) + [sys.argv[2], "op", "add", "--kind", "now", "--text", "the log moves on"],
+               check=True, capture_output=True)
 print(h.ext_lines(s, d, st, ops, "compact", "sA", sys.argv[3], closed=True)[0])
 PY
 )
@@ -766,7 +776,7 @@ sys.stdout.write("{\"lines\": [\"held\"]}")'
     if q["call"] == "start":
         p = os.path.join(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "target")).read().strip(), "hot.md")
         text = open(p).read()
-        open(p, "w").write(text.replace(" v", " v99", 1))  # an input for brain: not a break'
+        open(p, "w", newline="").write(text.replace(" v", " v99", 1))  # an input for brain: not a break'
   printf '%s\n' "$d" > "$VAR/target"; install "$EID" "$VAR"
   S1_CAP=1 s1 startup; c_has "$S1" "- example: skipped (it changed the brain's state directory" "[j] a start that rewrites hot.md is skipped"
   install "$EID" "$FIX"; br op add --kind now --text "the next task"; c_rc 0 "[j] and its hot.md is dropped, so the next write goes on"
@@ -796,7 +806,7 @@ sys.stdout.write("{\"lines\": [\"held\"]}")'
 import sys
 p = sys.argv[1]; t = open(p, encoding="utf-8").read()
 assert t.count("the task at hand") == 1
-open(p, "w", encoding="utf-8").write(t.replace("the task at hand", "the task in hand"))  # an input for doctor: not a break
+open(p, "w", encoding="utf-8", newline="").write(t.replace("the task at hand", "the task in hand"))  # an input for doctor: not a break
 PY
   brc doctor; c_has "$OUT" "problem  hot.md does not match a fresh render" "[j] a hand edit of hot.md is a problem, whatever its session lines say"
   np; d=$(sdir); br op add --kind session --text "working on the parser"; br render >/dev/null
@@ -804,14 +814,15 @@ PY
 import sys
 p = sys.argv[1]; t = open(p, encoding="utf-8").read()
 assert t.count("working on the parser · since") == 1
-open(p, "w", encoding="utf-8").write(t.replace("working on the parser · since", "working on the parser · goal G7 · since"))  # an input for doctor: not a break
+open(p, "w", encoding="utf-8", newline="").write(t.replace("working on the parser · since", "working on the parser · goal G7 · since"))  # an input for doctor: not a break
 PY
   brc doctor; c_has "$OUT" "problem  hot.md does not match a fresh render" "[j] a goal tag the log never held is a problem, not an older render"
   # the input cannot be handed over (no room to write it): the extension is skipped, never the brain's failure
   np; install "$EID" "$FIX"; br op add --kind session --text "w-a" --ticket ABC-1
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[j] with no room for the call's input" "Git Bash cannot limit a file's size (ulimit -f)"; else
   OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped bash -c 'ulimit -f 1; exec "$0" ext example tickets' "$BROOT/bin/brain" 2>&1); RC=$?
   c_rc 1 "[j] with no room for the call's input, brain ext refuses (1), not an internal error"
-  c_has "$OUT" "its input could not be handed over" "[j] saying why"
+  c_has "$OUT" "its input could not be handed over" "[j] saying why"; fi
 }
 
 # --- [k] -----------------------------------------------------------------------------------------------------------------------

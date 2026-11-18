@@ -181,24 +181,36 @@ case_soul_file() {
   np; seed D2@60 D3@60; promote D2 S07 1; promote D3 S09 1
   c_hasnt "$(card)" "SOUL file" "[f] no soul_file key: no line"
   printf '# Shared rules\n- [S07] one review round\n- [S11] a line nobody promoted\n' > "$TMP/CLAUDE-$NP.md"
-  conf "{\"soul_file\": \"$TMP/CLAUDE-$NP.md\"}"
+  conf "{\"soul_file\": \"$(wpath "$TMP/CLAUDE-$NP.md")\"}"
   c_has "$(card)" "differs: [S09] no line · [S11] not promoted" "[f] a promoted code with no line and a line with no promotion are named"
   printf -- '- [S07] one\n- [S09] two\n' > "$TMP/CLAUDE-$NP.md"
   c_hasnt "$(card)" "SOUL file" "[f] a file that agrees: no line"
+  printf -- '- [S07] one\r\n\032\r\n- [S09] two\r\n' > "$TMP/CLAUDE-$NP.md"
+  c_hasnt "$(card)" "SOUL file" "[f] CRLF and a Ctrl-Z byte before a line: still read whole (Windows text mode ends a read at Ctrl-Z)"
   mkdir -p "$P/up"; printf -- '- [S07] one\n- [S09] two\n' > "$P/up/rules.md"; conf '{"soul_file": "up/rules.md"}'
   c_hasnt "$(card)" "SOUL file" "[f] a relative path is read from the work tree's top"
   conf '{"soul_file": "missing.md"}'
   c_has "$(card)" "SOUL file missing.md cannot be read (FileNotFoundError)" "[f] a file that cannot be read says so"
-  mkfifo "$P/fifo"; conf '{"soul_file": "fifo"}'
-  OUT=$(PLANT_CAP_SECS=20 capped card 2>&1); RC=$?
-  c_eq "$RC" 0 "[f] a FIFO with no writer: the card returns (within the cap)"
-  c_has "$OUT" "SOUL file fifo cannot be read (not a regular file)" "[f] and says so"
-  python3 -c 'import sys; open(sys.argv[1], "w").write("[S07] " + "x" * (1024 * 1024))' "$P/big.md"; conf '{"soul_file": "big.md"}'
+  if [ "${OS:-}" = Windows_NT ]; then
+    c_skip "[f] a FIFO with no writer" "Windows has no FIFO in the file system; its console device stands in"
+    conf '{"soul_file": "\\\\.\\CON"}'                 # \\.\CON: the device on every Windows (a bare CON in a full path is a file since Windows 11)
+    OUT=$(PLANT_CAP_SECS=20 capped card 2>&1); RC=$?
+    c_eq "$RC" 0 "[f] the console device as the SOUL file: the card returns (within the cap)"
+    c_has "$OUT" "CON cannot be read" "[f] and says so"
+  else
+    mkfifo "$P/fifo"; conf '{"soul_file": "fifo"}'
+    OUT=$(PLANT_CAP_SECS=20 capped card 2>&1); RC=$?
+    c_eq "$RC" 0 "[f] a FIFO with no writer: the card returns (within the cap)"
+    c_has "$OUT" "SOUL file fifo cannot be read (not a regular file)" "[f] and says so"
+  fi
+  python3 -c 'import sys; open(sys.argv[1], "w", newline="").write("[S07] " + "x" * (1024 * 1024))' "$P/big.md"; conf '{"soul_file": "big.md"}'
   c_has "$(card)" "SOUL file big.md cannot be read (over 1 MiB)" "[f] a file over 1 MiB says so"
   mkdir -p "$P/adir"; conf '{"soul_file": "adir"}'
-  c_has "$(card)" "SOUL file adir cannot be read (not a regular file)" "[f] a directory: not a regular file"
+  c_has "$(card)" "SOUL file adir cannot be read ($([ "${OS:-}" = Windows_NT ] && echo PermissionError || echo "not a regular file"))" \
+    "[f] a directory: not a regular file (Windows refuses to open a directory as a file: PermissionError)"
   conf '{"soul_file": "\ud800.md"}'
-  c_has "$(card)" "cannot be read (UnicodeEncodeError)" "[f] a path the file system cannot encode: says so, the card stays"
+  c_has "$(card)" "cannot be read ($([ "${OS:-}" = Windows_NT ] && echo FileNotFoundError || echo UnicodeEncodeError))" \
+    "[f] a path the file system cannot encode: says so, the card stays (Windows paths are UTF-16: no such file)"
   conf '{"soul_file": 7}'
   br op add --kind trap --text "a trap"; c_rc 1 "[f] a wrong value refuses writes"
   c_has "$OUT" "soul_file must be a path of 1 to 1024 characters" "[f] and names the key"

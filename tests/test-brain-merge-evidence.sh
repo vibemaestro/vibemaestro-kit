@@ -50,6 +50,10 @@ clean_env "$TMP"
 # shellcheck source=fixtures/brain.sh
 . "$HERE/fixtures/brain.sh"
 brain_kit "$SRC_ROOT"
+if [ "${OS:-}" = Windows_NT ]; then   # Windows' own Python runs gh.exe only: the stub gh script every case answers through is never run
+  echo "  SKIP [all]: every case answers gh through a stub script, which Windows' own Python cannot run (the tree kill is store [WK], the harvest store [WH])"
+  summary; exit
+fi
 command -v jq >/dev/null || { bad "jq is needed by the stub gh (it runs the body filter as gh would)"; summary; exit 1; }
 
 # --- the stub gh ------------------------------------------------------------------------------------------------------------
@@ -303,7 +307,7 @@ case_prompt() {
   np; rules; mlog acme/app 3
   hk prompt "$(pin sB)"; c_eq "$RC|$OUT|$([ -e "$(sdir)/merge-evidence-bg.json" ] && echo stamp)" "0||" "[h] another session: nothing, not even the stamp"
   VIBEMAESTRO_ROLE=worker hk prompt "$(pin)"; c_eq "$RC|$OUT|$([ -e "$(sdir)/merge-evidence-bg.json" ] && echo stamp)" "0||" "[h] a worker: silent"
-  OUT=$(pin | PATH="$TMP/nogh" python3 "$BROOT/scripts/brain_hook.py" prompt 2>&1); RC=$?
+  OUT=$(pin | PATH="$TMP/nogh" hookpy "$BROOT/scripts/brain_hook.py" prompt 2>&1); RC=$?
   python3 -c 'import time; time.sleep(1)'
   c_eq "$RC|$OUT|$(runs)" "0||0" "[h] no gh: rc 0, nothing started"
   np; rules

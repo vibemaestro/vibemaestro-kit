@@ -82,11 +82,13 @@ ahead() { python3 -c 'import sys, time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ"
 must() { "$@"; [ "$RC" = 0 ] || bad "setup: $* → rc $RC: ${OUT:0:200}"; }
 mode_of() { python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$1"; }
 bad_in() {  # bad_in <brain args…> — the brain given a bad input it must refuse, through capped (a checker's input, not a break)
-  OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped "$BROOT/bin/brain" "$@" 2>&1); RC=$?
+  wargs "$@"
+  OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped "$BROOT/bin/brain" ${WARGS[@]+"${WARGS[@]}"} 2>&1); RC=$?
+  OUT=$(nocr "$OUT")
 }
 jq_() { python3 -c 'import json, sys; b = json.load(open(sys.argv[1], encoding="utf-8")); print(eval(sys.argv[2]))' "$@"; }
 
-cmdline() { python3 -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' "$@"; }
+cmdline() { wargs "$@"; MSYS_NO_PATHCONV=1 python3 -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' ${WARGS[@]+"${WARGS[@]}"}; }
 OWN=$(printf '%s' owner)                             # the owner's command word, built here
 ownin() {  # ownin <mode> <command> — guard-owner's input for session SID in project P
   python3 -c 'import json, sys
@@ -97,7 +99,7 @@ gown() { local m=$1; shift; hk guard-owner "$(ownin "$m" "$(cmdline brain "$OWN"
 asked() { gown default "$@"; [ "$(hfield permissionDecision)" = ask ] || bad "setup: guard-owner did not ask for $*: $(hfield permissionDecisionReason)"; }
 bad_gown() {  # bad_gown <args after the word> — guard-owner given an owner call it must deny, through capped (a checker's input, not a break)
   local e; e=$(mktemp)
-  OUT=$(ownin default "$(cmdline brain "$OWN" "$@")" | capped python3 "$BROOT/scripts/brain_hook.py" guard-owner 2>"$e"); RC=$?
+  OUT=$(ownin default "$(cmdline brain "$OWN" "$@")" | capped hookpy "$BROOT/scripts/brain_hook.py" guard-owner 2>"$e"); RC=$?
   ERR=$(cat "$e"); rm -f "$e"
 }
 owner_import() {  # owner_import <bundle> — the owner's dialog through guard-owner, then the CLI it approved
@@ -180,7 +182,7 @@ for op in ops:
 b["log"], b["head"] = log, {"seq": len(log), "sha256": prev}
 import brain_transfer as t
 b["items"], b["queue"], b["ledger"] = json.loads(s.dumps(t.bundle_copies(s.fold(ops), ops)))
-open(dst, "w", encoding="utf-8").write(json.dumps(b, ensure_ascii=False))
+open(dst, "w", encoding="utf-8", newline="").write(json.dumps(b, ensure_ascii=False))
 PY
 }
 carry() {  # carry <in> <out> <python on op at seq K: o> <K> — line K changed and carried with its source's hash, as a line with
@@ -200,7 +202,7 @@ e["line"] = s.dumps(o)
 b["placeholders"] = sorted(set(b["placeholders"]) | {"~"})
 ops = [json.loads(x["line"]) for x in b["log"]]
 b["items"], b["queue"], b["ledger"] = json.loads(s.dumps(t.bundle_copies(s.fold(ops), ops)))
-open(dst, "w", encoding="utf-8").write(json.dumps(b, ensure_ascii=False))
+open(dst, "w", encoding="utf-8", newline="").write(json.dumps(b, ensure_ascii=False))
 PY
 }
 addline() {  # addline <in> <out> <JSON op> — the bundle with one line appended after its last, chained to it and the copies
@@ -221,7 +223,7 @@ b["log"].append({"seq": extra["seq"], "line": line})
 b["head"] = {"seq": extra["seq"], "sha256": hashlib.sha256(line.encode("utf-8")).hexdigest()}
 ops = [json.loads(x["line"]) for x in b["log"]]
 b["items"], b["queue"], b["ledger"] = json.loads(s.dumps(t.bundle_copies(s.fold(ops), ops)))
-open(dst, "w", encoding="utf-8").write(json.dumps(b, ensure_ascii=False))
+open(dst, "w", encoding="utf-8", newline="").write(json.dumps(b, ensure_ascii=False))
 PY
 }
 put() {  # put <JSON op>… — ops appended through the store library as the writer sA, their "t" N days ago (a brain's history,
@@ -260,14 +262,14 @@ for kv in sys.argv[3:]:
     it[k] = json.loads(v)
 print(json.dumps(it, ensure_ascii=False))' "$@"
 }
-tamper() {  # tamper <in> <out> <python on b, the bundle> — a bundle changed by hand, the chain left as it is: a bad input for
-            # the checker (not a break)
+tamper() {  # tamper <in> <out> <python on b, the bundle> [arg] — a bundle changed by hand, the chain left as it is: a bad input
+            # for the checker (not a break); a path goes in as arg (sys.argv[4]), which Git Bash hands Windows' Python in its form
   python3 - "$@" <<'PY'
 import json, sys
 src, dst, code = sys.argv[1:4]
 b = json.load(open(src, encoding="utf-8"))
 exec(code)
-open(dst, "w", encoding="utf-8").write(json.dumps(b, ensure_ascii=False))
+open(dst, "w", encoding="utf-8", newline="").write(json.dumps(b, ensure_ascii=False))
 PY
 }
 
@@ -303,16 +305,17 @@ PY
   c_eq "$(printf '%s\n' "$R" | sed -n 1p)" "goal làm bundle đi global | global None chat 30/10 | export trước G1 | True | ['acme/app¤5'] queued {'X': ['X3']} | window False" \
     "[a] the items: kind, the owner's words, scope, a focus's goal, a request's due day, anchors, the queue; a promoted lesson is not an item"
   c_eq "$(printf '%s\n' "$R" | sed -n 2p)" "1 1 1 1 1 1 1" "[a] the ledger: held, broke, progress, the codes' own events, and a promoted lesson's, which stay its own"
-  c_eq "$(mode_of "$f")" 600 "[a] the bundle is 0600"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[a] the bundle is 0600" "Windows has no mode bits"; else c_eq "$(mode_of "$f")" 600 "[a] the bundle is 0600"; fi
   bad_in export --out "$f"; c_rc 1 "[a] an existing file is refused"; c_has "$OUT" "exists" "[a] … saying so"
   bad_in export --out "$d/x.json"; c_rc 1 "[a] a file in the state root is refused"; c_has "$OUT" "state root" "[a] … saying so"
-  OUT=$("$BROOT/bin/brain" export --out "$TMP/a-$NP-nosession.json" 2>&1); RC=$?
+  OUT=$("$BROOT/bin/brain" export --out "$(wpath "$TMP/a-$NP-nosession.json")" 2>&1); RC=$?
   c_rc 0 "[a] export needs no Claude Code session (a scheduler may run it)"
   # this machine's paths become placeholders, the changed line carried with its original hash
   np
-  must br op add --kind fact --text "the map is at $P/kb/map.md"
-  must br op add --kind fact --text "the cache is at $HOME/.cache/brain"
-  c_has "$(cat "$(sdir)/hot.jsonl")" "$P/kb/map.md" "[a] instrument: the log holds the project's path"
+  local mp hp; mp="$(wpath "$P")/kb/map.md"; hp="$(wpath "$HOME")/.cache/brain"   # Windows: C:/…, as a session there writes it
+  must br op add --kind fact --text "the map is at $mp"
+  must br op add --kind fact --text "the cache is at $hp"
+  c_has "$(cat "$(sdir)/hot.jsonl")" "$mp" "[a] instrument: the log holds the project's path"
   f="$TMP/a-$NP.json"
   br export --out "$f"; c_rc 0 "[a] a log holding this machine's paths is exported"
   R=$(python3 - "$f" "$(sdir)" <<'PY'
@@ -325,8 +328,14 @@ print(len(red), all(e["sha256"] == hashlib.sha256(raw[e["seq"] - 1]).hexdigest()
 PY
 )
   c_eq "$R" "2 True True True ['<project>', '~']" "[a] the two lines carry <project> and ~, each with its original hash"
-  c_eq "$(grep -c -F "$TMP" "$f")" 0 "[a] no path of the scratch tree is left in the bundle"
-  c_eq "$(grep -c -F "/nonexistent" "$f")" 0 "[a] the home path is not left in it either"
+  local tj=""; [ "${OS:-}" != Windows_NT ] || tj=$(cygpath -w "$TMP" | sed 's/\\/\\\\/g')   # Windows: also C:\\… as JSON holds it
+  c_eq "$(grep -c -i -F -e "$(wpath "$TMP")" ${tj:+-e "$tj"} "$f")" 0 "[a] no path of the scratch tree is left in the bundle"
+  R=$(bpy 'import brain_transfer as t; s.WINDOWS = True; q = r"C:\Work\proj"
+paths = sorted({p: "<project>" for p in [q] + t.other_spellings(q)}.items(), key=lambda kv: (-len(kv[0]), kv[0]))
+print("|".join(t.redacted([r"see c:\work\proj\a.md", r"json C:\\Work\\proj\\b.md", "bash /C/Work/proj", "C:/Work/proj"], paths, set())))')
+  c_eq "$R" 'see <project>\a.md|json <project>\\b.md|bash <project>|<project>' \
+    "[a] Windows: a machine path in another case, doubled in a JSON text, as C:/ or as Git Bash's /c/ is hidden as well (main: the first three left)"
+  c_eq "$(grep -c -i -F "$(wpath /nonexistent)" "$f")" 0 "[a] the home path is not left in it either"
   br doctor --bundle "$f"; c_rc 0 "[a] doctor accepts it"; c_has "$OUT" "2 lines carry a placeholder" "[a] … and names the lines"
   # a sensitive value in the log (written past the filter, as an older filter could have let it) refuses the export
   np; must br op add --kind fact --text "plain"
@@ -366,7 +375,7 @@ e["sha256"] = hashlib.sha256(e["line"].encode("utf-8")).hexdigest(); e["line"] =
   c_has "$OUT" "holds none of the bundle's placeholders" "[b] … only a line changed for a placeholder keeps its source's hash"
   tamper "$f" "$TMP/b-drop.json" 'del b["log"][4]'
   bad_in doctor --bundle "$TMP/b-drop.json"; c_rc 1 "[b] a dropped line is a problem"; c_has "$OUT" "a line is missing" "[b] … a line missing"
-  tamper "$f" "$TMP/b-splice.json" 'o = json.load(open("'"$other"'")); b["log"] = b["log"][:1] + o["log"][1:2]'
+  tamper "$f" "$TMP/b-splice.json" 'o = json.load(open(sys.argv[4], encoding="utf-8")); b["log"] = b["log"][:1] + o["log"][1:2]' "$other"
   bad_in doctor --bundle "$TMP/b-splice.json"; c_rc 1 "[b] a line spliced from another bundle is a problem"
   c_has "$OUT" "the chain is broken" "[b] … the chain broken at the splice"
   tamper "$f" "$TMP/b-head.json" 'b["head"]["sha256"] = "0" * 64'
@@ -377,8 +386,10 @@ e["sha256"] = hashlib.sha256(e["line"].encode("utf-8")).hexdigest(); e["line"] =
   bad_in doctor --bundle "$TMP/b-v2.json"; c_rc 1 "[b] version 2 is a problem"; c_has "$OUT" "update vibemaestro-brain" "[b] … update the brain"
   tamper "$f" "$TMP/b-key.json" 'b["extra"] = 1'
   bad_in doctor --bundle "$TMP/b-key.json"; c_rc 1 "[b] an unknown key is a problem"; c_has "$OUT" "unknown: extra" "[b] … naming it"
-  ln -s "$f" "$TMP/b-link.json"
-  bad_in doctor --bundle "$TMP/b-link.json"; c_rc 1 "[b] a symlink is a problem"; c_has "$OUT" "is a symlink" "[b] … saying so"
+  if can_link; then
+    ln -s "$f" "$TMP/b-link.json"
+    bad_in doctor --bundle "$TMP/b-link.json"; c_rc 1 "[b] a symlink is a problem"; c_has "$OUT" "is a symlink" "[b] … saying so"
+  else c_skip "[b] a symlink is a problem" "ln -s copies here instead of linking"; fi
   bad_in doctor --bundle "$TMP"; c_rc 1 "[b] a directory is a problem"; c_has "$OUT" "is not a regular file" "[b] … saying so"
   bad_in import "$TMP/b-splice.json"; c_rc 1 "[b] the import refuses a spliced bundle whole"; c_has "$OUT" "refused whole" "[b] … saying so"
 }
@@ -559,6 +570,9 @@ case_words_roundtrip() {
   np; must owner_import "$TMP/wr-carried.json"; br import "$TMP/wr-carried.json"; c_rc 0 "[words-roundtrip] a bundle whose words line carries a placeholder imports"
   c_has "$OUT" "P1 (its words line carries a placeholder: the chain does not vouch for it" "[words-roundtrip] … skips the focus, naming why"
   # a supersede whose earlier item had a carried words line: the supersede line holds the words and is not carried, so it lands
+  if [ "${OS:-}" = Windows_NT ]; then   # README, On Windows: a focus retires through vibemaestro-sdlc's baton, which does not run there yet
+    c_skip "[words-roundtrip] a superseded focus's words through a bundle" "a focus is superseded through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl); store [jira] checks the refusal"
+  else
   np; must owner_ok add --kind goal --text "ship the bundle" --owner-quote q --where chat --done "the PR merged" --not-doing "the fleet" \
     --review "$(dplus 30)" --scope project
   must br op add --kind focus --text "bundle first" --owner-quote q1 --where chat --goal G1
@@ -569,6 +583,7 @@ case_words_roundtrip() {
   carry "$TMP/wr-chain.json" "$TMP/wr-chain-c.json" 'o["done"] = "~ words nobody vouches for"' "$s"
   np; must owner_import "$TMP/wr-chain-c.json"; br import "$TMP/wr-chain-c.json"; c_rc 0 "[words-roundtrip] a bundle whose superseded focus had a carried words line imports"
   br show P2 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" 'clean done | clean not' "[words-roundtrip] … and its successor lands with its own words"
+  fi
   np; conf '{"quote_max": 100}'; must owner_import "$k"; br import "$k"; c_rc 0 "[words-roundtrip] a brain with a quote cap of 100 imports"
   c_has "$OUT" "P1 (its done when is 150 units, over this brain's cap of 100)" "[words-roundtrip] … skips a focus whose word is over its cap"
 }
@@ -706,16 +721,22 @@ case_drill() {
 # --- [i] backup -----------------------------------------------------------------------------------------------------------------------
 case_backup() {
   np; must br op add --kind fact --text "kept"
-  local place="$TMP/bk-$NP" d n f; d=$(sdir)
+  local place d n f priv="yours, mode 0700" open="group or others" opens; d=$(sdir)
+  place=$(wpath "$TMP/bk-$NP")                     # on Windows a session names it as C:/…
   mkdir -m 700 "$place"
+  if [ "${OS:-}" = Windows_NT ]; then priv="yours alone"; open="S-1-1-0 can use it"; fi
+  opens() {  # opens <dir> — group or others may use it (Windows: Everyone may change it)
+    if [ "${OS:-}" = Windows_NT ]; then MSYS_NO_PATHCONV=1 icacls "$(cygpath -w "$1")" /grant "*S-1-1-0:(OI)(CI)M" >/dev/null; else chmod 755 "$1"; fi
+  }
   gown default backup "$place"
-  c_eq "$(hfield permissionDecisionReason)" "Back up this project's brain to \"$place\" every 24 h (a private directory: yours, mode 0700, outside every git work tree)" \
+  c_eq "$(hfield permissionDecisionReason)" "Back up this project's brain to \"$place\" every 24 h (a private directory: $priv, outside every git work tree)" \
     "[i] the dialog names the place and the interval"
   br "$OWN" backup "$place"; c_rc 0 "[i] the owner names the place through the dialog"
   c_eq "$(grep -c -F "$place" "$d/hot.jsonl")" 0 "[i] the place is not in the log"
-  mkdir -m 700 "$TMP/bk-open"; chmod 755 "$TMP/bk-open"; mkdir -p "$P/sub"; chmod 700 "$P/sub"; ln -s "$place" "$TMP/bk-link"; : > "$TMP/bk-file"
-  local where why
-  for where in "$P/sub|git repository" "$(dirname "$d")|state root" "$TMP/bk-open|group or others" "$TMP/bk-link|symlink" "$TMP/bk-file|not a directory"; do
+  mkdir -m 700 "$TMP/bk-open"; opens "$TMP/bk-open"; mkdir -p "$P/sub"; chmod 700 "$P/sub"; : > "$TMP/bk-file"
+  local where why links=""
+  if can_link; then ln -s "$place" "$TMP/bk-link"; links="$TMP/bk-link|symlink"; else c_skip "[i] the place bk-link" "ln -s copies here instead of linking"; fi
+  for where in "$P/sub|git repository" "$(dirname "$d")|state root" "$TMP/bk-open|$open" $links "$TMP/bk-file|not a directory"; do
     why=${where#*|}; where=${where%|*}
     bad_gown backup "$where"
     c_eq "$(hfield permissionDecision)" deny "[i] the place ${where#"$TMP"/} is refused before asking"
@@ -728,7 +749,8 @@ case_backup() {
   : > "$place/other-0123456789ab-20250101T000000Z-s1.brain.json"
   br backup; c_rc 0 "[i] brain backup writes one"
   f=$(printf '%s\n' "$OUT" | sed 's/.* to //')
-  c_eq "$(mode_of "$f")" 600 "[i] … 0600"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[i] … 0600" "Windows has no mode bits (the place's access rules are checked)"
+  else c_eq "$(mode_of "$f")" 600 "[i] … 0600"; fi
   br doctor --bundle "$f"; c_rc 0 "[i] … a bundle doctor accepts"
   c_eq "$(ls "$place" | grep -c "^proj$NP-")" 30 "[i] the newest thirty of this project are kept"
   c_eq "$(ls "$place" | grep -c '^other-')" 1 "[i] … another project's file is left alone"
@@ -739,7 +761,7 @@ case_backup() {
     python3 - "$d/backup-last.json" "$1" <<'PY'
 import json, sys, time
 p = sys.argv[1]; c = json.load(open(p)); c["ok"]["t"] = time.time() - float(sys.argv[2]) * 3600
-open(p, "w").write(json.dumps(c))
+open(p, "w", newline="").write(json.dumps(c))
 PY
   }
   backdate 25
@@ -751,15 +773,15 @@ PY
   local i; for i in $(seq 1 50); do [ "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["ok"]["seq"])' "$d/backup-last.json")" = "$(bpy 'print(len(s.verify(s.state_dir())[0]))')" ] && break; sleep 0.1; done
   c_eq "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["ok"]["seq"])' "$d/backup-last.json")" "$(bpy 'print(len(s.verify(s.state_dir())[0]))')" \
     "[i] a SessionStart with a backup due starts it in the background, and it is written"
-  br doctor; c_has "$OUT" "backup: to $place every 24 h; last " "[i] doctor names the place and the last backup"
-  chmod 755 "$place"; must br op add --kind fact --text "after"
-  bad_in backup; c_rc 1 "[i] a place that stopped being private refuses the backup"; c_has "$OUT" "group or others" "[i] … saying why"
+  br doctor; c_has "$OUT" "backup: to $(wcwd "$place") every 24 h; last " "[i] doctor names the place and the last backup (as stored: the system's own form)"
+  opens "$place"; must br op add --kind fact --text "after"
+  bad_in backup; c_rc 1 "[i] a place that stopped being private refuses the backup"; c_has "$OUT" "$open" "[i] … saying why"
   br doctor; c_has "$OUT" "the last backup failed at " "[i] doctor warns of the failure"
   bpy 'print("\n".join(s.card_lines(s.load(s.state_dir())[1], __import__("time").time(), d=s.state_dir())))' > "$TMP/card"
   c_has "$(cat "$TMP/card")" "backup failing since " "[i] the review card names it"
-  chmod 700 "$place"
+  if [ "${OS:-}" = Windows_NT ]; then MSYS_NO_PATHCONV=1 icacls "$(cygpath -w "$place")" /remove "*S-1-1-0" >/dev/null; else chmod 700 "$place"; fi
   gown default backup off
-  c_eq "$(hfield permissionDecisionReason)" "Stop backing up this project's brain (it went to \"$place\")" "[i] the dialog to stop"
+  c_eq "$(hfield permissionDecisionReason)" "Stop backing up this project's brain (it went to \"$(wcwd "$place")\")" "[i] the dialog to stop"
   br "$OWN" backup off; c_rc 0 "[i] off stops it"; br backup; c_rc 1 "[i] … and brain backup then needs a place"
 }
 
@@ -795,7 +817,7 @@ for pat, new in ((r"(?m)^MANAGED_SETTINGS = \(.*\)$", 'MANAGED_SETTINGS = ("%s/m
                  (r"(?m)^        return pwd\.getpwuid\(os\.getuid\(\)\)\.pw_dir$", '        return "%s"' % a),
                  (r"(?m)^        if pid <= 1:$", "        if pid <= 1 or pid == SUITE_PID:")):
     s, n = re.subn(pat, lambda _: new, s)
-open(p, "w", encoding="utf-8").write(s)
+open(p, "w", encoding="utf-8", newline="").write(s)
 PY
 }
 case_compat() {
@@ -1023,9 +1045,11 @@ st, ops, led = L.snapshot(s.state_dir()); print(L.dormant(st, ops, led, time.tim
   must owner_ok backup "$place"; must br backup
   must owner_ok backup "$other"
   br backup --if-due; c_has "$OUT" "backed up seq " "[n] a backup is due at once in a newly named place"
-  ln -s "$place" "$TMP/n-link-$NP"; bad_gown backup "$TMP/n-link-$NP/"
+  if can_link; then
+    ln -s "$place" "$TMP/n-link-$NP"; bad_gown backup "$TMP/n-link-$NP/"
+    c_eq "$(hfield permissionDecision)" deny "[n] a symlink named with a trailing slash is refused"
+  else c_skip "[n] a symlink named with a trailing slash" "ln -s copies here instead of linking"; fi
   bad_gown backup "/$place"; c_has "$(hfield permissionDecisionReason)" "name it plainly" "[n] a place with a leading // is not plain either"
-  c_eq "$(hfield permissionDecision)" deny "[n] a symlink named with a trailing slash is refused"
 }
 
 echo "== cases =="

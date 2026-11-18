@@ -21,6 +21,7 @@
 #       alone) each inject nothing; BRAIN_OFF=0, and neither the switch nor the pair, do inject
 #   [C] fail-open: a corrupt hot.jsonl injects a one-line warning with rc 0; an internal error is one stderr line, rc 0
 #   [R] the hook's import-free state root (its fast path) equals brain_store.state_root()
+#   [CP] a guard reads its input as UTF-8 bytes whatever the system code page: an edit under a non-ASCII state root is denied
 #   [W] the session's project, whatever the shell's directory: claimed in A, with cwd in B the compact hooks log A's episode
 #       and SessionStart injects A's block, with CLAUDE_PROJECT_DIR or, without it, from the session's record; the CLI writes
 #       A and names both; outside a session, the cwd as before; /clear's new session id still A; session-end removes the
@@ -83,7 +84,7 @@ many_skills() {  # project, user and plugin skill directories holding more skill
   local reg='{"version":2,"plugins":{' sep="" n
   for n in plug-a plug-b plug-c plug-off; do
     for i in 01 02 03 04 05 06 07 08 09 10; do skill "$TMP/pl$NP/$n/skills" "$n-skill-$i" "Skill $i of $n."; done
-    reg="$reg$sep\"$n@m\":[{\"scope\":\"user\",\"installPath\":\"$TMP/pl$NP/$n\"}]"; sep=,
+    reg="$reg$sep\"$n@m\":[{\"scope\":\"user\",\"installPath\":\"$(wpath "$TMP/pl$NP/$n")\"}]"; sep=,
   done
   skill "$TMP/pl$NP/plug-a/skills" "aa-plug-planted" "Planted in a plugin."
   printf '%s}}' "$reg" > "$cfg/plugins/installed_plugins.json"
@@ -164,7 +165,8 @@ case_compact() {
   c_eq "$(epfield trigger)" auto "[P] and the trigger"
   local f; f="$(sdir)/$(epfield summary)"
   c_has "$(cat "$f" 2>/dev/null)" "SUMMARY-MARKER" "[P] the summary is saved"
-  c_eq "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" 600 "[P] 0600"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[P] 0600" "Windows has no mode bits (the store's access rules: store [WA])"
+  else c_eq "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" 600 "[P] 0600"; fi
   c_eq "$(find "$sd" -name '*.md' | wc -l | tr -d ' ')" 200 "[P] the newest 200 summaries are kept"
   c_eq "$(epfield hot_version)" "$(bpy 'print(s.read_head(s.state_dir())["seq"])')" "[P] the hot memory version is the head's seq"
   start compact; c_hasnt "$(ctx)" "SUMMARY-MARKER" "[P] the summary is never injected"
@@ -188,9 +190,11 @@ case_guards() {
   c_eq "$(hfield permissionDecision)" deny "[E] an edit under the state root: deny"
   hk guard-edit "$(hin session_id=sA cwd="$root/x" tool_name=Write tool_input='{"file_path":"head.json"}')"
   c_eq "$(hfield permissionDecision)" deny "[E] a relative path that resolves under it: deny"
-  ln -s "$root/x" "$P/link"
-  hk guard-edit "$(hin session_id=sA cwd="$P" tool_name=Write tool_input="{\"file_path\":\"$P/link/new.json\"}")"
-  c_eq "$(hfield permissionDecision)" deny "[E] through a symlink: deny"
+  if can_link; then
+    ln -s "$root/x" "$P/link"
+    hk guard-edit "$(hin session_id=sA cwd="$P" tool_name=Write tool_input="{\"file_path\":\"$P/link/new.json\"}")"
+    c_eq "$(hfield permissionDecision)" deny "[E] through a symlink: deny"
+  else c_skip "[E] through a symlink" "ln -s copies here instead of linking"; fi
   hk guard-edit "$(hin session_id=sA cwd="$P" tool_name=NotebookEdit tool_input="{\"notebook_path\":\"$root/x/n.ipynb\"}")"
   c_eq "$(hfield permissionDecision)" deny "[E] a notebook under it: deny"
   hk guard-edit "$(hin session_id=sA cwd="$P" tool_name=Edit tool_input="{\"file_path\":\"$P/src/main.py\"}")"
@@ -228,16 +232,20 @@ nlines() { wc -l < "$1" 2>/dev/null | tr -d ' ' || echo 0; }
 
 case_session() {  # the session's project, whatever the shell's directory: claim in A, hooks and CLI with cwd in B
   newp
-  local A=$P B="$TMP/other$NP" dA dB n tr="$TMP/tr$NP.jsonl"
+  local A=$P B="$TMP/other$NP" dA dB n tr="$TMP/tr$NP.jsonl" wA wB
   mkdir -p "$B"; git_ -C "$B" init -q -b main
+  wA=$(wpath "$A"); wB=$(wcwd "$B")   # Windows: the project as CLAUDE_PROJECT_DIR reaches Python (C:/…), the shell as getcwd gives it
   owner_ok add --kind decision --text "A-MARKER" --owner-quote "a project marker" --where chat   # string 1 holds the left brain
   dA=$(sdir); dB=$(cd "$B" && bpy 'import os; print(s.state_dir(os.getcwd()))')
   printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":1,"cache_read_input_tokens":500,"cache_creation_input_tokens":0,"output_tokens":1}}}' > "$tr"
   CLAUDE_PROJECT_DIR="$A" start startup
   c_has "$(ctx)" "A-MARKER" "[W] startup in A: A's block"
   local f sd old ma; f=$(bpy 'print(s.session_file("sA"))'); sd=$(dirname "$f")
-  c_eq "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" 600 "[W] the session's project record is written, 0600"
-  c_eq "$(stat -c %a "$sd" 2>/dev/null || stat -f %Lp "$sd")" 700 "[W] in a 0700 sessions/ directory"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[W] 0600 in a 0700 sessions/ directory" "Windows has no mode bits (store [WA])"
+  else
+    c_eq "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" 600 "[W] the session's project record is written, 0600"
+    c_eq "$(stat -c %a "$sd" 2>/dev/null || stat -f %Lp "$sd")" 700 "[W] in a 0700 sessions/ directory"
+  fi
   bpy "s.record_session('sOld', '$A', s.state_dir('$A'))"; old=$(bpy 'print(s.session_file("sOld"))')
   python3 -c 'import os, sys, time; t = time.time() - 40 * 86400; os.utime(sys.argv[1], (t, t))' "$old"
   SID=sN CLAUDE_PROJECT_DIR="$A" start startup; SID=sA
@@ -259,7 +267,7 @@ case_session() {  # the session's project, whatever the shell's directory: claim
   c_has "$(ctx)" "A-MARKER" "[W] SessionStart:compact without CLAUDE_PROJECT_DIR: A's block"
   br op add --kind next --text "WRITTEN-FROM-B"
   c_rc 0 "[W] brain op in B: rc 0"
-  c_has "$OUT" "this session's project is $A; the shell is in $B; using $A" "[W] the CLI names both projects"
+  c_has "$OUT" "this session's project is $wA; the shell is in $wB; using $wA" "[W] the CLI names both projects"
   c_has "$(cat "$dA/hot.jsonl")" "WRITTEN-FROM-B" "[W] and writes A's hot memory"
   br doctor --path; c_has "$OUT" "$dA" "[W] doctor --path in B names A's state directory"
   cd "$A" || return 1; br matrix --json; ma=$(mrow); cd "$B" || return 1
@@ -293,22 +301,24 @@ case_session() {  # the session's project, whatever the shell's directory: claim
   mkdir -p "$C"; git_ -C "$C" init -q -b main
   (cd "$C" && SID=sD owner_ok add --kind decision --text "C-MARKER" --owner-quote "a project marker" --where chat)
   dC=$(cd "$C" && SID=sD bpy 'import os; print(s.state_dir(os.getcwd()))')
-  if [ "$(id -u)" != 0 ]; then                # root writes into a 0500 directory anyway
+  if [ "${OS:-}" = Windows_NT ]; then
+    c_skip "[W] a resume in C whose record cannot be written" "Windows lets a read-only folder take new files"
+  elif [ "$(id -u)" != 0 ]; then              # root writes into a 0500 directory anyway
     chmod 500 "$sd"
     CLAUDE_PROJECT_DIR="$C" hk session-start "$(hin session_id=sA cwd="$B" hook_event_name=SessionStart source=resume)"
     chmod 700 "$sd"
     c_has "$(ctx)" "C-MARKER" "[W] a resume in C whose record cannot be written: C's block"
-    c_has "$ERR" "it still names $A, which \`brain\` run from Bash would use" "[W] and names the project the old record keeps"
+    c_has "$ERR" "it still names $wA, which \`brain\` run from Bash would use" "[W] and names the project the old record keeps"
   fi
   CLAUDE_PROJECT_DIR="$C" hk session-start "$(hin session_id=sA cwd="$B" hook_event_name=SessionStart source=resume)"
-  c_has "$ERR" "this session's project was $A; it is now $C" "[W] a resume in another project says it moves the record"
+  c_has "$ERR" "this session's project was $wA; it is now $(wpath "$C")" "[W] a resume in another project says it moves the record"
   c_has "$(ctx)" "C-MARKER" "[W] and injects that project's block"
-  c_eq "$(epf "$dC" rebound_from)" "$A" "[W] its episode names the project it left"
+  c_eq "$(epf "$dC" rebound_from)" "$wA" "[W] its episode names the project it left"
   nowrite "$TMP/fault$NP"
-  mkdir -p "$C/sub"; bpy "s.record_session('sA', '$C/sub', s.state_dir('$C/sub'))"
+  mkdir -p "$C/sub"; bpy "s.record_session('sA', '$(wpath "$C/sub")', s.state_dir('$(wpath "$C/sub")'))"
   PYTHONPATH="$TMP/fault$NP" CLAUDE_PROJECT_DIR="$C" hk session-start "$(hin session_id=sA cwd="$B" hook_event_name=SessionStart source=compact)"
   c_has "$ERR" "record was not written: OSError" "[W] instrument: the fault makes the record write fail"
-  c_eq "$(bpy 'print(s.read_session("sA")["project"])')" "$C/sub" "[W] a failed write keeps a record naming the same brain (a sibling worktree)"
+  c_eq "$(bpy 'print(s.read_session("sA")["project"])')" "$(wpath "$C/sub")" "[W] a failed write keeps a record naming the same brain (a sibling worktree)"
   PYTHONPATH="$TMP/fault$NP" CLAUDE_PROJECT_DIR="$A" hk session-start "$(hin session_id=sA cwd="$B" hook_event_name=SessionStart source=resume)"
   c_has "$(ctx)" "A-MARKER" "[W] a failed write on a resume into A: A's block"
   c_eq "$(bpy 'print(s.read_session("sA"))')" None "[W] the record naming C is removed, so the CLI cannot write C"
@@ -320,7 +330,7 @@ nowrite() {  # nowrite <dir> — a sitecustomize there makes brain_store's write
   mkdir -p "$1"
   cat > "$1/sitecustomize.py" <<PY
 import errno, os, sys
-sys.path.insert(0, "$BROOT/scripts")
+sys.path.insert(0, "$(wpath "$BROOT/scripts")")
 import brain_store
 _w = brain_store._write_file
 def _fail(path, data):
@@ -361,7 +371,7 @@ case_corrupt() {
   mkdir "$(sdir)/episodes.jsonl"
   hk pre-compact "$(hin session_id=sA cwd="$P" trigger=manual)"
   c_rc 0 "[C] an internal error (the log is a directory): rc 0"
-  c_has "$ERR" "brain hook pre-compact: IsADirectoryError" "[C] one stderr line names it"
+  c_has "$ERR" "brain hook pre-compact: $([ "${OS:-}" = Windows_NT ] && echo PermissionError || echo IsADirectoryError)" "[C] one stderr line names it (Windows names a directory opened as a file PermissionError)"
   hk session-start 'not json'; c_rc 0 "[C] input that is not JSON: rc 0"
 }
 
@@ -377,16 +387,18 @@ print(len(b) > 9500, len(out) <= 9500, out.splitlines()[-1].startswith("[brain: 
 
 pick_checks() {  # pick_checks <live script> — the key choice on recorded Claude Code menus (B1.2a)
   local s=$1 T='^Yes, (I trust this folder|proceed)' Y='^Yes$'
-  c_eq "$(printf ' Security guide\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n' | bash "$s" --pick-key "$T")" Down "[P2] trust dialog of 2.1.290/2.1.302, cursor on No first: Down"
-  c_eq "$(printf ' Security guide\n   No, exit\n ❯ Yes, I trust this folder\n' | bash "$s" --pick-key "$T")" Enter "[P2] then, the cursor on Yes: Enter"
-  c_eq "$(printf ' Do you trust the files in this folder?\n ❯ 1. Yes, proceed\n   2. No, exit\n' | bash "$s" --pick-key "$T")" Enter "[P2] an older dialog with Yes first: Enter"
-  c_eq "$(printf '> Run exactly this one Bash command\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don'"'"'t ask again for brain commands\n   3. No\n' | bash "$s" --pick-key "$Y")" Enter "[P2] permission prompt: the plain Yes (a quoted > line beside a ❯ menu is not the cursor)"
-  c_eq "$(printf ' Do you want to proceed?\n   1. Yes\n ❯ 2. Yes, and don'"'"'t ask again\n   3. No\n' | bash "$s" --pick-key "$Y")" Up "[P2] the cursor on \"don't ask again\": Up to the plain Yes, never Enter there"
-  c_eq "$(printf ' Do you want to proceed?\n 1. Yes\n 2. No\n' | bash "$s" --pick-key "$Y")" 1 "[P2] a numbered menu with no cursor: its number"
-  c_eq "$(printf ' something else\n ❯ No, exit\n' | bash "$s" --pick-key "$T")" none "[P2] no matching option: no key"
-  c_eq "$(printf '> quoted prompt\n 1. Yes\n 2. No\n' | bash "$s" --pick-key "$Y")" 1 "[P2] a quoted > line and a numbered menu with no cursor: the number, not Down"
-  c_eq "$(printf ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n ❯ \n' | bash "$s" --pick-key "$Y")" Enter "[P2] an empty input line under the menu is not its cursor"
-  c_eq "$(printf ' Yes\n Menu\n 1. Yes\n 2. No\n' | bash "$s" --pick-key "$Y")" 1 "[P2] a stray Yes line above a numbered menu: the numbered one"
+  # the key alone (Python on Windows ends its line with CR LF); the script's own Python reads the screen as UTF-8 (a helper)
+  pk() { PYTHONUTF8=1 bash "$s" --pick-key "$1" | tr -d '\r'; }
+  c_eq "$(printf ' Security guide\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n' | pk "$T")" Down "[P2] trust dialog of 2.1.290/2.1.302, cursor on No first: Down"
+  c_eq "$(printf ' Security guide\n   No, exit\n ❯ Yes, I trust this folder\n' | pk "$T")" Enter "[P2] then, the cursor on Yes: Enter"
+  c_eq "$(printf ' Do you trust the files in this folder?\n ❯ 1. Yes, proceed\n   2. No, exit\n' | pk "$T")" Enter "[P2] an older dialog with Yes first: Enter"
+  c_eq "$(printf '> Run exactly this one Bash command\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don'"'"'t ask again for brain commands\n   3. No\n' | pk "$Y")" Enter "[P2] permission prompt: the plain Yes (a quoted > line beside a ❯ menu is not the cursor)"
+  c_eq "$(printf ' Do you want to proceed?\n   1. Yes\n ❯ 2. Yes, and don'"'"'t ask again\n   3. No\n' | pk "$Y")" Up "[P2] the cursor on \"don't ask again\": Up to the plain Yes, never Enter there"
+  c_eq "$(printf ' Do you want to proceed?\n 1. Yes\n 2. No\n' | pk "$Y")" 1 "[P2] a numbered menu with no cursor: its number"
+  c_eq "$(printf ' something else\n ❯ No, exit\n' | pk "$T")" none "[P2] no matching option: no key"
+  c_eq "$(printf '> quoted prompt\n 1. Yes\n 2. No\n' | pk "$Y")" 1 "[P2] a quoted > line and a numbered menu with no cursor: the number, not Down"
+  c_eq "$(printf ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n ❯ \n' | pk "$Y")" Enter "[P2] an empty input line under the menu is not its cursor"
+  c_eq "$(printf ' Yes\n Menu\n 1. Yes\n 2. No\n' | pk "$Y")" 1 "[P2] a stray Yes line above a numbered menu: the numbered one"
   printf 'x\n' | bash "$s" --pick-key '(' >/dev/null 2>&1; c_eq "$?" 1 "[P2] a choice that cannot be made (bad pattern): rc 1, no key"
 }
 
@@ -416,12 +428,22 @@ print(h.state_root() == s.state_root())' "$BROOT/scripts")
   done
 }
 
+case_codepage() {  # a hook's input read in the system code page (Windows' pipes): a guard must still see a path that is not ASCII
+  newp
+  export XDG_STATE_HOME="$TMP/trạng thái $NP"
+  br op add --kind now --text "a store under a Vietnamese name"
+  PYTHONIOENCODING=cp1252 hk guard-edit "$(hin session_id=sA cwd="$P" tool_name=Edit tool_input="{\"file_path\":\"$XDG_STATE_HOME/vibemaestro/brain/x/hot.jsonl\"}")"
+  c_eq "$(hfield permissionDecision)" deny "[CP] an edit under a state root named in Vietnamese is denied with the hook's streams in the code page (main: read as cp1252, let through)"
+}
+
 echo "== cases =="
-for c in case_root case_caps case_shelf case_compact case_guards case_session case_end case_off case_corrupt case_cut case_live case_pick; do run_case $c; done
+for c in case_root case_caps case_shelf case_compact case_guards case_session case_end case_off case_corrupt case_cut case_live case_pick case_codepage; do run_case $c; done
 
 echo "== [NW] the store cannot load (Windows: no fcntl, no pwd): Claude is told, the person sees no fixed line, the guards refuse =="
 # A sitecustomize on PYTHONPATH takes fcntl and pwd out of the module table: what Windows Python lacks
 NW="$TMP/nowin"; mkdir -p "$NW"; printf 'import sys\nsys.modules["fcntl"] = None\nsys.modules["pwd"] = None\n' > "$NW/sitecustomize.py"
+# on Windows the store takes ctypes and msvcrt instead: without ctypes it cannot load there either
+[ "${OS:-}" != Windows_NT ] || printf 'sys.modules["ctypes"] = None\n' >> "$NW/sitecustomize.py"
 nw() { PYTHONPATH="$NW" hk "$@"; }
 eq "$(PYTHONPATH="$NW" python3 -c 'import fcntl' >/dev/null 2>&1; echo $?)" 1 "instrument: under the stand-in, fcntl cannot be imported"
 NWP="$TMP/nowin-proj"; mkdir -p "$NWP"; git_ -C "$NWP" init -q
@@ -440,10 +462,14 @@ eq "$(hfield permissionDecision)" "" "[NW] …an edit of the person's own file i
 nw guard-bash "$(hin session_id=sNW agent_id=a1 cwd="$NWP" hook_event_name=PreToolUse tool_name=Bash tool_input="$(hin command='brain op add --kind now --text x')")"
 eq "$(hfield permissionDecision)" deny "[NW] a subagent's brain op is still refused (that guard never needed the store)"
 NF="$TMP/nofcntl"; mkdir -p "$NF"; printf 'import sys\nsys.modules["fcntl"] = None\n' > "$NF/sitecustomize.py"   # no fcntl, pwd still there (a broken POSIX install)
+if [ "${OS:-}" = Windows_NT ]; then
+  echo "  SKIP [NW] with HOME empty, the folder under the account's home: no pwd on Windows, the account's home is the token's profile (store [WP])"
+else
 AH=$(python3 -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')
 OUT=$(printf '%s' "$(hin session_id=sNW cwd="$NWP" hook_event_name=PreToolUse tool_name=Edit tool_input="$(hin file_path="$AH/.local/state/vibemaestro/brain/x/hot.jsonl")")" \
       | env -u XDG_STATE_HOME HOME= PYTHONPATH="$NF" python3 "$BROOT/scripts/brain_hook.py" guard-edit 2>/dev/null)
 eq "$(hfield permissionDecision)" deny "[NW] with HOME empty, the store's folder under the account's home is refused too, as the store places it (expanduser gave /)"
+fi
 
 cd "$TMP" || exit 1
 

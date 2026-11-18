@@ -261,7 +261,7 @@ for pat, new in ((r"(?m)^MANAGED_SETTINGS = \(.*\)$", 'MANAGED_SETTINGS = ("%s/m
                  (r"(?m)^        if pid <= 1:$", "        if pid <= 1 or pid == SUITE_PID:")):
     s, n = re.subn(pat, lambda _: new, s)
     assert n == 1, pat
-open(p, "w", encoding="utf-8").write(s)
+open(p, "w", encoding="utf-8", newline="").write(s)
 PY
 }
 

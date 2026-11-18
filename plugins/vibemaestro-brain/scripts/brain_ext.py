@@ -21,7 +21,6 @@ import math
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -357,7 +356,7 @@ def made(before, after):
 def _kill(p):
     """End the call's process group (whatever it left running in it) and collect it."""
     with contextlib.suppress(OSError):
-        os.killpg(p.pid, signal.SIGKILL)
+        s.kill_tree(p)
     with contextlib.suppress(subprocess.TimeoutExpired, OSError):
         p.wait(timeout=1)
 
@@ -405,8 +404,8 @@ def _call(ext, raw, seconds):
             except OSError as e:
                 raise Broken("its input could not be handed over (%s)" % e.__class__.__name__)
             try:
-                p = subprocess.Popen([sys.executable, "-I", "-B", ext["script"]], cwd=ext["root"], env=env, stdin=fin,
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, start_new_session=True)
+                p = s.spawn([sys.executable, "-I", "-B", "-X", "utf8", ext["script"]], cwd=ext["root"], env=env, stdin=fin,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
             except OSError as e:
                 raise Broken("its script did not start (%s)" % e.__class__.__name__)
         threads = [threading.Thread(target=_pump, args=(p.stdout, "head", OUT_MAX + 1, out)),

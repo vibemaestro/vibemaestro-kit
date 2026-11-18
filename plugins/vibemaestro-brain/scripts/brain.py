@@ -544,9 +544,21 @@ def doctor(path, bundle=None):
     return None
 
 
+def arg_conv_back(env):
+    """Put back the MSYS2_ARG_CONV_EXCL that bin/brain replaced for its own arguments (none, or the person's own value), so
+    what brain starts converts its arguments as it would have."""
+    if env.pop("BRAIN_ARG_CONV_SET", None):
+        was = env.pop("BRAIN_ARG_CONV_WAS", None)
+        if was is None:
+            env.pop("MSYS2_ARG_CONV_EXCL", None)
+        else:
+            env["MSYS2_ARG_CONV_EXCL"] = was
+
+
 if __name__ == "__main__":
     for _s in filter(None, (sys.stdout, sys.stderr)):   # Windows writes a pipe in the system code page, which lacks Vietnamese and the arrows
         _s.reconfigure(encoding="utf-8", errors="backslashreplace")
+    arg_conv_back(os.environ)
     try:
         msg = main(sys.argv[1:])
     except s.Refused as e:

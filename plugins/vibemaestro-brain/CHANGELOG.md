@@ -2,6 +2,16 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.5.2
+
+Released together: vibemaestro-sdlc 0.7.2, vibemaestro-brain 0.5.2
+
+- patch: The brain runs on Windows: its memory, its hooks and the `brain` command work there as on Linux and macOS, with one writer at a time, state folders only your account can use, and a helper that runs too long stopped with everything it started.
+
+### Upgrade notes
+
+- On Windows the brain now keeps its memory and refuses to write into a state folder another account can use; the README's On Windows section says how to make such a folder private again.
+
 ## 0.5.1
 
 Released together: vibemaestro-sdlc 0.7.2, vibemaestro-brain 0.5.1

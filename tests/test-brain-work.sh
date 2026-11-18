@@ -263,6 +263,7 @@ case_status() {
 
 # --- [c] -----------------------------------------------------------------------------------------------------------------------
 case_autoclose() {
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[c] items close when their PR merges" "Windows' own Python runs gh.exe only: the stub gh script that answers it is never run"; return; fi
   np
   seed "S1@$C20;closes=acme/app¤5;text=w-auth: review round 2" "Q1@$C20;closes=acme/app¤6;text=owner: merge the parser" \
        "S2@$C20;closes=acme/app¤7;text=w-db: still open" "N1@$C20;text=a now item"
@@ -316,6 +317,7 @@ case_done() {
 
 # --- [e] -----------------------------------------------------------------------------------------------------------------------
 case_empty() {
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[e] what an auto-close leaves in the right brain" "Windows' own Python runs gh.exe only: the stub gh script that answers it is never run"; return; fi
   np; seed "D1@$C20;text=a pin"; startall
   c_rc 0 "[e] rc 0"
   c_has "$S1" "- D1 a pin" "[e] string 1 holds the left brain"
@@ -444,14 +446,18 @@ case_episode() {
 
 # --- [l] -----------------------------------------------------------------------------------------------------------------------
 case_handover() {
+  # Windows: the 14 Pythons start over about 4 s, so "no wait" there is this run's own batch with no wait plus 3 s (a wait for a
+  # hand-over adds START_WAIT, 6 s), and a hand-over is old past SIBLINGS, 5 s there
+  local fast=3 old=2 b0 b1; [ "${OS:-}" != Windows_NT ] || old=7
   np; seed "N1@$C20" "S1@$C20;text=a session" "X1@$C20;text=a next"
   one session-start
   c_eq "$(cd "$(sdir)/starts" && ls | sed 's/^[0-9a-f]*\.//' | sort -n | tr '\n' ' ')" \
        "2.json 3.json 4.json 5.json 6.json 7.json 8.json 9.json 10.json 11.json 12.json 13.json 14.json " "[l] string 1's pass hands each other string over in a file"
-  c_eq "$(stat -c %a "$(sdir)/starts")$(stat -c %a "$(sdir)"/starts/*.json | sort -u)" 700600 "[l] 0700 and 0600"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[l] 0700 and 0600" "Windows has no mode bits (the store's access rules: store [WA])"
+  else c_eq "$(stat -c %a "$(sdir)/starts")$(stat -c %a "$(sdir)"/starts/*.json | sort -u)" 700600 "[l] 0700 and 0600"; fi
   hk session-end "$(hin session_id="$SID" cwd="$P" hook_event_name=SessionEnd reason=exit)"
   c_eq "$(ls "$(sdir)/starts" | wc -l | tr -d ' ')" 0 "[l] SessionEnd removes what was not taken"
-  startall
+  b0=$(date +%s); startall; b1=$(date +%s); [ "${OS:-}" != Windows_NT ] || fast=$((b1 - b0 + 3))
   c_has "$SR" "- S1 a session" "[l] string 2's command prints what string 1 handed over"
   c_has "$SR" "- X1 a next" "[l] with Next"
   c_hasnt "$SR" "skipped" "[l] with no note of its own"
@@ -473,9 +479,9 @@ case_handover() {
   bpy 'import hashlib, json, os, time
 d = s.state_dir(); os.makedirs(d + "/starts", exist_ok=True)
 p = d + "/starts/" + hashlib.sha256(b"sA").hexdigest()[:32] + ".2.json"
-s._write_file(p, json.dumps({"session": "sA", "source": "compact", "t": time.time() - 2, "part": 2, "text": "OLD STRING"}))'
+s._write_file(p, json.dumps({"session": "sA", "source": "compact", "t": time.time() - '"$old"', "part": 2, "text": "OLD STRING"}))'
   one session-start-2
-  c_hasnt "$OUT" "OLD STRING" "[l] a hand-over from 2 s before is not used"
+  c_hasnt "$OUT" "OLD STRING" "[l] a hand-over from $old s before is not used"
   c_has "$OUT" "- S1 alone" "[l] the string is rendered instead"
   # SessionEnd removes the session's hand-overs
   one session-start
@@ -486,7 +492,7 @@ s._write_file(p, json.dumps({"session": "sA", "source": "compact", "t": time.tim
   t0=$(date +%s); startall; t1=$(date +%s)
   c_has "$S1" "hot memory was not injected" "[l] a broken log: string 1 warns"
   c_eq "$SL|$SR" "|" "[l] the other strings print nothing"
-  c_eq "$([ $((t1 - t0)) -le 3 ] && echo fast)" fast "[l] and do not wait for a hand-over ($((t1 - t0)) s)"
+  c_eq "$([ $((t1 - t0)) -le "$fast" ] && echo fast)" fast "[l] and do not wait for a hand-over ($((t1 - t0)) s)"
   # a write holding the store lock: SessionStart reads under the lock, so it waits for the write and shows it
   np; seed "S1@$C20;text=before the write"
   (CLAUDE_CODE_SESSION_ID=sA BRAIN_TEST=1 BRAIN_TEST_PAUSE_MS=500 "$BROOT/bin/brain" op add --kind session --text "written during the start" >/dev/null 2>&1) &
@@ -495,11 +501,18 @@ s._write_file(p, json.dumps({"session": "sA", "source": "compact", "t": time.tim
   c_has "$SR" "- S2 written during the start" "[l] it waits for the write that holds the lock, and shows it"
   c_hasnt "$S1" "not injected" "[l] and no broken-log warning"
   # a lock held past LOCK_WAIT (a writer stuck): the read goes on without it, and every string comes
-  python3 -c 'import fcntl, os, sys, time
-fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600); fcntl.flock(fd, fcntl.LOCK_EX); time.sleep(4)' "$(sdir)/lock" &
-  wp=$!; sleep 0.2; t0=$(date +%s); startall; t1=$(date +%s); kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
+  rm -f "$TMP/held$NP"
+  python3 -c 'import os, sys, time; sys.path.insert(0, sys.argv[3]); import brain_store as s
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT | s.O_BINARY, 0o600); s.lock_nb(fd); open(sys.argv[2], "w", newline="").close(); time.sleep(4)' \
+    "$(sdir)/lock" "$TMP/held$NP" "$BROOT/scripts" &
+  wp=$!
+  for i in $(seq 1 100); do [ -e "$TMP/held$NP" ] && break; sleep 0.05; done
+  c_eq "$([ -e "$TMP/held$NP" ] && echo held || echo none)" held "instrument: the store lock is held by another process"
+  # string 1's command alone, timed (the other strings' starts spread over seconds on Windows), then all 14 with the lock still held
+  t0=$(date +%s); one session-start; t1=$(date +%s)
+  c_eq "$([ $((t1 - t0)) -le 3 ] && echo fast)" fast "[l] string 1 reads after the 1 s wait, not the writer's 4 ($((t1 - t0)) s)"
+  startall; wait "$wp" 2>/dev/null   # the holder ends by itself: a lock file in use is not removed below
   c_has "$S1$SR" "- S2 written during the start" "[l] a lock held for 4 s: the strings are injected"
-  c_eq "$([ $((t1 - t0)) -le 3 ] && echo fast)" fast "[l] after the 1 s wait, not the writer's 4 ($((t1 - t0)) s)"
   # a lock file that cannot be opened (here a directory; a read-only or full disk alike): read without it
   rm -f "$(sdir)/lock"; mkdir "$(sdir)/lock"; startall
   c_has "$SR" "- S2 written during the start" "[l] a lock that cannot be opened: the strings are still injected"
@@ -508,13 +521,13 @@ fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600); fcntl.flock(fd, fcntl.
   np; seed "S1@$C20;text=no id"
   t0=$(date +%s); startall compact ""; t1=$(date +%s)
   c_has "$SR" "- S1 no id" "[l] no session id: string 2 renders its own string"
-  c_eq "$([ $((t1 - t0)) -le 3 ] && echo fast)" fast "[l] without waiting ($((t1 - t0)) s)"
+  c_eq "$([ $((t1 - t0)) -le "$fast" ] && echo fast)" fast "[l] without waiting ($((t1 - t0)) s)"
   c_eq "$(ls "$(sdir)/starts" 2>/dev/null | wc -l | tr -d ' ')" 0 "[l] and string 1 hands nothing over"
   # `starts` is not a directory: nothing can be handed over, so nothing is waited for; a log that refuses: one warning line
   np; seed "S1@$C20;text=starts is a file"; : > "$(sdir)/starts"
   t0=$(date +%s); startall; t1=$(date +%s)
   c_has "$SR" "- S1 starts is a file" "[l] starts is a file: string 2 renders its own string"
-  c_eq "$([ $((t1 - t0)) -le 3 ] && echo fast)" fast "[l] without waiting ($((t1 - t0)) s)"
+  c_eq "$([ $((t1 - t0)) -le "$fast" ] && echo fast)" fast "[l] without waiting ($((t1 - t0)) s)"
   printf 'garbage\n' >> "$(sdir)/hot.jsonl"; startall
   c_has "$SR" "brain: strings 2 to 14 were not injected" "[l] no hand-over and a log that refuses: string 2 says so"
   c_eq "$(printf '%s' "$SR" | grep -c 'were not injected')" 1 "[l] once, not once per string"
@@ -583,12 +596,14 @@ f.write(json.dumps({"t": s.now_iso(), "kind": "session-start", "session": "older
 # --- [n] -----------------------------------------------------------------------------------------------------------------------
 case_live() {
   local L="$SRC_ROOT/tests/live" F="$SRC_ROOT/tests/live/fixtures/brain-transcript"
+  # sedto <name> <sed args…> — the edited copy in a file: Windows' Python cannot open the /proc path a <(…) gives it
+  sedto() { local o="$TMP/live-$1.jsonl"; shift; sed "$@" > "$o" && printf '%s' "$o"; }
   bash -n "$L/hook-cap.sh"; RC=$?; c_rc 0 "[n] hook-cap.sh parses"
   OUT=$(bash "$L/hook-cap.sh" 9500 ten 2>&1); RC=$?; c_rc 2 "[n] hook-cap.sh refuses a length that is not a number (rc 2)"
   c_has "$OUT" "usage" "[n] and prints its usage"
   OUT=$(python3 "$L/brain-transcript-check.py" "$F/two-halves.jsonl" --episodes "$F/two-halves.episodes.jsonl" --ids D1,X1,S1,F1 --source startup); RC=$?
   c_rc 0 "[n] the two halves: clean (rc 0)"; c_has "$OUT" "string 1 inline 349 · string 2 inline 409 · ids found · clean" "[n] each inline, its size, the ids found"
-  OUT=$(python3 "$L/brain-transcript-check.py" "$F/two-halves.jsonl" --episodes <(sed 's/"injected_strings":\[[0-9]*\]/"injected_strings":[409,180]/' "$F/two-halves.episodes.jsonl") --ids X1 --source startup); RC=$?
+  OUT=$(python3 "$L/brain-transcript-check.py" "$F/two-halves.jsonl" --episodes "$(sedto e1 's/"injected_strings":\[[0-9]*\]/"injected_strings":[409,180]/' "$F/two-halves.episodes.jsonl")" --ids X1 --source startup); RC=$?
   c_rc 1 "[n] a string the episode line counted but the transcript lacks: rc 1"; c_has "$OUT" "string 3 absent" "[n] named"
   OUT=$(python3 "$L/brain-transcript-check.py" "$F/right-over-cap.jsonl" --episodes "$F/right-over-cap.episodes.jsonl" --ids N1 --source startup); RC=$?
   c_rc 1 "[n] a right-brain string over the cap: rc 1"; c_has "$OUT" "string 2 persisted" "[n] it says persisted"
@@ -598,16 +613,16 @@ case_live() {
   c_rc 1 "[n] an id not in the strings: rc 1"; c_has "$OUT" "ids not found: S9" "[n] named"
   OUT=$(python3 "$L/brain-transcript-check.py" "$F/no-sessions.jsonl" --episodes "$F/no-sessions.episodes.jsonl" --ids X1,F1 --source startup); RC=$?
   c_rc 0 "[n] string 2 absent, its episode line 0: clean (rc 0)"; c_has "$OUT" "string 2 absent" "[n] it says absent"
-  OUT=$(python3 "$L/brain-transcript-check.py" "$F/no-sessions.jsonl" --episodes <(sed 's/"injected_sessions":0/"injected_sessions":180/' "$F/no-sessions.episodes.jsonl") --ids X1 --source startup); RC=$?
+  OUT=$(python3 "$L/brain-transcript-check.py" "$F/no-sessions.jsonl" --episodes "$(sedto e2 's/"injected_sessions":0/"injected_sessions":180/' "$F/no-sessions.episodes.jsonl")" --ids X1 --source startup); RC=$?
   c_rc 1 "[n] string 2 absent while the episode line says it injected 180: rc 1"
   OUT=$(python3 "$L/brain-transcript-check.py" "$F/plan-over-cap.jsonl" --episodes "$F/plan-over-cap.episodes.jsonl" --ids N1 --source startup); RC=$?
   c_rc 1 "[n] string 3 over the cap: rc 1"; c_has "$OUT" "string 3 persisted" "[n] it says persisted"
   OUT=$(python3 "$L/brain-transcript-check.py" "$F/three-strings.jsonl" --episodes "$F/three-strings.episodes.jsonl" --ids X1); RC=$?
   c_rc 2 "[n] no SessionStart:compact in a startup transcript: rc 2"
-  OUT=$(python3 "$L/brain-transcript-check.py" "$F/no-sessions.jsonl" --episodes <(sed -e 's/"injected_plan":[0-9]*,//' -e 's/"injected_sessions":[0-9]*,//' -e 's/"format":3/"format":2/' "$F/no-sessions.episodes.jsonl") --ids X1 --source startup); RC=$?
+  OUT=$(python3 "$L/brain-transcript-check.py" "$F/no-sessions.jsonl" --episodes "$(sedto e3 -e 's/"injected_plan":[0-9]*,//' -e 's/"injected_sessions":[0-9]*,//' -e 's/"format":3/"format":2/' "$F/no-sessions.episodes.jsonl")" --ids X1 --source startup); RC=$?
   c_rc 0 "[n] an older brain's episode line (no field for strings 2 and 3): clean (rc 0)"
   c_has "$OUT" "string 2 none (an older brain, format 2)" "[n] and says why string 2 is not there"
-  OUT=$(python3 "$L/brain-transcript-check.py" "$F/no-sessions.jsonl" --episodes <(sed -e 's/"injected_sessions":[0-9]*,//' "$F/no-sessions.episodes.jsonl") --ids X1 --source startup); RC=$?
+  OUT=$(python3 "$L/brain-transcript-check.py" "$F/no-sessions.jsonl" --episodes "$(sedto e4 -e 's/"injected_sessions":[0-9]*,//' "$F/no-sessions.episodes.jsonl")" --ids X1 --source startup); RC=$?
   c_rc 1 "[n] a format-3 line without the field is not taken for an older brain (rc 1)"
 }
 

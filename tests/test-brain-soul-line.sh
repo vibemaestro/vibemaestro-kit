@@ -50,9 +50,9 @@ install() {  # install <source dir> — the example extension copied into the pl
 import json, os, sys
 cfg, pid, root = sys.argv[1:4]
 p = os.path.join(cfg, "plugins", "installed_plugins.json"); r = json.load(open(p))
-r["plugins"][pid] = [{"scope": "user", "installPath": root}]; json.dump(r, open(p, "w"))
+r["plugins"][pid] = [{"scope": "user", "installPath": root}]; json.dump(r, open(p, "w", newline=""))
 p = os.path.join(cfg, "settings.json"); s = json.load(open(p))
-s["enabledPlugins"][pid] = True; json.dump(s, open(p, "w"))
+s["enabledPlugins"][pid] = True; json.dump(s, open(p, "w", newline=""))
 PY
 }
 variant() {  # variant <python> — a copy of the example whose answer(q) runs first (None falls back to the example's own); VAR
@@ -82,6 +82,7 @@ card() { bpy 'import time, brain_ledger as L
 st, ops, led = L.snapshot(s.state_dir()); print("\n".join(s.card_lines(st, time.time(), ops=ops, d=s.state_dir())))'; }
 
 case_promote() {
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[p] a promote writes its SOUL line through kit:soul-line" "a focus is retired, and a SOUL line written, through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl)"; return; fi
   local real
   np; owner_ok add --kind decision --text "one owner, one signature" --owner-quote q --where chat
   real=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$P/SOUL.md")
@@ -122,6 +123,7 @@ case_refused() {
 }
 
 case_ext() {
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[e] an extension's verb writes and removes a SOUL line" "a focus is retired, and a SOUL line written, through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl)"; return; fi
   np; install "$FIX"
   br op add --kind trap --text "check the base before a rebase"
   owner_g shelve T1 "CLAUDE.md [S14]" --soul-line "[S14] check the base before a rebase"; c_rc 0 "[e] the extension's archive: written"
@@ -152,11 +154,14 @@ case_bind() {
        "[b] nothing written: D1 live, both files unchanged"
   printf '{"soul_file": "SOUL.md"}\n' > "$P/.vibemaestro/brain.json"
   gown promote D1 "CLAUDE.md [S14]" --soul-line "[S14] x"
-  mv "$P/SOUL.md" "$P/REAL.md"; ln -s OTHER.md "$P/SOUL.md"
-  br owner promote D1 "CLAUDE.md [S14]" --soul-line "[S14] x"; c_rc 6 "[b] a link swapped in after the dialog: refused (6)"
-  rm "$P/SOUL.md"; mv "$P/REAL.md" "$P/SOUL.md"
+  if can_link; then
+    mv "$P/SOUL.md" "$P/REAL.md"; ln -s OTHER.md "$P/SOUL.md"
+    br owner promote D1 "CLAUDE.md [S14]" --soul-line "[S14] x"; c_rc 6 "[b] a link swapped in after the dialog: refused (6)"
+    rm "$P/SOUL.md"; mv "$P/REAL.md" "$P/SOUL.md"
+  else c_skip "[b] a link swapped in after the dialog" "ln -s copies here instead of linking"; fi
   owner_ok promote D1 "CLAUDE.md [S14]" --soul-line "[S14] x"; c_rc 6 "[b] a record that binds no line: refused (6)"
   c_eq "$(cat "$P/OTHER.md")|$(cat "$P/SOUL.md")" "other|$s" "[b] …no file written"
+  if can_link; then
   mkdir -p "$P/a" "$P/b"; printf 'a\n' > "$P/a/S.md"; printf 'b\n' > "$P/b/S.md"; ln -s a "$P/cur"
   printf '{"soul_file": "cur/S.md"}\n' > "$P/.vibemaestro/brain.json"
   c_eq "$(bpy 'import os, brain
@@ -165,6 +170,7 @@ one = s.soul_line_for(ns)["file"]
 os.replace("cur", "old"); os.symlink("b", "cur")
 two = s.soul_line_for(ns)["file"]
 print(os.path.basename(os.path.dirname(one)), os.path.basename(os.path.dirname(two)))')" "a a" "[b] one call resolves the file once: the link moved, the call still names a/S.md"
+  else c_skip "[b] one call resolves the file once" "ln -s copies here instead of linking"; fi
   printf '{"soul_file": "SO\\u200bUL.md"}\n' > "$P/.vibemaestro/brain.json"
   owner_ok promote D1 "CLAUDE.md [S14]" --soul-line "[S14] x"; c_rc 1 "[b] a soul_file with an invisible character: refused"
   c_has "$OUT" "cannot show plainly" "[b] …says why"

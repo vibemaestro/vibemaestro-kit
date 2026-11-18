@@ -77,7 +77,7 @@ brain-owner         %brain %sdlc-for-brain %sdlc-hooks tests/fixtures/brain.sh t
 brain-soul-line     %brain %sdlc-for-brain %sdlc tests/fixtures/brain.sh tests/fixtures/capped.sh tests/fixtures/brain-extension/* tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
 brain-stale         %brain %sdlc-for-brain tests/fixtures/brain.sh tests/fixtures/capped.sh
 brain-work          %brain %sdlc-for-brain tests/fixtures/brain.sh tests/fixtures/capped.sh tests/live/hook-cap.sh tests/live/brain-transcript-check.py tests/live/fixtures/brain-transcript/*
-brain-store         %brain %sdlc-for-brain tests/fixtures/brain.sh tests/fixtures/capped.sh
+brain-store         %brain %sdlc-for-brain tests/fixtures/brain.sh tests/fixtures/capped.sh tests/fixtures/brain_sd.py
 coordinator-bootstrap %sdlc plugins/vibemaestro-sdlc/skills/bootstrap/SKILL.md plugins/vibemaestro-sdlc/skills/coordinator-bootstrap/SKILL.md %hub plugins/vibemaestro-brain/.claude-plugin/plugin.json tests/fixtures/ports.sh tests/fixtures/dependent-plugin/* tests/fixtures/baton-owner.sh tests/fixtures/capped.sh
 baton-soul-line     %sdlc %hub %brain tests/fixtures/ports.sh tests/fixtures/baton-owner.sh tests/fixtures/capped.sh
 baton-permissions-upgrade %sdlc %hub tests/fixtures/ports.sh tests/fixtures/baton-owner.sh tests/fixtures/capped.sh
@@ -149,7 +149,7 @@ hook                %sdlc-lib %kb-cli %brain-hooks plugins/vibemaestro-sdlc/bato
 hook-latency        %sdlc-lib %sdlc %brain plugins/vibemaestro-sdlc/scripts/pre-bash.py tests/fixtures/ports.sh tests/hook-latency.py plugins/vibemaestro-sdlc/rules/pr-no-leaks.instructions.md tests/fixtures/capped.sh tests/fixtures/dependent-plugin/.claude-plugin/plugin.json
 # developer mode byte for byte as recorded on main, and the Python finder of every hook command (KIT-870)
 devmode-same        %sdlc %brain tests/fixtures/brain.sh tests/fixtures/devmode-same/expected.txt %hub tests/fixtures/capped.sh
-pyrun               %sdlc-lib %sdlc-hooks %brain-hooks %hub
+pyrun               %sdlc-lib %sdlc-hooks %brain-hooks %hub plugins/vibemaestro-brain/bin/brain
 everyday-mode       %sdlc-lib %sdlc-hooks %brain-hooks %hub plugins/vibemaestro-sdlc/templates/everyday-core.md
 quiet-save          %sdlc-lib %sdlc-hooks %brain-hooks %hub %sdlc
 windows-everyday    %sdlc-lib %sdlc-hooks %brain-hooks %hub %sdlc tests/fixtures/capped.sh

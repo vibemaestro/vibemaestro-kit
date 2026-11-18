@@ -115,6 +115,40 @@ eq "$(denies "$(w1252 cp1252 "$SH" "$SDLC" PreToolUse Bash "$XOA_VI")")" 1 "[P7]
 eq "$(cd "$VR" && PYTHONIOENCODING=cp1252 "$PY" "$SDLC/scripts/sdlc_config.py" get tokens.spec.placeholder | tr -d '\r'; echo "rc=${PIPESTATUS[0]}")" "$(printf '<ĐIỀN\nrc=0')" \
    "[P7] a script Claude runs directly (sdlc_config.py) prints Vietnamese under the system code page (main: a traceback)"
 
+echo "== [P8] the brain command on Windows: Python found as the hooks find it; none found is said, and fails =="
+# bin/brain is a command, not a hook: a write that silently did nothing would be taken as done
+BB="$BRAIN/bin/brain"
+bb() {  # bb <PATH> <args…> — the brain command as a Windows session runs it; stdout and stderr, then rc=<n>
+  local p=$1; shift
+  (cd "$APP" && env PATH="$p" OS=Windows_NT XDG_STATE_HOME="$TMP/st-bb" /bin/sh "$BB" "$@" 2>&1; echo "rc=$?")
+}
+BBNO=$(bindir bbno dirname)
+eq "$(PATH="$BBNO" bash -c 'command -v python3 python py' | grep -c .)" 0 "instrument: the case PATH has no python3, python or py"
+eq "$(bb "$BBNO" doctor --path)" "$(printf 'brain: no Python 3.8 or newer was found on this machine, so nothing was run\nrc=127')" \
+   "[P8] no Python: one line on stderr and rc 127, not a silent 0 (main: python3 not found)"
+eq "$([ -e "$TMP/st-bb" ] && echo written || echo none)" none "[P8] …and nothing is written"
+BBW=$(bindir bbw dirname git $([ "${OS:-}" != Windows_NT ] || echo cygpath))   # Git Bash has cygpath: the script path in Windows' form
+PYX=$(python3 -c 'import sys; print(sys.executable)'); [ "${OS:-}" = Windows_NT ] && PYX=$(cygpath -u "$PYX")   # the runner's python3 may be a stand-in that runs `python`
+fake "$BBW" python3 'exit 9009'
+fake "$BBW" python "exec \"$PYX\" \"\$@\""
+has "$(bb "$BBW" --help)" "usage: brain" "[P8] behind a dead python3 shortcut, python runs the command (main: the shortcut's rc 49)"
+eq "$(bb "$BBW" --help | tail -n 1)" "rc=0" "[P8] …with its exit code"
+# what it hands Windows' own Python: the script path in Windows' form (cygpath -w), every argument as typed and the switch that
+# keeps Git Bash from rewriting them (stand-ins that print what they get: a cygpath, and a python that passes the version probe)
+BBA=$(bindir bba dirname)
+fake "$BBA" cygpath 'printf "%s(%s)\n" "$1" "$2"'
+fake "$BBA" python '[ "$1" = -c ] && exit 0; printf "%s\n" "$@"; printf "excl=%s set=%s was=%s\n" "${MSYS2_ARG_CONV_EXCL-}" "${BRAIN_ARG_CONV_SET-}" "${BRAIN_ARG_CONV_WAS-none}"'
+eq "$(bb "$BBA" op add --text "/clear wipes the context")" "$(printf -- '-w(%s)\nop\nadd\n--text\n/clear wipes the context\nexcl=* set=1 was=none\nrc=0' "$BRAIN/bin/../scripts/brain.py")" \
+   "[P8] Windows' Python gets the script path in its own form (cygpath -w) and each argument as typed (main: a /c/… path it cannot open)"
+eq "$(MSYS2_ARG_CONV_EXCL='--prefix=' bb "$BBA" --help | tail -n 2 | head -n 1)" "excl=* set=1 was=--prefix=" "[P8] the person's own MSYS2_ARG_CONV_EXCL is kept, to be put back"
+eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import brain
+for e in ({"BRAIN_ARG_CONV_SET": "1", "MSYS2_ARG_CONV_EXCL": "*"},
+          {"BRAIN_ARG_CONV_SET": "1", "MSYS2_ARG_CONV_EXCL": "*", "BRAIN_ARG_CONV_WAS": "--prefix="},
+          {"MSYS2_ARG_CONV_EXCL": "--own="}):
+    brain.arg_conv_back(e)
+    print(sorted(e.items()))' "$BRAIN/scripts" | tr -d '\r')" "$(printf "[]\n[('MSYS2_ARG_CONV_EXCL', '--prefix=')]\n[('MSYS2_ARG_CONV_EXCL', '--own=')]")" \
+   "[P8] brain.py puts back what bin/brain replaced: none, or the person's value; a value bin/brain did not set is left alone"
+
 if [ "${OS:-}" = Windows_NT ]; then
   echo "  SKIP [P3]-[P6]: they swap Python and Git for stand-ins on a PATH of links, read the execute bit and compare argv paths, none of"
   echo "       which Windows has; tests/test-windows-everyday.sh [H] runs the finder there with no Python and with only py"

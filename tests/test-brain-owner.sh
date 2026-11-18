@@ -219,7 +219,7 @@ case_answerer() {
   owner_ok add --kind decision --text "second" --owner-quote q --where w; c_rc 6 "[P] one in the managed settings: rc 6"
   rm "$MANAGED/managed-settings.json"
   mkdir -p "$TMP/pl$NP/hooks"; printf '{"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"true"}]}]}}' > "$TMP/pl$NP/hooks/hooks.json"
-  printf '{"version":2,"plugins":{"answer@m":[{"scope":"user","installPath":"%s"}]}}' "$TMP/pl$NP" > "$CLAUDE_CONFIG_DIR/plugins.json"
+  printf '{"version":2,"plugins":{"answer@m":[{"scope":"user","installPath":"%s"}]}}' "$(wpath "$TMP/pl$NP")" > "$CLAUDE_CONFIG_DIR/plugins.json"
   mkdir -p "$CLAUDE_CONFIG_DIR/plugins"; mv "$CLAUDE_CONFIG_DIR/plugins.json" "$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"
   printf '{"enabledPlugins":{"answer@m":true}}' > "$CLAUDE_CONFIG_DIR/settings.json"
   owner_ok add --kind decision --text "third" --owner-quote q --where w; c_rc 6 "[P] an enabled plugin with a PermissionRequest hook: rc 6"
@@ -231,7 +231,16 @@ case_answerer() {
   c_rc 0 "[P] instrument: through a bash parent, the call writes"
   rec default sA "${a[@]}"
   OUT=$(CLAUDE_CODE_SESSION_ID=sA bash -c '"$1" owner "${@:2}"; exit $?' --permission-prompt-tool "$BROOT/bin/brain" "${a[@]}" 2>&1); RC=$?
-  c_rc 6 "[P] an ancestor started with --permission-prompt-tool: rc 6"
+  c_rc 6 "[P] an ancestor started with --permission-prompt-tool: rc 6"; c_has "$OUT" "a process started with --permission-prompt-tool" "[P] … for that reason"
+  # Claude Code's shapes: a program that is not Git Bash's, started with the flag, runs Git Bash's bash; a hook is its one
+  # command (bash execs it), the Bash tool's call one of several (bash forks, and the fork execs: the break the walk crosses)
+  local sh_; for sh_ in '"$0" owner "$@"' '"$0" owner "$@"; exit $?'; do
+    rec default sA "${a[@]}"
+    OUT=$(CLAUDE_CODE_SESSION_ID=sA python3 -c 'import subprocess, sys; sys.exit(subprocess.call(sys.argv[2:]))' \
+          --permission-prompt-tool "$(command -v bash)" -c "$sh_" "$BROOT/bin/brain" "${a[@]}" 2>&1); RC=$?
+    c_rc 6 "[P] a Python parent started with --permission-prompt-tool, its bash running the call ($sh_): rc 6"
+    c_has "$OUT" "a process started with --permission-prompt-tool" "[P] … for that reason ($sh_)"
+  done
   rec default sA "${a[@]}"
   OUT=$(CLAUDE_CODE_SESSION_ID=sA bash -c '"$1" owner "${@:2}"; exit $?' "note: --permission-prompt-tool in a prompt" "$BROOT/bin/brain" "${a[@]}" 2>&1); RC=$?
   c_rc 0 "[P] the flag inside a longer argument is not an answerer"
@@ -269,12 +278,14 @@ case_answerer2() {
   mkdir -p "$TMP/par$NP"; printf '%s' "$PRH" > "$TMP/par$NP/s.json"; rec default sA "${a[@]}"
   OUT=$(cd "$TMP/par$NP" && CLAUDE_CODE_SESSION_ID=sA bash -c '(cd "$2" && "$3" owner "${@:4}"); exit $?' --settings s.json "$P" "$BROOT/bin/brain" "${a[@]}" 2>&1); RC=$?
   c_rc 6 "[R] a parent with --settings <relative path from its own cwd>: rc 6"
+  [ "${OS:-}" != Windows_NT ] || c_has "$OUT" "names a relative path, which the brain cannot find on Windows" "[R] Windows: refused because the parent's working directory is not read there"
   mkdir -p "$TMP/pd$NP/hooks"; printf '%s' "$PRH" > "$TMP/pd$NP/hooks/hooks.json"; rec default sA "${a[@]}"
-  OUT=$(CLAUDE_CODE_SESSION_ID=sA bash -c '"$2" owner "${@:3}"; exit $?' --plugin-dir "$TMP/pd$NP" "$BROOT/bin/brain" "${a[@]}" 2>&1); RC=$?
+  # (on Windows the parent is a Git Bash bash, which takes the path as typed: Claude Code there is given C:/…)
+  OUT=$(CLAUDE_CODE_SESSION_ID=sA bash -c '"$2" owner "${@:3}"; exit $?' --plugin-dir "$(wpath "$TMP/pd$NP")" "$BROOT/bin/brain" "${a[@]}" 2>&1); RC=$?
   c_rc 6 "[R] a parent with --plugin-dir <a plugin with the hook>: rc 6"
   export CLAUDE_CONFIG_DIR="$cfg"; mkdir -p "$TMP/mp$NP/.claude-plugin" "$TMP/mp$NP/cfg" "$cfg/plugins"
   printf '%s' "$PRH" > "$TMP/mp$NP/cfg/h.json"; printf '{"name":"mp","hooks":"./cfg/h.json"}' > "$TMP/mp$NP/.claude-plugin/$MAN"
-  printf '{"version":2,"plugins":{"mp@m":[{"scope":"user","installPath":"%s"}]}}' "$TMP/mp$NP" > "$cfg/plugins/installed_plugins.json"
+  printf '{"version":2,"plugins":{"mp@m":[{"scope":"user","installPath":"%s"}]}}' "$(wpath "$TMP/mp$NP")" > "$cfg/plugins/installed_plugins.json"
   printf '{"enabledPlugins":{"mp@m":true}}' > "$cfg/settings.json"
   rec default sA "${a[@]}"; br owner "${a[@]}"; c_rc 6 "[R] an enabled plugin whose manifest names a hooks file: rc 6"
   unset CLAUDE_CONFIG_DIR
@@ -305,8 +316,195 @@ scratch = os.environ["FIXTURE_SCRATCH"]
 print([c for _, c, _, _ in a if c and not c.startswith(scratch)], [g for _, _, g, _ in a if g],
       [h for *_, h in a if h and not h.startswith(scratch) and h != "/nonexistent"], len(a) > 0)
 PY
-  R=$(bash -c 'python3 "$0" "$1"; exit $?' "$TMP/anc.py" "$BROOT/scripts")   # a bash between: the case's own ancestor
+  R=$(bash -c 'python3 "$0" "$1"; exit $?' "$TMP/anc.py" "$BROOT/scripts" | tr -d '\r')   # a bash between: the case's own ancestor
   c_eq "$R" "[] [] [] True" "[Y] the ancestors a case sees: no cwd or HOME outside the scratch tree, no config dir (and at least one)"
+}
+
+case_win_walk() {  # the Windows walk of the parent processes, on fake process tables (every system) and on this one (Windows)
+  newp
+  R=$(bpy '
+F = 10 ** 9                                         # ids no running process has
+def info_of(times, bad=(), gone=()):
+    def info(pid):
+        if pid in bad:
+            raise PermissionError(13, "Access is denied")
+        if pid in gone:
+            raise ProcessLookupError(pid)
+        return times[pid], "cmd %d" % (pid - F)
+    return info
+def walk(start, table, info, stop=None, bridge=None):
+    try:
+        return [c for _, c in s.win_chain(start, table, info, stop, bridge)]
+    except s.Unread as e:
+        return "Unread: %s" % e
+t = {F + i: F + i + 1 for i in range(4)}            # F, its parent F+1, … F+4, which is not running
+times = {F + i: 100 - i for i in range(5)}
+younger = dict(times); younger[F + 2] = 200
+print(walk(F, t, info_of(times)))
+print(walk(F, t, info_of(times, bad={F + 2})))
+print(walk(F, t, info_of(times, bad={F})))
+print(walk(F, t, info_of(younger)))
+print(walk(F, t, info_of(times, gone={F + 2})))
+print(walk(F, {F: 4, 4: 0}, info_of({F: 1, 4: 0})))
+print(walk(F + 9, t, info_of(times)))
+print(walk(F, {F: F + 1, F + 1: F}, info_of({F: 1, F + 1: 1})))
+print(walk(F, t, info_of(times), stop=F + 2))
+def git_bash(parents, bad=()):                      # what Git Bash keeps: the parent of each of its processes
+    def bridge(pid, below):
+        if pid in bad:
+            raise OSError("ps.exe exited 1")
+        return parents.get(pid)
+    return bridge
+g = {F: F + 1, F + 1: F + 9, F + 2: F + 8, F + 4: F + 5}   # F+1 and F+2 each exec-ed by a Git Bash process now gone
+gt = {F: 10, F + 1: 9, F + 2: 5, F + 4: 3}
+print(walk(F, g, info_of(gt), bridge=git_bash({F + 1: F + 2, F + 2: F + 4})))
+print(walk(F, g, info_of(gt), bridge=git_bash({F + 1: F + 2}, bad={F + 2})))
+print(walk(F, g, info_of(gt), bridge=git_bash({F + 1: F + 7})))
+print(walk(F, g, info_of({F: 10, F + 1: 9, F + 2: 50, F + 4: 3}), bridge=git_bash({F + 1: F + 2})))
+print(walk(F, g, info_of(gt), bridge=git_bash({})))
+print(walk(F, g, info_of(gt), stop=F + 2, bridge=git_bash({F + 1: F + 2})))')
+  c_eq "$R" "['cmd 1', 'cmd 2', 'cmd 3']
+Unread: process 1000000002: Access is denied
+Unread: process 1000000000: Access is denied
+['cmd 1']
+['cmd 1']
+[]
+Unread: process 1000000009 is not in the process table
+Unread: the chain of parent processes does not end within 64
+['cmd 1']
+['cmd 1', 'cmd 2', 'cmd 4']
+Unread: the Git Bash parent of process 1000000002: ps.exe exited 1
+Unread: process 1000000007, Git Bash's parent of 1000000001, is not in the process table
+Unread: process 1000000002, Git Bash's parent of 1000000001, started after it
+['cmd 1']
+['cmd 1']" "[WW] the walk: to the first parent not running; a running one it cannot read refuses; an id a younger process took, or one that ended, ends it; no end refuses; past a Git Bash exec, the parent Git Bash keeps, and one it cannot read refuses"
+  R=$(bpy 'try:
+    print(s.msys_table("      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n"
+                       "     1234       1    1234      10764  cons0     197609 12:00:01 /usr/bin/bash\n"
+                       "I    2345    1234    2345      11220  cons0     197609 12:00:02 /usr/bin/sh\n"))
+    s.msys_table("ps: unknown option\n")
+except OSError as e:
+    print("OSError:", e)')
+  R2=$(bpy 'for rows in ("     1234       1    1234      10764\n", "     1234       1    1234      10764  cons0  1 12:00:01 /usr/bin/bash\n     4321    1234    4321      10999  cons0  1 12:00:03 <defunct>\n"):
+    try:
+        print(s.msys_table("      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n" + rows))
+    except OSError as e:
+        print("OSError:", e)')
+  c_eq "$R2" "OSError: ps printed a row this check cannot read
+({10764: (1234, 1)}, {1234: 10764})" "[WW] a row cut short (ps cuts at COLUMNS) refuses; a process ended and not reaped is left out"
+  c_eq "$R" "({10764: (1234, 1), 11220: (2345, 1234)}, {1234: 10764, 2345: 11220})
+OSError: ps printed no process table" "[WW] Git Bash's ps read: each Windows pid with its Git Bash pid and parent; anything else is no table"
+  mkdir -p "$TMP/gb$NP"; : > "$TMP/gb$NP/msys-2.0.dll"
+  R=$(bpy 'import os, subprocess
+gb = "'"$(wpath "$TMP/gb$NP")"'"
+# bash -c (200, Git Bash pid 20) forked a child that exec-ed sh (400, Git Bash pid 30) and ended; sh exec-ed Windows Python (500)
+# and waits on it, so ps shows pid 30 at Windows pid 500; the Git Bash parent of bash -c is the suite shell (10, Windows pid 100).
+table = {500: 400, 400: 300, 200: 100, 100: 50}
+times = {100: 0, 200: 1, 400: 3, 500: 4, 600: 3, 700: 5, 900: 2}
+cmds = {100: "bash suite.sh", 200: "bash -c X --permission-prompt-tool brain", 400: "sh bin/brain owner", 500: "python brain.py",
+        600: "sh shim", 700: "python brain.py", 900: "bash -c Y --permission-prompt-tool brain"}
+def info(pid):
+    return times[pid], cmds[pid]
+s._win_image = lambda pid: os.path.join(gb, "x.exe")
+def ps(rows, rc=0):
+    def run(argv, **kw):                            # the ps of Git Bash: lines cut at COLUMNS; without -a, this account only
+        cols = int((kw.get("env") or os.environ).get("COLUMNS") or 65536)
+        lines = ["      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND"] + rows.splitlines()
+        lines = [l for l in lines if "-a" in argv[1:] or " 999999 " not in l]
+        return subprocess.CompletedProcess(argv, rc, "".join(l[:cols] + "\n" for l in lines).encode(), b"")
+    s.subprocess.run = run
+def walk(start=500, stop=100):
+    try:
+        return [c for _, c in s.win_chain(start, table, info, stop, bridge=s._msys_bridge())]
+    except s.Unread as e:
+        return "Unread: %s" % e
+os.environ["COLUMNS"] = "36"
+row = lambda pid, ppid, w, name, uid=197609: "%9d %7d %7d %10d  cons0 %10d 12:00:01 %s\n" % (pid, ppid, pid, w, uid, name)
+ps(row(10, 1, 100, "/usr/bin/bash", 999999) + row(20, 10, 200, "/usr/bin/bash") + row(30, 20, 500, "/usr/bin/sh"))
+print(walk())                                       # the suite shell as another account: read through ps -a
+ps("", rc=1)
+print(walk())
+ps(row(30, 20, 500, "/usr/bin/sh"))
+print(walk())
+ps(row(10, 1, 100, "/usr/bin/bash"))
+print(walk())
+# bash -c (900) started by a program that is not Git Bash (Git Bash parent 1) exec-ed sh, which exec-ed sh (that one ended),
+# which exec-ed Windows Python (700): Git Bash shows pid 40 at 700, with parent 1; the waiting bash -c above is not found
+table.update({700: 600, 600: 800, 900: 50})
+ps(row(40, 1, 700, "/usr/bin/sh"))
+print(walk(700))')
+  c_eq "$R" "['sh bin/brain owner', 'bash -c X --permission-prompt-tool brain']
+Unread: the Git Bash parent of process 400: ps.exe exited 1
+Unread: the Git Bash parent of process 400: its Git Bash parent 20 is not in Git Bash's process table
+Unread: the Git Bash parent of process 400: Git Bash's process table does not hold it
+Unread: the Git Bash parent of process 600: Git Bash keeps no running parent of it, and the program above the break is not known" \
+    "[WW] past a sh that exec-ed Windows' Python (ps shows its pid at the Python's), the walk reaches the bash -c above; no ps, or a parent missing from it, refuses"
+  R=$(bpy '
+import struct
+head, base = struct.calcsize("HHP"), 5000
+us = lambda n, most, at, data: struct.pack("HHP", n, most, base + at) + data
+txt = "claude --permission-prompt-tool x".encode("utf-16-le")
+good = us(len(txt), len(txt) + 2, head, txt)
+print(s.us_text(good, base))
+print(all(s.us_text(good[:k], base) is None for k in range(len(good))))
+print(s.us_text(us(3, 4, head, b"ab\0\0"), base), s.us_text(us(len(txt), len(txt), head - 2, txt), base),
+      s.us_text(us(len(txt), 2, head, txt), base), s.us_text(us(2, 2, len(good), txt), base))')
+  c_eq "$R" "claude --permission-prompt-tool x
+True
+None None None None" "[WW] a command line is read from its own bytes only: every cut, an odd length, a pointer outside them or past its maximum is refused"
+  R=$(bpy 'q, b = chr(34), chr(92)                    # a quote and a backslash, kept out of the shell quoting
+c = (q + "C:" + b + "Program Files" + b + "c.exe" + q + " " + q + "--settings={" + b + q + "a" + b + q + ":1}" + q + " a" + b * 2
+     + "b " + q + "x" + q * 2 + "y" + q + " c" + b * 3 + q + "d --plugin-dir=" + q + "C:" + b + "p d" + q)
+print("|".join(s.split_cmdline(c)))')
+  c_eq "$R" 'C:\Program Files\c.exe|--settings={"a":1}|a\\b|x"y|c\"d|--plugin-dir=C:\p d' \
+    "[WW] a command line split as the C runtime splits it: a quoted program, escaped quotes, backslashes, \"\" inside quotes"
+  mkdir -p "$TMP/profile$NP/.claude"; printf '%s' "$PRH" > "$TMP/profile$NP/.claude/$SET"   # a USERPROFILE holding the hook
+  R=$(bpy '
+import json, os
+s.WINDOWS = True
+me, F = os.getpid(), 10 ** 9
+def parent(cmd, bad=False):
+    s._win_table = lambda: {me: F, F: F + 1}
+    def info(pid):
+        if bad and pid == F:
+            raise PermissionError(13, "Access is denied")
+        return (2, "python brain.py") if pid == me else (1, cmd)
+    s._win_info = info
+    s._msys_bridge = lambda: lambda pid, below: None    # no Git Bash process in this table
+    return "; ".join(s.answerers()) or "none"
+hook = json.dumps({"hooks": {"PermissionRequest": [{"hooks": [{"type": "command", "command": "true"}]}]}})
+print(parent("claude --permission-prompt-tool mcp__x__ok"))
+print(parent("claude", bad=True).replace(str(F), "F"))
+print(parent("claude --settings s.json"))
+print(parent("claude \"--settings=%s\"" % hook.replace("\"", "\\\"")))
+print(parent("bash -c \"brain owner add --text --permission-prompt-tool\""))
+q, b = chr(34), chr(92)
+print(parent(q + "C:" + b + "cl" + b + "claude.exe" + q + "--permission-prompt-tool stdio -p go"))
+print(parent("claude.exe " + q * 3 + " --permission-prompt-tool x" + q + " -p go"))
+print(parent("claude --settings " + b + "s.json"))
+os.environ["USERPROFILE"] = "'"$(wpath "$TMP/profile$NP")"'"
+print(parent("claude"))')
+  c_eq "$R" "a process started with --permission-prompt-tool
+a parent process whose command line the brain cannot read (process F: Access is denied)
+a --settings of a parent process names a relative path, which the brain cannot find on Windows
+a PermissionRequest hook in --settings of a parent process
+none
+a process started with --permission-prompt-tool
+a process started with --permission-prompt-tool
+a --settings of a parent process names a relative path, which the brain cannot find on Windows
+a PermissionRequest hook in the user settings" "[WW] on Windows' process table: the flag (also as an older Bun splits it), a parent it cannot read, a relative or drive-less --settings, a hook in one and one in USERPROFILE's ~/.claude each refuse the owner's write; a flag inside a bash -c text does not"
+  R=$(bpy 'q, b = chr(34), chr(92)
+for c in (q + "C:" + b + "cl" + b + "claude.exe" + q + "--permission-prompt-tool stdio", "claude.exe " + q * 3 + " --settings C:/t/s.json" + q + " -p go"):
+    print("|".join(s.split_cmdline(c)), "/", "|".join(s.split_cmdline_w(c)))')
+  c_eq "$R" 'C:\cl\claude.exe--permission-prompt-tool|stdio / C:\cl\claude.exe|--permission-prompt-tool|stdio
+claude.exe|" --settings C:/t/s.json|-p|go / claude.exe|"|--settings|C:/t/s.json -p go' \
+    "[WW] the two rules a Windows program may split by differ after a quoted program and in a run of three quotes; the walk reads both"
+  if [ "${OS:-}" = Windows_NT ]; then
+    R=$(bpy 'import os
+ch = s.win_chain(os.getpid(), s._win_table(), s._win_info, bridge=s._msys_bridge())
+print(len(ch) > 1, any(os.path.basename(s.split_cmdline(c)[0]).lower() in ("bash", "bash.exe") for _, c in ch), len(s.win_ancestors()) > 0)')
+    c_eq "$R" "True True True" "[WW] this process's own chain on this runner: read to its end, a bash in it, and the suite's part of it seen"
+  else c_skip "[WW] this process's own chain, by Windows' own calls" "a Windows runner checks it"; fi
 }
 
 case_homes() {
@@ -334,7 +532,7 @@ case_rawname() {
   newp
   local cfg="$TMP/cfg$NP"; mkdir -p "$cfg/plugins" "$TMP/pe$NP/hooks"
   printf '%s' "$PRH" > "$TMP/pe$NP/hooks/hooks.json"
-  printf '%s' '{"version":2,"plugins":{"ans\u001b[2Jwer@m":[{"scope":"user","installPath":"'"$TMP/pe$NP"'"}]}}' > "$cfg/plugins/installed_plugins.json"
+  printf '%s' '{"version":2,"plugins":{"ans\u001b[2Jwer@m":[{"scope":"user","installPath":"'"$(wpath "$TMP/pe$NP")"'"}]}}' > "$cfg/plugins/installed_plugins.json"
   printf '%s' '{"enabledPlugins":{"ans\u001b[2Jwer@m":true}}' > "$cfg/$SET"
   OUT=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_CODE_SESSION_ID=sA "$BROOT/bin/brain" doctor 2>&1); RC=$?
   c_has "$OUT" 'enabled plugin ans\u001b[2Jwer' "[Y] doctor names the plugin, its escape shown escaped"
@@ -358,9 +556,10 @@ case_parenthome() {
   newp
   local a=(add --kind decision --text "parent home" --owner-quote q --where w)
   mkdir -p "$TMP/ph$NP/.claude"; printf '%s' "$PRH" > "$TMP/ph$NP/.claude/$SET"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[Z3] the parent's HOME holds the hook" "the brain reads no parent's environment on Windows (README, On Windows)"; else
   rec default sA "${a[@]}"
   OUT=$(env HOME="$TMP/ph$NP" CLAUDE_CODE_SESSION_ID=sA bash -c 'HOME="$1/other" "$0" owner "${@:2}"; exit $?' "$BROOT/bin/brain" "$TMP" "${a[@]}" 2>&1); RC=$?
-  c_rc 6 "[Z3] the parent's HOME holds the hook, the call runs under another HOME: rc 6"
+  c_rc 6 "[Z3] the parent's HOME holds the hook, the call runs under another HOME: rc 6"; fi
   rm "$TMP/ph$NP/.claude/$SET"; rec default sA "${a[@]}"
   OUT=$(env HOME="$TMP/ph$NP" CLAUDE_CODE_SESSION_ID=sA bash -c 'HOME="$1/other" "$0" owner "${@:2}"; exit $?' "$BROOT/bin/brain" "$TMP" "${a[@]}" 2>&1); RC=$?
   c_rc 0 "[Z3] instrument: without the hook, the same call writes"
@@ -370,7 +569,7 @@ case_nlname() {
   newp
   local cfg="$TMP/cfg$NP"; mkdir -p "$cfg/plugins" "$TMP/pn$NP/hooks"
   printf '%s' "$PRH" > "$TMP/pn$NP/hooks/hooks.json"
-  printf '%s' '{"version":2,"plugins":{"x\nok       forged line\ny@m":[{"scope":"user","installPath":"'"$TMP/pn$NP"'"}]}}' > "$cfg/plugins/installed_plugins.json"
+  printf '%s' '{"version":2,"plugins":{"x\nok       forged line\ny@m":[{"scope":"user","installPath":"'"$(wpath "$TMP/pn$NP")"'"}]}}' > "$cfg/plugins/installed_plugins.json"
   printf '%s' '{"enabledPlugins":{"x\nok       forged line\ny@m":true}}' > "$cfg/$SET"
   OUT=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_CODE_SESSION_ID=sA "$BROOT/bin/brain" doctor 2>&1); RC=$?
   c_has "$OUT" 'enabled plugin x\u000aok' "[Z3] instrument: doctor names the plugin, its newline escaped"
@@ -379,10 +578,11 @@ case_nlname() {
 
 # --- the guard-owner hook --------------------------------------------------------------------------------------------------------
 
-cmdline() { python3 -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' "$@"; }
+cmdline() { wargs "$@"; MSYS_NO_PATHCONV=1 python3 -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' ${WARGS[@]+"${WARGS[@]}"}; }
 u() { python3 -c 'import sys; sys.stdout.buffer.write(chr(int(sys.argv[1], 16)).encode("utf-8"))' "$1"; }   # u <hex>: one character, whatever the locale (CI's printf left \\u02ba as text)
-ownin() {  # ownin <mode> <command> [key=value…] — guard-owner's input for session SID in project P (an empty mode is left out)
-  python3 -c 'import json, sys
+ownin() {  # ownin <mode> <command> [key=value…] — guard-owner's input for session SID in project P (an empty mode is left out);
+  # the command goes over as written (Git Bash would rewrite one that starts with /), the cwd as Claude Code sends it there
+  MSYS_NO_PATHCONV=1 python3 -c 'import json, sys
 d = {"session_id": sys.argv[1], "cwd": sys.argv[2], "hook_event_name": "PreToolUse", "tool_name": "Bash",
      "tool_input": {"command": sys.argv[4]}}
 if sys.argv[3]:
@@ -390,7 +590,7 @@ if sys.argv[3]:
 for kv in sys.argv[5:]:
     k, _, v = kv.partition("=")
     d[k] = v
-print(json.dumps(d, ensure_ascii=False))' "$SID" "$P" "$@"
+print(json.dumps(d, ensure_ascii=False))' "$SID" "$(wpath "$P")" "$@"
 }
 gown() { local m=$1; shift; hk guard-owner "$(ownin "$m" "$(cmdline brain owner "$@")")"; }   # gown <mode> <args after owner…>
 gcmd() { hk guard-owner "$(ownin "$@")"; }                                                       # gcmd <mode> <command> [k=v…]
@@ -398,8 +598,12 @@ recmode() { bpy 'import glob, json, os
 print(" ".join(sorted(json.load(open(p))["mode"] for p in glob.glob(os.path.join(s.state_dir(), "asked", "*.json")))) or "none")'; }
 recid() { bpy 'import glob, os
 print(" ".join(sorted(os.path.basename(p) for p in glob.glob(os.path.join(s.state_dir(), "asked", "*.json")))) or "none")'; }
-fakever() {  # fakever <version line> — a fake Claude Code binary printing it; prints its path
-  local f; f=$(mktemp "$TMP/claude-$NP.XXXXXX"); printf '#!/bin/sh\necho "%s"\n' "$1" > "$f"; chmod +x "$f"; echo "$f"
+fakever() {  # fakever <version line> — a fake Claude Code binary printing it; prints its path. Windows' Python starts no
+  # #!/bin/sh script there, and Windows runs a .cmd file through cmd.exe
+  local f; f=$(mktemp "$TMP/claude-$NP.XXXXXX")
+  if [ "${OS:-}" = Windows_NT ]; then mv "$f" "$f.cmd"; f="$f.cmd"; printf '@echo %s\r\n' "$1" > "$f"
+  else printf '#!/bin/sh\necho "%s"\n' "$1" > "$f"; chmod +x "$f"; fi
+  echo "$f"
 }
 LINE1='Pin owner decision D1 (a lasting direction, never done), from "prompt 10-18 09:11": "Owner merges every PR that touches clusters/"'
 
@@ -588,13 +792,40 @@ case_hook_next() {
   gcmd default "ls"; c_eq "$([ -e "$pd/stale" ] && echo kept || echo swept)" swept "[Q] a crashed session's marker older than 20 minutes is swept"
   : > "$pd/future"; touch -d '@4000000000' "$pd/future"
   gcmd default "ls"; c_eq "$([ -e "$pd/future" ] && echo kept || echo swept)" swept "[Q] a marker dated far ahead is swept too (round 3)"
-  gown default "${ADD[@]}"; mkdir -p "$pd/stale-dir"; touch -d '@1000000000' "$pd/stale-dir"; ln -s "$TMP/nowhere" "$pd/dangling"
+  gown default "${ADD[@]}"; mkdir -p "$pd/stale-dir"; touch -d '@1000000000' "$pd/stale-dir"
+  if can_link; then ln -s "$TMP/nowhere" "$pd/dangling"; else c_skip "[Q] a dangling link in pending/" "ln -s copies here instead of linking"; fi
   gcmd default "ls -la"; c_eq "$(recmode)" none "[Q] a stale directory and a dangling link in pending/ do not stop the void (round 3)"
   rm -rf "$pd/stale-dir" "$pd/dangling"
   R=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import brain_hook as h, brain_store as s
 print(h.SWEEP_AGE >= 2 * s.RECORD_MAX_AGE)' "$BROOT/scripts"); c_eq "$R" True "[Q] the sweep age is at least twice a record's life (round 3)"
-  chmod 500 "$pd"; gown default "${ADD[@]}"; chmod 700 "$pd"
-  c_eq "$(recmode)" none "[Q] a marker that cannot be written leaves no record either: the marker comes first (round 3)"
+  if [ "${OS:-}" = Windows_NT ]; then
+    c_skip "[Q] a marker that cannot be written leaves no record" "Windows lets a read-only folder take new files"
+  else
+    chmod 500 "$pd"; gown default "${ADD[@]}"; chmod 700 "$pd"
+    c_eq "$(recmode)" none "[Q] a marker that cannot be written leaves no record either: the marker comes first (round 3)"
+  fi
+  # Windows: a pending/ that is not this account's alone (made in an elevated session) refuses the call there, naming the folder,
+  # rather than a hook error the session never sees and a CLI that reports no dialog (Windows' own check stood in by one that
+  # refuses pending/)
+  R=$(ownin default "$(cmdline brain owner "${ADD[@]}")" | CLAUDE_CODE_SESSION_ID="$SID" python3 -c 'import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import brain_store as s, brain_hook as h
+_root = s.state_root(); s.state_root = lambda: _root   # the Linux spelling: only the order of the checks is under test
+s.WINDOWS = True
+s._ancestors = lambda: []                           # the walk of Windows'"'"' processes is case_win_walk'"'"'s
+def private(p):
+    if os.path.basename(p) == "pending":
+        raise s.Refused(1, "the brain directory pending is refused: S-1-5-32-544 owns it")
+s.private = private
+h.guard_owner(json.load(sys.stdin))' "$BROOT/scripts" 2>&1 | python3 -c 'import json, sys
+t = sys.stdin.read()
+try:
+    o = json.loads(t)["hookSpecificOutput"]
+    print(o["permissionDecision"], "pending is refused" in o["permissionDecisionReason"])
+except (ValueError, KeyError):
+    print("no decision:", t.strip().splitlines()[-1:] or "")')
+  c_eq "$R" "deny True" "[Q] a pending/ that is not the account's alone: the owner call is denied, naming the folder"
+  c_eq "$(recmode)" none "[Q] …and no record is written"
 }
 
 case_hook_answerer() {
@@ -733,7 +964,7 @@ print(len(miss), miss[:5])')" "0 []" "[A1] every code point the old blocklist re
 }
 
 bfile() {  # bfile <path> <python expression of the list> — a batch file, as the session writes one (JSON, UTF-8)
-  python3 -c 'import json, sys; open(sys.argv[1], "w", encoding="utf-8").write(json.dumps(eval(sys.argv[2]), ensure_ascii=False))' "$1" "$2"
+  python3 -c 'import json, sys; open(sys.argv[1], "w", encoding="utf-8", newline="").write(json.dumps(eval(sys.argv[2]), ensure_ascii=False))' "$1" "$2"
 }
 bitems() {  # bitems — the ids and texts of the live owner items, in id order
   bpy 'st = s.load(s.state_dir())[1]
@@ -790,6 +1021,7 @@ case_batch() {  # several owner items through one dialog, bound to the file's by
   # all or none: a write that fails after the first item writes nothing, and the record stays usable
   local big; big=$(python3 -c 'print("x" * 290)')
   bfile w.json "[[\"add\", \"--kind\", \"decision\", \"--text\", \"$big %d\" % i, \"--owner-quote\", \"q\" * 590, \"--where\", \"w\"] for i in range(3)]"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[B] round 1: a log that can take one item, not three" "Git Bash cannot limit a file's size (ulimit -f)"; else
   gown default batch w.json; c_eq "$(hfield permissionDecision)" ask "[B] round 1: instrument: asked for three big items"
   local size lim; size=$(wc -c < "$(sdir)/hot.jsonl"); lim=$(( (size + 1500) / 1024 + 1 ))
   OUT=$( (trap '' XFSZ; ulimit -f "$lim"; CLAUDE_CODE_SESSION_ID="$SID" "$BROOT/bin/brain" owner batch w.json) 2>&1 ); RC=$?
@@ -800,7 +1032,7 @@ case_batch() {  # several owner items through one dialog, bound to the file's by
   br doctor; c_hasnt "$OUT" "problem" "[B] round 1: the chain and caches hold"
   br owner batch w.json; c_rc 0 "[B] round 1: the same record writes them once there is room"
   bfile u.json '[["unpin", "D6"], ["unpin", "D7"], ["unpin", "D8"]]'; gown default batch u.json; br owner batch u.json
-  c_eq "$(bitems)" "D3=a pin in between D4=third pin D5=second pin, reworded" "[B] round 1: instrument: the three unpinned again"
+  c_eq "$(bitems)" "D3=a pin in between D4=third pin D5=second pin, reworded" "[B] round 1: instrument: the three unpinned again"; fi
   # sizes and refusals before any dialog
   bfile one.json '[["unpin", "D3"]]'
   gown default batch one.json; c_eq "$(hfield permissionDecision)" deny "[B] a 1-item file: deny (a single item has its own form)"
@@ -825,12 +1057,15 @@ case_batch() {  # several owner items through one dialog, bound to the file's by
   printf '[["unpin", "D3"], ["unpin", "D4"]' > broken.json
   gown default batch broken.json; c_eq "$(hfield permissionDecision)" deny "[B] a file that is not JSON: deny"
   c_has "$(hfield permissionDecisionReason)" "not JSON" "[B] saying why"
-  bfile real.json '[["unpin", "D3"], ["unpin", "D4"]]'; ln -s real.json link.json
-  gown default batch link.json; c_eq "$(hfield permissionDecision)" deny "[B] FILE a symlink: deny"
-  c_has "$(hfield permissionDecisionReason)" "is a symlink" "[B] saying why"
-  gown default batch real.json; c_eq "$(hfield permissionDecision)" ask "[B] instrument: the regular file is asked"
-  mv real.json target.json; ln -s target.json real.json
-  br owner batch real.json; c_rc 1 "[B] FILE turned into a symlink after the dialog: refused"
+  bfile real.json '[["unpin", "D3"], ["unpin", "D4"]]'
+  if can_link; then
+    ln -s real.json link.json
+    gown default batch link.json; c_eq "$(hfield permissionDecision)" deny "[B] FILE a symlink: deny"
+    c_has "$(hfield permissionDecisionReason)" "is a symlink" "[B] saying why"
+    gown default batch real.json; c_eq "$(hfield permissionDecision)" ask "[B] instrument: the regular file is asked"
+    mv real.json target.json; ln -s target.json real.json
+    br owner batch real.json; c_rc 1 "[B] FILE turned into a symlink after the dialog: refused"
+  else c_skip "[B] FILE a symlink, before and after the dialog" "ln -s copies here instead of linking"; fi
   c_eq "$(bitems)" "D3=a pin in between D4=third pin D5=second pin, reworded" "[B] nothing written by the refusals"
   # the session's project A while the shell is in B, the file in B
   local A=$P B="$TMP/other$NP" dB
@@ -848,6 +1083,7 @@ case_batch() {  # several owner items through one dialog, bound to the file's by
 
 case_batch_fresh() {  # round 2: a fresh brain's claim goes in the batch's one write, so a refused batch leaves the log empty
   newp
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[B] round 2: a write that fails at once" "Git Bash cannot limit a file's size (ulimit -f)"; return; fi
   local big; big=$(python3 -c 'print("x" * 290)')
   bfile w.json "[[\"add\", \"--kind\", \"decision\", \"--text\", \"$big %d\" % i, \"--owner-quote\", \"q\" * 590, \"--where\", \"w\"] for i in range(3)]"
   gown default batch w.json; c_eq "$(hfield permissionDecision)" ask "[B] round 2: instrument: asked on a brain with no log yet"
@@ -858,7 +1094,7 @@ case_batch_fresh() {  # round 2: a fresh brain's claim goes in the batch's one w
   c_eq "$(head -n 1 "$(sdir)/hot.jsonl" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["op"])')" claim "[B] round 2: the claim line opens the log"
 }
 
-for c in case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
+for c in case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_win_walk case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
   run_case $c; done
 cd "$TMP" || exit 1
 

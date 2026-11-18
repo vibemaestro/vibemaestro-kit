@@ -25,21 +25,29 @@ Standard library only.
 import bisect
 import contextlib
 import datetime
-import fcntl
 import glob
 import hashlib
 import json
 import os
-import pwd
 import re
 import secrets
 import shlex
+import signal
 import stat
 import string
+import struct
 import subprocess
 import sys
 import time
 import unicodedata
+
+WINDOWS = os.name == "nt"
+if WINDOWS:                                         # no fcntl, no pwd: msvcrt locks, the account comes from the process token
+    import ctypes
+    import msvcrt
+else:
+    import fcntl
+    import pwd
 
 KINDS = {"goal": "G", "decision": "D", "window": "W", "focus": "P", "request": "R", "now": "N", "next": "X", "trap": "T",
          "session": "S", "queue": "Q", "fact": "F"}
@@ -137,7 +145,12 @@ SOUL_CODE = re.compile(r"S(?:[0-9]{2}|[1-9][0-9]{2})")  # a SOUL rule's code (`[
                                                     # digits, or three with no leading zero, so each code has one spelling
 RULE_LETTERS = ("D", "T", "F")                      # the items the ledger counts held and broke for, with the SOUL codes
 SESSION_SOURCE = {"type": "coordinator"}            # the log's word, since its first format, for an item `brain op` wrote
-MANAGED_SETTINGS = ("/etc/claude-code/managed-settings.json", "/Library/Application Support/ClaudeCode/managed-settings.json")
+# Claude Code's managed settings file (code.claude.com/docs/en/managed-settings); on Windows its path and the legacy one it no
+# longer reads, read here too: one more place to look only makes the answerer check stricter
+POSIX_MANAGED = ("/etc/claude-code/managed-settings.json", "/Library/Application Support/ClaudeCode/managed-settings.json")
+WINDOWS_MANAGED = (r"C:\Program Files\ClaudeCode\managed-settings.json", r"C:\ProgramData\ClaudeCode\managed-settings.json")
+MANAGED_SETTINGS = WINDOWS_MANAGED if WINDOWS else POSIX_MANAGED
+O_BINARY = getattr(os, "O_BINARY", 0)               # Windows opens a file in text mode without it: CRLF written, Ctrl-Z ends a read
 
 
 class Refused(Exception):
@@ -149,13 +162,582 @@ class Refused(Exception):
         self.msg = msg
 
 
+# --- Windows: the account, its access rules, the lock and process trees (ctypes, msvcrt) --------------------------------------
+
+_WIN, _MINE = {}, []
+SID_TRUSTED = ("S-1-5-18", "S-1-5-32-544", "S-1-3-4", "S-1-3-0")   # SYSTEM, Administrators, OWNER RIGHTS, CREATOR OWNER
+SYNCHRONIZE = 0x00100000                            # waiting on an object: the one right another account may hold
+
+
+def _win():
+    """kernel32, advapi32 and userenv with the signatures used here, loaded once."""
+    if not _WIN:
+        from ctypes import wintypes as w
+        k, a, u = (ctypes.WinDLL(n, use_last_error=True) for n in ("kernel32", "advapi32", "userenv"))
+        nt = ctypes.WinDLL("ntdll")
+        ref = ctypes.POINTER
+
+        class PE(ctypes.Structure):                 # PROCESSENTRY32W
+            _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD), ("th32ProcessID", w.DWORD),
+                        ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", w.DWORD), ("cntThreads", w.DWORD),
+                        ("th32ParentProcessID", w.DWORD), ("pcPriClassBase", w.LONG), ("dwFlags", w.DWORD),
+                        ("szExeFile", w.WCHAR * 260)]
+        for f, res, args in ((k.GetCurrentProcess, w.HANDLE, []), (k.CloseHandle, w.BOOL, [w.HANDLE]),
+                             (k.CreateToolhelp32Snapshot, w.HANDLE, [w.DWORD, w.DWORD]),
+                             (k.Process32FirstW, w.BOOL, [w.HANDLE, ref(PE)]), (k.Process32NextW, w.BOOL, [w.HANDLE, ref(PE)]),
+                             (k.GetProcessTimes, w.BOOL, [w.HANDLE] + [ref(w.FILETIME)] * 4),
+                             (k.GetExitCodeProcess, w.BOOL, [w.HANDLE, ref(w.DWORD)]),
+                             (k.QueryFullProcessImageNameW, w.BOOL, [w.HANDLE, w.DWORD, w.LPWSTR, ref(w.DWORD)]),
+                             (nt.NtQueryInformationProcess, w.LONG, [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.ULONG,
+                                                                     ref(w.ULONG)]),
+                             (k.CreateJobObjectW, w.HANDLE, [ctypes.c_void_p, w.LPCWSTR]),
+                             (k.OpenProcess, w.HANDLE, [w.DWORD, w.BOOL, w.DWORD]),
+                             (k.AssignProcessToJobObject, w.BOOL, [w.HANDLE, w.HANDLE]),
+                             (k.TerminateJobObject, w.BOOL, [w.HANDLE, w.UINT]),
+                             (a.OpenProcessToken, w.BOOL, [w.HANDLE, w.DWORD, ref(w.HANDLE)]),
+                             (a.GetTokenInformation, w.BOOL, [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ref(w.DWORD)]),
+                             (a.GetFileSecurityW, w.BOOL, [w.LPCWSTR, w.DWORD, ctypes.c_void_p, w.DWORD, ref(w.DWORD)]),
+                             (u.GetUserProfileDirectoryW, w.BOOL, [w.HANDLE, w.LPWSTR, ref(w.DWORD)])):
+            f.restype, f.argtypes = res, args
+        _WIN.update(k=k, a=a, u=u, nt=nt, w=w, PE=PE)
+    return _WIN
+
+
+def _winerr():
+    """The OSError of the Windows call that just failed."""
+    return ctypes.WinError(ctypes.get_last_error())
+
+
+@contextlib.contextmanager
+def _token():
+    """This process's access token, opened for reading (TOKEN_QUERY)."""
+    W = _win()
+    h = W["w"].HANDLE()
+    if not W["a"].OpenProcessToken(W["k"].GetCurrentProcess(), 0x0008, ctypes.byref(h)):
+        raise _winerr()
+    try:
+        yield h
+    finally:
+        W["k"].CloseHandle(h)
+
+
+def _sized(call):
+    """The buffer a Windows call fills once it has said its size: call(buffer, size, byref(size needed)), nonzero on success."""
+    n = _win()["w"].DWORD(0)
+    call(None, 0, ctypes.byref(n))
+    if not n.value:
+        raise _winerr()
+    buf = ctypes.create_string_buffer(n.value)
+    if not call(buf, n, ctypes.byref(n)):
+        raise _winerr()
+    return buf
+
+
+def my_sids():
+    """(the user, the default owner) of this process's token as SID text: who this account is, and whom it makes the owner of
+    what it creates (the Administrators group for an elevated administrator)."""
+    if not _MINE:
+        mine = []
+        with _token() as h:
+            for cls in (1, 4):                      # TokenUser, TokenOwner: a pointer to a SID that lies in the same buffer
+                buf = _sized(lambda b, n, r: _win()["a"].GetTokenInformation(h, cls, b, n, r))
+                at = (ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0] or 0) - ctypes.addressof(buf)
+                sid = sid_text(buf.raw, at)
+                if sid is None:
+                    raise OSError("the process token's SID cannot be read")
+                mine.append(sid)
+        _MINE[:] = mine
+    return tuple(_MINE)
+
+
+def win_profile():
+    """The profile folder Windows keeps for this process's account (GetUserProfileDirectoryW), whatever USERPROFILE says."""
+    W = _win()
+    with _token() as h:
+        n = W["w"].DWORD(0)
+        W["u"].GetUserProfileDirectoryW(h, None, ctypes.byref(n))
+        buf = ctypes.create_unicode_buffer(n.value or 1)
+        if not n.value or not W["u"].GetUserProfileDirectoryW(h, buf, ctypes.byref(n)):
+            raise _winerr()
+    return buf.value
+
+
+def sid_text(b, at):
+    """The SID at offset `at` of the bytes `b` as text ("S-1-5-18"), None when it does not fit in `b` or is not a SID."""
+    if not 0 <= at <= len(b) - 8 or b[at] != 1 or b[at + 1] > 15 or at + 8 + 4 * b[at + 1] > len(b):
+        return None
+    return "S-1-%d" % int.from_bytes(b[at + 2:at + 8], "big") + "".join(
+        "-%d" % x for x in struct.unpack_from("<%dI" % b[at + 1], b, at + 8))
+
+
+def sd_problem(sd, mine, owner_only=False):
+    """Why the self-relative security descriptor `sd` (bytes: owner and DACL) does not keep what it guards to this account,
+    None when it does: its owner is one of `mine`, and each allow rule names `mine`, SYSTEM, Administrators, OWNER RIGHTS or
+    CREATOR OWNER, or grants nothing but SYNCHRONIZE. A rule only children inherit counts too: the brain's files would get it.
+    No DACL (everyone may do anything), a rule of a kind other than allow or deny, and an offset or a length that does not fit
+    are problems: nothing is answered from part of a descriptor. With owner_only, only the owner is read."""
+    cut = "its security descriptor does not add up"
+    if len(sd) < 20:
+        return cut
+    rev, _, ctrl, o_owner, _, _, o_dacl = struct.unpack_from("<BBHIIII", sd, 0)
+    if rev != 1 or not ctrl & 0x8000:               # SE_SELF_RELATIVE: offsets into these bytes, not pointers
+        return cut
+    owner = sid_text(sd, o_owner) if o_owner else None
+    if owner is None:
+        return cut
+    if owner not in mine:
+        return "it is not this account's (its owner is %s)" % owner
+    if owner_only:
+        return None
+    if not ctrl & 0x0004 or not o_dacl:             # SE_DACL_PRESENT
+        return "it has no access list, so everyone can use it"
+    if o_dacl > len(sd) - 8:
+        return cut
+    arev, _, size, count, _ = struct.unpack_from("<BBHHH", sd, o_dacl)
+    at, end = o_dacl + 8, o_dacl + size
+    if arev not in (2, 4) or size < 8 or end > len(sd):
+        return cut
+    for _ in range(count):
+        if at > end - 4:
+            return cut
+        kind, _, asize = struct.unpack_from("<BBH", sd, at)
+        if asize < 4 or at + asize > end:
+            return cut
+        if kind not in (1, 6, 10, 12):              # a deny rule only takes access away
+            if kind != 0:                           # ACCESS_ALLOWED_ACE is the one allow rule read here
+                return "it has an access rule of a kind this check does not read (type %d)" % kind
+            sid = sid_text(sd[at + 8:at + asize], 0) if asize >= 16 else None
+            if sid is None:
+                return cut
+            mask = struct.unpack_from("<I", sd, at + 4)[0]
+            if mask & ~SYNCHRONIZE and sid not in mine and sid not in SID_TRUSTED:
+                return "%s can use it (access 0x%08x)" % (sid, mask)
+        at += asize
+    return None
+
+
+def access_problem(path, owner_only=False):
+    """sd_problem of what `path` names (Windows; GetFileSecurityW follows a link, as a write would), None when it is this
+    account's alone; OSError when Windows cannot say."""
+    W = _win()
+    buf = _sized(lambda b, n, r: W["a"].GetFileSecurityW(path, 0x1 | 0x4, b, n, r))   # OWNER and DACL_SECURITY_INFORMATION
+    return sd_problem(buf.raw, my_sids(), owner_only)
+
+
+def private(p):
+    """Refused(1) unless the directory `p` is this account's and nobody else's: on Windows, which has no mode to put back."""
+    try:
+        why = access_problem(p)
+    except OSError as e:
+        why = "its owner and access list cannot be read (%s)" % e
+    if why:
+        raise Refused(1, "the brain's directory %s is refused: %s; the brain README's Windows section says how to make it "
+                         "private again" % (printable(p), why))
+
+
+
+def open_to_others(path, st_):
+    """Group or others can use `path` (its stat `st_`); on Windows, where the mode says nothing, its owner and access list."""
+    if not WINDOWS:
+        return st_.st_mode & 0o077
+    try:
+        return access_problem(path) is not None
+    except OSError:
+        return True
+
+
+HELD = PermissionError if WINDOWS else OSError      # what taking a lock another open file holds, without waiting, raises
+
+
+def lock_nb(fd):
+    """The lock on the open file `fd`, taken at once, or HELD. POSIX: flock. Windows: msvcrt's lock on byte 0 (past the end of
+    the empty lock file), which Windows drops when the file closes or its process ends."""
+    if WINDOWS:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def unlock(fd):
+    """Give the lock on `fd` back before it closes: Windows may drop a closed file's lock late (POSIX: the close does it)."""
+    if WINDOWS:
+        with contextlib.suppress(OSError):
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
+def spawn(argv, **kw):
+    """subprocess.Popen(argv) in a group of its own that kill_tree ends whole: a new session on POSIX, a job object on Windows
+    (what the child starts joins the job and cannot leave it). A child the job cannot take is killed and OSError raised."""
+    if not WINDOWS:
+        return subprocess.Popen(argv, start_new_session=True, **kw)
+    p = subprocess.Popen(argv, **kw)
+    # shortcut: the child runs a few microseconds before it joins the job, so a process it starts in that time is not in the
+    # job, and a read of a pipe that process holds then waits for it (a hang where POSIX only loses output); start the child
+    # suspended and resume it after the join if a hang ever escapes this way
+    try:
+        p.job = _job(p.pid)
+    except OSError:
+        p.kill()
+        p.wait()
+        raise
+    return p
+
+
+def _job(pid):
+    """A new job object holding the process `pid` (a child not reaped yet, so the pid is still that child's)."""
+    k = _win()["k"]
+    job = k.CreateJobObjectW(None, None)
+    if not job:
+        raise _winerr()
+    h = k.OpenProcess(0x0101, False, pid)          # PROCESS_TERMINATE | PROCESS_SET_QUOTA, what joining a job needs
+    err = None if h and k.AssignProcessToJobObject(job, h) else _winerr()
+    if h:
+        k.CloseHandle(h)
+    if err:
+        k.CloseHandle(job)
+        raise err
+    return job
+
+
+def kill_tree(p):
+    """End what still runs in the group spawn() gave `p`, its children included; OSError when that fails."""
+    if not WINDOWS:
+        os.killpg(p.pid, signal.SIGKILL)
+        return
+    job, p.job = getattr(p, "job", None), None
+    if job:
+        k = _win()["k"]
+        err = None if k.TerminateJobObject(job, 1) else _winerr()
+        k.CloseHandle(job)
+        if err:
+            raise err
+
+
+# The processes that started this one (Windows), read so that a parent able to answer the owner's dialog is seen: their
+# parent ids from a Toolhelp snapshot, each one's command line from NtQueryInformationProcess, class 60
+# (ProcessCommandLineInformation, Windows 8.1 and later), with PROCESS_QUERY_LIMITED_INFORMATION: no read of another process's
+# memory. Their working directory and environment live in that memory, so they are not read (README, On Windows).
+
+class Unread(Exception):
+    """A running parent process whose command line cannot be read: an owner write is refused, never allowed for want of a look."""
+
+
+def win_chain(pid, table, info, stop=None, bridge=None):
+    """[(pid, command line)] of the processes above `pid`, nearest first, from `table` ({pid: parent pid}, a snapshot) and
+    `info(pid)` ((creation time, command line); ProcessLookupError when it has ended, OSError when it cannot be read). A
+    parent that no longer runs (not in the table, or an id a younger process took: created after its child) ends the chain,
+    a dead process answers no prompt, unless `bridge(pid, below)` names the parent Git Bash keeps for `pid` (`below`: the
+    process walked just under it): a Git Bash program whose own parent is one ends its Windows process when it execs another,
+    which keeps its Git Bash parent. System ends it.
+    Unread when a running parent or what `bridge` reads cannot be read, when `pid` or a bridged parent is not in the table,
+    or when the chain does not end within 64. `stop`: a process the walk ends below (the suites' own shell)."""
+    if pid not in table:
+        raise Unread("process %d is not in the process table" % pid)
+    try:
+        t = info(pid)[0]
+    except OSError as e:
+        raise Unread("process %d: %s" % (pid, e.strerror or e))
+    out, below = [], None
+    for _ in range(64):
+        ppid = table[pid]
+        if ppid in (0, 4) or ppid == stop:
+            return out
+        got = None
+        if ppid in table:
+            try:
+                got = info(ppid)
+            except ProcessLookupError:
+                pass
+            except OSError as e:
+                raise Unread("process %d: %s" % (ppid, e.strerror or e))
+            if got and got[0] > t:
+                got = None
+        if got is None:
+            try:
+                ppid = bridge(pid, below) if bridge else None
+            except OSError as e:
+                raise Unread("the Git Bash parent of process %d: %s" % (pid, e.strerror or e))
+            if ppid is None or ppid == stop:
+                return out
+            if ppid not in table:
+                raise Unread("process %d, Git Bash's parent of %d, is not in the process table" % (ppid, pid))
+            try:
+                got = info(ppid)
+            except OSError as e:
+                raise Unread("process %d: %s" % (ppid, e.strerror or e))
+            if got[0] > t:
+                raise Unread("process %d, Git Bash's parent of %d, started after it" % (ppid, pid))
+        out.append((ppid, got[1]))
+        below, pid, t = pid, ppid, got[0]
+    raise Unread("the chain of parent processes does not end within 64")
+
+
+MSYS_ROW = re.compile(r"[ SIO] +([0-9]+) +([0-9]+) +[0-9]+ +([0-9]+) ")   # ps.cc's long form: status, PID PPID PGID WINPID
+
+
+def msys_table(text):
+    """({Windows pid: (Git Bash pid, its Git Bash parent)}, {Git Bash pid: Windows pid}) from the output of Git Bash's `ps`
+    (its long form: a status letter, then PID PPID PGID WINPID …; a Git Bash pid shows the Windows pid of its newest program);
+    OSError when it is not that output, or a row is not one. Rows end at a newline only, so a program's name cannot add one;
+    a process ended and not yet reaped (`<defunct>`, its Windows pid free for another) is left out."""
+    lines = text.split("\n")
+    if lines[0].split()[:4] != ["PID", "PPID", "PGID", "WINPID"]:
+        raise OSError("ps printed no process table")
+    byw, byc = {}, {}
+    for line in lines[1:]:
+        m = MSYS_ROW.match(line)
+        if not m:
+            if line.strip():
+                raise OSError("ps printed a row this check cannot read")
+            continue
+        if line.rstrip().endswith(" <defunct>"):
+            continue
+        pid, ppid, w = (int(g) for g in m.groups())
+        byw[w], byc[pid] = (pid, ppid), w
+    return byw, byc
+
+
+def _msys_bridge():
+    """bridge(pid, below) for win_chain: the Windows pid of the parent Git Bash (or Cygwin) keeps for `pid` when `pid`'s program
+    sits beside that runtime's DLL, read once from the runtime's own `ps -a` beside it. A Git Bash pid shows its newest
+    program, so `pid` waiting on the native program it exec-ed is found by that program, `below`. None for any other
+    program. OSError when the table cannot be read, when the process is not in it, when its Git Bash parent is 1 (an ended
+    parent, or a native program that started it, whose first program may still wait above the break), or when its parent
+    is not in the table."""
+    tables = {}
+
+    def bridge(pid, below):
+        d = os.path.dirname(_win_image(pid))
+        if not any(os.path.isfile(os.path.join(d, n)) for n in ("msys-2.0.dll", "cygwin1.dll")):
+            return None
+        if d not in tables:
+            try:
+                env = {k: v for k, v in os.environ.items() if k.upper() != "COLUMNS"}   # ps cuts each line to COLUMNS
+                r = subprocess.run([os.path.join(d, "ps.exe"), "-a"], capture_output=True, timeout=10,
+                                   stdin=subprocess.DEVNULL, env=env)
+            except subprocess.SubprocessError as e:
+                raise OSError(str(e))
+            if r.returncode != 0:
+                raise OSError("ps.exe exited %d" % r.returncode)
+            tables[d] = msys_table(r.stdout.decode("utf-8", "replace"))
+        byw, byc = tables[d]
+        mine = byw.get(pid) or byw.get(below)
+        if not mine:
+            raise OSError("Git Bash's process table does not hold it")
+        if mine[1] <= 1:
+            raise OSError("Git Bash keeps no running parent of it, and the program above the break is not known")
+        if mine[1] not in byc:
+            raise OSError("its Git Bash parent %d is not in Git Bash's process table" % mine[1])
+        return byc[mine[1]]
+    return bridge
+
+
+def us_text(b, base):
+    """The text of the UNICODE_STRING at the start of `b`, the bytes a call filled at address `base` (its Buffer points into
+    them); None when a length or the pointer does not fit in `b`. Nothing is read outside `b`."""
+    head = struct.calcsize("HHP")
+    if len(b) < head:
+        return None
+    n, most, ptr = struct.unpack_from("HHP", b, 0)
+    at = ptr - base
+    if n % 2 or n > most or not head <= at <= len(b) - n:
+        return None
+    try:
+        return b[at:at + n].decode("utf-16-le")
+    except UnicodeDecodeError:
+        return None
+
+
+def split_cmdline(c):
+    """The argv a Windows program's C runtime makes of the command line `c`: the first word ends at a space or tab outside
+    quotes, with no escapes; in the others 2n backslashes and a quote are n backslashes and a quote that opens or closes,
+    2n+1 and a quote are n backslashes and a literal quote, other backslashes are literal, and "" inside quotes is a quote."""
+    out, i, n = [], 0, len(c)
+    word, q = [], False
+    while i < n and (q or c[i] not in " \t"):
+        if c[i] == '"':
+            q = not q
+        else:
+            word.append(c[i])
+        i += 1
+    out.append("".join(word))
+    while True:
+        while i < n and c[i] in " \t":
+            i += 1
+        if i >= n:
+            return out
+        word, q = [], False
+        while i < n and (q or c[i] not in " \t"):
+            if c[i] == "\\":
+                j = i
+                while j < n and c[j] == "\\":
+                    j += 1
+                if j < n and c[j] == '"':
+                    word.append("\\" * ((j - i) // 2))
+                    if (j - i) % 2:
+                        word.append('"')
+                        j += 1
+                else:
+                    word.append("\\" * (j - i))
+                i = j
+            elif c[i] == '"':
+                if q and c[i + 1:i + 2] == '"':
+                    word.append('"')
+                    i += 2
+                else:
+                    q = not q
+                    i += 1
+            else:
+                word.append(c[i])
+                i += 1
+        out.append("".join(word))
+
+
+def split_cmdline_w(c):
+    """The argv CommandLineToArgvW makes of `c` (what a program built on it, an older Bun's among them, sees): the first word
+    ends at the next quote when it starts with one, and the next starts right there; backslashes as split_cmdline; in a run
+    of quotes, every third is a literal quote and the run leaves the quotes."""
+    out, i, n = [], 0, len(c)
+    word = []
+    if c[:1] == '"':
+        i = 1
+        while i < n and c[i] != '"':
+            word.append(c[i])
+            i += 1
+        i += 1
+    else:
+        while i < n and c[i] not in " \t":
+            word.append(c[i])
+            i += 1
+    out.append("".join(word))
+    while i < n and c[i] in " \t":
+        i += 1
+    if i >= n:
+        return out
+    word, q, b = [], 0, 0
+    while i < n:
+        ch = c[i]
+        if ch in " \t" and q == 0:
+            out.append("".join(word))
+            word, b = [], 0
+            while i < n and c[i] in " \t":
+                i += 1
+            if i >= n:
+                return out
+            continue
+        if ch == "\\":
+            word.append(ch)
+            b += 1
+            i += 1
+        elif ch == '"':
+            if b % 2 == 0:
+                del word[len(word) - b // 2:]
+                q += 1
+            else:
+                del word[len(word) - b // 2 - 1:]
+                word.append('"')
+            i, b = i + 1, 0
+            while i < n and c[i] == '"':
+                q += 1
+                if q == 3:
+                    word.append('"')
+                    q = 0
+                i += 1
+            if q == 2:
+                q = 0
+        else:
+            word.append(ch)
+            b = 0
+            i += 1
+    out.append("".join(word))
+    return out
+
+
+def _win_table():
+    """{pid: parent pid} of the processes running now (a Toolhelp snapshot); OSError when Windows will not give one."""
+    W = _win()
+    k = W["k"]
+    snap = k.CreateToolhelp32Snapshot(0x2, 0)       # TH32CS_SNAPPROCESS
+    if snap in (None, ctypes.c_void_p(-1).value):
+        raise _winerr()
+    try:
+        pe, table = W["PE"](), {}
+        pe.dwSize = ctypes.sizeof(pe)
+        more = k.Process32FirstW(snap, ctypes.byref(pe))
+        while more:
+            table[pe.th32ProcessID] = pe.th32ParentProcessID
+            more = k.Process32NextW(snap, ctypes.byref(pe))
+        if ctypes.get_last_error() != 18:           # ERROR_NO_MORE_FILES ends the list; anything else cut it short
+            raise _winerr()
+    finally:
+        k.CloseHandle(snap)
+    return table
+
+
+def _win_info(pid):
+    """(creation time, command line) of the running process `pid`; ProcessLookupError when it has ended, OSError when Windows
+    will not say."""
+    W = _win()
+    k, w = W["k"], W["w"]
+    h = k.OpenProcess(0x1000, False, pid)           # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        e = ctypes.get_last_error()
+        if e == 87:                                 # ERROR_INVALID_PARAMETER: no process has this id now
+            raise ProcessLookupError(pid)
+        raise ctypes.WinError(e)
+    try:
+        code, ft = w.DWORD(), [w.FILETIME() for _ in range(4)]
+        if not k.GetExitCodeProcess(h, ctypes.byref(code)) or not k.GetProcessTimes(h, *map(ctypes.byref, ft)):
+            raise _winerr()
+        if code.value != 259:                       # STILL_ACTIVE: a process that has ended can still be open
+            raise ProcessLookupError(pid)
+        size = w.ULONG(0)
+        W["nt"].NtQueryInformationProcess(h, 60, None, 0, ctypes.byref(size))
+        buf = ctypes.create_string_buffer(size.value or 1)
+        st = W["nt"].NtQueryInformationProcess(h, 60, buf, size.value, ctypes.byref(size))
+        text = us_text(buf.raw[:size.value], ctypes.addressof(buf)) if st >= 0 and size.value <= len(buf) else None
+        if text is None:
+            raise OSError("its command line cannot be read (NTSTATUS 0x%08x)" % (st & 0xFFFFFFFF))
+        return ft[0].dwHighDateTime << 32 | ft[0].dwLowDateTime, text
+    finally:
+        k.CloseHandle(h)
+
+
+def _win_image(pid):
+    """The full path of the program the running process `pid` runs; OSError when Windows will not say."""
+    W = _win()
+    k, w = W["k"], W["w"]
+    h = k.OpenProcess(0x1000, False, pid)           # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        raise _winerr()
+    try:
+        buf, n = ctypes.create_unicode_buffer(32768), w.DWORD(32768)
+        if not k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+            raise _winerr()
+        return buf.value
+    finally:
+        k.CloseHandle(h)
+
+
+def win_ancestors():
+    """[(argv, None, None, None)] of the processes above this one, in _ancestors' form (working directory and environment
+    unread), each command line split by both rules a Windows program may use; Unread when one cannot be read."""
+    try:
+        table = _win_table()
+    except OSError as e:
+        raise Unread("the process table cannot be read (%s)" % e)
+    chain = win_chain(os.getpid(), table, _win_info, bridge=_msys_bridge())
+    return [(argv, None, None, None) for _, c in chain for argv in (split_cmdline(c), split_cmdline_w(c))]
+
+
 # --- where state lives --------------------------------------------------------------------------------------------------------
 
 def account_home():
-    """The account's home from the password database: HOME can be emptied or pointed elsewhere, this cannot."""
+    """The account's home from the password database (on Windows the profile folder Windows keeps for it): HOME, and on Windows
+    USERPROFILE, can be emptied or pointed elsewhere, this cannot."""
     try:
-        return pwd.getpwuid(os.getuid()).pw_dir
-    except KeyError:
+        return win_profile() if WINDOWS else pwd.getpwuid(os.getuid()).pw_dir
+    except (KeyError, OSError):
         return ""
 
 
@@ -174,7 +756,13 @@ def config_dir(cwd=None):
 def state_root():
     x = os.environ.get("XDG_STATE_HOME", "")
     base = x if os.path.isabs(x) else os.path.join(home(), ".local", "state")
-    return os.path.join(base, "vibemaestro", "brain")
+    r = os.path.join(base, "vibemaestro", "brain")
+    return r.replace("/", "\\") if WINDOWS else r    # one spelling on Windows (Git Bash hands C:/…), every path below it the same
+
+
+def same_path(a, b):
+    """`a` and `b` name the same path as written (separators, case on Windows, `.` and `..` read lexically), not as strings."""
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 class Gone(Refused):
@@ -264,6 +852,8 @@ def read_session(sid):
     except (OSError, ValueError) as e:
         raise Refused(1, "this session's project record %s cannot be read (%s); the shell is in %s; nothing was read or "
                          "written" % (p, e.__class__.__name__, shell_dir()))
+    if WINDOWS:                                     # a record in a sessions/ another account may change is not trusted
+        private(os.path.dirname(p))
     project, state = (r.get("project"), r.get("state")) if isinstance(r, dict) else (None, None)
     if not (isinstance(project, str) and os.path.isabs(project) and isinstance(state, str)
             and os.path.dirname(os.path.normpath(state)) == os.path.normpath(state_root())
@@ -287,7 +877,7 @@ def session_note():
     if not b:
         return None
     here = shell_dir()
-    if not os.path.isabs(here) or state_dir(here) != b["state"]:
+    if not os.path.isabs(here) or not same_path(state_dir(here), b["state"]):
         return "this session's project is %s; the shell is in %s; using %s" % (b["project"], here, b["project"])
     return None
 
@@ -302,6 +892,8 @@ def record_session(sid, project, d):
             os.makedirs(os.path.dirname(q), exist_ok=True)
             with contextlib.suppress(FileExistsError):
                 os.mkdir(q, 0o700)
+        if WINDOWS and q != os.path.dirname(root):  # the root and sessions/ are the brain's own: checked before a record goes in
+            private(q)
     p = session_file(sid)
     try:
         old = read_session(sid)
@@ -317,7 +909,7 @@ def record_session(sid, project, d):
             q = os.path.join(sd, name)
             if now - os.lstat(q).st_mtime > SESSION_MAX_AGE:
                 os.unlink(q)
-    return old["project"] if old and old["state"] != d else None
+    return old["project"] if old and not same_path(old["state"], d) else None
 
 
 def drop_session(sid):
@@ -332,7 +924,7 @@ def drop_session(sid):
 # JSON file makes every item write refuse (rc 1; `brain claim` still works, so a session can take the brain back) while every
 # read uses that key's default. A left cap (G, D, W) off its default is flagged: the owner's decision.
 
-CONFIG_FILE = os.path.join(".vibemaestro", "brain.json")
+CONFIG_FILE = ".vibemaestro/brain.json"             # a repository path in messages: `/` on every system, as the docs write it
 CONFIG_SCHEMA = 1
 CONFIG_BYTES = 65536
 RANGES = {"caps": (1, 100), "text_max": (50, 1000), "text_caps": (50, 1000), "quote_max": (100, 2000), "untouched": (1, 365)}
@@ -422,7 +1014,7 @@ def read_config(root):
     out["untouched"] = dict(DEFAULT_UNTOUCHED)
     out["soul_file"] = None
     try:
-        fd = os.open(out["path"], os.O_RDONLY | os.O_NONBLOCK)    # a FIFO opens at once instead of waiting for a writer
+        fd = os.open(out["path"], os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | O_BINARY)    # a FIFO opens at once instead of waiting for a writer
     except FileNotFoundError:
         return out
     except OSError as e:
@@ -559,43 +1151,47 @@ def config_line():
 
 def ensure_dir(d):
     """Create the state directory and `asked/`; every directory created from `vibemaestro/` down is 0700, and the brain's own
-    (the root, the state directory, `asked/`) are put back to 0700 when an earlier build left them open."""
+    (the root, the state directory, `asked/`) are put back to 0700 when an earlier build left them open. Windows has no mode to
+    put back: there the brain's own are refused (Refused 1) unless they are this account's alone (private)."""
     root = state_root()
     for p in (os.path.dirname(root), root, d, os.path.join(d, "asked")):
         if os.path.isdir(p):
             st_ = os.lstat(p)
-            if (p != os.path.dirname(root) and stat.S_ISDIR(st_.st_mode) and st_.st_uid == os.getuid()
+            if (not WINDOWS and p != os.path.dirname(root) and stat.S_ISDIR(st_.st_mode) and st_.st_uid == os.getuid()
                     and st_.st_mode & 0o077):
                 os.chmod(p, 0o700)
-            continue
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        try:
-            os.mkdir(p, 0o700)
-        except FileExistsError:
-            continue
-        os.chmod(p, 0o700)
+        else:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            try:
+                os.mkdir(p, 0o700)
+                os.chmod(p, 0o700)
+            except FileExistsError:
+                pass
+        if WINDOWS and p != os.path.dirname(root):  # checked before anything is made inside it
+            private(p)
 
 
 @contextlib.contextmanager
 def locked(d, wait=None):
     """The store lock; with `wait` seconds, Refused(1) when it is still held then (a hook must not hang on a writer)."""
     ensure_dir(d)
-    fd = os.open(os.path.join(d, "lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(os.path.join(d, "lock"), os.O_RDWR | os.O_CREAT | O_BINARY, 0o600)
     try:
-        if wait is None:
+        if wait is None and not WINDOWS:
             fcntl.flock(fd, fcntl.LOCK_EX)
-        else:
-            end = time.monotonic() + wait
+        else:                                       # Windows waits by trying again: msvcrt's own wait gives up after 10 s
+            end = time.monotonic() + (float("inf") if wait is None else wait)
             while True:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    lock_nb(fd)
                     break
-                except OSError:
+                except HELD:
                     if time.monotonic() >= end:
                         raise Refused(1, "the store lock is held by another process")
                     time.sleep(0.02)
         yield
     finally:
+        unlock(fd)
         os.close(fd)
 
 
@@ -612,19 +1208,30 @@ def test_pause():
 
 
 def _write_file(path, data):
-    """Atomic write, 0600."""
+    """Atomic write, 0600, with the same bytes on every system (no CRLF on Windows)."""
     tmp = "%s.%d.tmp" % (path, os.getpid())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | O_BINARY, 0o600)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        replace(tmp, path)
     except OSError:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def replace(src, dst):
+    """os.replace; on Windows tried again for up to a second while another process has `dst` open (PermissionError: a reader,
+    or an antivirus scan, that opened it without letting it be renamed over)."""
+    for _ in range(50 if WINDOWS else 0):
+        try:
+            return os.replace(src, dst)
+        except PermissionError:
+            time.sleep(0.02)
+    return os.replace(src, dst)
 
 
 def now_iso(t=None):
@@ -750,7 +1357,7 @@ def append_many(d, raw, ops):
         lines.append(dumps(op).encode("utf-8"))
         prev = line_hash(lines[-1])
     data = b"".join(b + b"\n" for b in lines)
-    fd = os.open(os.path.join(d, "hot.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(os.path.join(d, "hot.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT | O_BINARY, 0o600)
     try:
         size = os.lseek(fd, 0, os.SEEK_END)
         try:
@@ -1331,6 +1938,12 @@ def sdlc_file(rel):
     return f if os.path.isfile(f) else None
 
 
+def utf8_env():
+    """The environment for a Python child that reads or prints text: UTF-8 on its pipes, as this side writes and reads them
+    (Windows' default is the system code page, which lacks Vietnamese)."""
+    return dict(os.environ, PYTHONIOENCODING="utf-8")
+
+
 def sanitize(d, texts):
     """Run every text through sdlc's filter once; refuse (rc 1) on a hit, printing only the masked form, or when it cannot run."""
     texts = [t for t in texts if t]
@@ -1346,7 +1959,7 @@ def sanitize(d, texts):
                          "until it is installed")
     try:
         r = subprocess.run([sys.executable, f, "--text", "--cwd", d], input="\n".join(texts), capture_output=True,
-                           text=True, timeout=30)
+                           encoding="utf-8", env=utf8_env(), timeout=30)
     except (OSError, subprocess.SubprocessError) as e:
         raise Refused(1, "the sensitive-value filter could not run (%s); the write is refused" % e.__class__.__name__)
     if r.returncode == 0:
@@ -1448,7 +2061,10 @@ def _json_file(p):
 
 
 def _ancestors():
-    """[(argv, cwd or None, CLAUDE_CONFIG_DIR or None, HOME or None)] of the ancestor processes (Linux /proc, else `ps` without cwd)."""
+    """[(argv, cwd or None, CLAUDE_CONFIG_DIR or None, HOME or None)] of the ancestor processes (Linux /proc, else `ps` without
+    cwd; Windows: win_ancestors, the command line only, Unread when one cannot be read)."""
+    if WINDOWS:
+        return win_ancestors()
     out, pid = [], os.getppid()
     for _ in range(64):
         if pid <= 1:
@@ -1479,6 +2095,12 @@ def _ancestors():
         out.append((argv or [], cwd, cfg, hm))
         pid = ppid
     return out
+
+
+def _drive_abs(v):
+    """`v` names a place whatever the working directory: absolute with a drive or a share (Windows' `\\x` is on the current
+    drive)."""
+    return os.path.isabs(v) and bool(os.path.splitdrive(v)[0])
 
 
 def _flag_values(argv, flag):
@@ -1526,10 +2148,15 @@ def answerers(project=None):
     the union of every place the running session may take settings from (each config directory, each worktree of the
     repository, each ancestor's working directory), so a call from another directory or environment can only see more."""
     found = []
-    anc = _ancestors()
+    try:
+        anc = _ancestors()
+    except Unread as e:
+        anc = []
+        found.append("a parent process whose command line the brain cannot read (%s)" % e)
     # ~/.claude by HOME and by the password database (HOME can be emptied or moved), this process's config directory (a
     # relative one from its cwd), and each ancestor's config directory and ~/.claude (relative ones from that ancestor's cwd)
-    cfgs = [os.path.join(h, ".claude") for h in (os.environ.get("HOME", ""), account_home()) if os.path.isabs(h)]
+    homes = (os.environ.get("HOME", ""), account_home()) + ((os.environ.get("USERPROFILE", ""),) if WINDOWS else ())
+    cfgs = [os.path.join(h, ".claude") for h in homes if os.path.isabs(h)]   # Windows: Node and Bun take ~ from USERPROFILE
     cfgs.append(config_dir())
     rel = lambda v, cwd: v if os.path.isabs(v) or not cwd else os.path.join(cwd, v)
     cfgs += [rel(c, cwd) for _, cwd, c, _ in anc if c]
@@ -1565,7 +2192,10 @@ def answerers(project=None):
         if any(a == "--permission-prompt-tool" or a.startswith("--permission-prompt-tool=") for a in argv):
             found.append("a process started with --permission-prompt-tool")
         for v in _flag_values(argv, "--settings"):
-            if v.lstrip().startswith("{"):
+            if WINDOWS and not cwd and not v.lstrip().startswith("{") and not _drive_abs(v):
+                found.append("a --settings of a parent process names a relative path, which the brain cannot find on Windows")
+                s = None
+            elif v.lstrip().startswith("{"):
                 try:
                     s = json.loads(v)
                 except ValueError:
@@ -1575,7 +2205,9 @@ def answerers(project=None):
             if _has_permission_request(s):
                 found.append("a PermissionRequest hook in --settings of a parent process")
         for v in _flag_values(argv, "--plugin-dir"):
-            if _plugin_answers(v if os.path.isabs(v) or not cwd else os.path.join(cwd, v)):
+            if WINDOWS and not cwd and not _drive_abs(v):
+                found.append("a --plugin-dir of a parent process names a relative path, which the brain cannot find on Windows")
+            elif _plugin_answers(v if os.path.isabs(v) or not cwd else os.path.join(cwd, v)):
                 found.append("a PermissionRequest hook in a --plugin-dir of a parent process")
     return sorted(set(found))
 
@@ -1617,7 +2249,7 @@ def json_capped(path, cap, follow=True):
     """The JSON value of the file at `path`, None when it is missing, larger than `cap` bytes, not UTF-8 JSON, or (with
     follow=False) a symlink."""
     try:
-        fd = os.open(path, os.O_RDONLY | (0 if follow else getattr(os, "O_NOFOLLOW", 0)))
+        fd = os.open(path, os.O_RDONLY | O_BINARY | (0 if follow else getattr(os, "O_NOFOLLOW", 0)))
         with os.fdopen(fd, "rb") as f:
             data = f.read(cap + 1)
         return json.loads(data.decode("utf-8")) if len(data) <= cap else None
@@ -2168,7 +2800,7 @@ def focus_counts(ids):
     out = []
     for p in ids:
         try:
-            fd = os.open(os.path.join(base, p + ".json"), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+            fd = os.open(os.path.join(base, p + ".json"), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | O_BINARY)
             try:
                 data = os.read(fd, FOCUS_FILE_MAX + 1) if stat.S_ISREG(os.fstat(fd).st_mode) else b""
             finally:
@@ -2413,7 +3045,9 @@ def episode_line(d, session, kind, **fields):
     """Append one line to the Episode Log, `episodes.jsonl` (append-only, 0600, one write per line)."""
     ensure_dir(d)
     line = dict(fields, t=now_iso(), kind=kind, session=session or None)
-    fd = os.open(os.path.join(d, "episodes.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    # shortcut: Windows appends by a seek then a write, so two hooks writing at the same instant can overwrite one line (every
+    # reader skips a line that is not JSON); take the store lock here if lost episodes ever matter
+    fd = os.open(os.path.join(d, "episodes.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT | O_BINARY, 0o600)
     try:
         os.write(fd, (dumps(line) + "\n").encode("utf-8"))
     finally:
@@ -2672,6 +3306,10 @@ def charters_end(iid, d, texts):
     return revoke_charters(iid)
 
 
+NO_FCNTL = "No module named 'fcntl'"                 # vibemaestro-sdlc's baton on Windows: it locks with fcntl, which is POSIX
+BATON_WINDOWS = "vibemaestro-sdlc's baton, which %s, does not run on Windows yet"
+
+
 def revoke_charters(focus):
     """"\n<lines>" of vibemaestro-sdlc's `baton.py grant revoke --focus <P>` run from this project: each charter the owner signed for
     the focus from it ends with the focus ("" when none was in force). Refused (1) when it cannot run or fails: a closed or
@@ -2682,9 +3320,12 @@ def revoke_charters(focus):
                       % focus)
     try:
         r = subprocess.run([sys.executable, baton, "grant", "revoke", "--focus", focus], cwd=project_root(), capture_output=True,
-                           text=True, errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+                           encoding="utf-8", errors="replace", env=utf8_env(), timeout=60, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as e:
         raise Refused(1, "the charters of %s could not be revoked (%s); nothing was written" % (focus, e.__class__.__name__))
+    if r.returncode != 0 and WINDOWS and NO_FCNTL in r.stderr + r.stdout:
+        raise Refused(1, "%s cannot be closed or superseded: %s; nothing was written, and the rest of the brain works" % (
+            focus, BATON_WINDOWS % "revokes its charters"))
     if r.returncode != 0:
         raise Refused(1, "the charters of %s could not be revoked (baton.py rc %d: %s)%s; nothing was written" % (
             focus, r.returncode, printable((r.stderr or r.stdout).strip()[:300]),
@@ -3059,8 +3700,8 @@ def run_soul_line(sl):
         return "the SOUL line %s was not written: vibemaestro-sdlc's baton.py was not found" % tag
     args = ["kit:soul-line", "--file", sl["file"], "--code", sl["code"], "--action", sl["action"], "--text", sl["text"]]
     try:
-        r = subprocess.run([sys.executable, baton, "go"] + args, cwd=project_root(), capture_output=True, text=True,
-                           timeout=SOUL_RUN_SECONDS)
+        r = subprocess.run([sys.executable, baton, "go"] + args, cwd=project_root(), capture_output=True, encoding="utf-8",
+                           errors="replace", env=utf8_env(), timeout=SOUL_RUN_SECONDS)
         rc, last = r.returncode, ([l for l in (r.stdout + r.stderr).splitlines() if l.strip()] or [""])[-1]
     except (OSError, subprocess.SubprocessError) as e:
         rc, last = None, e.__class__.__name__
@@ -3069,6 +3710,8 @@ def run_soul_line(sl):
     if rc == 0:
         return "the SOUL line %s %s %s (kit:soul-line)" % (tag, "added to" if sl["action"] == "add" else "removed from",
                                                            printable(sl["file"]))
+    if rc not in (0, None) and WINDOWS and NO_FCNTL in r.stdout + r.stderr:
+        return "the SOUL line %s was not written: %s; the rest of the brain works" % (tag, BATON_WINDOWS % "writes it")
     if rc == 8:
         return ("the SOUL line %s waits for a signature (this machine's baton mode): the session runs `baton go %s` alone in "
                 "a Bash call" % (tag, " ".join(shlex.quote(a) for a in args)))
@@ -3338,7 +3981,7 @@ def batch_read(path):
     if not os.path.isabs(path):
         working_dir()                               # a relative name in a deleted directory: say that, not "cannot be read"
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | O_BINARY)
     except OSError as e:
         if e.errno == errno.ELOOP:
             raise Refused(1, "the batch file %s is a symlink: write the file itself" % printable(path))
@@ -3873,13 +4516,14 @@ def doctor():
         except Refused as e:
             out.append(("problem", "the chain or head.json: %s" % e.msg))
         try:
-            fd = os.open(os.path.join(d, "lock"), os.O_RDWR | os.O_CREAT, 0o600)
+            fd = os.open(os.path.join(d, "lock"), os.O_RDWR | os.O_CREAT | O_BINARY, 0o600)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_nb(fd)
                 out.append(("ok", "the lock is free"))
-            except OSError:
+            except HELD:
                 out.append(("warn", "the lock is held by another process right now"))
             finally:
+                unlock(fd)
                 os.close(fd)
         except OSError as e:
             out.append(("problem", "the lock file cannot be opened (%s)" % e.__class__.__name__))
@@ -3892,20 +4536,24 @@ def doctor():
                     continue
                 if stat.S_ISLNK(st_.st_mode):
                     loose.append(n + " (a symlink)")
-                elif st_.st_mode & 0o077:
+                elif open_to_others(os.path.join(root, n), st_):
                     loose.append(n + ("/" if n in dirs else ""))
         for p, label in ((d, "the state directory"), (state_root(), "the brain root")):
-            if os.stat(p).st_mode & 0o077:
+            if open_to_others(p, os.stat(p)):
                 loose.append(label)
-        out.append(("problem", "group or other can read, or a symlink: %s" % printable(", ".join(sorted(loose)))) if loose
-                   else ("ok", "file modes 0600 / 0700"))
+        if WINDOWS:
+            out.append(("problem", "another account can use it, or a symlink: %s" % printable(", ".join(sorted(loose)))) if loose
+                       else ("ok", "files and folders: this account's alone"))
+        else:
+            out.append(("problem", "group or other can read, or a symlink: %s" % printable(", ".join(sorted(loose)))) if loose
+                       else ("ok", "file modes 0600 / 0700"))
     f = sdlc_filter()
     if not f:
         out.append(("problem", "vibemaestro-sdlc's sensitive-value filter was not found: every write is refused"))
     else:
         tok = "gh" + "p_" + "a1B2c3D4e5" * 3 + "a1B2c3"
         rc = [subprocess.run([sys.executable, f, "--text", "--cwd", d if os.path.isdir(d) else os.getcwd()], input=t,
-                             capture_output=True, text=True, timeout=30).returncode for t in ("plain words", tok)]
+                             capture_output=True, encoding="utf-8", env=utf8_env(), timeout=30).returncode for t in ("plain words", tok)]
         out.append(("ok", "the sensitive-value filter runs (clean 0, token 1)") if rc == [0, 1] else
                    ("problem", "the sensitive-value filter answers %s on clean text and a token, not 0 and 1" % rc))
     for a in answerers():

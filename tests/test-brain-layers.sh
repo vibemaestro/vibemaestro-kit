@@ -317,14 +317,18 @@ print(ql("q", a(59) + "e\U00000301" + "z" * 5) == "  \"q\" \U000000B7 " + a(59))
   python3 -c 'import sys; sys.stdout.write("[" * 65536)' > "$P/.vibemaestro/brain.json"
   br op add --kind next --text "nested"; c_rc 1 "[a] a file nested past the parser: rc 1, not an internal error"; c_has "$OUT" "is not a JSON object" "[a] saying so"
   startall; c_has "$S1" "brain config: 1 error" "[a] SessionStart injects with the config line"
-  rm -f "$P/.vibemaestro/brain.json"; mkfifo "$P/.vibemaestro/brain.json"
-  local t0 t1; t0=$(date +%s)
-  R=$(printf '%s' "$(hin session_id="$SID" cwd="$P" source=compact)" | CLAUDE_PROJECT_DIR="$P" timeout 10 "$PY" "$BROOT/scripts/brain_hook.py" session-start)
-  t1=$(date +%s)
-  c_has "$R" "brain config: 1 error" "[a] a FIFO: SessionStart injects with the config line"
-  c_eq "$([ $((t1 - t0)) -le 3 ] && echo fast)" fast "[a] without waiting on the FIFO ($((t1 - t0)) s)"
-  br op add --kind next --text "fifo"; c_rc 1 "[a] a FIFO: writes refused"; c_has "$OUT" "is not a regular file" "[a] saying so"
   rm -f "$P/.vibemaestro/brain.json"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[a] a FIFO as the config" "Windows has no FIFO in the file system"
+  else
+    mkfifo "$P/.vibemaestro/brain.json"
+    local t0 t1; t0=$(date +%s)
+    R=$(printf '%s' "$(hin session_id="$SID" cwd="$P" source=compact)" | CLAUDE_PROJECT_DIR="$P" timeout 10 "$PY" "$BROOT/scripts/brain_hook.py" session-start)
+    t1=$(date +%s)
+    c_has "$R" "brain config: 1 error" "[a] a FIFO: SessionStart injects with the config line"
+    c_eq "$([ $((t1 - t0)) -le 3 ] && echo fast)" fast "[a] without waiting on the FIFO ($((t1 - t0)) s)"
+    br op add --kind next --text "fifo"; c_rc 1 "[a] a FIFO: writes refused"; c_has "$OUT" "is not a regular file" "[a] saying so"
+    rm -f "$P/.vibemaestro/brain.json"
+  fi
   # a config error: guard-owner never asks, close-linked refuses, the SessionStart auto-close closes nothing and says so
   conf '{"caps": {"X": 0}}'
   gown add --kind window --text "a window" --owner-quote q --where w --expires 2099-01-01T00:00:00Z
@@ -335,9 +339,15 @@ print(ql("q", a(59) + "e\U00000301" + "z" * 5) == "  \"q\" \U000000B7 " + a(59))
   br op add --kind next --text "closes when merged" --closes acme/app¤41; c_rc 0 "[a] instrument: an item that closes by a link"
   sleep 1; pr 'acme/app¤41' merged "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; conf '{"caps": {"X": 0}}'
   local merged='st = s.load(s.state_dir())[1]; print(sorted(v["status"] for k, v in st["items"].items() if v["text"] == "closes when merged"))'
-  startall; c_eq "$(bpy "$merged")" "['live']" "[a] a config error: SessionStart closes nothing by a link"
-  c_has "$S1" "auto-close: nothing closed (.vibemaestro/brain.json" "[a] and its note says why"
-  conf '{}'; startall; c_eq "$(bpy "$merged")" "['closed']" "[a] instrument: the config fixed, the same SessionStart closes it"
+  startall
+  if [ "${OS:-}" = Windows_NT ]; then   # the same steps, so what follows starts from the same state
+    c_skip "[a] a config error: SessionStart closes nothing by a link, says why, and closes it once the config is fixed" "Windows' own Python runs gh.exe only: the stub gh script that answers it is never run"
+    conf '{}'; startall
+  else
+    c_eq "$(bpy "$merged")" "['live']" "[a] a config error: SessionStart closes nothing by a link"
+    c_has "$S1" "auto-close: nothing closed (.vibemaestro/brain.json" "[a] and its note says why"
+    conf '{}'; startall; c_eq "$(bpy "$merged")" "['closed']" "[a] instrument: the config fixed, the same SessionStart closes it"
+  fi
   # doctor: a hot.md rendered before the config changed is a warn; an older brain's of another version a problem
   br op add --kind next --text "$(rep n 100)" --link kb/some/link.md
   br doctor; c_has "$OUT" "ok       hot.md matches a fresh render" "[a] instrument: hot.md matches"
@@ -350,7 +360,7 @@ print(ql("q", a(59) + "e\U00000301" + "z" * 5) == "  \"q\" \U000000B7 " + a(59))
   python3 - "$(sdir)/hot.md" <<'PY'
 import sys
 p = sys.argv[1]; t = open(p, encoding="utf-8").read(); assert "- X" in t
-open(p, "w", encoding="utf-8").write(t.replace("- X", "- X9", 1))
+open(p, "w", encoding="utf-8", newline="").write(t.replace("- X", "- X9", 1))
 PY
   br doctor; c_has "$OUT" "problem  hot.md does not match a fresh render" "[a] the same hot.md edited: a problem, whatever the config did"
   br render >/dev/null; conf '{"text_caps": {"X": 50}}'
@@ -385,12 +395,14 @@ case_root() {
   c_hasnt "$R" "this session's project is" "[r] instrument: the bare layout's own worktree, no recorded project"
   c_has "$R" "queued X2 (Next holds 1 of 1" "[r] a bare layout: the second worktree reads the same file as the first"
   # a project whose .git is a link to another repository's: it reads its own file, as it always did
-  local S="$TMP/linked$NP"; mkdir -p "$S/.vibemaestro"; ln -s "$Ra/.git" "$S/.git"; printf '{"caps": {"N": 1}}\n' > "$S/.vibemaestro/brain.json"
-  R=$(cd "$S" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/linkedstate$NP" "$BROOT/bin/brain" op add --kind now --text a >/dev/null 2>&1
-      cd "$S" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/linkedstate$NP" "$BROOT/bin/brain" op add --kind now --text b 2>&1)
-  c_has "$R" "queued N2 (Now holds 1 of 1" "[r] a .git linked elsewhere: the project's own file"
-  R=$(cd "$S" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/linkedstate$NP" "$BROOT/bin/brain" doctor 2>&1)
-  c_has "$R" "is read from this work tree only, yet its brain log is shared with $(cd "$Ra" && pwd -P)," "[r] and doctor says the log is the other repository's"
+  if can_link; then
+    local S="$TMP/linked$NP"; mkdir -p "$S/.vibemaestro"; ln -s "$Ra/.git" "$S/.git"; printf '{"caps": {"N": 1}}\n' > "$S/.vibemaestro/brain.json"
+    R=$(cd "$S" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/linkedstate$NP" "$BROOT/bin/brain" op add --kind now --text a >/dev/null 2>&1
+        cd "$S" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/linkedstate$NP" "$BROOT/bin/brain" op add --kind now --text b 2>&1)
+    c_has "$R" "queued N2 (Now holds 1 of 1" "[r] a .git linked elsewhere: the project's own file"
+    R=$(cd "$S" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/linkedstate$NP" "$BROOT/bin/brain" doctor 2>&1)
+    c_has "$R" "is read from this work tree only, yet its brain log is shared with $(cd "$Ra" && pwd -P)," "[r] and doctor says the log is the other repository's"
+  else c_skip "[r] a .git linked elsewhere" "ln -s copies here instead of linking"; fi
   # a git directory kept apart (--separate-git-dir): git records no main work tree, so a linked worktree reads its own file
   # (accepted) and doctor says so; the main work tree reads its own without a word
   local Sg="$TMP/sep$NP"; mkdir -p "$Sg/store"
@@ -414,6 +426,10 @@ case_root() {
   mkdir -p "$Su/sub/.vibemaestro"; printf '{"caps": {"X": 1}}\n' > "$Su/sub/.vibemaestro/brain.json"
   R=$(cd "$TMP/subwt$NP" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/substate$NP" "$BROOT/bin/brain" doctor 2>&1)
   c_has "$R" "config: .vibemaestro/brain.json: X 1" "[r] a submodule's linked worktree reads the submodule's file"
+  if [ "${OS:-}" = Windows_NT ]; then   # the POSIX names below (bytes that are not UTF-8, a newline) do not exist on NTFS
+    c_skip "[r] worktrees and projects named in bytes that are not UTF-8 or with a newline" "NTFS names are UTF-16 and hold no newline"
+    git_ -C "$Ra" worktree add -q --detach "$TMP/rawt$NP"; mkdir -p "$Ra/.vibemaestro"; printf '{"caps": {"X": 1}}\n' > "$Ra/.vibemaestro/brain.json"
+  else
   # a sibling worktree whose name is not UTF-8: no crash, the config still read
   git_ -C "$Ra" worktree add -q --detach "$TMP/rawt$NP"; git_ -C "$Ra" worktree add -q --detach "$TMP/wt-$(printf '\377')$NP"
   mkdir -p "$Ra/.vibemaestro"; printf '{"caps": {"X": 1}}\n' > "$Ra/.vibemaestro/brain.json"
@@ -424,9 +440,11 @@ case_root() {
   local Wn="$TMP/wt"$'\n'"x$NP"; git_ -C "$Ra" worktree add -q --detach "$Wn"
   R=$(cd "$Ra" && WN="$Wn" bpy 'import os; print(os.path.realpath(os.environ["WN"]) in [os.path.realpath(p) for p in s._worktrees()])')
   c_eq "$R" True "[r] a sibling worktree with a newline in its path: listed whole"
+  fi
   # the CLI run inside the repository's own .git: the work tree's file, as the brain log is the work tree's
   R=$(cd "$Ra/.git" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/rastate$NP" "$BROOT/bin/brain" doctor 2>&1)
   c_has "$R" "config: .vibemaestro/brain.json: X 1" "[r] the CLI inside .git reads the work tree's file"
+  [ "${OS:-}" = Windows_NT ] || {
   # git's answers are decoded as the OS decodes paths: a top level that is not UTF-8
   local Nu="$TMP/nu-$(printf '\377')$NP"; git_ -C "$TMP" init -q -b main "$Nu"; mkdir -p "$Nu/sub"
   R=$(NU="$Nu" bpy 'import os; print(s.main_tree(os.environ["NU"] + "/sub") == os.path.realpath(os.environ["NU"]))' 2>&1)
@@ -438,6 +456,11 @@ case_root() {
   c_has "$R" "config: .vibemaestro/brain.json: X 1" "[r] a project path with a newline: a subdirectory reads the top's file"
   R=$(cd "$Nl" && CLAUDE_CODE_SESSION_ID="$SID" XDG_STATE_HOME="$TMP/nlstate$NP" "$BROOT/bin/brain" doctor 2>&1)
   c_has "$R" "config: .vibemaestro/brain.json: X 1" "[r] and the top itself reads it"
+  }
+  if [ "${OS:-}" = Windows_NT ]; then   # Windows' own Python runs git.exe only: a shim script is never called
+    br doctor; c_hasnt "$OUT" "is read from this work tree only" "[r] a plain repository: no such warning"
+    c_skip "[r] doctor resolves the config once" "a git shim script cannot stand in for git.exe"; return
+  fi
   mkdir -p "$TMP/gitshim$NP"; printf '#!/bin/sh
 echo x >> "%s/gitcalls%s"
 exec "%s" "$@"
@@ -503,7 +526,7 @@ caps = {"N": 2, "X": 3, "S": 2, "Q": 2, "T": 2, "F": 2, "R": 2}
 cfg = os.path.join(sys.argv[2], ".vibemaestro", "brain.json")
 os.makedirs(os.path.dirname(cfg), exist_ok=True)
 def set_caps():
-    open(cfg, "w").write(json.dumps({"caps": caps}))
+    open(cfg, "w", newline="").write(json.dumps({"caps": caps}))
     s._CONF.clear()
 set_caps()
 problems, refused = [], 0
@@ -619,8 +642,9 @@ full() {
   many_skills "${1:-}"
 }
 case_worst() {
-  local i a n most=0 cuts=0 mixed=0 mode
-  for mode in text emoji; do
+  local i a n most=0 cuts=0 mixed=0 mode modes="text emoji"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[e] every cap filled, with the closes a lookup makes" "Windows' own Python runs gh.exe only: the stub gh script that answers it is never run"; modes=; fi
+  for mode in $modes; do
     full "$([ $mode = emoji ] && echo emoji)"; most=0; cuts=0; mixed=0
     for i in 1 2 3 4 5 6 7 8 9 10; do                 # 12 lookups per start: ten starts answer every anchor from the cache
       startall compact; read -r n a b c <<<"$(strings_check)"
@@ -666,7 +690,7 @@ print(need <= s.FIRST_RESERVE, need)' "$BROOT/scripts")
     unset CLAUDE_CONFIG_DIR
   done
   # on stdin: the emoji run's strings are past the 128 KiB one argument may hold
-  c_eq "$(printf '%s' "$ALL" | python3 -c 'import sys; print(sum(1 for c in sys.stdin.read() if ord(c) > 0xFFFF) > 1000)')" True "[e] instrument: the emoji run holds characters of 2 units"
+  [ -z "$modes" ] || c_eq "$(printf '%s' "$ALL" | python3 -c 'import sys; print(sum(1 for c in sys.stdin.read() if ord(c) > 0xFFFF) > 1000)')" True "[e] instrument: the emoji run holds characters of 2 units"
   # caps raised past what 14 strings hold: 14 printed, each ≤ 9,500, the last one naming what was not injected
   np; conf '{"caps": {"X": 100, "T": 100, "F": 100, "S": 100}}'
   local specs=()
@@ -704,7 +728,7 @@ for pat, new in ((r"(?m)^MANAGED_SETTINGS = \(.*\)$", 'MANAGED_SETTINGS = ("%s/m
                  (r"(?m)^        if pid <= 1:$", "        if pid <= 1 or pid == SUITE_PID:")):
     s, n = re.subn(pat, lambda _: new, s)
     assert n == 1, pat
-open(p, "w", encoding="utf-8").write(s)
+open(p, "w", encoding="utf-8", newline="").write(s)
 PY
 }
 case_compat() {
@@ -841,6 +865,7 @@ case_goals() {
 
 # --- [h] -----------------------------------------------------------------------------------------------------------------------
 case_focus() {
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[h] a focus orders Next, follows its goal, passes its items on" "a focus is retired, and a SOUL line written, through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl)"; return; fi
   np
   goal_args "ship the layers" "$(dplus 30)"; owner_ok "${GA[@]}"
   br op add --kind focus --text "capacity first" --owner-quote "làm capacity trước" --where chat --goal G9
@@ -903,6 +928,7 @@ case_requests() {
   startall; c_has "$SR" "Done (24 h)
 - R2 kb/out.md · the owner asks for the card, after the capacity" "[i] and in Done, its pointer first"
   # it closes by its --closes anchor, which is its pointer, and it is marked stale like N, X, S and Q
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[i] a request closes by its anchor, is marked stale, and a full section queues" "Windows' own Python runs gh.exe only: the stub gh script that answers it is never run"; return; fi
   pr 'acme/app¤51' open
   br op add --kind request --text "merge the layers" --owner-quote "merge it" --where chat --closes acme/app¤51; c_rc 0 "[i] a request with --closes"
   sleep 1; pr 'acme/app¤51' merged "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1002,7 +1028,8 @@ case_card() {
   c_has "$card" "- G1 review in 12 d · focus P1 · no progress yet" "[l] each goal's review day and its focus, a line each"
   c_has "$card" "- G2 review OVERDUE 3 d · no focus · no progress yet" "[l] a goal past its review day, with no focus"
   c_has "$card" "- sections over 85 %: Next 2/2" "[l] the sections at 85 % of their caps"
-  c_has "$card" "- anchors closed: X1 acme/app¤61 merged" "[l] the live items whose anchors closed"
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[l] the live items whose anchors closed" "Windows' own Python runs gh.exe only: the stub gh script that answers it is never run"
+  else c_has "$card" "- anchors closed: X1 acme/app¤61 merged" "[l] the live items whose anchors closed"; fi
   c_has "$card" "- overflow queue: X 1" "[l] the overflow queue"
   c_has "$card" "- loss score of the last compaction logged: 0.42 (" "[l] the last loss score, with its time"
   c_eq "$(python3 -c 'import sys; print(len(sys.argv[1].encode("utf-16-le")) // 2 <= 1000)' "$card")" True "[l] ≤ 1,000 units"

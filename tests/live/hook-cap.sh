@@ -19,13 +19,13 @@
 # Claude Code counts: with --astral the string is mostly emoji, so its length in characters is about half.
 # =============================================================================
 set -uo pipefail
-CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
-[ -n "$CLAUDE_BIN" ] || { echo "skip: claude is not on PATH"; exit 2; }
 ASTRAL=0; [ "${1:-}" = --astral ] && { ASTRAL=1; shift; }
 [ $# -gt 0 ] && LENGTHS=("$@") || LENGTHS=(9500 10000 10001)
 for n in "${LENGTHS[@]}"; do
   case $n in ''|*[!0-9]*) echo "usage: bash tests/live/hook-cap.sh [--astral] [length…]  (whole numbers)"; exit 2 ;; esac
 done
+CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
+[ -n "$CLAUDE_BIN" ] || { echo "skip: claude is not on PATH"; exit 2; }
 T=$(mktemp -d); T=$(cd "$T" && pwd -P)
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/plugin/.claude-plugin" "$T/plugin/hooks" "$T/config" "$T/home" "$T/project" "$T/tmp"

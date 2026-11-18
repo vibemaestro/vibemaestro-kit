@@ -302,7 +302,7 @@ def soul_file_line(ops):
         return None
     full = path if os.path.isabs(path) else os.path.join(s.config_root(), path)
     try:
-        fd = os.open(full, os.O_RDONLY | os.O_NONBLOCK)    # a FIFO or a device must not hold a SessionStart hook
+        fd = os.open(full, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | s.O_BINARY)    # a FIFO or a device must not hold a SessionStart hook
     except (OSError, ValueError) as e:                  # ValueError: a path the file system cannot encode
         return "SOUL file %s cannot be read (%s)" % (s.clean_line(path), e.__class__.__name__)
     try:

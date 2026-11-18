@@ -62,6 +62,10 @@ clean_env "$TMP"
 # shellcheck source=fixtures/brain.sh
 . "$HERE/fixtures/brain.sh"
 brain_kit "$SRC_ROOT"
+if [ "${OS:-}" = Windows_NT ]; then   # Windows' own Python runs gh.exe only: the stub gh script every case answers through is never run
+  echo "  SKIP [all]: every case answers gh through a stub script, which Windows' own Python cannot run (the tree kill is store [WK], the harvest store [WH])"
+  summary; exit
+fi
 
 # --- the stub gh ------------------------------------------------------------------------------------------------------------
 export STUB="$TMP/stub"

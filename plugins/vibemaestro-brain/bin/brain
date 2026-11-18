@@ -1,3 +1,20 @@
 #!/bin/sh
 # The `brain` CLI: on the Bash PATH while the plugin is enabled (bin/ of a plugin, Claude Code docs).
-exec python3 "$(dirname "$0")/../scripts/brain.py" "$@"
+script="$(dirname "$0")/../scripts/brain.py"
+[ "${OS:-}" = Windows_NT ] || exec python3 "$script" "$@"
+# Windows: `python3` and `python` may be Store shortcuts that run nothing; the candidates of scripts/pyrun.sh, each used only if
+# it is Python 3.8+. A hook finding none exits 0; this command fails and says so, or a session would take a write as done.
+# Git Bash rewrites an argument that starts with / into a Windows path when it runs Windows' own Python: a text such as "/clear"
+# would be stored changed, and an owner call would no longer match what its dialog showed. The arguments go over as typed
+# (MSYS2_ARG_CONV_EXCL: arguments only, the environment is still converted), so the script path is given in Windows' form;
+# brain.py puts back the value it had (none, or the person's own), so what the brain starts converts as before.
+script=$(cygpath -w "$script" 2>/dev/null || printf '%s' "$script")
+[ -z "${MSYS2_ARG_CONV_EXCL+x}" ] || export BRAIN_ARG_CONV_WAS="$MSYS2_ARG_CONV_EXCL"
+export BRAIN_ARG_CONV_SET=1 MSYS2_ARG_CONV_EXCL='*'
+usable() { "$@" -c 'import sys; sys.exit(sys.version_info < (3, 8))' </dev/null >/dev/null 2>&1; }
+for p in python3 python; do
+  command -v "$p" >/dev/null 2>&1 && usable "$p" && exec "$p" "$script" "$@"
+done
+command -v py >/dev/null 2>&1 && usable py -3 && exec py -3 "$script" "$@"
+echo "brain: no Python 3.8 or newer was found on this machine, so nothing was run" >&2
+exit 127

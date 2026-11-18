@@ -56,7 +56,8 @@ def state_root():
             import brain_store
             return brain_store.state_root()
         x = os.path.join(h, ".local", "state")
-    return os.path.join(x, "vibemaestro", "brain")
+    r = os.path.join(x, "vibemaestro", "brain")
+    return r.replace("/", "\\") if os.name == "nt" else r    # the store's one spelling on Windows
 
 
 def pending_dir():
@@ -117,7 +118,9 @@ sys.path.insert(0, HERE)
 
 STRINGS = 14                            # SessionStart string commands in hooks.json: brain_store.SLOTS (test-brain-layers.sh [e] holds them equal)
 START_WAIT = 6.0                        # seconds strings 2 and 3 wait for string 1's hand-over (worst case: 4 s of waits, then its work)
-SIBLINGS = 1.0                          # seconds between the starts of the commands of one SessionStart, at most (measured: 2 ms)
+# seconds between the starts of the commands of one SessionStart, at most (measured: 2 ms; Windows starts the 14 Pythons over
+# about 4 s on a CI runner, so a later string missed its hand-over and waited START_WAIT)
+SIBLINGS = 5.0 if os.name == "nt" else 1.0
 T_START = time.time()                   # this process's start: the commands of one SessionStart start together
 SLOT_EVENTS = {"session-start-%d" % n: n for n in range(2, STRINGS + 1)}
 SHELF_MAX = 1000
@@ -154,17 +157,17 @@ def store():
     return brain_store
 
 
-# The store needs fcntl and pwd, which Windows Python lacks: there the brain cannot run yet (its port is its own work). Claude is
+# The store needs fcntl and pwd (POSIX), or ctypes and msvcrt (Windows): a Python without them cannot run the brain. Claude is
 # told in its context, never a fixed-language line to the person, and the guards that need the store refuse instead of passing.
-NO_STORE = ("vibemaestro-brain cannot run on this machine yet: its store needs file locking that Python on Windows does not have, so "
-            "nothing is remembered across sessions here and the `brain` command does not work. Do not raise this unprompted; when it "
-            "matters (the person asks you to remember something for a later session, or asks about the brain), tell them in their "
-            "own language that the brain does not run on Windows yet.")
-NO_STORE_DENY = "brain: the brain cannot run on this machine yet (Windows), so its memory is not changed here"
+NO_STORE = ("vibemaestro-brain cannot run on this machine yet: its store does not load with the Python here, so nothing is "
+            "remembered across sessions and the `brain` command does not work. Do not raise this unprompted; when it matters (the "
+            "person asks you to remember something for a later session, or asks about the brain), tell them in their own language "
+            "that the brain cannot run with this machine's Python.")
+NO_STORE_DENY = "brain: the brain's store does not load on this machine, so its memory is not changed here"
 
 
 def store_loads():
-    """The store can be imported here (False on Windows: no fcntl, no pwd)."""
+    """The store can be imported here (False when this Python lacks a module it needs)."""
     try:
         store()
     except ImportError:
@@ -183,7 +186,8 @@ def state_root_unloaded():
         except (ImportError, KeyError, AttributeError):
             h = os.path.expanduser("~")
     base = x if os.path.isabs(x) else os.path.join(h, ".local", "state")
-    return os.path.join(base, "vibemaestro", "brain")
+    r = os.path.join(base, "vibemaestro", "brain")
+    return r.replace("/", "\\") if os.name == "nt" else r    # the store's one spelling on Windows
 
 
 def has_state(d):
@@ -216,7 +220,7 @@ def unwritten(s, sid, d):
         left = s.read_session(sid)
     except s.Refused:
         return ""                                   # the CLI refuses a damaged record itself, naming it
-    if left and left["state"] == d:
+    if left and s.same_path(left["state"], d):
         return ""
     if left:
         s.drop_session(sid)
@@ -242,9 +246,9 @@ def resolve(inp, record=True):
         d, old = s.state_dir(env), None
         try:
             old = s.record_session(sid, env, d) if sid and record else None
-        except OSError as e:                        # the record serves the CLI; this hook still has its project
-            sys.stderr.write("brain: the session's project record was not written: %s%s\n" % (e.__class__.__name__,
-                                                                                                 unwritten(s, sid, d)))
+        except (OSError, s.Refused) as e:           # the record serves the CLI; this hook still has its project
+            sys.stderr.write("brain: the session's project record was not written: %s%s\n"
+                             % (s.printable(e.msg) if isinstance(e, s.Refused) else e.__class__.__name__, unwritten(s, sid, d)))
         if old:
             sys.stderr.write("brain: this session's project was %s; it is now %s (CLAUDE_PROJECT_DIR)\n"
                              % (s.printable(old), s.printable(env)))
@@ -1006,6 +1010,8 @@ def mark_pending(s, sid, d):
     if not os.path.isdir(pd):
         with contextlib.suppress(FileExistsError):
             os.mkdir(pd, 0o700)
+    if s.WINDOWS:                                   # pending/ is the brain's own too: another account's is refused (Windows)
+        s.private(pd)
     s._write_file(pending_marker(sid), d + "\n")
 
 
@@ -1184,8 +1190,11 @@ def guard_owner(inp):
             plan = s.soul_digest(sl) if sl else None
     except s.Refused as e:
         return deny(s.printable(e.msg), "state")
-    mark_pending(s, sid, d)                         # first: a marker with no record is harmless, a record with none is not
-    rid = s.record_asked(d, sid, mode, args, plan=plan)
+    try:
+        mark_pending(s, sid, d)                     # first: a marker with no record is harmless, a record with none is not
+        rid = s.record_asked(d, sid, mode, args, plan=plan)
+    except s.Refused as e:                          # a folder of the brain refused (Windows): said here, not a silent hook error
+        return deny(s.printable(e.msg), "state")
     try:
         decide("ask", line)
     except Exception:
@@ -1223,8 +1232,10 @@ def main(argv):
     event = argv[1] if len(argv) > 1 else ""
     if event not in HANDLERS or off():
         return 0
+    if sys.stderr:                                  # UTF-8 whatever the system code page (Windows' is not): a message holds paths
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     try:
-        inp = json.loads(_RAW) if _RAW is not None else json.load(sys.stdin)
+        inp = json.loads(_RAW if _RAW is not None else sys.stdin.buffer.read())   # bytes: JSON is UTF-8, not the code page
     except ValueError:
         return 0
     if not isinstance(inp, dict):

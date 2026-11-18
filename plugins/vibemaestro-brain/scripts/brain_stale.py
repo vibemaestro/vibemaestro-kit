@@ -34,7 +34,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -292,10 +291,12 @@ def parse_pulls(out):
 
 
 def _drain(f):
-    """What an exited gh wrote, without waiting for EOF: a child that inherited the pipe keeps it open."""
+    """What an exited gh wrote, without waiting for EOF: a child that inherited the pipe keeps it open (on Windows its job is
+    ended first, so nothing holds the pipe and the read ends)."""
     if f is None:
         return ""
-    os.set_blocking(f.fileno(), False)
+    if not s.WINDOWS:
+        os.set_blocking(f.fileno(), False)
     try:
         return (f.read(4096) or b"").decode("utf-8", "replace")
     except OSError:
@@ -304,15 +305,22 @@ def _drain(f):
 
 def _harvest(p):
     """(rc, stdout, stderr) of a gh that has exited; its group is killed at once (a child holding the pipe), not later."""
+    if s.WINDOWS:
+        _kill(p)
     text, err = _drain(p.stdout), _drain(p.stderr)
     for f in (p.stdout, p.stderr):
         if f is not None:
             f.close()
+    _kill(p)
+    return p.returncode, text, err
+
+
+def _kill(p):
+    """End what still runs in a gh's group (a child holding the pipe); one that has already ended is fine."""
     try:
-        os.killpg(p.pid, signal.SIGKILL)
+        s.kill_tree(p)
     except OSError:
         pass
-    return p.returncode, text, err
 
 
 def run(jobs, deadline, errors=False):
@@ -323,8 +331,8 @@ def run(jobs, deadline, errors=False):
     procs = {}
     for k, argv in jobs.items():
         try:
-            procs[k] = subprocess.Popen(["gh"] + argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE if errors else subprocess.DEVNULL, env=env, start_new_session=True)
+            procs[k] = s.spawn(["gh"] + argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE if errors else subprocess.DEVNULL, env=env)
         except (OSError, ValueError):
             procs[k] = None
     end = time.monotonic() + deadline
@@ -344,10 +352,7 @@ def run(jobs, deadline, errors=False):
             out[k] = _harvest(p)
             del waiting[k]
     for p in waiting.values():                          # still running at the deadline: the whole group, then reap
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except OSError:
-            pass
+        _kill(p)
         p.wait()
         p.stdout.close()
         if p.stderr is not None:

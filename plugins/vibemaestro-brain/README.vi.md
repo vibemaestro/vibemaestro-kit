@@ -407,7 +407,7 @@ Một plugin khác có thể thêm vào brain qua một script đã khai báo: m
 
 Một manifest phạm một luật, hoặc hai phần mở rộng trùng tên, trùng động từ owner hay trùng tùy chọn, bị bỏ qua, và `brain doctor` nói vì sao.
 
-**Brain gọi nó thế nào.** `python -I -B <script>` ở gốc plugin, một đối tượng JSON vào stdin và một ra stdout (tối đa 64 KiB), trong 1 giây ở một hook và 3 giây ở CLI, và mọi phần mở rộng của một sự kiện trong 2 giây ở một hook và 6 giây ở CLI; quá thời hạn thì cả nhóm tiến trình bị giết. Mọi lời gọi chạy dưới khóa của kho. Lời gọi không có `CLAUDE_CODE_SESSION_ID` và có một `XDG_STATE_HOME` trống, nên một lần ghi `brain` do nó khởi chạy bị từ chối (rc 4). Mọi đầu vào có `schema`, `call`, `extension`, `now`, `project`, `config` (các ngưỡng `ledger` và các mức trần) và `state` (mọi mục theo id); mọi lời gọi trừ một lần start không có thẻ còn có `ops`, các thao tác của nhật ký như đã lưu.
+**Brain gọi nó thế nào.** `python -I -B -X utf8 <script>` ở gốc plugin, một đối tượng JSON vào stdin và một ra stdout (tối đa 64 KiB), trong 1 giây ở một hook và 3 giây ở CLI, và mọi phần mở rộng của một sự kiện trong 2 giây ở một hook và 6 giây ở CLI; quá thời hạn thì cả nhóm tiến trình bị giết. Mọi lời gọi chạy dưới khóa của kho. Lời gọi không có `CLAUDE_CODE_SESSION_ID` và có một `XDG_STATE_HOME` trống, nên một lần ghi `brain` do nó khởi chạy bị từ chối (rc 4). Mọi đầu vào có `schema`, `call`, `extension`, `now`, `project`, `config` (các ngưỡng `ledger` và các mức trần) và `state` (mọi mục theo id); mọi lời gọi trừ một lần start không có thẻ còn có `ops`, các thao tác của nhật ký như đã lưu.
 
 | Lời gọi | Khi nào | Cho thêm | Trả lời |
 |---|---|---|---|
@@ -500,6 +500,14 @@ Còn hai thư mục nữa nằm cạnh các thư mục dự án dưới `…/vib
 
 Đừng bao giờ sửa các file này. Một guard sẽ từ chối việc sửa, và một thay đổi bằng tay làm gãy chuỗi hash và chặn mọi lần ghi.
 
+### Trên Windows
+
+Brain chạy bằng Python của chính Windows dưới bash của Git for Windows, shell mà Claude Code dùng ở đó.
+
+- **Thư mục riêng tư.** Windows không có mode của file. Trước khi ghi, brain kiểm thư mục gốc của nó, thư mục của dự án và `asked/`: tài khoản này phải là chủ của từng thư mục, và không tài khoản nào khác được dùng nó (trừ SYSTEM và Administrators). Nếu không, lần ghi bị từ chối (rc 1), nêu tên thư mục và tài khoản (SID của nó) được dùng nó, hoặc chủ của nó. Một thư mục nằm dưới hồ sơ người dùng của bạn vốn đã riêng tư, nên cách đơn giản nhất là trỏ `XDG_STATE_HOME` tới một thư mục như vậy. Để giữ thư mục đó, chạy trong Command Prompt `icacls "<thư mục>" /inheritance:d`, rồi `icacls "<thư mục>" /remove *<SID> /t` với SID mà lời từ chối nêu (`/t`: cả các thư mục bên trong). Một thư mục do tài khoản khác làm chủ (thư mục tạo từ một cửa sổ lệnh nâng quyền có chủ là `S-1-5-32-544`, Administrators) thành của bạn, cùng những gì bên trong, bằng `takeown /f "<thư mục>" /r`. Nơi sao lưu được kiểm cùng một cách.
+- **Đối số giữ nguyên như khi gõ.** `brain` nhận đối số đúng như bạn gõ, nên một đoạn chữ bắt đầu bằng `/` được lưu nguyên như đã viết. Hãy đưa đường dẫn dạng `C:/…` hoặc tương đối với dự án, không phải dạng `/c/…` của Git Bash.
+- **Giới hạn.** Phép kiểm thứ có thể trả lời hộp thoại cấp quyền thay một người đọc các file managed settings (`C:\Program Files\ClaudeCode\managed-settings.json` và đường cũ `C:\ProgramData\ClaudeCode\managed-settings.json`), không đọc chính sách trong registry, và đọc dòng lệnh của từng tiến trình đã khởi động phiên (Windows 8.1 trở lên): một tiến trình nó không đọc được (của tài khoản khác chẳng hạn) thì mục owner bị từ chối, có nêu tên tiến trình đó. Nó không đọc thư mục làm việc hay biến môi trường của chúng, nên một file settings chỉ tiến trình cha đọc (thư mục config khác, dự án khác) không được thấy, và `--settings` hay `--plugin-dir` của tiến trình cha cho dưới dạng đường dẫn tương đối thì mục owner bị từ chối. Nó phân biệt một tiến trình cha với một tiến trình sinh sau đã lấy lại id của nó bằng thời điểm khởi động, nên một quản trị viên lùi đồng hồ có thể làm nó không thấy; tài khoản như vậy sửa thẳng được các file của brain, điều mà phép kiểm này không chống. Khi các tiến trình phía trên brain đi qua một tiến trình Git Bash mà tiến trình cha Git Bash của nó đã mất, thì không biết được chương trình phía trên, nên mục owner bị từ chối và dòng thông báo nêu tên tiến trình: Claude Code khởi động từ terminal MSYS2 (trình khởi chạy của nó thoát), bên trong tmux hay screen, hoặc qua `setsid`, hoặc `python3` đứng đầu PATH là một script shell (các shim của pyenv-win). Hãy khởi động Claude Code từ cửa sổ riêng của Git Bash, PowerShell, Windows Terminal hay VS Code, với một chương trình Python, không phải script, đứng đầu PATH. Hai hook ghi Episode Log cùng một lúc có thể ghi đè một dòng của nó. Đóng hay thay một focus thì thu hồi các charter của nó qua baton của vibemaestro-sdlc, và dòng SOUL của một lần promote cũng được ghi qua đó; khi baton chưa chạy trên Windows, brain từ chối đóng hay thay một focus thay vì để một charter còn hiệu lực, không ghi dòng SOUL, và nói vậy trong một dòng; phần còn lại của brain vẫn chạy.
+
 ## Phụ thuộc vào vibemaestro-sdlc
 
 `plugin.json` khai báo phụ thuộc vào `vibemaestro-sdlc`. Brain dùng hai thứ từ đó:
@@ -516,7 +524,7 @@ Mỗi bản phát hành công khai của brain đòi phiên bản vibemaestro-sd
 - Claude Code. Mục của owner cần phiên bản 2.1.211 trở lên khi phiên chạy ở chế độ `auto`; `brain doctor` kiểm tra điều này.
 - `vibemaestro-sdlc`, được cài cùng brain.
 - Python 3.8 trở lên và `git` trên `PATH`. Các script chỉ dùng thư viện chuẩn.
-- Hệ thống POSIX: kho lưu dùng khóa file `fcntl`.
+- Linux, macOS, hoặc Windows có Git for Windows (xem [Trên Windows](#trên-windows)).
 
 ## Giới hạn
 

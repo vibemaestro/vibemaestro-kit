@@ -18,24 +18,50 @@ brain_kit() {  # brain_kit <src root> — copies the brain and sdlc into $TMP/ki
   # The answerer check reads the machine around it: the managed settings (a sandbox pod holds a PermissionRequest hook there),
   # the account's home from the password database, and every ancestor process's cwd and CLAUDE_CONFIG_DIR. A suite must not
   # depend on the machine it is launched from, so the copy reads the scratch tree's managed settings and account home, and
-  # stops its ancestor walk at the suite's own shell (SUITE_PID): only the processes a case starts are its ancestors. The
-  # suites re-exec without CLAUDE_CONFIG_DIR, because a forked subshell shows the suite shell's initial environment.
+  # stops its ancestor walk at the suite's own shell (SUITE_PID, on Windows that shell's Windows process id): only the
+  # processes a case starts are its ancestors. The suites re-exec without CLAUDE_CONFIG_DIR, because a forked subshell shows
+  # the suite shell's initial environment.
   MANAGED="$TMP/managed"; ACCOUNT="$TMP/account"; mkdir -p "$MANAGED" "$ACCOUNT"
-  python3 - "$BROOT/scripts/brain_store.py" "$MANAGED" "$ACCOUNT" "$$" <<'PY' || { bad "brain_kit: a line to isolate was not found in the copy"; return 1; }
+  local me=$$; [ "${OS:-}" != Windows_NT ] || me=$(cat "/proc/$$/winpid")
+  python3 - "$BROOT/scripts/brain_store.py" "$MANAGED" "$ACCOUNT" "$me" <<'PY' || { bad "brain_kit: a line to isolate was not found in the copy"; return 1; }
 import re, sys
 p, m, a, pid = sys.argv[1:5]
 s = open(p, encoding="utf-8").read()
-subs = ((r"(?m)^MANAGED_SETTINGS = \(.*\)$", 'MANAGED_SETTINGS = ("%s/managed-settings.json",)\nSUITE_PID = %s' % (m, pid)),
-        (r"(?m)^        return pwd\.getpwuid\(os\.getuid\(\)\)\.pw_dir$", '        return "%s"' % a),
-        (r"(?m)^        if pid <= 1:$", "        if pid <= 1 or pid == SUITE_PID:"))
+subs = ((r"(?m)^MANAGED_SETTINGS = .*$", 'MANAGED_SETTINGS = ("%s/managed-settings.json",)\nSUITE_PID = %s' % (m, pid)),
+        (r"(?m)^        return (?:win_profile\(\) if WINDOWS else )?pwd\.getpwuid\(os\.getuid\(\)\)\.pw_dir$", '        return "%s"' % a),
+        (r"(?m)^        if pid <= 1:$", "        if pid <= 1 or pid == SUITE_PID:"),
+        (r"(?m)^    chain = win_chain\(os\.getpid\(\), table, _win_info, bridge=_msys_bridge\(\)\)$",
+         "    chain = win_chain(os.getpid(), table, _win_info, SUITE_PID, bridge=_msys_bridge())"))
 for pat, new in subs:
     s, n = re.subn(pat, lambda _: new, s)
     if n != 1:
         sys.exit(1)
-open(p, "w", encoding="utf-8").write(s)
+open(p, "w", encoding="utf-8", newline="").write(s)
 PY
   export PYTHONDONTWRITEBYTECODE=1
 }
+
+# Windows (Git Bash running Windows' own Python): Python ends a printed line with CR LF, so every python3 a suite runs is read
+# without the CR (the rc stays Python's: pipefail); br and hk drop it from what they capture. The suites' own helpers run in
+# UTF-8 mode (they read and write files without naming an encoding); -X is not handed to a child and nothing is exported, so
+# the brain itself (bin/brain, a hook, what they start) runs in the system code page, as on a person's machine.
+if [ "${OS:-}" = Windows_NT ]; then
+  python3() { command python3 -X utf8 "$@" | sed 's/\r$//'; }
+fi
+hookpy() {  # hookpy <script> <args…> — a hook script as pyrun.sh runs it: on Windows with UTF-8 streams unless the case set others
+  if [ "${OS:-}" = Windows_NT ]; then PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}" command python3 "$@"; else command python3 "$@"; fi
+}
+wargs() {  # wargs <arg>… — WARGS: the arguments, each path in the scratch tree in the form a Windows session types (C:/…);
+  # the brain takes its arguments as typed there (bin/brain), as guard-owner reads them
+  local a; WARGS=()
+  for a in "$@"; do
+    # only the prefix: cygpath would also resolve a .. the argument must keep, as a person types it
+    if [ "${OS:-}" = Windows_NT ]; then case "$a" in "$TMP"|"$TMP"/*) a="$(cygpath -m "$TMP")${a#"$TMP"}";; esac; fi
+    WARGS+=("$a")
+  done
+}
+wcwd() { if [ "${OS:-}" = Windows_NT ]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }   # a directory as Python's getcwd gives it
+nocr() { if [ "${OS:-}" = Windows_NT ]; then local t=${1//$'\r\n'/$'\n'}; printf '%s' "${t%$'\r'}"; else printf '%s' "$1"; fi; }
 
 Q=0; CASE_FAIL=0; NP=0
 _c() {  # _c <0|1 passed> <label> <detail>
@@ -45,6 +71,7 @@ c_eq()    { [ "$1" = "$2" ] && _c 1 "$3" || _c 0 "$3" "got '${1:0:300}', want '$
 c_has()   { case "$1" in *"$2"*) _c 1 "$3";; *) _c 0 "$3" "missing '$2' in '${1:0:300}'";; esac; }
 c_hasnt() { case "$1" in *"$2"*) _c 0 "$3" "has '$2'";; *) _c 1 "$3";; esac; }
 c_rc()    { c_eq "$RC" "$1" "$2"; }
+c_skip()  { [ "$Q" = 1 ] || printf '  SKIP %s: %s\n' "$1" "$2"; }   # c_skip <label> <why> — a check this system cannot make
 
 newp() {  # newp — a fresh git project and a fresh state root; cd into the project; SID back to sA
   NP=$((NP+1))
@@ -57,7 +84,9 @@ newp() {  # newp — a fresh git project and a fresh state root; cd into the pro
 }
 
 br() {  # br <args…> — run the brain of BROOT as session SID; sets OUT (stdout+stderr) and RC
-  OUT=$(CLAUDE_CODE_SESSION_ID="$SID" "$BROOT/bin/brain" "$@" 2>&1); RC=$?
+  wargs "$@"
+  OUT=$(CLAUDE_CODE_SESSION_ID="$SID" "$BROOT/bin/brain" ${WARGS[@]+"${WARGS[@]}"} 2>&1); RC=$?
+  OUT=$(nocr "$OUT")
 }
 
 bpy() {  # bpy <python code> — run code with brain_store imported as s, in the current project
@@ -77,8 +106,16 @@ owner_ok() {  # owner_ok <args after owner…> — a fresh default-mode record f
   rec default "$SID" "$@"; br owner "$@"
 }
 
-hin() {  # hin <key=value>… — hook input JSON; a value that parses as JSON stays JSON, any other is a string
-  python3 -c 'import json, sys
+hin() {  # hin <key=value>… — hook input JSON; a value that parses as JSON stays JSON, any other is a string. On Windows a path
+  # key (cwd, file_path, notebook_path, transcript_path) is handed over in the form Claude Code sends there (C:/…)
+  MSYS_NO_PATHCONV=1 python3 -c 'import json, os, subprocess, sys
+PATHS = ("cwd", "file_path", "notebook_path", "transcript_path")
+def win(v):
+    if os.name != "nt" or not v.startswith("/"):
+        return v
+    return subprocess.run(["cygpath", "-m", v], capture_output=True, text=True, check=True).stdout.strip()
+def fix(o):
+    return {k: win(v) if k in PATHS and isinstance(v, str) else fix(v) for k, v in o.items()} if isinstance(o, dict) else o
 d = {}
 for kv in sys.argv[1:]:
     k, _, v = kv.partition("=")
@@ -86,14 +123,14 @@ for kv in sys.argv[1:]:
         d[k] = json.loads(v)
     except ValueError:
         d[k] = v
-print(json.dumps(d, ensure_ascii=False))' "$@"
+print(json.dumps(fix(d), ensure_ascii=False))' "$@"
 }
 
 hk() {  # hk <event> <hook input JSON> — run BROOT's brain_hook.py as Claude Code does; sets OUT (stdout), ERR (stderr), RC
   local e
   e=$(mktemp)
-  OUT=$(printf '%s' "$2" | python3 "$BROOT/scripts/brain_hook.py" "$1" 2>"$e"); RC=$?
-  ERR=$(cat "$e"); rm -f "$e"
+  OUT=$(printf '%s' "$2" | hookpy "$BROOT/scripts/brain_hook.py" "$1" 2>"$e"); RC=$?
+  OUT=$(nocr "$OUT"); ERR=$(nocr "$(cat "$e")"); rm -f "$e"
 }
 
 hfield() {  # hfield <field> — a field of hookSpecificOutput in OUT ("" when OUT is empty or has no such field)
@@ -119,7 +156,7 @@ p, old, new = sys.argv[1:4]
 s = open(p, encoding="utf-8").read()
 if s.count(old) != 1:
     sys.exit(1)
-open(p, "w", encoding="utf-8").write(s.replace(old, new))
+open(p, "w", encoding="utf-8", newline="").write(s.replace(old, new))
 PY
   then bad "[X] $name: the break does not apply (the text is not found exactly once in $file)"; return; fi
   local crc rf="$d.case"; rm -f "$rf"

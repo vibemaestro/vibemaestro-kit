@@ -91,7 +91,7 @@ L = [
     a("m5", "2026-10-19T12:01:03.000Z", 0, 1200, 0, 1200, 20),
     a("m6", "2026-10-19T12:05:00.000Z", 0, 2400, 0, 0, 10, other=400),
 ]
-with open(sys.argv[1], "w", encoding="utf-8") as f:
+with open(sys.argv[1], "w", encoding="utf-8", newline="") as f:
     for r in L:
         f.write((r if isinstance(r, str) else json.dumps(r)) + "\n")
     f.write(json.dumps(a("m7", "2026-10-19T12:06:00.000Z", 1, 1, 1, 1, 1))[:60])   # a record cut mid-write: no newline
@@ -190,7 +190,7 @@ lsp_registry() {  # lsp_registry — plugins of every kind in a fabricated regis
   for n in pyright-lsp gopls-lsp serena lsp-json lsp-servers zz-nolang "$@"; do
     mkdir -p "$TMP/pl$NP/$n/.claude-plugin"
     printf '{"name":"%s"}' "$n" > "$TMP/pl$NP/$n/.claude-plugin/plugin.json"
-    reg="$reg$sep\"$n@m\":[{\"scope\":\"user\",\"installPath\":\"$TMP/pl$NP/$n\"}]"; sep=,
+    reg="$reg$sep\"$n@m\":[{\"scope\":\"user\",\"installPath\":\"$(wpath "$TMP/pl$NP/$n")\"}]"; sep=,
   done
   printf '{"python":{"command":"pyright"}}' > "$TMP/pl$NP/lsp-json/.lsp.json"
   printf '{"name":"lsp-servers","lspServers":{"go":{"command":"gopls"}}}' > "$TMP/pl$NP/lsp-servers/.claude-plugin/plugin.json"
@@ -458,7 +458,7 @@ def plug(name, version, deps=None):
     m = {"name": name, "version": version}
     if deps:
         m["dependencies"] = deps
-    json.dump(m, open(os.path.join(d, ".claude-plugin", "plugin.json"), "w"))
+    json.dump(m, open(os.path.join(d, ".claude-plugin", "plugin.json"), "w", newline=""))
     return d
 def stop(dirs):
     try:
@@ -502,9 +502,12 @@ case_probe_plan() {
 }
 
 echo "== cases =="
-for c in case_cost case_merge case_sums case_rows case_lsp case_hot case_did case_knob case_probe_pass case_probe_fallback \
-         case_probe_nocompact case_probe_grader case_probe_memory case_probe_preflight case_probe_control10 case_probe_plan \
-         case_probe_isolated case_probe_void case_probe_crash case_probe_dep case_probe_silent; do
+PROBES="case_probe_pass case_probe_fallback case_probe_nocompact case_probe_grader case_probe_memory case_probe_preflight
+        case_probe_control10 case_probe_plan case_probe_isolated case_probe_void case_probe_crash case_probe_dep case_probe_silent"
+if [ "${OS:-}" = Windows_NT ]; then   # the probe starts a stand-in claude, a shell script Windows' own Python cannot run
+  echo "  SKIP [probe]: the probe drives a stand-in claude script, which Windows' own Python cannot start"; PROBES=""
+fi
+for c in case_cost case_merge case_sums case_rows case_lsp case_hot case_did case_knob $PROBES; do
   run_case $c
 done
 cd "$TMP" || exit 1

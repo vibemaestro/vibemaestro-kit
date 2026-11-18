@@ -140,8 +140,8 @@ brain_store_isolate() {  # brain_store_isolate <brain_store.py> <dir> — as bra
 import re, sys
 p, m, a, pid = sys.argv[1:5]
 s = open(p, encoding="utf-8").read()
-subs = ((r"(?m)^MANAGED_SETTINGS = \(.*\)$", 'MANAGED_SETTINGS = ("%s/managed-settings.json",)\nSUITE_PID = %s' % (m, pid)),
-        (r"(?m)^        return pwd\.getpwuid\(os\.getuid\(\)\)\.pw_dir$", '        return "%s"' % a),
+subs = ((r"(?m)^MANAGED_SETTINGS = .*$", 'MANAGED_SETTINGS = ("%s/managed-settings.json",)\nSUITE_PID = %s' % (m, pid)),
+        (r"(?m)^        return (?:win_profile\(\) if WINDOWS else )?pwd\.getpwuid\(os\.getuid\(\)\)\.pw_dir$", '        return "%s"' % a),
         (r"(?m)^        if pid <= 1:$", "        if pid <= 1 or pid == SUITE_PID:"))
 for pat, new in subs:
     s, n = re.subn(pat, lambda _: new, s)
