@@ -82,7 +82,7 @@ card() { bpy 'import time, brain_ledger as L
 st, ops, led = L.snapshot(s.state_dir()); print("\n".join(s.card_lines(st, time.time(), ops=ops, d=s.state_dir())))'; }
 
 case_promote() {
-  if [ "${OS:-}" = Windows_NT ]; then c_skip "[p] a promote writes its SOUL line through kit:soul-line" "a focus is retired, and a SOUL line written, through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl)"; return; fi
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[p] a promote writes its SOUL line through kit:soul-line" "a SOUL line is written through vibemaestro-sdlc's baton go, which does not run on Windows yet (a signed run needs the owner's dialog)"; return; fi
   local real
   np; owner_ok add --kind decision --text "one owner, one signature" --owner-quote q --where chat
   real=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$P/SOUL.md")
@@ -123,7 +123,7 @@ case_refused() {
 }
 
 case_ext() {
-  if [ "${OS:-}" = Windows_NT ]; then c_skip "[e] an extension's verb writes and removes a SOUL line" "a focus is retired, and a SOUL line written, through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl)"; return; fi
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[e] an extension's verb writes and removes a SOUL line" "a SOUL line is written through vibemaestro-sdlc's baton go, which does not run on Windows yet (a signed run needs the owner's dialog)"; return; fi
   np; install "$FIX"
   br op add --kind trap --text "check the base before a rebase"
   owner_g shelve T1 "CLAUDE.md [S14]" --soul-line "[S14] check the base before a rebase"; c_rc 0 "[e] the extension's archive: written"

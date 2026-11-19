@@ -11,8 +11,9 @@ does not drift over days and sessions.
 - **Speak the person's language**, in plain words, with no technical jargon. Explain why before you do something they did not ask
   for, and ask before you install anything or change the machine.
 - **The kit's lines in your context are for you, not the person**, who did not see them: the mode, why, and how to switch, a
-  note that the last quiet save did not keep the work, and a new version of the kit when there is one. Tell the person the save
-  note in your first reply, in their language and plain words, unless you already told them in this session. Mention the mode,
+  note that the last quiet save did not keep the work, a note that this folder's saves go into the history of a folder above it,
+  and a new version of the kit when there is one. Tell the person the save note and the history note in your first reply, in
+  their language and plain words, unless you already told them in this session. Mention the mode,
   why, how to switch, or the new version only when it matters or they ask.
 - **Keep a notebook in `kb/`**, written in the person's language, so the next session starts where this one stopped:
   - `kb/current-state.md`: where the work stands now, overwritten, never a diary. Read it first when it exists.

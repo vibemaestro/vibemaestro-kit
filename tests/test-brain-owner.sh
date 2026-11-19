@@ -78,6 +78,8 @@ clean_env "$TMP"
 # shellcheck source=fixtures/brain.sh
 . "$HERE/fixtures/brain.sh"
 brain_kit "$SRC_ROOT"
+# shellcheck source=fixtures/owner-hosts.sh
+. "$HERE/fixtures/owner-hosts.sh"
 
 ADD=(add --kind decision --text "Owner merges every PR that touches clusters/" --owner-quote "PR chạm clusters/ thì anh merge" --where "prompt 10-18 09:11" --anchor "clusters/")
 SENTENCE="permission dialog"
@@ -641,8 +643,48 @@ case_hook_ask() {
   c_eq "$(hfield permissionDecision)" deny "[H] auto on 2.1.210: deny (R4)"
   c_has "$(hfield permissionDecisionReason)" "$SENTENCE" "[H] with the refusal sentence"
   c_eq "$(recmode)" none "[H] and no record"
-  CLAUDE_CODE_EXECPATH=$(fakever "no version here") gown auto "${a[@]}"
+  mkdir -p "$TMP/nover$NP"; cp "$(fakever "no version here")" "$TMP/nover$NP/claude"   # nor a `claude` on PATH that knows one
+  PATH="$TMP/nover$NP:$PATH" CLAUDE_CODE_EXECPATH=$(fakever "no version here") gown auto "${a[@]}"
   c_eq "$(hfield permissionDecision)" deny "[H] auto on an unknown version: deny"
+}
+
+# brain_host_row <mode> — under the row's HOST and HOST_ENV (owner_hosts): guard-owner's decision, then the CLI's rc after an
+# ask (the CLI runs under the same host, as the Bash tool does) or the deny's reason
+brain_host_row() {
+  NH=$((NH+1))
+  local a=(add --kind decision --text "decision under host row $NH" --owner-quote q --where w)
+  OUT=$(ownin "$1" "$(cmdline brain owner "${a[@]}")" | env "${HOST_ENV[@]}" ${HOST[@]+"${HOST[@]}"} python3 "$BROOT/scripts/brain_hook.py" guard-owner 2>/dev/null)
+  if [ "$(hfield permissionDecision)" = ask ]; then
+    env CLAUDE_CODE_SESSION_ID="$SID" "${HOST_ENV[@]}" ${HOST[@]+"${HOST[@]}"} "$BROOT/bin/brain" owner "${a[@]}" > /dev/null 2>&1
+    echo "ask/$?"
+  else
+    hfield permissionDecision; hfield permissionDecisionReason
+  fi
+}
+NH=0
+
+case_hook_hosts() {  # [HOST] the shared table: the official hosts' dialog writes, in auto too; every other answerer is refused
+  newp
+  owner_hosts "$TMP/hosts$NP" brain_host_row c_eq c_has
+  HOST=(); HOST_ENV=(CLAUDE_PID=² PATH="$TMP/hosts$NP/auto-none/bin:$PATH")
+  c_has "$(brain_host_row auto | tr '\n' ' ')" 'deny brain: permission mode auto' "[HOST] CLAUDE_PID not a plain number (²): no crash, a deny"
+  c_has "$(brain_host_row auto)" '(tried: `claude` on PATH)' "[HOST] … that tried PATH only"
+  owner_vline "$P" claude 2.1.290 win > /dev/null      # a project's own claude, in the hook's working directory
+  HOST_ENV=(PATH=".:$TMP/hosts$NP/auto-none/bin:$PATH")
+  c_has "$(brain_host_row auto | tr '\n' ' ')" 'deny brain: permission mode auto' "[HOST] a claude in the working directory (. first on PATH; Windows looks there anyway): not run, deny"
+  c_has "$(brain_host_row auto)" '(tried: `claude` on PATH)' "[HOST] … no claude on PATH taken"
+  rm -f "$P/claude" "$P/claude.cmd"
+  if [ "${OS:-}" = Windows_NT ]; then
+    c_skip "[HOST] brain doctor reads the version of the running Claude Code" "Windows Python cannot run the fake host, a Git Bash script"
+  else
+    OUT=$(env CLAUDE_CODE_SESSION_ID="$SID" PATH="$TMP/hosts$NP/auto-terminal/bin:$PATH" \
+            bash "$TMP/hosts$NP/auto-terminal/claude" :: "$BROOT/bin/brain" doctor 2>&1)
+    c_has "$OUT" "Claude Code 2.1.290" "[HOST] brain doctor reads the version of the running Claude Code, with none on PATH"
+  fi
+  printf '%s' "$PRH" > "$MANAGED/managed-settings.json"
+  HOST_ENV=(CLAUDE_CODE_ENTRYPOINT=claude-vscode); read -r -a HOST <<< "bash $TMP/hosts$NP/vscode/claude $OWNER_SDK ::"
+  c_eq "$(brain_host_row default | head -n 1)" deny "[HOST] the VS Code host with a PermissionRequest hook in the managed settings: deny"
+  rm -f "$MANAGED/managed-settings.json"
 }
 
 case_hook_deny() {
@@ -1094,7 +1136,7 @@ case_batch_fresh() {  # round 2: a fresh brain's claim goes in the batch's one w
   c_eq "$(head -n 1 "$(sdir)/hot.jsonl" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["op"])')" claim "[B] round 2: the claim line opens the log"
 }
 
-for c in case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_win_walk case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
+for c in case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_hosts case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_win_walk case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
   run_case $c; done
 cd "$TMP" || exit 1
 

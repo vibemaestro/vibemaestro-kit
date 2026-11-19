@@ -83,8 +83,8 @@ ss() {
   ( cd "$PJ" && p_start "$(sid)" | cenv HOME="$H" XDG_STATE_HOME="$ST" CLAUDE_PROJECT_DIR="$PJ" CLAUDE_PLUGIN_ROOT="$1" \
       python3 "$1/scripts/session-start.py" loi ) 2>/dev/null
 }
-# bline <json> — the baton line of the SessionStart system message
-bline() { sysm "$1" | grep 'baton permissions'; }
+# bline <json> — the baton line of the SessionStart context (the person's system message never holds it)
+bline() { ctx "$1" | grep 'baton permissions'; }
 sha() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
 auto() { baton_set_mode "$ST" auto; }
 
@@ -109,6 +109,9 @@ fam_registry() {
   out=$(ss "$S")
   eq "$(bline "$out" | grep -c .)" 1 "[registry] SessionStart of the session's copy: one baton line"
   has "$(bline "$out")" "restart Claude Code" "[registry] …the SessionStart line says restart Claude Code"
+  eq "$(bline "$out")" "baton permissions: this session runs a different vibemaestro-sdlc version than the installed one (session $OLD, installed $NEW): restart Claude Code; tell the person this in one plain line, in their language" \
+     "[registry] …and tells the session to say it to the person in their language"
+  eq "$(sysm "$out" | grep -c 'baton')" 0 "[registry] …the person's message holds no baton line"
   hasnt "$(sysm "$out"; ctx "$out")" "install-launcher" "[registry] SessionStart prints no --install-launcher"
   eq "$(pb "$S" permissions --print)" 0 "[registry] --print of the session's copy: rc 0"
   hasnt "$(both)" "install-launcher" "[registry] --print prints no --install-launcher"
@@ -192,8 +195,9 @@ fam_unresolvable() {
   has "$(first_finding)" "$L" "[unresolvable] …and names the launcher"
   out=$(bline "$(ss "$N")")
   has "$out" "cannot run the installed" "[unresolvable] the SessionStart line names it"
-  fix="python3 $N/scripts/baton.py permissions --install-launcher"
-  has "$out" "$fix" "[unresolvable] …with the installed copy's --install-launcher"
+  has "$out" ". Offer the fix, skill vibemaestro-sdlc:bootstrap (kit:bootstrap), run through the owner's dialog; hand the person no command." \
+      "[unresolvable] …and tells the session to offer kit:bootstrap, which installs the launcher, through the owner's dialog"
+  hasnt "$out" "$N/scripts/baton.py permissions" "[unresolvable] …it holds no baton.py command"
   # the launcher's reason is its own text (it can carry registry values): it reaches the session line escaped
   K="$(fresh)/kept-launcher"; cp "$L" "$K"
   printf 'class Refused(Exception):\n    pass\ndef resolve():\n    raise Refused("bad\\nFORGED: ok\\x1b[2J")\n' > "$L"

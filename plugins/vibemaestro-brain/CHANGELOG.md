@@ -2,6 +2,12 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.5.3
+
+Released together: vibemaestro-sdlc 0.7.3, vibemaestro-brain 0.5.3
+
+- patch: Owner items (goals, decisions and windows pinned with `brain owner …`) now work in Claude Code's VS Code extension and the Claude desktop app, as in a terminal, Windows included. In `auto` mode they need Claude Code 2.1.211 or later; when the version cannot be read, the refusal says what was tried and that the default permission mode works. Any other program that could answer the permission dialog is still refused.
+
 ## 0.5.2
 
 Released together: vibemaestro-sdlc 0.7.2, vibemaestro-brain 0.5.2

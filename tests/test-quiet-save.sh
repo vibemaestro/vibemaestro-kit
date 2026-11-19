@@ -542,6 +542,92 @@ NR="$TMP/notebook-remote"; mkdir -p "$NR"; printf 'bai\n' > "$NR/bai.md"; stop "
 H1=$(git -C "$NR" rev-parse HEAD); printf 'x\n' >> "$NR/bai.md"; stop "$NR" >/dev/null
 eq "$(git -C "$NR" rev-parse HEAD)" "$H1" "[I5] once the folder has a remote, the next turn saves nothing (the developer flow keeps it)"
 
+echo "== [Q] a subfolder that turns the kit off, under a history root (KIT-968) =="
+offcfg() { mkdir -p "$1/.vibemaestro"; printf '%s\n' "${2:-{\"schema\": 1, \"hooks\": \"off\"\}}" > "$1/.vibemaestro/sdlc.json"; }
+subst() {  # subst <dir> — Claude's context from the SubagentStart hook in <dir>
+  local c; c=$(hook_cmds "$HOOKS" SubagentStart general-purpose | head -n 1)
+  ctx "$(cd "$1" && printf '{"session_id":"%s","hook_event_name":"SubagentStart","agent_type":"general-purpose"}' "$(sid)" \
+         | CLAUDE_PLUGIN_ROOT="$PL" CLAUDE_PROJECT_DIR="$1" bash -c "$c" 2>/dev/null)"
+}
+edit() {  # edit <dir> — the joined output of the PreToolUse Edit hooks for a file in <dir>
+  local c; while IFS= read -r c; do [ -n "$c" ] || continue
+    (cd "$1" && p_edit "$(sid)" "$1/a.txt" | CLAUDE_PLUGIN_ROOT="$PL" CLAUDE_PROJECT_DIR="$1" bash -c "$c" 2>/dev/null)
+  done < <(hook_cmds "$HOOKS" PreToolUse Edit)
+}
+T="$TMP/thu-nghiem"; mkdir -p "$T/chua-cai" "$T/da-cai" "$T/ban[1]" "$T/ban1"
+printf 'a\n' > "$T/chua-cai/a.txt"; printf 'b\n' > "$T/da-cai/b.txt"; printf 'c\n' > "$T/ban[1]/c.txt"; printf 'd\n' > "$T/ban1/d.txt"
+stop "$T" >/dev/null
+eq "$(tracked "$T")" "ban1/d.txt ban[1]/c.txt chua-cai/a.txt da-cai/b.txt " "[Q0] a turn in the parent itself makes it the history root of every subfolder (how the field case began)"
+offcfg "$T/chua-cai"; offcfg "$T/ban[1]"; printf 'a2\n' > "$T/chua-cai/a.txt"
+N0=$(saves "$T")
+eq "$(core "$T/chua-cai")" "" "[Q1] a session in the off subfolder: the core hook says nothing"
+eq "$(subst "$T/chua-cai")" "" "[Q1] …nor the SubagentStart hook"
+has "$(subst "$T/da-cai")" 'Keep a notebook in' "[Q1] control: in the on sibling the SubagentStart hook gives the everyday core"
+stop "$T/chua-cai" >/dev/null
+eq "$(saves "$T")" "$N0" "[Q1] a turn ending in the off subfolder makes no save"
+printf 'b2\n' > "$T/da-cai/b.txt"; stop "$T/da-cai" >/dev/null
+eq "$(saves "$T")" "$((N0 + 1))" "[Q2] a turn in the on sibling saves"
+eq "$(tracked "$T")" "ban1/d.txt da-cai/b.txt " "[Q2] …without the off subfolders, though an earlier save held them; ban1 (which ban[1] matches as a pattern) is kept"
+eq "$(cat "$T/chua-cai/a.txt")" "a2" "[Q2] …and the off subfolder's files stay on disk as they were"
+N0=$(saves "$T"); printf 'a3\n' > "$T/chua-cai/a.txt"; stop "$T" >/dev/null
+eq "$(saves "$T")|$(tracked "$T")" "$N0|ban1/d.txt da-cai/b.txt " "[Q2] a turn in the root itself does not take the off subfolder either (nothing else changed: no save)"
+C3=$(core "$T/da-cai")
+eq "$(printf %s "$C3" | grep -o 'thu-nghiem above it' | wc -l | tr -d ' ')" 1 "[Q3] the on sibling's session start names the folder that holds its history, once"
+has "$C3" "the quiet saves of this folder go into the history of the folder" "[Q3] …in the line for Claude"
+hasnt "$(coresys "$T/da-cai")" "thu-nghiem" "[Q3] …and the person sees no fixed-language line"
+hasnt "$(core "$T")" "go into the history of the folder" "[Q4] a session in the history root itself: no such line"
+NP="$TMP/no-parent-history"; mkdir -p "$NP/sub"; printf 'x\n' > "$NP/sub/x.txt"
+C4=$(core "$NP/sub")
+has "$C4" "everyday mode, because" "[Q4] control: a subfolder of a folder with no history is in everyday mode"
+hasnt "$C4" "go into the history of the folder" "[Q4] …and gets no history line (its saves are its own)"
+mkdir -p "$T/chua-cai/inner"; offcfg "$T/chua-cai/inner" '{"schema": 1, "language": "en"}'; printf 'i\n' > "$T/chua-cai/inner/i.txt"
+N0=$(saves "$T")
+eq "$(core "$T/chua-cai/inner")" "" "[Q5] a nearer config without the hooks key, inside the off folder: the kit stays off"
+stop "$T/chua-cai/inner" >/dev/null
+eq "$(saves "$T")" "$N0" "[Q5] …and no save"
+RO="$TMP/root-off"; mkdir -p "$RO/sub"; printf 'x\n' > "$RO/sub/x.txt"; stop "$RO" >/dev/null; offcfg "$RO"
+N0=$(saves "$RO"); printf 'y\n' >> "$RO/sub/x.txt"
+eq "$(core "$RO/sub")" "" "[Q6] the root's own hooks: off still turns off a subfolder with no config (unchanged)"
+stop "$RO/sub" >/dev/null
+eq "$(saves "$RO")" "$N0" "[Q6] …and no save"
+W2="$TMP/root-note"; mkdir -p "$W2/on" "$W2/off"; printf 'x\n' > "$W2/on/a.txt"; printf 'x\n' > "$W2/off/a.txt"; stop "$W2" >/dev/null
+offcfg "$W2" '{"schema": 1, "later_key": true}'; offcfg "$W2/off"
+has "$(edit "$W2/on")" "later_key" "[Q7] control: the root's config note reaches the PreToolUse hook of an on subfolder"
+eq "$(edit "$W2/off")" "" "[Q7] the PreToolUse hook says nothing in the off subfolder"
+OO="$TMP/only-off"; mkdir -p "$OO/chua-cai"; offcfg "$OO/chua-cai"; printf 'a\n' > "$OO/chua-cai/a.txt"
+stop "$OO" >/dev/null
+eq "$(test -e "$OO/.git" && echo git || echo none)" none "[Q8] a folder holding only an off subfolder is empty to the save: no history made"
+
+echo "== [Q9] review round 1 (KIT-968): an off folder git ignores, a copy that holds one, an off folder that is an empty repository =="
+IG="$TMP/ignored-off"; mkdir -p "$IG/ign" "$IG/keep"; printf 'k\n' > "$IG/keep/k.txt"; printf 'i\n' > "$IG/ign/i.txt"; printf '/ign/\n' > "$IG/.gitignore"
+offcfg "$IG/ign"; stop "$IG" >/dev/null; N0=$(saves "$IG"); printf 'k2\n' >> "$IG/keep/k.txt"; stop "$IG" >/dev/null
+eq "$(saves "$IG")|$(tracked "$IG")" "$((N0 + 1))|.gitignore keep/k.txt " "[Q9] an off folder that .gitignore also names: the rest is still saved"
+hasnt "$(core "$IG")" "the last quiet save of this folder" "[Q9] …and no failed-save line at the next session start"
+BC="$TMP/copy-holds-off"; mkdir -p "$BC/chua-cai/.vibemaestro" "$BC/da-cai"; printf 'b\n' > "$BC/da-cai/b.txt"; printf 'a\n' > "$BC/chua-cai/a.txt"
+printf '{"schema": 1, "hooks": "auto"}\n' > "$BC/chua-cai/.vibemaestro/sdlc.json"; stop "$BC" >/dev/null
+printf '{"schema": 1, "hooks": "off"}\n' > "$BC/chua-cai/.vibemaestro/sdlc.json"; printf 'a2\n' > "$BC/chua-cai/a.txt"
+qs copy 1 --dir "$BC" >/dev/null; offcfg "$BC/ban-cu"/*/chua-cai   # not a break: the copy an older save (made before the fix) would hold
+N0=$(saves "$BC"); printf 'b2\n' >> "$BC/da-cai/b.txt"; stop "$BC" >/dev/null
+eq "$(saves "$BC")|$(tracked "$BC")" "$((N0 + 1))|.ignore da-cai/b.txt " "[Q9] a kit copy in ban-cu/ that holds an off folder: the next turn still saves the rest"
+ER="$TMP/off-empty-repo"; mkdir -p "$ER/inr" "$ER/keep"; printf 'k\n' > "$ER/keep/k.txt"; git_ -C "$ER/inr" init -q; offcfg "$ER/inr"
+stop "$ER" >/dev/null
+eq "$(saves "$ER")|$(tracked "$ER")" "1|keep/k.txt " "[Q10] an off folder that is a repository with no commit is left out whole; the rest is saved"
+
+echo "== [Q11] review round 2 (KIT-968): an ignored off folder whose name starts with ':', a staged file the save cannot simply unstage =="
+CO="$TMP/colon-off"; mkdir -p "$CO/keep"; printf 'k\n' > "$CO/keep/k.txt"
+if mkdir "$CO/:colon" 2>/dev/null; then
+  offcfg "$CO/:colon"; printf '/:colon/\n' > "$CO/.gitignore"; stop "$CO" >/dev/null
+  eq "$(saves "$CO")|$(tracked "$CO")" "1|.gitignore keep/k.txt " "[Q11] an ignored off folder named ':colon' (git reads a leading ':' as pathspec magic): the rest is saved"
+else echo "  SKIP [Q11] ':colon': this file system refuses ':' in a name (Windows)"; fi
+RF="$TMP/rm-refused"; mkdir -p "$RF/ign" "$RF/oth" "$RF/keep"; printf 'i\n' > "$RF/ign/i.txt"; printf 'o\n' > "$RF/oth/o.txt"; printf 'k\n' > "$RF/keep/k.txt"
+stop "$RF" >/dev/null
+printf '#!/bin/sh\nexit 1\n' > "$RF/.git/hooks/pre-commit"; chmod +x "$RF/.git/hooks/pre-commit"
+printf 'i2\n' > "$RF/ign/i.txt"; stop "$RF" >/dev/null                   # the person's hook refuses: ign/i.txt stays staged
+rm "$RF/.git/hooks/pre-commit"; printf 'i3\n' > "$RF/ign/i.txt"          # staged content now differs from both HEAD and the file
+offcfg "$RF/ign"; offcfg "$RF/oth"; printf '/ign/\n' > "$RF/.gitignore"; printf 'k2\n' > "$RF/keep/k.txt"; stop "$RF" >/dev/null
+eq "$(saves "$RF")|$(tracked "$RF")" "2|.gitignore keep/k.txt " "[Q11] an off folder with a staged file that differs from both the save and the disk: both off folders leave, the rest is saved"
+eq "$(cat "$RF/ign/i.txt")" "i3" "[Q11] …and the off folder's file stays on disk as the person left it"
+
 echo "== [O] connected to a remote: the developer flow takes over, the save stops =="
 git_ init -q --bare "$TMP/hub.git"; git -C "$P" remote add origin "$TMP/hub.git"; git -C "$P" push -q origin HEAD 2>/dev/null
 N0=$(saves "$P"); printf 'after\n' > "$P/after.txt"; stop "$P" >/dev/null

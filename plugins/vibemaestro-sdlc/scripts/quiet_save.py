@@ -143,10 +143,12 @@ def protected(home):
 
 
 def too_many(d):
-    """More than MAX_FILES files under `d` (the walk stops at MAX_FILES + 1)."""
+    """More than MAX_FILES files under `d` (the walk stops at MAX_FILES + 1); a folder the save leaves out is not counted."""
+    import sdlc_config as C
     n = 0
     for root, dirs, files in os.walk(d):
-        dirs[:] = [x for x in dirs if x not in NOT_COUNTED and not os.path.lexists(os.path.join(root, x, ".git"))]
+        dirs[:] = [x for x in dirs if x not in NOT_COUNTED and not os.path.lexists(os.path.join(root, x, ".git"))
+                   and not C.hooks_off_at(os.path.join(root, x))]
         n += len(files)
         if n > MAX_FILES:
             return True
@@ -155,6 +157,7 @@ def too_many(d):
 
 def repo_of(d):
     """The kit's repository at `d`: Skip when it is not one the save may write. A plain folder becomes one."""
+    import sdlc_config as C
     rc, top, err = git(d, "rev-parse", "--show-toplevel")
     if rc == 127:
         raise Skip("Git is not installed, so nothing can be saved", state="failed")
@@ -163,7 +166,7 @@ def repo_of(d):
             raise Skip("Git cannot read this folder (%s)" % (err.splitlines() or ["no message"])[0][:160], state="failed")
         place_check(d)
         try:
-            empty = not any(e not in NOT_CONTENT for e in os.listdir(d))
+            empty = not any(e not in NOT_CONTENT and not C.hooks_off_at(os.path.join(d, e)) for e in os.listdir(d))
         except OSError:
             empty = False
         if empty:
@@ -306,10 +309,35 @@ class Lock:
                 pass
 
 
-def empty_inner(d):
+def off_dirs(d):
+    """The subfolders of `d` (paths relative to it, `/`-separated) whose own .vibemaestro/sdlc.json turns the kit off: the save
+    leaves them out whole, an inner repository among them. The walk skips what is never saved (bulky folders, inner repositories,
+    the kit's folders of old copies) and does not enter an off folder."""
+    import sdlc_config as C
+    out, made = [], made_by_kit(d)
+    for root, dirs, _files in os.walk(d):
+        keep = []
+        for x in dirs:
+            p = os.path.join(root, x)
+            if x in NOT_COUNTED or (root == d and kit_folder(d, x, made)):
+                continue
+            if C.hooks_off_at(p):
+                out.append(os.path.relpath(p, d).replace(os.sep, "/"))
+            elif not os.path.lexists(os.path.join(p, ".git")):
+                keep.append(x)
+        dirs[:] = keep
+    return out
+
+
+def but(off):
+    """The pathspec of the whole folder but the folders `off` (literal names: a `*` or `[` in a name is just a character)."""
+    return ["--", "."] + [":(exclude,literal)%s" % x for x in off] if off else []
+
+
+def empty_inner(d, off=()):
     """The repositories inside the folder that hold no commit yet: `git add` cannot record them, so the save stops and says so.
     Read from `git status -z` (an untracked folder that is a repository is listed as `<path>/`) and the inner repository's own HEAD."""
-    out = git(d, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignored=no")[1]
+    out = git(d, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignored=no", *but(off))[1]
     dirs = [e[2:].rstrip("/") for e in out.split("\0") if e.startswith("? ") and e.endswith("/")]
     return [x for x in dirs if os.path.lexists(os.path.join(d, fs(x), ".git"))
             and git(os.path.join(d, fs(x)), "rev-parse", "--verify", "--quiet", "HEAD")[0] != 0]
@@ -351,12 +379,21 @@ def commit(d, message):
     """Commit everything the save keeps; False when there was nothing to save. Skip when the commit fails."""
     excludes(d)
     clear_index_lock(d)
-    inner = empty_inner(d)
+    off = off_dirs(d)
+    inner = empty_inner(d, off)
     if inner:
         raise Skip("%s, so the save stopped; move it out of this folder, or delete its hidden .git folder if that history is not "
                    "needed" % inner_words(d, inner))
     drop_dead_links(d)
-    rc, _o, err = git(d, "add", "-A")
+    # shortcut: every off folder goes on one command line; a few hundred long names could pass Windows' 32K limit, use
+    # --pathspec-from-file if that is ever met
+    if off:                             # saved before it was turned off: later saves no longer hold it (the files stay on disk)
+        # -f: a file staged by a refused save differs from both HEAD and the disk, and plain rm refuses it (only the index changes)
+        git(d, "--literal-pathspecs", "rm", "-r", "--cached", "-f", "-q", "--ignore-unmatch", "--", *off)
+    # git refuses an exclude pathspec that names an ignored path (rc 1), and never adds an ignored one anyway
+    # check-ignore takes no literal magic: "./" keeps a name that starts with ':' from being read as magic (`*`, `[` are literal there)
+    seen = [x for x in off if git(d, "check-ignore", "-q", "--", "./" + x)[0] != 0]
+    rc, _o, err = git(d, "add", "-A", *but(seen))
     if rc != 0:
         if rc == 124:
             clear_index_lock(d, any_age=True)
@@ -384,7 +421,7 @@ def save(payload):
         import vsdlc
         troot = vsdlc.project_root(payload)
         cfg, _probs, _present = C.load(troot, quiet=True)
-        if cfg["hooks"] == "off" or vsdlc.session_mode(vsdlc.plugin_root(), troot, cfg)[0] != "everyday":
+        if cfg["hooks"] == "off" or C.off_below(vsdlc.session_folder(payload), troot) or vsdlc.session_mode(vsdlc.plugin_root(), troot, cfg)[0] != "everyday":
             return
     except Exception:
         return

@@ -570,9 +570,6 @@ case_words_roundtrip() {
   np; must owner_import "$TMP/wr-carried.json"; br import "$TMP/wr-carried.json"; c_rc 0 "[words-roundtrip] a bundle whose words line carries a placeholder imports"
   c_has "$OUT" "P1 (its words line carries a placeholder: the chain does not vouch for it" "[words-roundtrip] … skips the focus, naming why"
   # a supersede whose earlier item had a carried words line: the supersede line holds the words and is not carried, so it lands
-  if [ "${OS:-}" = Windows_NT ]; then   # README, On Windows: a focus retires through vibemaestro-sdlc's baton, which does not run there yet
-    c_skip "[words-roundtrip] a superseded focus's words through a bundle" "a focus is superseded through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl); store [jira] checks the refusal"
-  else
   np; must owner_ok add --kind goal --text "ship the bundle" --owner-quote q --where chat --done "the PR merged" --not-doing "the fleet" \
     --review "$(dplus 30)" --scope project
   must br op add --kind focus --text "bundle first" --owner-quote q1 --where chat --goal G1
@@ -583,7 +580,6 @@ case_words_roundtrip() {
   carry "$TMP/wr-chain.json" "$TMP/wr-chain-c.json" 'o["done"] = "~ words nobody vouches for"' "$s"
   np; must owner_import "$TMP/wr-chain-c.json"; br import "$TMP/wr-chain-c.json"; c_rc 0 "[words-roundtrip] a bundle whose superseded focus had a carried words line imports"
   br show P2 --json; c_eq "$(printf '%s' "$OUT" | python3 -c "$show")" 'clean done | clean not' "[words-roundtrip] … and its successor lands with its own words"
-  fi
   np; conf '{"quote_max": 100}'; must owner_import "$k"; br import "$k"; c_rc 0 "[words-roundtrip] a brain with a quote cap of 100 imports"
   c_has "$OUT" "P1 (its done when is 150 units, over this brain's cap of 100)" "[words-roundtrip] … skips a focus whose word is over its cap"
 }

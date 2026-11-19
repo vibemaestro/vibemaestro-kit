@@ -22,7 +22,7 @@ Properties of the hooks:
 - A broken plugin (missing `rules/`, missing core) warns loudly at the top of the session. It does not pretend that rules were delivered.
 - A matching rule is shown once per session, again after a compaction (which drops it from the context), and once inside each subagent, which keeps a set of its own. A `level: block` denial is raised every time.
 - The hooks also warn when the checkout is behind its upstream branch, add size and ledger-page notes when you edit a ledger file, and add one line at session start when the BatonRun permission check finds something missing.
-- The hooks are silent when `.vibemaestro/sdlc.json` sets `"hooks": "off"`. A repository that keeps its own rule hooks in `.claude/settings.json` must set `"hooks": "off"` or remove them: the two sets add up and are not de-duplicated.
+- The hooks are silent when `.vibemaestro/sdlc.json` sets `"hooks": "off"`. Any such file from the session's folder up to the top of its git history (or of the kit's save history) counts, whatever a nearer file says: a subfolder that sets it is off even when a parent folder holds the history, and a quiet save made from anywhere in that history leaves that subfolder out (saves made before it was turned off keep what they held). A repository that keeps its own rule hooks in `.claude/settings.json` must set `"hooks": "off"` or remove them: the two sets add up and are not de-duplicated.
 - Rules of other installed plugins that declare a dependency on this one are served by the same hooks.
 
 **Everyday mode**, for a person doing ordinary work rather than software, is described in [Everyday mode](#everyday-mode).
@@ -77,7 +77,7 @@ The plugin needs no other plugin and reads no other repository.
 | `bash` | the `.sh` adapters | tested on Linux and macOS |
 | `gh` (GitHub CLI), logged in | `intake` (tracking issue), `ship` (open PR), `install-gates` (runner check), `batonrun` | the process is written for GitHub |
 
-Windows is not tested.
+On Windows (Git for Windows' `bash`, Windows' own Python) the hooks and everyday mode run, and so do the baton's `log`, `list`, `mode` and `grant revoke`: the brain's close or supersede of a focus revokes the focus's charters there. Writing and running a baton (`new`, `check`, `go`, `run`, `rehearse`, `sign`, `pack`, a mode change, `permissions --print` and `--install-launcher`) and the owner's dialog do not run on Windows yet: each says so in one line and nothing runs; they run on Linux and macOS. `permissions --check` says in one line that there is nothing to check there.
 
 ## Install and update
 
@@ -133,7 +133,7 @@ Skills are called by name, `vibemaestro-sdlc:<name>`. They write into the `kb/` 
 | `batonrun` | Runs an action that writes outside the session as one baton script: checked, rehearsed, signed, run, post-checked, logged. | a merge, a registry push, a deletion, a force-push, a change to the user's plugin config |
 | `bootstrap` | Sets up a machine for BatonRun in one owner-signed run: the launcher and the permission block. `coordinator-bootstrap` is its old name, which leaves in the next release. | a new machine, or the session-start permission check fails |
 | `local-parallel` | Runs several tasks at once on one machine: one subagent per task (its own worktree, `intake` to a draft PR, model `agents.worker_model`); the main session keeps the queue, relays spec approvals, post-checks each PR and merges it with `kit:merge-pr`. | the person wants several tasks done in parallel |
-| `owner-sign` | For the owner only (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): lists the baton runs a session queued for the owner's signature (`go --queue`) and opens one owner dialog per item picked, in the owner's own session. | runs wait in the queue for the owner |
+| `owner-sign` | For the owner only (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): lists the baton runs a session queued for the owner's signature (`go --queue`) and opens one owner dialog per item picked, in the owner's own session: a terminal, Claude Code's VS Code extension or the Claude desktop app. | runs wait in the queue for the owner |
 | `history` | In everyday mode: lists the quiet saves of the folder in plain words and writes the chosen one as a copy into `ban-cu/`, never over the work folder; the person takes the files they need, and a copy is removed only on their word. | the person asks what was saved or wants an earlier state of a file |
 
 Useful reads of `kb/` that do not load whole files: `kb.py find <words>`, `kb.py list [--type T] [--status S]`, `kb.py outline <file>`. All three are read-only.
@@ -242,7 +242,7 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | Key | Default | Meaning |
 |---|---|---|
 | `schema` | `1` | Config schema number, the major version of the format. The plugin refuses a number above its own and names the update to run. |
-| `hooks` | `"auto"` | `"off"` silences every hook of the plugin. |
+| `hooks` | `"auto"` | `"off"` silences every hook of the plugin in this folder and its subfolders, and the quiet save leaves the folder out. |
 | `profile` | `"auto"` | `"everyday"` or `"developer"` fixes the kit's mode in this folder; `"auto"` chooses it (see [Everyday mode](#everyday-mode)). |
 | `language` | `"vi"` | `"vi"` or `"en"`: the language of the kb content (every session writes in it) and of the story labels, spec section names, PR-body headings and flow lines. `kb.py init` records it in every new config, `"en"` unless answered, so only a config made before has the default. |
 | `update_check` | `true` | `false` turns off the update reminder of a public install in this repository, for vibemaestro-sdlc and vibemaestro-brain (see the kit README, Update). |

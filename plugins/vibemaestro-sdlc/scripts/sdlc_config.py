@@ -322,6 +322,27 @@ def config_path(root):
     return os.path.join(root, *CONFIG_REL.split("/"))
 
 
+def hooks_off_at(folder):
+    """The config file in `folder` sets `"hooks": "off"`, read raw: another key that makes the file invalid does not undo it."""
+    try:
+        with open(config_path(folder), encoding="utf-8") as f:
+            data = json.loads(f.read(1024 * 1024))
+    except (OSError, ValueError, RecursionError):
+        return False
+    return isinstance(data, dict) and data.get("hooks") == "off"
+
+
+def off_below(start, root):
+    """The nearest folder from `start` up to `root` (not included: its own config is read by `load`) whose config sets
+    `"hooks": "off"`, or None. Any of them turns the kit off for a session in `start`, whatever a nearer config says."""
+    d, root = os.path.realpath(start), os.path.realpath(root)
+    while d != root and d.startswith(root.rstrip(os.sep) + os.sep):
+        if hooks_off_at(d):
+            return d
+        d = os.path.dirname(d)
+    return None
+
+
 def is_present(root):
     """Something sits at the config path. A directory or a broken link there counts as present (and invalid, see `load`):
     a config that exists but cannot be read must not look like "no config"."""

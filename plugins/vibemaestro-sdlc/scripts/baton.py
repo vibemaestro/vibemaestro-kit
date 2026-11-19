@@ -172,7 +172,6 @@ Python 3.8+, standard library only.
 import calendar
 import difflib
 import errno
-import fcntl
 import fnmatch
 import glob
 import hashlib
@@ -191,6 +190,15 @@ import tempfile
 import time
 import unicodedata
 import urllib.parse
+
+WINDOWS = os.name == "nt"
+if WINDOWS:                                             # no fcntl: msvcrt locks, as vibemaestro-brain's store
+    import msvcrt
+else:
+    import fcntl
+O_BINARY = getattr(os, "O_BINARY", 0)                   # Windows opens a file in text mode without it: CRLF written, Ctrl-Z ends a read
+WINDOWS_WHERE = ("signed runs and the owner's dialog run on Linux and macOS, in a terminal, Claude Code's VS Code extension or "
+                 "the Claude desktop app")
 
 sys.dont_write_bytecode = True
 
@@ -634,7 +642,7 @@ def read_capped(path, cap, nofollow=True):
     """(bytes, stat) of a regular file of at most `cap` bytes, opened without blocking and, with `nofollow`, never through a
     symlink; ValueError or OSError."""
     fd = os.open(path, os.O_RDONLY | (getattr(os, "O_NOFOLLOW", 0) if nofollow else 0) | getattr(os, "O_NONBLOCK", 0)
-                 | getattr(os, "O_NOCTTY", 0))
+                 | getattr(os, "O_NOCTTY", 0) | O_BINARY)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
@@ -872,7 +880,7 @@ def loose_dir(path):
         st = os.stat(path)
     except OSError:
         return None
-    if st.st_uid != os.getuid() or st.st_mode & 0o022:
+    if not WINDOWS and (st.st_uid != os.getuid() or st.st_mode & 0o022):   # Windows has neither; nothing kept runs there
         return "%s is owned by uid %d, mode %o: a project root and its .vibemaestro/batons are yours and writable by you only" \
                % (esc(path), st.st_uid, stat.S_IMODE(st.st_mode))
     return None
@@ -1621,6 +1629,8 @@ def remove_if_free(path):
 def drop_copies():
     """At the end of a process: release every copy it held, and remove each when no run phase started (RUN["consumed"]). The stop
     signals wait meanwhile, so a second interrupt does not leave a copy behind."""
+    if not HELD_COPIES:                                 # every process that bound none (on Windows, every one: go does not run there)
+        return
     mask = signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGTERM, signal.SIGHUP, signal.SIGINT))
     try:
         for final in list(HELD_COPIES):
@@ -3422,8 +3432,8 @@ def write_private(path, text):
         os.unlink(tmp)                                  # a leftover of a crashed run with the same pid
     except OSError:
         pass
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | O_BINARY, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     os.replace(tmp, path)
 
@@ -3583,12 +3593,18 @@ def log_event(d, **kw):
         v = "-" if v is None or v == "" else (json.dumps(v) if isinstance(v, list) else str(v))
         vals.append(log_value(v))
     data = "\t".join(vals).encode("utf-8", "backslashreplace")
-    fd = os.open(os.path.join(d, "log.tsv"), os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+    # Windows' O_APPEND is a seek, then a write: two writers could put their lines at one offset, so there the log lock is held
+    held = [lock_file(os.path.join(d, "log.lock"), LOG_LOCK_WAIT)] if WINDOWS else []
     try:
-        size = os.fstat(fd).st_size                     # a line left unended (a crash, a hand edit) never glues onto this one
-        os.write(fd, (b"\n" if size and os.pread(fd, 1, size - 1) != b"\n" else b"") + data + b"\n")
+        fd = os.open(os.path.join(d, "log.tsv"), os.O_RDWR | os.O_APPEND | os.O_CREAT | O_BINARY, 0o600)
+        try:
+            size = os.fstat(fd).st_size                 # a line left unended (a crash, a hand edit) never glues onto this one
+            os.lseek(fd, max(size - 1, 0), os.SEEK_SET)
+            os.write(fd, (b"\n" if size and os.read(fd, 1) != b"\n" else b"") + data + b"\n")
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        unlock(held)
     return data.decode("utf-8")                         # the line as it stands in the file
 
 
@@ -3686,6 +3702,10 @@ def allowed(signer, mode, stops, value=None):
 ASKED_MAX_AGE = 1800                                  # 30 min: the slowest measured click from a phone was 18m28s
 VERSION_FLOOR = (2, 1, 211)                            # before it, auto mode could approve a hook's `ask` without the dialog
 DIALOG_MODES = ("default", "acceptEdits", "auto")
+OFFICIAL_HOSTS = ("claude-vscode", "claude-desktop", "claude-desktop-3p")   # CLAUDE_CODE_ENTRYPOINT: VS Code, the desktop app
+AUTO_WHERE = ("In a terminal, the VS Code extension or the Claude desktop app, switch the permission mode to default and ask "
+              "again, or update Claude Code. Anywhere else (an SDK app, a custom prompt tool) %s refused in every mode: open "
+              "Claude Code in one of those three")
 MANAGED_SETTINGS = ("/etc/claude-code/managed-settings.json", "/Library/Application Support/ClaudeCode/managed-settings.json")
 SANDBOX_ENV = ("INTENT_SLUG", "SEAT")                  # vsdlc.SANDBOX_ENV: both set means a worker session (deprecated)
 ROLE_ENV = ("VIBEMAESTRO_ROLE", "worker")             # vsdlc.ROLE_ENV: the worker switch, exactly this value
@@ -3788,19 +3808,61 @@ def find_asked(session, argv, cwd, now=None):
     return None, None
 
 
-def version_ok():
-    """The running Claude Code is VERSION_FLOOR or later, read from the `X.Y.Z (Claude Code)` line of `$CLAUDE_CODE_EXECPATH
-    --version`, else of `claude --version` (an npm install's EXECPATH is node, whose version is not Claude Code's)."""
-    exe = os.environ.get("CLAUDE_CODE_EXECPATH", "")
-    for prog in ([exe] if os.path.isabs(exe) else []) + ["claude"]:
+def claude_programs(pid):
+    """The commands that run the Claude Code process `pid` again, to ask its version: its program (Linux: /proc/<pid>/exe, which
+    still runs once an update replaced the file; else `ps -o comm=`, the whole path even with spaces), then the program with its
+    script (an npm install: node cli.js). [] when they cannot be read or the process is not Claude Code."""
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+        exe = "/proc/%d/exe" % pid
+    except OSError:
         try:
-            out = subprocess.run([prog, "--version"], capture_output=True, text=True, timeout=5).stdout
+            exe = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout.strip()
+            argv = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout.split()
         except (OSError, subprocess.SubprocessError):
-            continue
+            return []
+    if not os.path.isabs(exe) or not is_claude(argv):       # never another program: CLAUDE_PID may be inherited or stale
+        return []
+    script = argv[1] if len(argv) > 1 and not argv[1].startswith("-") and os.path.isfile(argv[1]) else None
+    return [[exe]] + ([[exe, script]] if script else [])
+
+
+def claude_version():
+    """(the running Claude Code's version, or None; [what was tried]), from the first `X.Y.Z (Claude Code)` line of `--version`
+    run as: the program of the process CLAUDE_PID names (Claude Code sets it for hooks; CLAUDE_CODE_EXECPATH it sets only in the
+    Bash tool's shell), then $CLAUDE_CODE_EXECPATH, then `claude` on PATH (a desktop app started from the GUI has none)."""
+    pid, exe = os.environ.get("CLAUDE_PID", ""), os.environ.get("CLAUDE_CODE_EXECPATH", "")
+    known = re.fullmatch(r"[0-9]{1,9}", pid)          # a plain number a pid can be, never one that overflows a call
+    tries = [("the running Claude Code (process %s)" % pid, c) for c in (claude_programs(int(pid)) if known else [])]
+    tries += [("CLAUDE_CODE_EXECPATH", [exe])] if os.path.isabs(exe) else []
+    tried = []
+    on_path = shutil.which("claude")                    # Windows: claude.cmd of an npm install too (PATHEXT)
+    on_path = on_path if on_path and os.path.isabs(on_path) else None   # never the working directory's (Windows looks there)
+    tries += [("`claude` on PATH", [on_path])] if on_path else []
+    for what, cmd in tries:
+        try:
+            out = subprocess.run(cmd + ["--version"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
         m = re.search(r"(\d+)\.(\d+)\.(\d+)[^\n]*Claude Code", out or "")
         if m:
-            return tuple(int(x) for x in m.groups()) >= VERSION_FLOOR
-    return False
+            return tuple(int(x) for x in m.groups()), tried
+        tried += [] if what in tried else [what]
+    return None, tried + ([] if on_path else ["`claude` on PATH"])
+
+
+def auto_refusal(what):
+    """Why `what` is refused in permission mode auto, or None: auto shows the dialog only from VERSION_FLOOR."""
+    v, tried = claude_version()
+    floor = ".".join(map(str, VERSION_FLOOR))
+    if v is None:
+        return ("permission mode auto shows the owner's permission dialog only from Claude Code %s, and its version cannot be "
+                "read here (tried: %s). %s" % (floor, ", ".join(tried), AUTO_WHERE % (what + " is")))
+    if v < VERSION_FLOOR:
+        return ("permission mode auto: Claude Code %s is older than %s, whose auto mode can answer the permission dialog "
+                "without the owner. %s" % (".".join(map(str, v)), floor, AUTO_WHERE % (what + " is")))
+    return None
 
 
 def account_home():
@@ -3925,6 +3987,19 @@ def flag_values(argv, flag):
     return vals
 
 
+def prompt_tool(argv):
+    return any(a == "--permission-prompt-tool" or a.startswith("--permission-prompt-tool=") for a in argv)
+
+
+def official_host(argv):
+    """argv is the Claude Code of the VS Code extension or the Claude desktop app, whose dialog a person clicks: their entry point
+    (CLAUDE_CODE_ENTRYPOINT, which Claude Code hands on to hooks and the Bash tool), the SDK's `--permission-prompt-tool=stdio`
+    once, no -p. A process of the same user that sets that entry point and answers through the SDK passes too: the records
+    guard against slips, not against a process of the same user."""
+    return (os.environ.get("CLAUDE_CODE_ENTRYPOINT") in OFFICIAL_HOSTS and is_claude(argv) and not headless(argv)
+            and flag_values(argv, "--permission-prompt-tool") == ["stdio"])
+
+
 def print_run(anc):
     """True when an ancestor is Claude Code run with -p/--print: no one answers its dialog."""
     for argv, _c, _g, _h in anc:
@@ -4001,8 +4076,11 @@ def answerers(anc):
             for e in entries if isinstance(entries, list) else []:
                 if isinstance(e, dict) and plugin_answers(str(e.get("installPath", ""))):
                     found.append("a PermissionRequest hook in the enabled plugin %s" % key.split("@")[0])
+    # the official host's Claude Code is excused only when every process with a prompt tool has its command line: an SDK app
+    # run inside the host inherits its entry point but not its command line, while a Git Bash fork of one process keeps it
+    tools = {tuple(argv) for argv, _c, _g, _h in anc if prompt_tool(argv)}
     for argv, cwd, _, _ in anc:
-        if any(a == "--permission-prompt-tool" or a.startswith("--permission-prompt-tool=") for a in argv):
+        if prompt_tool(argv) and not (official_host(argv) and tools == {tuple(argv)}):
             found.append("a process started with --permission-prompt-tool")
         for v in flag_values(argv, "--settings"):
             if v.lstrip().startswith("{"):
@@ -4315,6 +4393,8 @@ def guard_owner(inp):
         at = next((i for i, (t, _f) in enumerate(segs) if owner_calls(t)), 0)
         if any("<<" in t for t, _f in segs[:at]):  # maybe a heredoc's body line: no record, so a call there refuses itself; no deny
             return None
+    if WINDOWS:                     # the processes above the hook, which bind the record, are read from /proc or ps: not there
+        return deny("the owner's dialog does not run on Windows yet (%s)" % WINDOWS_WHERE)
     if in_sandbox():
         sets = is_mode and any(f[1] and f[1][1:2] and f[1][1] in MODES for f in found)    # a mode, not a remote list
         return deny("a sandbox session: whoever answers its dialog is not the owner" + (policy_note() if sets else ""))
@@ -4327,7 +4407,11 @@ def guard_owner(inp):
         return deny(SHAPE_MODE if is_mode else SHAPE)
     if not sid:
         return deny("no session id in the hook input")
-    if not (mode in ("default", "acceptEdits") or (mode == "auto" and version_ok())):
+    if mode == "auto":
+        why = auto_refusal("a mode change" if is_mode else what)
+        if why:
+            return deny(why)
+    elif mode not in ("default", "acceptEdits"):
         return deny("permission mode %s shows no dialog the owner answers (default, acceptEdits, or auto from %s)"
                     % (mode, ".".join(map(str, VERSION_FLOOR))))
     lin = lineage()
@@ -6953,7 +7037,8 @@ def catalogue():
     for prefix, name, path in files:
         e = {"prefix": prefix, "name": name, "path": path, "marks": [], "sha": None}
         try:
-            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0))
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
+                         | O_BINARY)
             try:
                 st = os.fstat(fd)
                 if not stat.S_ISREG(st.st_mode):
@@ -7092,7 +7177,8 @@ def cmd_list(rest):
 PACK_LOCK_WAIT = 30
 SEQ_MAX = 999999
 COPY_NAME = re.compile(r"-(?:v[0-9]+|[0-9a-f]{7,})-*\Z")       # the names a copy takes: evolve a baton, never copy it
-CRITICAL = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+CRITICAL = tuple(getattr(signal, n) for n in ("SIGTERM", "SIGHUP", "SIGINT") if hasattr(signal, n))   # Windows has no SIGHUP
+LOG_LOCK_WAIT = 10
 
 
 def kit_names():
@@ -7161,23 +7247,40 @@ def stops_of(text):
     return ", ".join(sorted(set(w.strip() for w in f["Stops"][1].split(",") if w.strip())))
 
 
+HELD = PermissionError if WINDOWS else BlockingIOError   # what a lock another process holds raises when taken without waiting
+
+
+def lock_file(path, wait):
+    """The descriptor holding the lock of the lock file `path` (made 0600 when absent); unlock() gives it back. TimeoutError (an
+    OSError) when another process still holds it after `wait` seconds. POSIX: flock. Windows: msvcrt's lock on byte 0, past the
+    end of the empty file, tried again until the wait ends (msvcrt's own wait gives up after 10 s), as vibemaestro-brain's store
+    lock; either ends with the process that holds it."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | O_BINARY, 0o600)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            if WINDOWS:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except HELD:
+            if time.monotonic() > deadline:
+                os.close(fd)
+                raise TimeoutError("another process holds the lock %s after %d s" % (path, wait))
+            time.sleep(0.05)
+
+
 def place_lock(key):
-    """The descriptor holding the lock of one place; close it to release. Stop(ENV) after PACK_LOCK_WAIT seconds."""
+    """The descriptor holding the lock of one place; unlock() releases it. Stop(ENV) after PACK_LOCK_WAIT seconds."""
     d = os.path.join(ensure_state(), "kept", key)
     os.makedirs(d, mode=0o700, exist_ok=True)
     path = os.path.join(d, ".lock")
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    deadline = time.monotonic() + PACK_LOCK_WAIT
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fd
-        except BlockingIOError:
-            if time.monotonic() > deadline:
-                os.close(fd)
-                raise Stop(ENV, "pack: another pack or retire in %s holds its lock %s after %d s; a lock ends with the process "
-                                "that holds it, so that one is still running: wait for it, then run this again", key, path, PACK_LOCK_WAIT)
-            time.sleep(0.05)
+    try:
+        return lock_file(path, PACK_LOCK_WAIT)
+    except TimeoutError:
+        raise Stop(ENV, "pack: another pack or retire in %s holds its lock %s after %d s; a lock ends with the process "
+                        "that holds it, so that one is still running: wait for it, then run this again", key, path, PACK_LOCK_WAIT)
 
 
 def place_locks(*keys):
@@ -7194,6 +7297,11 @@ def place_locks(*keys):
 
 def unlock(fds):
     for fd in reversed(fds):
+        if WINDOWS:                                     # given back before the close: Windows may drop a closed file's lock late
+            try:
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
         os.close(fd)
 
 
@@ -7777,6 +7885,7 @@ def entry_command():
 OLD_ASKS = ("Bash(*baton* sign --by owner*)",) + tuple(
     "Bash(*%s%s mode *)" % (prog, q) for prog in ("baton.py", "/baton") for q in ("", '"', "'"))
 OLD_ASK_FINDING = "the old broad ask rule "     # its finding's text starts so: kit:bootstrap sets it aside
+OLD_ASK_KIT = ": kit:permissions-upgrade replaces it with the anchored rules"   # …and ends so in the user settings, the kit's file
 OWNER_SUBS = ("sign --by owner", "mode")
 
 
@@ -8105,7 +8214,9 @@ def perm_findings(sources):
     for k, tool, content, text, where in rules:
         if k == "ask" and tool == "Bash" and text in OLD_ASKS:
             out.append(("STALE", OLD_ASK_FINDING + "%s (%s) asks for any command that only mentions it (a printf, a heredoc, "
-                                 "a commit message): kit:permissions-upgrade replaces it with the anchored rules" % (q(text), where)))
+                                 "a commit message)%s" % (q(text), where, OLD_ASK_KIT if where.split(" ")[0] in ("user", "given")
+                                                          else ": the owner removes it there by hand (kit:permissions-upgrade "
+                                                               "changes only the user settings)")))
     serves = lambda content: content and any(bash_matches(content, c) for c in owner + modes)   # noqa: E731
     for what, cmd in mention_probes():
         for k, tool, content, text, where in rules:      # an owner's own ask rule (`git commit:*`) that asks no sign or mode is theirs
@@ -8170,14 +8281,17 @@ def launcher_line():
 
 
 def session_warning():
-    """One line for SessionStart, or None. In mode manual with no baton rule anywhere, a missing rule is not a finding: there
-    every baton command opening a dialog is the intended behaviour; a stale or unsafe rule still is. A session whose sdlc is not
-    the registry's gets the restart line only: its view of the rules and the launcher is another version's. A launcher away
-    from TEXT_LAUNCHER adds launcher_line. The line goes into the session context as it is, so it is built by shown: a path in
-    a finding cannot start a line there."""
+    """One line for SessionStart's session context, or None. In mode manual with no baton rule anywhere, a missing rule is not a
+    finding: there every baton command opening a dialog is the intended behaviour; a stale or unsafe rule still is. A session
+    whose sdlc is not the registry's gets the restart line only: its view of the rules and the launcher is another version's. A
+    launcher away from TEXT_LAUNCHER adds launcher_line. The person never sees the line (the hook cannot know their language): it
+    tells the session what to say and which kit to offer, never a command for the person. It goes into the session context as
+    it is, so it is built by shown: a path in a finding cannot start a line there."""
+    if WINDOWS:                                         # the rules serve signed runs, which do not run there yet
+        return None
     other = registry_other()
     if other:
-        return other_line(other)
+        return shown("%s; tell the person this in one plain line, in their language", other_line(other))
     sources, mode = settings_sources(), read_mode()
     found = perm_findings(sources)
     if mode == "manual" and not baton_rules_present(sources):
@@ -8185,8 +8299,23 @@ def session_warning():
     parts = [launcher_line()]
     if found:
         kinds = sorted(set(k for k, _t in found))
-        parts.insert(0, shown("baton permissions (mode %s): %d %s (first: %s); print the fix with: %s",
-                              mode, len(found), "/".join(k.lower() for k in kinds), found[0][1], fix_hint()))
+        head = shown("baton permissions (mode %s): %d %s (first: %s)", mode, len(found), "/".join(k.lower() for k in kinds),
+                     found[0][1])
+        # what each kit clears (gates/permissions_upgrade.py: an old ask in the user settings; gates/bootstrap.py: a rule it
+        # adds and the launcher, the old asks set aside for permissions-upgrade); anything else both refuse
+        old = [t.startswith(OLD_ASK_FINDING) and t.endswith(OLD_ASK_KIT) for _k, t in found]
+        hand = [t for (k, t), o in zip(found, old) if not (o or t.startswith("the launcher ")
+                                                            or (k == "MISSING" and not t.startswith("the deny rule ")))]
+        if hand:
+            parts.insert(0, shown("%s. No kit fixes %s: name it to the owner, who removes or changes it in Claude Code's "
+                                  "permission settings; hand the person no command. Tell the person in one plain line, in their "
+                                  "language, that a baton permission rule on this machine needs their change", head, hand[0]))
+        else:
+            parts.insert(0, shown("%s. Offer the fix, %s, run through the owner's dialog; hand the person no command. Tell the "
+                                  "person in one plain line, in their language, that the baton permissions on this machine are "
+                                  "out of date and the session can fix them with one approval", head,
+                                  "kit:permissions-upgrade (skill batonrun)" if all(old)
+                                  else "skill vibemaestro-sdlc:bootstrap (kit:bootstrap)"))
     parts = [x for x in parts if x]
     return shown_join("; ", parts) if parts else None
 
@@ -8254,6 +8383,7 @@ def cmd_permissions(rest):
     return PERMS
 
 
+WINDOWS_NOT_YET = ("new", "check", "rehearse", "sign", "run", "go", "pack")   # a signed run's commands, and its owner's: not there
 COMMANDS = {"new": cmd_new, "check": cmd_check, "rehearse": cmd_rehearse, "sign": cmd_sign, "run": cmd_run, "go": cmd_go,
             "list": cmd_list, "pack": cmd_pack, "log": cmd_log, "mode": cmd_mode, "permissions": cmd_permissions, "grant": cmd_grant}
 
@@ -8305,7 +8435,7 @@ def main(argv):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")
         setattr(sys, name, SafeOut(stream))
-    for sig in (signal.SIGTERM, signal.SIGHUP):
+    for sig in CRITICAL[:-1]:                           # SIGTERM, and SIGHUP where there is one
         if signal.getsignal(sig) is not signal.SIG_IGN:  # `nohup` keeps SIGHUP ignored
             signal.signal(sig, _on_term)
     if argv[:1] == ["help"] and len(argv) > 1:
@@ -8319,6 +8449,14 @@ def main(argv):
     if fn is None:
         say("baton: unknown command %s (one of: %s)", repr(argv[0]), ", ".join(COMMANDS), out=sys.stderr)
         return USAGE
+    if WINDOWS and argv[:2] == ["permissions", "--check"]:
+        say("baton permissions: the permission rules serve signed runs, which do not run on Windows yet: nothing to check")
+        return OK
+    if WINDOWS and (argv[0] in WINDOWS_NOT_YET or argv[0] == "mode" and argv[1:] not in ([], ["remotes"])
+                    or argv[:2] in (["permissions", "--print"], ["permissions", "--install-launcher"])):
+        say("baton: %s does not run on Windows yet: a signed run needs the owner's dialog, which does not run there (%s); nothing "
+            "ran", " ".join(argv[:2]) if argv[0] in ("mode", "permissions") else argv[0], WINDOWS_WHERE, out=sys.stderr)
+        return ENV
     try:
         try:
             return fn(list(argv[1:]))

@@ -128,7 +128,6 @@ SHELF_LINE = 100
 PLUGIN_LINE = 200
 TAIL_BYTES = 256 * 1024                 # design value: the transcript tail read for the last `usage`
 SUMMARIES_KEPT = 200
-VERSION_FLOOR = (2, 1, 211)
 TEST_ASK_MODES = ("plan", "bypassPermissions")   # the only modes BRAIN_TEST_ASK_MODES may add, and only with BRAIN_TEST=1
 LITERAL = ("write one `brain owner …` command alone in the Bash call, with literal arguments: no variable, substitution, "
            "backslash, glob, ~ or redirect, and nothing before or after it, so the dialog shows exactly what runs")
@@ -942,18 +941,6 @@ def guard_edit(inp):
             return
 
 
-def version_ok():
-    """The running Claude Code is 2.1.211 or later: `$CLAUDE_CODE_EXECPATH --version`, else `claude --version`; unknown → no."""
-    exe = os.environ.get("CLAUDE_CODE_EXECPATH", "")
-    exe = exe if os.path.isabs(exe) else "claude"
-    try:
-        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
-        return False
-    v = store()._version_tuple(out)
-    return v is not None and v >= VERSION_FLOOR
-
-
 def ask_modes():
     """The test-only modes guard-owner also asks in: TEST_ASK_MODES named in BRAIN_TEST_ASK_MODES, under BRAIN_TEST=1. The
     record keeps the real mode and the store's dialog modes do not change, so the CLI refuses such a record."""
@@ -1161,8 +1148,11 @@ def guard_owner(inp):
     log["verb"] = verb
     if not sid:
         return deny("no session id in the hook input; owner items need a Claude Code session", "no-session")
-    dialog = mode in ("default", "acceptEdits") or (mode == "auto" and version_ok()) or mode in ask_modes()
-    if not dialog:
+    if mode == "auto":
+        why = s.auto_refusal()
+        if why:
+            return deny(why, "no-dialog")
+    elif mode not in ("default", "acceptEdits") and mode not in ask_modes():
         return deny(s.NO_DIALOG, "no-dialog")
     try:
         s.check_config()                            # a config error refuses the write: never ask the owner for it

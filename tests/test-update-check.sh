@@ -265,6 +265,13 @@ fam_uc() { local S=$1 P D V
     D=$(fresh)/data; quiet "[S11] …no cache" "$P" "$D" CLAUDE_PROJECT_DIR="$TMP/app/sub/deeper"
   done
   rm -rf "$TMP/app/.vibemaestro" "$TMP/app/sub"
+  OFFD="$TMP/app/chua-cai"; mkdir -p "$OFFD/.vibemaestro" "$OFFD/inner/.vibemaestro"
+  printf '{"schema": 1, "hooks": "off"}\n' > "$OFFD/.vibemaestro/sdlc.json"; printf '{"schema": 1, "language": "en"}\n' > "$OFFD/inner/.vibemaestro/sdlc.json"
+  D=$(fresh)/data; seed "$D" '"9.9.9"'; quiet "[S12] a folder that turns the kit off, the session in a subfolder whose nearer config has no hooks key" "$P" "$D" CLAUDE_PROJECT_DIR="$OFFD/inner"
+  rm "$OFFD/.vibemaestro/sdlc.json"
+  D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D" CLAUDE_PROJECT_DIR="$OFFD/inner"
+  has "$(sysm "$OUT")" "9.9.9 is available" "[S12] control: the same subfolder with no off file above it shows the line"
+  rm -rf "$OFFD"
   quiet "[S7] no CLAUDE_PLUGIN_DATA" "$P" -
   D=$(fresh)/data; seed "$D" '"9.9.9"'; us "$P" "$D"
   has "$(sysm "$OUT")" "9.9.9 is available" "[S0] control: the seeded cache, with nothing turning it off, shows the line"

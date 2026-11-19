@@ -103,7 +103,7 @@ Cài `vibemaestro-brain` thì `vibemaestro-sdlc` được cài theo.
 | Cần | Dùng cho |
 |---|---|
 | Claude Code (CLI `claude`); đã thử với 2.1.290; lệnh cài duy nhất ở [Thử ngay](#thử-ngay) cần 2.1.292 trở lên | mọi thứ; mục quyết định của brain cần 2.1.211 trở lên ở chế độ `auto` |
-| Python 3.8 trở lên (`python3`; trên Windows hook tìm cả `python` hay `py -3`), `git`, `bash` | hook và script; đã thử trên Linux và macOS, chưa thử trên Windows; brain cần hệ POSIX. Thiếu Python thì không hook nào chặn gì và phiên nói máy thiếu gì |
+| Python 3.8 trở lên (`python3`; trên Windows hook tìm cả `python` hay `py -3`), `git`, `bash` | hook và script; hook, chế độ đời thường và brain đã thử trên Linux, macOS và Windows 11 với Git for Windows, luồng developer trên Linux và macOS. Thiếu Python thì không hook nào chặn gì và phiên nói máy thiếu gì |
 | `gh`, đã đăng nhập (`gh auth login`) | issue theo dõi lúc intake, pull request lúc ship, ghi lên GitHub trong BatonRun |
 | Một repo GitHub cho dự án của bạn | issue và pull request; không có remote thì intake vẫn ghi intent và branch, bỏ qua issue |
 
@@ -111,11 +111,12 @@ Lúc chạy, các plugin không phụ thuộc repo nào khác.
 
 ## Windows / VS Code
 
-Kit chạy trong tiện ích Claude Code của VS Code; đã thử trên Linux và macOS, chưa thử trên Windows.
+Kit chạy trong tiện ích Claude Code của VS Code và trong ứng dụng Claude desktop. Hook, chế độ đời thường và brain đã thử trên Linux, macOS và Windows 11 với Git for Windows; luồng developer đã thử trên Linux và macOS.
 
 - **Cần gì, và vì sao.** Git for Windows: Claude Code chạy hook của kit qua `bash` của nó, và ở chế độ đời thường kit giữ các bản lưu ngầm của thư mục bạn trong một lịch sử git tại chỗ. Python 3.8 trở lên: hook và script viết bằng Python (trên Windows hook tìm cả `python` hay `py -3`). `gh` và một repo GitHub chỉ cần cho luồng developer.
 - **Cách kiểm.** Mở một phiên Claude Code trong thư mục của bạn. Khi máy thiếu gì, không hook nào chặn việc của bạn: lúc mở phiên có một dòng nói kit cần gì, máy này thiếu gì và cách kiểm lại. Bạn cũng có thể nhờ Claude kiểm máy: Claude đề xuất cách cài thứ còn thiếu hợp với máy của bạn, và hỏi trước khi cài bất cứ gì. Kit không có kịch bản cài và không có các bước cài cố định cho Git hay Python.
-- **Cài kit không cần terminal.** Trong khung Claude Code của VS Code, gõ `/plugin` để mở màn hình plugin, thêm marketplace `vibemaestro/vibemaestro-kit`, rồi cài `vibemaestro-sdlc`. `vibemaestro-brain` hiện chỉ chạy trên Linux và macOS: trên Windows nó đứng yên và báo cho Claude, Claude nói lại với bạn bằng ngôn ngữ của bạn khi việc đó quan trọng, còn các chốt chặn của nó từ chối mọi thay đổi bộ nhớ thay vì để lọt qua.
+- **Cài kit không cần terminal.** Trong khung Claude Code của VS Code, gõ `/plugin` để mở màn hình plugin, thêm marketplace `vibemaestro/vibemaestro-kit`, rồi cài `vibemaestro-sdlc`.
+- **Cái gì chạy ở đâu.** `vibemaestro-brain` chạy cả trên Windows. Các quyết định và mục tiêu bạn ghim vào brain dùng được trong tiện ích VS Code và ứng dụng desktop, kể cả trên Windows: bạn duyệt từng cái trong một hộp thoại. Ký các lượt chạy đang chờ của kit (`/vibemaestro-sdlc:owner-sign`) cũng dùng được trong tiện ích và ứng dụng, nhưng chưa dùng được trên Windows. Trên Windows, việc ký và các lượt chạy cần chữ ký (ví dụ một lần merge) chưa chạy: kit nói vậy trong một dòng và không chạy gì.
 - **Kit chọn chế độ nào.** Thư mục chưa là repo git, hay có lịch sử do chính lưu ngầm của kit tạo, mở ở chế độ đời thường: lời thường, một cuốn sổ trong `kb/`, lưu ngầm sau mỗi lượt, không nhánh hay pull request. Thư mục đã có git từ trước, hay đã nối GitHub, ở chế độ developer. Chọn thế nào, cố định cho một thư mục ra sao, và chuyển sang developer về sau: [Chế độ đời thường](plugins/vibemaestro-sdlc/README.vi.md#chế-độ-đời-thường).
 - **Một giới hạn đã biết trên Windows.** Một thư mục nằm trong thư mục làm việc của bạn mà có lịch sử Git riêng còn trống (tạo bằng `git init`, chưa có commit nào) thì trên Windows được lưu như các tệp thường; trên Linux và macOS bản lưu ngầm dừng lại ở đó và nói vì sao. Cách nào cũng không mất gì, và lịch sử bên trong đó được để nguyên.
 

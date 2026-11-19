@@ -18,6 +18,8 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 . "$HERE/fixtures/ports.sh"
 # shellcheck source=fixtures/baton-owner.sh
 . "$HERE/fixtures/baton-owner.sh"
+# shellcheck source=fixtures/owner-hosts.sh
+. "$HERE/fixtures/owner-hosts.sh"
 
 PLUGIN="$SRC_ROOT/plugins/vibemaestro-sdlc"
 TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
@@ -397,6 +399,44 @@ print(json.dumps({"session_id": "s-owner", "permission_mode": "default", "cwd": 
      "[L] a mode change: a poller started before the ask rc 3, the dialog's own call rc 0, the mode set"
 }
 
+# baton_host_row <mode> — under the row's HOST and HOST_ENV (owner_hosts): the guard's decision, then the sign's rc after an ask
+# or the deny's reason
+baton_host_row() {
+  local d
+  BT_ENV=("${HOST_ENV[@]}"); reseal "$P"; WRAP=(${HOST[@]+"${HOST[@]}"})   # the seal binds the row's PATH
+  d=$(hook "$P" "{\"permission_mode\": \"$1\"}")
+  if [ "$d" = ask ]; then
+    ( cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-owner "${BT_ENV[@]}" ${WRAP[@]+"${WRAP[@]}"} \
+        python3 "$P/scripts/baton.py" sign --by owner --seal "$SEAL" "$W/act.sh" "$W/out.txt" hello ) > "$BT_OUT" 2>&1
+    echo "ask/$?"
+  else
+    echo "$d"; HOOK_FIELD=permissionDecisionReason hook "$P" "{\"permission_mode\": \"$1\"}"
+  fi
+  WRAP=(); BT_ENV=()
+}
+
+fam_owner_hosts() {  # [HOST] the shared table: the official hosts' dialog signs, in auto too; every other answerer is refused
+  local P=$1
+  setup "$P"
+  local hd out; hd=$(fresh)
+  owner_hosts "$hd" baton_host_row eq has
+  HOST=(); HOST_ENV=(CLAUDE_PID=² PATH="$hd/auto-none/bin:$PATH")
+  out=$(baton_host_row auto)
+  eq "$(printf '%s\n' "$out" | head -n 1)" deny "[HOST] CLAUDE_PID not a plain number (²): no crash, a deny"
+  has "$out" '(tried: `claude` on PATH)' "[HOST] … that tried PATH only"
+  owner_vline "$W" claude 2.1.290 win > /dev/null      # a project's own claude, in the hook's working directory
+  HOST=(); HOST_ENV=(PATH=".:$hd/auto-none/bin:$PATH")
+  out=$(baton_host_row auto)
+  eq "$(printf '%s\n' "$out" | head -n 1)" deny "[HOST] a claude in the working directory (. first on PATH; Windows looks there anyway): not run, deny"
+  has "$out" '(tried: `claude` on PATH)' "[HOST] … no claude on PATH taken"
+  rm -f "$W/claude" "$W/claude.cmd"
+  printf '%s' "$PRH" > "$P.isolate/managed-settings.json"
+  printf '#!/bin/bash\nwhile [ "$1" != :: ]; do shift; done; shift; "$@"\n' > "$W/claude"
+  BT_ENV=(CLAUDE_CODE_ENTRYPOINT=claude-vscode); read -r -a WRAP <<< "bash $W/claude $OWNER_SDK ::"
+  eq "$(hook "$P")/$(asked_n)" "deny/0" "[HOST] the VS Code host with a PermissionRequest hook in the managed settings: the guard denies"
+  rm -f "$P.isolate/managed-settings.json"; WRAP=(); BT_ENV=()
+}
+
 fam_owner_wiring() {  # [H] hooks.json runs the guard on every Bash call, as its own entry
   local P=$1
   has "$(hook_cmds "$P/hooks/hooks.json" PreToolUse Bash)" 'scripts/baton-guard.py' "[H] hooks.json: a PreToolUse Bash command runs baton-guard.py"
@@ -408,7 +448,7 @@ fam_owner_wiring() {  # [H] hooks.json runs the guard on every Bash call, as its
 }
 
 FAMILIES="fam_owner_record fam_owner_modes fam_owner_who fam_owner_spelling fam_owner_rules fam_owner_auto fam_owner_mode fam_owner_oldcopy
-fam_owner_version fam_owner_lineage fam_owner_wiring"
+fam_owner_version fam_owner_lineage fam_owner_wiring fam_owner_hosts"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done

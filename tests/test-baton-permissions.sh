@@ -18,6 +18,8 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 . "$HERE/fixtures/lib.sh"
 # shellcheck source=fixtures/ports.sh
 . "$HERE/fixtures/ports.sh"
+# shellcheck source=fixtures/baton-owner.sh
+. "$HERE/fixtures/baton-owner.sh"     # mk_plugin_copy isolates fam_session's copy from the machine's mode policy
 
 PLUGIN="$SRC_ROOT/plugins/vibemaestro-sdlc"
 TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
@@ -355,31 +357,96 @@ ss() {
 }
 # lines <json> — how many times the baton line appears in the system message, and in the context
 lines() { printf '%s/%s' "$(sysm "$1" | grep -c 'baton permissions')" "$(ctx "$1" | grep -c 'baton permissions')"; }
-fam_session() {
-  local P=$1 out
-  fresh_env
-  out=$(ss "$P" loi); nonempty "$(ctx "$out")" "[session] instrument: the loi hook delivers the process core"
-  eq "$(lines "$out")" "0/0" "[session] manual, no rules: silent (every baton command opening a dialog is the intended manual behaviour)"
+# bctx <json> — the baton line of the context
+bctx() { ctx "$1" | grep 'baton permissions'; }
+# the session's instructions after the findings: the kit to offer, no command for the person, and what to tell them
+TELL="run through the owner's dialog; hand the person no command. Tell the person in one plain line, in their language, that the baton permissions on this machine are out of date and the session can fix them with one approval"
+BOOT="Offer the fix, skill vibemaestro-sdlc:bootstrap (kit:bootstrap), $TELL"
+# …and for a rule no kit fixes (both refuse it): the owner changes it by hand, and no one-approval promise
+HAND="name it to the owner, who removes or changes it in Claude Code's permission settings; hand the person no command. Tell the person in one plain line, in their language, that a baton permission rule on this machine needs their change"
+# session_cases <plugin> <everyday|developer> — the line in one profile: only in the session's context, never a command
+session_cases() {
+  local P=$1 prof=$2 out g="[session:$2]" v
+  fresh_env; ST="$H/.local/state"; L="$ST/vibemaestro/baton/bin/baton"     # the launcher at the default place: no launcher line
+  [ "$prof" = developer ] && mkdir -p "$PJ/.vibemaestro" && echo '{"profile": "developer"}' > "$PJ/.vibemaestro/sdlc.json"
+  out=$(ss "$P" loi)
+  nonempty "$(ctx "$out")" "$g instrument: the loi hook delivers the process core"
+  if [ "$prof" = everyday ]; then has "$(ctx "$out")" "vibemaestro-sdlc: everyday mode" "$g instrument: the session runs in everyday mode"
+  else hasnt "$(ctx "$out")" "everyday mode" "$g instrument: the session runs in developer mode"; fi
+  eq "$(lines "$out")" "0/0" "$g manual, no rules: silent (every baton command opening a dialog is the intended manual behaviour)"
   baton_set_mode "$ST" auto
   out=$(ss "$P" loi)
-  eq "$(lines "$out")" "1/1" "[session] auto, no rules: one line, to the owner and to the session"
-  has "$(sysm "$out")" "permissions --print" "[session] auto, no rules: the line names the command that prints the fix"
-  nonempty "$(ctx "$out" | grep -v 'baton permissions')" "[session] auto, no rules: the process core is still delivered"
+  eq "$(lines "$out")" "0/1" "$g auto, no rules: one line, to the session only"
+  v=$(bctx "$out")
+  has "$v" "baton permissions (mode auto): " "$g auto, no rules: the line names the mode"
+  has "$v" " missing (first: no allow rule for \`$L new act\`)" "$g auto, no rules: …and the first finding"
+  eq "${v#*). }" "$BOOT" "$g auto, no rules: the session offers the bootstrap kit through the owner's dialog, and tells the person in their language"
+  hasnt "$(sysm "$out"; ctx "$out")" "print the fix with" "$g auto, no rules: no command to print the fix"
+  hasnt "$(sysm "$out"; ctx "$out")" "baton.py" "$g auto, no rules: no baton.py command anywhere"
+  eq "$(sysm "$out")" "" "$g auto, no rules: the person's message holds nothing"
+  nonempty "$(ctx "$out" | grep -v 'baton permissions')" "$g auto, no rules: the process core is still delivered"
+  good_settings "$P"; cp "$PJ/good.json" "$H/.claude/settings.json"
+  eq "$(lines "$(ss "$P" loi)")" "0/0" "$g auto, the printed rules and the launcher: no line"
+  baton_set_mode "$ST" manual
+  eq "$(lines "$(ss "$P" loi)")" "0/0" "$g manual, the printed rules and the launcher: no line"
+  jedit "$PJ/good.json" "$H/.claude/settings.json" 'p["ask"].append("Bash(*baton* sign --by owner*)")'
+  out=$(ss "$P" loi)
+  eq "$(lines "$out")" "0/1" "$g manual, the old broad ask rule: one line, to the session only"
+  eq "$(bctx "$out")" "baton permissions (mode manual): 1 stale (first: the old broad ask rule \`Bash(*baton* sign --by owner*)\` (user $H/.claude/settings.json) asks for any command that only mentions it (a printf, a heredoc, a commit message): kit:permissions-upgrade replaces it with the anchored rules). Offer the fix, kit:permissions-upgrade (skill batonrun), $TELL" \
+     "$g manual, the old broad ask rule: the session offers kit:permissions-upgrade"
+  eq "$(sysm "$out")" "" "$g manual, the old broad ask rule: the person's message holds nothing"
+  jedit "$PJ/good.json" "$H/.claude/settings.json" 'p["allow"].append("Bash(python3 /x/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)")'
+  out=$(ss "$P" loi)
+  v="\`Bash(python3 /x/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)\` (user $H/.claude/settings.json) names version 1.9.0"
+  eq "$(bctx "$out")" "baton permissions (mode manual): 1 stale (first: $v). No kit fixes $v: $HAND" \
+     "$g manual, a rule naming another version (no kit removes it): the owner changes it by hand, no kit offered"
+  eq "$(sysm "$out")" "" "$g manual, a rule naming another version: the person's message holds nothing"
+  # an old ask in the project settings: kit:permissions-upgrade changes only the user settings, so neither the finding nor the
+  # line names it as the fix
+  cp "$PJ/good.json" "$H/.claude/settings.json"; mkdir -p "$PJ/.claude"
+  echo '{"permissions": {"ask": ["Bash(*baton* sign --by owner*)"]}}' > "$PJ/.claude/settings.json"
+  v="the old broad ask rule \`Bash(*baton* sign --by owner*)\` (project $PJ/.claude/settings.json) asks for any command that only mentions it (a printf, a heredoc, a commit message): the owner removes it there by hand (kit:permissions-upgrade changes only the user settings)"
+  eq "$(bctx "$(ss "$P" loi)")" "baton permissions (mode manual): 1 stale (first: $v). No kit fixes $v: $HAND" \
+     "$g manual, an old ask in the project settings: the owner removes it there by hand, no kit offered"
+  rm "$PJ/.claude/settings.json"
+  # a deny rule that blocks a mode call is a MISSING finding no added rule clears
+  jedit "$PJ/good.json" "$H/.claude/settings.json" 'p["deny"] = p.get("deny", []) + ["Bash(%s mode:*)" % L]'
+  v=$(bctx "$(ss "$P" loi)")
+  has "$v" ". No kit fixes the deny rule \`Bash($L mode:*)\` (user $H/.claude/settings.json) blocks " \
+      "$g manual, a deny rule on a mode call: no kit offered, the rule named for the owner"
+  has "$v" ": it must ask: $HAND" "$g …with no one-approval promise"
+  # the old asks with rules missing (a block printed before the anchored rules lost a rule): bootstrap adds them, then chains
+  # to kit:permissions-upgrade (skill bootstrap)
+  echo '{"permissions": {"ask": ["Bash(*baton* sign --by owner*)"]}}' > "$H/.claude/settings.json"
+  v=$(bctx "$(ss "$P" loi)")
+  has "$v" "baton permissions (mode manual): " "$g manual, an old ask and missing rules: one line"
+  eq "${v#*). }" "$BOOT" "$g manual, an old ask and missing rules: the session offers the bootstrap kit"
+}
+fam_session() {
+  local P=$1 out
+  session_cases "$P" everyday
+  session_cases "$P" developer
+  fresh_env; baton_set_mode "$ST" auto
   eq "$(lines "$(ss "$P" boi-canh)")" "0/0" "[session] the second hook does not repeat the line"
   # a state directory whose path holds a newline: the finding names the launcher under it, and the line stays one line
-  local st0=$ST; ST="$(fresh)/st"$'\n'"FORGED: ok"; baton_set_mode "$ST" auto
+  ST="$(fresh)/st"$'\n'"FORGED: ok"; baton_set_mode "$ST" auto
   out=$(ss "$P" loi)
-  eq "$(lines "$out")" "1/1" "[session] a newline in the state path: still one line"
+  eq "$(lines "$out")" "0/1" "[session] a newline in the state path: still one line"
   eq "$( { sysm "$out"; ctx "$out"; } | grep -c '^FORGED')" 0 "[session] a newline in the state path: no line of the message or context starts with FORGED"
-  has "$(sysm "$out")" 'st\u{a}FORGED: ok' "[session] …the newline is written as \\u{a}"
-  ST=$st0
-  good_settings "$P"; cp "$PJ/good.json" "$H/.claude/settings.json"
-  eq "$(lines "$(ss "$P" loi)")" "0/0" "[session] auto, the printed rules and the launcher: silent"
-  baton_set_mode "$ST" manual
-  jedit "$PJ/good.json" "$H/.claude/settings.json" 'p["allow"].append("Bash(python3 /x/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)")'
-  eq "$(lines "$(ss "$P" loi)")" "1/1" "[session] manual, a stale rule: one line"
+  has "$(ctx "$out")" 'st\u{a}FORGED: ok' "[session] …the newline is written as \\u{a}"
+  fresh_env
   echo '{"permissions": {"allow": ["Bash(*)"]}}' > "$H/.claude/settings.json"
-  eq "$(lines "$(ss "$P" loi)")" "1/1" "[session] manual, no baton rule but an allow Bash(*): one line (unsafe in every mode)"
+  out=$(ss "$P" loi)
+  eq "$(lines "$out")" "0/1" "[session] manual, no baton rule but an allow Bash(*): one line (unsafe in every mode)"
+  has "$(bctx "$out")" ". No kit fixes the allow rule \`Bash(*)\` (user $H/.claude/settings.json) lets " \
+      "[session] …no kit removes an allow rule: the line names it for the owner"
+  has "$(bctx "$out")" " run with no dialog: $HAND" "[session] …and promises no one-approval fix"
+  hasnt "$(bctx "$out")" "Offer the fix" "[session] …no kit is offered"
+  fresh_env; good_settings "$P"; cp "$PJ/good.json" "$H/.claude/settings.json"
+  out=$(ss "$P" loi)
+  eq "$(ctx "$out" | grep -c "^baton launcher: here it is $L; type it where the kit's text says")" 1 \
+     "[session] a launcher away from the documented place: its line is in the session context"
+  eq "$(sysm "$out")" "" "[session] …and not in the person's message"
   printf 'def (\n' >> "$P/scripts/baton.py"
   out=$(ss "$P" loi)
   eq "$(lines "$out")" "0/0" "[session] a baton.py that does not compile: no line"

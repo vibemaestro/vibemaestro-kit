@@ -20,9 +20,10 @@ except BaseException as _e:
     sys.exit(0)
 
 def with_baton_warning(emit):
-    """`emit` with baton's one-line permission warning (baton.session_warning) appended to both fields, when there is one.
-    The check runs only when the hook speaks (not with `hooks: off`) and lives in baton.py; a failure of it costs the line,
-    never the hook."""
+    """`emit` with baton's one-line permission warning (baton.session_warning) appended to the session context, when there is one.
+    Never to the system message the person sees: the hook cannot know their language, so the line tells the session what to say
+    (as the everyday core's lines do). The check runs only when the hook speaks (not with `hooks: off`) and lives in baton.py; a
+    failure of it costs the line, never the hook."""
     def emit_with_line(event, ctx="", sysmsg="", extra=None):
         try:
             import baton
@@ -30,7 +31,7 @@ def with_baton_warning(emit):
         except BaseException:
             line = None
         if line:
-            ctx, sysmsg = (ctx + "\n\n" + line if ctx else line), (sysmsg + "; " + line if sysmsg else line)
+            ctx = ctx + "\n\n" + line if ctx else line
         emit(event, ctx, sysmsg, extra)
     return emit_with_line
 

@@ -32,6 +32,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import signal
 import stat
 import string
@@ -150,6 +151,12 @@ SESSION_SOURCE = {"type": "coordinator"}            # the log's word, since its 
 POSIX_MANAGED = ("/etc/claude-code/managed-settings.json", "/Library/Application Support/ClaudeCode/managed-settings.json")
 WINDOWS_MANAGED = (r"C:\Program Files\ClaudeCode\managed-settings.json", r"C:\ProgramData\ClaudeCode\managed-settings.json")
 MANAGED_SETTINGS = WINDOWS_MANAGED if WINDOWS else POSIX_MANAGED
+VERSION_FLOOR = (2, 1, 211)                 # before it, auto mode could approve a hook's `ask` without the dialog
+CLAUDE_PROGRAMS = ("claude", "claude.exe", "cli.js")  # an argv word naming Claude Code; also any path under claude/versions/
+OFFICIAL_HOSTS = ("claude-vscode", "claude-desktop", "claude-desktop-3p")   # CLAUDE_CODE_ENTRYPOINT: VS Code, the desktop app
+AUTO_WHERE = ("In a terminal, the VS Code extension or the Claude desktop app, switch the permission mode to default and ask "
+              "again, or update Claude Code. Anywhere else (an SDK app, a custom prompt tool) %s refused in every mode: open "
+              "Claude Code in one of those three")
 O_BINARY = getattr(os, "O_BINARY", 0)               # Windows opens a file in text mode without it: CRLF written, Ctrl-Z ends a read
 
 
@@ -2143,6 +2150,89 @@ def _worktrees():
     return []
 
 
+def _is_claude(argv):
+    """An argv of Claude Code: its program (or node's script) named in CLAUDE_PROGRAMS or a path under claude/versions/."""
+    head = argv[:argv.index("--")] if "--" in argv else argv
+    return any(os.path.basename(a) in CLAUDE_PROGRAMS or "/claude/versions/" in a for a in head[:2])
+
+
+def prompt_tool(argv):
+    return any(a == "--permission-prompt-tool" or a.startswith("--permission-prompt-tool=") for a in argv)
+
+
+def official_host(argv):
+    """argv is the Claude Code of the VS Code extension or the Claude desktop app, whose dialog a person clicks: their entry point
+    (CLAUDE_CODE_ENTRYPOINT, which Claude Code hands on to hooks and the Bash tool), the SDK's `--permission-prompt-tool=stdio`
+    once, no -p. A process of the same user that sets that entry point and answers through the SDK passes too: the records
+    guard against slips, not against a process of the same user."""
+    head = argv[:argv.index("--")] if "--" in argv else argv
+    return (os.environ.get("CLAUDE_CODE_ENTRYPOINT") in OFFICIAL_HOSTS and _is_claude(argv)
+            and "-p" not in head and "--print" not in head and _flag_values(argv, "--permission-prompt-tool") == ["stdio"])
+
+
+def claude_programs(pid):
+    """The commands that run the Claude Code process `pid` again, to ask its version: its program (Linux: /proc/<pid>/exe, which
+    still runs once an update replaced the file; Windows: the image Windows runs; else `ps -o comm=`, the whole path even
+    with spaces), then the program with its script (an npm install: node cli.js). [] when they cannot be read or the process is
+    not Claude Code."""
+    try:
+        if WINDOWS:
+            argv, exe = split_cmdline(_win_info(pid)[1]), _win_image(pid)
+        else:
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+            exe = "/proc/%d/exe" % pid
+    except OSError:
+        if WINDOWS:
+            return []
+        try:
+            exe = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout.strip()
+            argv = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            return []
+    if not os.path.isabs(exe) or not _is_claude(argv):       # never another program: CLAUDE_PID may be inherited or stale
+        return []
+    script = argv[1] if len(argv) > 1 and not argv[1].startswith("-") and os.path.isfile(argv[1]) else None
+    return [[exe]] + ([[exe, script]] if script else [])
+
+
+def claude_version():
+    """(the running Claude Code's version, or None; [what was tried]), from the first `X.Y.Z (Claude Code)` line of `--version`
+    run as: the program of the process CLAUDE_PID names (Claude Code sets it for hooks; CLAUDE_CODE_EXECPATH it sets only in the
+    Bash tool's shell), then $CLAUDE_CODE_EXECPATH, then `claude` on PATH (a desktop app started from the GUI has none)."""
+    pid, exe = os.environ.get("CLAUDE_PID", ""), os.environ.get("CLAUDE_CODE_EXECPATH", "")
+    known = re.fullmatch(r"[0-9]{1,9}", pid)          # a plain number a pid can be, never one that overflows a call
+    tries = [("the running Claude Code (process %s)" % pid, c) for c in (claude_programs(int(pid)) if known else [])]
+    tries += [("CLAUDE_CODE_EXECPATH", [exe])] if os.path.isabs(exe) else []
+    tried = []
+    on_path = shutil.which("claude")                    # Windows: claude.cmd of an npm install too (PATHEXT)
+    on_path = on_path if on_path and os.path.isabs(on_path) else None   # never the working directory's (Windows looks there)
+    tries += [("`claude` on PATH", [on_path])] if on_path else []
+    for what, cmd in tries:
+        try:
+            out = subprocess.run(cmd + ["--version"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)[^\n]*Claude Code", out or "")
+        if m:
+            return tuple(int(x) for x in m.groups()), tried
+        tried += [] if what in tried else [what]
+    return None, tried + ([] if on_path else ["`claude` on PATH"])
+
+
+def auto_refusal():
+    """Why owner items are refused in permission mode auto, or None: auto shows the dialog only from VERSION_FLOOR."""
+    v, tried = claude_version()
+    floor = ".".join(map(str, VERSION_FLOOR))
+    if v is None:
+        return ("permission mode auto shows the owner's permission dialog only from Claude Code %s, and its version cannot be "
+                "read here (tried: %s). %s" % (floor, ", ".join(tried), AUTO_WHERE % "owner items are"))
+    if v < VERSION_FLOOR:
+        return ("permission mode auto: Claude Code %s is older than %s, whose auto mode can answer the permission dialog "
+                "without the owner. %s" % (".".join(map(str, v)), floor, AUTO_WHERE % "owner items are"))
+    return None
+
+
 def answerers(project=None):
     """What can answer Claude Code's permission prompt in place of a human, as far as settings and processes show. It reads
     the union of every place the running session may take settings from (each config directory, each worktree of the
@@ -2188,8 +2278,14 @@ def answerers(project=None):
             for e in entries if isinstance(entries, list) else []:
                 if isinstance(e, dict) and _plugin_answers(str(e.get("installPath", ""))):
                     found.append("a PermissionRequest hook in the enabled plugin %s" % key.split("@")[0])
-    for argv, cwd, _, _ in anc:
-        if any(a == "--permission-prompt-tool" or a.startswith("--permission-prompt-tool=") for a in argv):
+    # the official host's Claude Code is excused only when every process with a prompt tool has its command line: an SDK app
+    # run inside the host inherits its entry point but not its command line, while a Git Bash fork of one process keeps it
+    # (win_ancestors gives each process twice, split both ways: a process is its pair)
+    step = 2 if WINDOWS else 1
+    procs = [tuple(tuple(a) for a, _c, _g, _h in anc[i - i % step:i - i % step + step]) for i in range(len(anc))]
+    tools = {procs[i] for i, (argv, _c, _g, _h) in enumerate(anc) if prompt_tool(argv)}
+    for i, (argv, cwd, _, _) in enumerate(anc):
+        if prompt_tool(argv) and not (official_host(argv) and tools == {procs[i]}):
             found.append("a process started with --permission-prompt-tool")
         for v in _flag_values(argv, "--settings"):
             if WINDOWS and not cwd and not v.lstrip().startswith("{") and not _drive_abs(v):
@@ -4558,18 +4654,14 @@ def doctor():
                    ("problem", "the sensitive-value filter answers %s on clean text and a token, not 0 and 1" % rc))
     for a in answerers():
         out.append(("problem", "%s: owner items are refused while it is configured" % a))
-    try:
-        v = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10).stdout
-        vt = _version_tuple(v)
-        if vt is None:
-            out.append(("info", "Claude Code version unknown"))
-        elif vt < (2, 1, 211):
-            out.append(("problem", "Claude Code %d.%d.%d is older than 2.1.211: auto mode may approve without the dialog, "
-                                   "so owner items need 2.1.211 or later" % vt))
-        else:
-            out.append(("ok", "Claude Code %d.%d.%d" % vt))
-    except (OSError, subprocess.SubprocessError):
-        out.append(("info", "`claude` is not on PATH; the version floor (2.1.211) is not checked"))
+    vt, tried = claude_version()
+    if vt is None:
+        out.append(("info", "Claude Code version unknown (tried: %s)" % ", ".join(tried)))
+    elif vt < (2, 1, 211):
+        out.append(("problem", "Claude Code %d.%d.%d is older than 2.1.211: auto mode may approve without the dialog, "
+                               "so owner items need 2.1.211 or later" % vt))
+    else:
+        out.append(("ok", "Claude Code %d.%d.%d" % vt))
     for v in ("BRAIN_TEST", "BRAIN_TEST_PAUSE_MS"):
         if os.environ.get(v):
             out.append(("warn", "%s is set: it is for tests only" % v))

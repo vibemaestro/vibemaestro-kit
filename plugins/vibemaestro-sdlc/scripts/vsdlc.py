@@ -104,19 +104,24 @@ def _path_str(v):
     return isinstance(v, str) and bool(v) and "\x00" not in v
 
 
-def project_root(payload):
-    """Gốc repo của PHIÊN: CLAUDE_PROJECT_DIR (Claude Code đặt), rồi cwd trong payload."""
+def session_folder(payload):
+    """Thư mục của PHIÊN: CLAUDE_PROJECT_DIR (Claude Code đặt), rồi cwd trong payload (real path)."""
     cwd = payload.get("cwd")
-    d = os.environ.get("CLAUDE_PROJECT_DIR") or (cwd if _path_str(cwd) else "") or os.getcwd()
-    d = os.path.realpath(d)
+    return os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or (cwd if _path_str(cwd) else "") or os.getcwd())
+
+
+def project_root(payload):
+    """Gốc repo của PHIÊN: the work tree that holds session_folder, or that folder itself."""
+    d = session_folder(payload)
     top = git_out(d, "rev-parse", "--show-toplevel") if os.path.isdir(d) else None
     return os.path.realpath(os.fsdecode(top.encode("utf-8", "surrogateescape"))) if top else d   # git's UTF-8 path, in the OS's form
 
 
-def hook_state(troot, sid):
+def hook_state(troot, sid, start=None):
     """(config, silent, warning). The activation table of the config contract:
 
-      silent  when `hooks` is `off`; otherwise active. The repo's own `.claude/settings.json` plays no part: a repo that runs
+      silent  when `hooks` is `off`, or a config in a folder from `start` (the session's folder) up to `troot` sets it
+              (sdlc_config.off_below); otherwise active. The repo's own `.claude/settings.json` plays no part: a repo that runs
               its own rule hooks next to the plugin's sets `hooks` to `off` to keep the reminders single.
       warning (text, short) for an INVALID config, once per session, else None. An invalid config means the defaults here,
               so `hooks` is `auto` and a warning never meets `silent`. A valid config with notes (keys this plugin does not
@@ -128,7 +133,7 @@ def hook_state(troot, sid):
     else:
         notes = C.LAST_NOTES                           # what this load found: no second parse on the hook's hot path
         warn = (config_note_text(notes), config_short_note(notes)) if notes and once("config-notes:" + troot, sid) else None
-    return cfg, cfg["hooks"] == "off", warn
+    return cfg, cfg["hooks"] == "off" or bool(start and C.off_below(start, troot)), warn
 
 
 def with_warn(warn, ctx, sysmsg=""):
@@ -434,9 +439,10 @@ def everyday_rules(rules, paths, root, troot, cfg):
     return [(n, t) for n, t in rules if not (paths.get(n) or "").startswith(mine)]
 
 
-def everyday_core(root, reason=None, troot=None):
+def everyday_core(root, reason=None, troot=None, start=None):
     """(context, system message) of the everyday core; with `reason`, the mode line first, and with `troot` one more line when the
-    last quiet save of that folder did not keep the work (everyday.save_trouble). Both lines go to Claude's context only: the hook
+    last quiet save of that folder did not keep the work (everyday.save_trouble), and one when the session's folder `start` lies
+    below `troot` and `troot` holds the kit's history (the saves of `start` go there). The lines go to Claude's context only: the hook
     cannot know the person's language, so Claude says them in it (the core tells it when); the person sees no fixed-language line."""
     path = os.path.join(root, *EVERYDAY_CORE.split("/"))
     text = read_text(path)
@@ -444,6 +450,9 @@ def everyday_core(root, reason=None, troot=None):
     trouble = everyday.save_trouble(troot) if troot else ""
     if trouble:
         line += " %s: %s." % (PLUGIN_NAME, trouble)
+    if troot and start and os.path.realpath(start) != os.path.realpath(troot) and everyday.kit_made(troot):
+        line += (" %s: the quiet saves of this folder go into the history of the folder %s above it, which saves that whole folder "
+                 "(all its subfolders but those whose .vibemaestro/sdlc.json turns the kit off)." % (PLUGIN_NAME, troot))
     if text is None:
         msg = "cannot read the everyday core %s" % path
         return warn_text([msg]) + ("\n\n" + line if line else ""), short_warn([msg])
@@ -458,7 +467,7 @@ def pretool_path(raw):
     # what this context has SEEN is per subagent (scope); what the machine COMPUTED (upstream cache, slow pack marks) per session
     sid, scope = session_key(payload), scope_id(payload)
     root, troot = plugin_root(), project_root(payload)
-    cfg, silent, warn = hook_state(troot, scope)
+    cfg, silent, warn = hook_state(troot, scope, session_folder(payload))
     if silent:
         return 0                                   # `hooks: off`: im, TRƯỚC mọi việc khác
     bad = plugin_problems(root)
@@ -763,7 +772,7 @@ def pretool_command(raw):
         return 0
     sid, scope = session_key(payload), scope_id(payload)   # seen: per subagent; computed: per session (pretool_path)
     root, troot = plugin_root(), project_root(payload)
-    cfg, silent, warn = hook_state(troot, scope)
+    cfg, silent, warn = hook_state(troot, scope, session_folder(payload))
     if silent:
         return 0
     ti = payload.get("tool_input")
@@ -1412,7 +1421,7 @@ def session_index_start(payload):
         return 0
     troot = project_root(payload)
     cfg, probs, _present = C.load(troot, quiet=True)
-    if probs or cfg["hooks"] == "off" or not cfg["current_state"].get("inject"):
+    if probs or cfg["hooks"] == "off" or C.off_below(session_folder(payload), troot) or not cfg["current_state"].get("inject"):
         return 0
     try:
         ctx, sysmsg = session_index(troot, cfg, stop)
@@ -1443,7 +1452,7 @@ def session_start(mode):
         # `context` command forgets, and only reminder marks: the parallel `core` command's config warning keeps its mark
         forget_reminders(session_key(payload))
     root, troot = plugin_root(), project_root(payload)
-    cfg, silent, warn = hook_state(troot, session_key(payload))
+    cfg, silent, warn = hook_state(troot, session_key(payload), session_folder(payload))
     if silent:
         return 0                                   # `hooks: off`
     bad = plugin_problems(root)
@@ -1451,7 +1460,7 @@ def session_start(mode):
         ctx, sysmsg = warn_text(bad), short_warn(bad)
     elif mode in CORE_MODES:
         m, why = session_mode(root, troot, cfg)
-        ctx, sysmsg = everyday_core(root, why, troot) if m == "everyday" else session_core(root, coordinated_session(root, troot))
+        ctx, sysmsg = everyday_core(root, why, troot, session_folder(payload)) if m == "everyday" else session_core(root, coordinated_session(root, troot))
         if shutil.which("git") is None:
             ctx, sysmsg = with_warn(GIT_MISSING, ctx, sysmsg)
     elif session_mode(root, troot, cfg)[0] == "everyday":
@@ -1493,7 +1502,7 @@ def subagent_start():
     if isinstance(kind, str) and kind in READ_ONLY_AGENTS:
         return 0
     root, troot = plugin_root(), project_root(payload)
-    cfg, silent, warn = hook_state(troot, scope_id(payload))
+    cfg, silent, warn = hook_state(troot, scope_id(payload), session_folder(payload))
     if silent:
         return 0                                   # `hooks: off`
     bad = plugin_problems(root)

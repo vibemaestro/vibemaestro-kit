@@ -151,6 +151,8 @@ clean_env() {
   # place under the scratch HOME, so a check of the default place still holds; a test that needs the session sets it itself.
   export XDG_STATE_HOME="$HOME/.local/state"
   unset CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION
+  # the owner's dialog checks read the running Claude Code from these (host, version): a case sets the ones it tests
+  unset CLAUDE_PID CLAUDE_CODE_EXECPATH CLAUDE_CODE_ENTRYPOINT
   net_guard_install "$t"
 }
 

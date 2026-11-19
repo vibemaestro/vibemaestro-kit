@@ -35,6 +35,10 @@ After a plugin upgrade:
   check names this case first (STALE: the launcher cannot run the installed vibemaestro-sdlc), and so does SessionStart, before
   the first baton fails. `kit:plugin-update` prints these two steps itself after it updates the plugins.
 
-SessionStart prints one line when the check fails, with the command that prints the fix; in mode `manual` with no baton rule at
-all it stays silent, because there a dialog on every baton command is the intended behaviour.
+SessionStart puts one line into the session's context when the check fails, never into the message the person sees, and it
+holds no command for the person. It names the fix the session offers through the owner's dialog: `kit:permissions-upgrade` when
+the only findings are old broad ask rules in the user settings, else the skill `bootstrap` (`kit:bootstrap`). When a rule needs a
+change no kit makes, it names that rule for the owner to change by hand. Either way the session tells the person in one plain
+line, in their language. In mode `manual` with no baton rule at all it stays silent, because there a dialog on every baton
+command is the intended behaviour.
 

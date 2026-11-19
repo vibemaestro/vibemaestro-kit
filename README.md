@@ -103,7 +103,7 @@ Installing `vibemaestro-brain` installs `vibemaestro-sdlc` with it.
 | Needed | For |
 |---|---|
 | Claude Code (`claude` CLI); tested with 2.1.290; the one-command install in [Try it](#try-it) needs 2.1.292 or later | everything; the brain's decision items need 2.1.211 or later in `auto` mode |
-| Python 3.8 or later (`python3`; on Windows the hooks also find `python` or `py -3`), `git`, `bash` | the hooks and scripts; tested on Linux and macOS, not on Windows; the brain needs a POSIX system. Without Python no hook blocks anything and the session says what is missing |
+| Python 3.8 or later (`python3`; on Windows the hooks also find `python` or `py -3`), `git`, `bash` | the hooks and scripts; the hooks, everyday mode and the brain are tested on Linux, macOS and Windows 11 with Git for Windows, the developer flow on Linux and macOS. Without Python no hook blocks anything and the session says what is missing |
 | `gh`, signed in (`gh auth login`) | the tracking issue at intake, the pull request at ship, GitHub writes in BatonRun |
 | A GitHub repository for your project | issues and pull requests; without a remote, intake records the intent and branch and skips the issue |
 
@@ -111,11 +111,12 @@ The plugins do not depend on any other repository at run time.
 
 ## Windows / VS Code
 
-The kit runs in Claude Code's VS Code extension; it is tested on Linux and macOS, not on Windows.
+The kit runs in Claude Code's VS Code extension and in the Claude desktop app. The hooks, everyday mode and the brain are tested on Linux, macOS and Windows 11 with Git for Windows; the developer flow is tested on Linux and macOS.
 
 - **What it needs, and why.** Git for Windows: Claude Code runs the kit's hooks through its `bash`, and in everyday mode the kit keeps the quiet saves of your folder in a local git history. Python 3.8 or later: the hooks and scripts are Python (on Windows the hooks also find `python` or `py -3`). `gh` and a GitHub repository are needed only for the developer flow.
 - **How to check.** Open a Claude Code session in your folder. When something is missing, no hook blocks your work: the session start says in one line what the kit needs, what this machine lacks, and how to check again. You can also ask Claude to check the machine: it proposes the way to install what is missing that fits your machine, and asks before it installs anything. The kit has no install script and no fixed steps for Git or Python.
-- **Install the kit without a terminal.** In the Claude Code panel in VS Code, type `/plugin` to open the plugin screen, add the marketplace `vibemaestro/vibemaestro-kit`, and install `vibemaestro-sdlc`. `vibemaestro-brain` runs on Linux and macOS only for now: on Windows it stays idle and lets Claude know, so Claude can tell you in your own language when it matters, and its guards refuse a change to its memory instead of letting it through.
+- **Install the kit without a terminal.** In the Claude Code panel in VS Code, type `/plugin` to open the plugin screen, add the marketplace `vibemaestro/vibemaestro-kit`, and install `vibemaestro-sdlc`.
+- **What works where.** `vibemaestro-brain` runs on Windows too. The decisions and goals you pin in the brain work in the VS Code extension and the desktop app, Windows included: you approve each one in a dialog. Signing the kit's waiting runs (`/vibemaestro-sdlc:owner-sign`) works in the extension and the app too, but not on Windows yet. On Windows, signing and the runs that need a signature (a merge, for example) do not work yet: the kit says so in one line and runs nothing.
 - **Which mode the kit picks.** A folder that is not a git repository yet, or one whose history the kit's quiet save created, opens in everyday mode: plain words, a notebook in `kb/`, a quiet save after each turn, no branches or pull requests. A folder that already had git, or one connected to GitHub, is in developer mode. How it is chosen, how to fix it for a folder, and how to move to developer later: [Everyday mode](plugins/vibemaestro-sdlc/README.md#everyday-mode).
 - **A known limit on Windows.** A folder inside your work folder that has a Git history of its own with nothing in it yet (made with `git init`, no commit) is saved as ordinary files on Windows; on Linux and macOS the quiet save stops at it and says why. Nothing is lost either way, and that inner history is left as it is.
 

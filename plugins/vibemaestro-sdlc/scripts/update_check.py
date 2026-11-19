@@ -26,7 +26,8 @@ the environment is used as urllib uses it, except for the tests' loopback server
 
 Silent, with no read: a manifest without a version or a valid repository (a private install); a worker session
 (VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and SEAT, deprecated); VIBEMAESTRO_NO_UPDATE_CHECK or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set (not empty, not 0); `update_check: false` or
-`hooks: "off"` in the project's `.vibemaestro/sdlc.json`; no CLAUDE_PLUGIN_DATA.
+`hooks: "off"` in the project's `.vibemaestro/sdlc.json`, or `hooks: "off"` in any folder from the session's up to the top of its git
+history; no CLAUDE_PLUGIN_DATA.
 
 VIBEMAESTRO_UPDATE_CHECK_API replaces https://api.github.com only when it is http://127.0.0.1:<port> (the tests' fake server).
 Standard library only, Python 3.8+.
@@ -117,8 +118,25 @@ def config_off():
         with open(os.path.join(root, CONFIG_REL), encoding="utf-8") as f:
             cfg = json.loads(f.read(1024 * 1024))
     except (OSError, ValueError):
+        cfg = None
+    if isinstance(cfg, dict) and (cfg.get("update_check") is False or cfg.get("hooks") == "off"):
+        return True
+    return hooks_off_above()
+
+
+def hooks_off_above():
+    """`hooks: "off"` in any folder from the session's folder up to the top of its git history, as the other hooks read it
+    (sdlc_config.off_below), whatever a nearer config says; False when that cannot be read."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        if here not in sys.path:
+            sys.path.insert(0, here)               # brain loads this file into its own process, where sdlc's scripts are not on the path
+        import sdlc_config as C
+        start = os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+        top = C.repo_root(start)
+        return C.hooks_off_at(top) or C.off_below(start, top) is not None
+    except Exception:                              # noqa: BLE001 — the reminder never fails the session
         return False
-    return isinstance(cfg, dict) and (cfg.get("update_check") is False or cfg.get("hooks") == "off")
 
 
 def silent():

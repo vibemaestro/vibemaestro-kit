@@ -2,6 +2,15 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.7.3
+
+Released together: vibemaestro-sdlc 0.7.3, vibemaestro-brain 0.5.3
+
+- patch: Everyday mode: turning the kit off in a subfolder (`"hooks": "off"` in its `.vibemaestro/sdlc.json`) now works even when a folder above it holds the save history: the kit stays quiet there, its update reminder included, and the quiet saves leave that subfolder out. When your folder's saves go into the history of a folder above it, Claude tells you once which folder that is.
+- patch: When the kit's permission rules on your computer are out of date, the session start no longer shows you a line in English with a command to run: Claude tells you in your own language and offers to fix them with one approval. The same goes for the note that asks you to restart Claude Code after a plugin update.
+- patch: The owner can now sign waiting runs (`/vibemaestro-sdlc:owner-sign`) and change the baton's mode in Claude Code's VS Code extension and the Claude desktop app, as in a terminal; not on Windows yet. In `auto` mode this needs Claude Code 2.1.211 or later; when the version cannot be read, the refusal says what was tried and that the default permission mode works. Any other program that could answer the permission dialog is still refused.
+- patch: On Windows the baton no longer stops with `No module named 'fcntl'`: the brain can now close or supersede a focus there, and the baton's log, list and mode views work. Signing and signed runs (a merge, the owner's signature) do not run on Windows yet: each says so in one line and runs nothing; they run on Linux and macOS.
+
 ## 0.7.2
 
 Released together: vibemaestro-sdlc 0.7.2, vibemaestro-brain 0.5.1

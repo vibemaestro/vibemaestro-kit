@@ -865,7 +865,6 @@ case_goals() {
 
 # --- [h] -----------------------------------------------------------------------------------------------------------------------
 case_focus() {
-  if [ "${OS:-}" = Windows_NT ]; then c_skip "[h] a focus orders Next, follows its goal, passes its items on" "a focus is retired, and a SOUL line written, through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl)"; return; fi
   np
   goal_args "ship the layers" "$(dplus 30)"; owner_ok "${GA[@]}"
   br op add --kind focus --text "capacity first" --owner-quote "làm capacity trước" --where chat --goal G9

@@ -28,7 +28,7 @@ jobs:
         include:
           - part: everyday
             minutes: 50
-            suites: windows-everyday:100 pyrun:60 quiet-save:340 everyday-mode:170 init-setup:150 devmode-same:1800
+            suites: windows-everyday:100 baton-windows:300 pyrun:60 quiet-save:340 everyday-mode:170 init-setup:150 devmode-same:1800
           - part: brain-a
             minutes: 60
             suites: brain-layers:1500 brain-hooks:300 brain-ledger:300 brain-drift-soul:120 brain-soul-line:120 brain-close:120 brain-stale:120 brain-merge-evidence:120

@@ -774,7 +774,6 @@ print(d.endswith(hashlib.sha1(os.fsencode(p)).hexdigest()[:12]))')" True "[P] th
 }
 
 case_focus_done_when() {  # a focus takes done when and not doing
-  if [ "${OS:-}" = Windows_NT ]; then c_skip "[focus-done-when] a focus's done when and not doing across its supersedes" "a focus is retired, and a SOUL line written, through vibemaestro-sdlc's baton, which does not run on Windows yet (it imports fcntl)"; return; fi
   newp
   owner_ok add --kind goal --text "ship the layers" --owner-quote q --where chat --done "the PR merged" --not-doing "the ledger" \
     --review "$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=30))')" --scope project
@@ -848,27 +847,24 @@ case_focus_words() {  # a live focus gets its done when and not doing in place: 
   br op words P3 --done-when "$TOKEN"; c_rc 1 "[focus-words-not-focus] a token-shaped done when: refused"
   c_hasnt "$OUT" "$TOKEN" "[focus-words-not-focus] the token is not printed"
   br op words P3 --not-doing "a$(printf '\001')b"; c_rc 1 "[focus-words-not-focus] a control character: refused"
-  if [ "${OS:-}" = Windows_NT ]; then   # README, On Windows: a focus retires through vibemaestro-sdlc's baton, which does not run there yet
-    br op close P3 --reason "dropped"; c_rc 1 "[focus-words-not-focus] Windows: closing a focus is refused, its charters cannot be revoked there"
-    c_has "$OUT" "P3 cannot be closed or superseded: vibemaestro-sdlc's baton, which revokes its charters, does not run on Windows yet; nothing was written, and the rest of the brain works" "[focus-words-not-focus] Windows: one line saying why, that nothing was written and that the rest works"
-    br show P3 --json; c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["status"])')" live "[focus-words-not-focus] Windows: P3 is still live"
-  else
-    br op close P3 --reason "dropped"; c_rc 0 "[focus-words-not-focus] instrument: P3 closed"
-    br op words P3 --done-when "x"; c_rc 1 "[focus-words-not-focus] a closed focus: refused"
-  fi
+  br op close P3 --reason "dropped"; c_rc 0 "[focus-words-not-focus] P3 closed (on Windows too: vibemaestro-sdlc's baton revokes its charters there)"
+  br op words P3 --done-when "x"; c_rc 1 "[focus-words-not-focus] a closed focus: refused"
   br doctor; c_rc 0 "[focus-words-not-focus] doctor rc 0 after the refusals"
 }
 
-case_baton_windows() {  # where vibemaestro-sdlc's baton cannot run (Windows: it imports fcntl), the brain says so in one line
+case_baton_windows() {  # where vibemaestro-sdlc's baton cannot run (an older one on Windows: it imports fcntl), the brain says so in one line
   newp
   mkdir -p "$TMP/nofcntl$NP"
   cat > "$TMP/nofcntl$NP/sitecustomize.py" <<'PY'
-import sys
-class NoFcntl:                                      # what the baton meets on Windows, which has no fcntl (a bad input, not a break)
-    def find_spec(self, name, path=None, target=None):
-        if name == "fcntl":
-            raise ModuleNotFoundError("No module named 'fcntl'", name="fcntl")
-sys.meta_path.insert(0, NoFcntl())
+import builtins
+_import = builtins.__import__
+def no_fcntl(name, globals=None, locals=None, fromlist=(), level=0):
+    # an sdlc baton older than its Windows port, on Windows (a bad input, not a break): the baton script's own fcntl or msvcrt
+    # import fails. Asked at the import statement, not of a finder: subprocess on Windows has msvcrt in sys.modules by then
+    if name in ("fcntl", "msvcrt") and (globals or {}).get("__name__") == "__main__":
+        raise ModuleNotFoundError("No module named 'fcntl'", name="fcntl")
+    return _import(name, globals, locals, fromlist, level)
+builtins.__import__ = no_fcntl
 PY
   R=$(bpya 'import os
 s.WINDOWS = True
@@ -907,18 +903,11 @@ print(json.dumps({"session_id": sys.argv[1], "cwd": sys.argv[2], "hook_event_nam
   c_rc 0 "[jira] a focus with --jira: written"
   br show P1 --json
   c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the focus holds the key"
-  local nx=P3
-  if [ "${OS:-}" = Windows_NT ]; then   # README, On Windows: a focus retires through vibemaestro-sdlc's baton, which does not run there yet
-    br op supersede P1 --text "capacity first, again" --reason wording; c_rc 1 "[jira] Windows: superseding a focus is refused, its charters cannot be revoked there"
-    c_has "$OUT" "P1 cannot be closed or superseded: vibemaestro-sdlc's baton" "[jira] Windows: saying why"
-    br show P2 --json; c_rc 1 "[jira] Windows: no P2 was made"; nx=P2
-  else
-    br op supersede P1 --text "capacity first, again" --reason wording; c_rc 0 "[jira] a focus superseded"
-    br show P2 --json
-    c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the key goes over to the superseding focus"
-  fi
+  br op supersede P1 --text "capacity first, again" --reason wording; c_rc 0 "[jira] a focus superseded (on Windows too)"
+  br show P2 --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the key goes over to the superseding focus"
   br op add --kind focus --text "second" --owner-quote q2 --where chat --goal G3
-  br show "$nx" --json
+  br show P3 --json
   c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print("jira" in json.load(sys.stdin))')" "False" "[jira] a focus without it stores no jira field"
   # refused: the shape of an intent's jira: key, and the kinds that take it
   local bad

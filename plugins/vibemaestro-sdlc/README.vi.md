@@ -22,7 +22,7 @@ Tính chất của hook:
 - Plugin hỏng (thiếu `rules/`, thiếu lõi) thì cảnh báo to ở đầu phiên. Plugin không giả vờ đã giao luật.
 - Luật khớp được hiện một lần mỗi phiên, hiện lại sau một lần nén ngữ cảnh (nén làm mất nó khỏi ngữ cảnh), và một lần trong mỗi subagent, vì subagent giữ một bộ dấu riêng. Một lệnh bị chặn bởi `level: block` thì bị chặn mỗi lần.
 - Hook còn cảnh báo khi bản checkout tụt sau nhánh upstream, thêm ghi chú về kích thước và về trang sổ khi bạn sửa file sổ, và thêm một dòng lúc mở phiên khi phép kiểm quyền BatonRun thấy thiếu gì đó.
-- Hook im khi `.vibemaestro/sdlc.json` đặt `"hooks": "off"`. Repo có hook tra luật riêng trong `.claude/settings.json` phải đặt `"hooks": "off"` hoặc gỡ chúng đi: hai bộ hook cộng dồn, không tự loại trùng.
+- Hook im khi `.vibemaestro/sdlc.json` đặt `"hooks": "off"`. Mọi tệp như vậy từ thư mục của phiên đi lên tới gốc lịch sử git của nó (hoặc lịch sử lưu của kit) đều tính, dù một tệp gần hơn nói gì: thư mục con đặt nó thì tắt, kể cả khi lịch sử nằm ở thư mục cha, và lần lưu lặng lẽ làm từ bất kỳ đâu trong lịch sử đó bỏ thư mục con ấy ra (những lần lưu trước khi tắt vẫn giữ những gì đã lưu). Repo có hook tra luật riêng trong `.claude/settings.json` phải đặt `"hooks": "off"` hoặc gỡ chúng đi: hai bộ hook cộng dồn, không tự loại trùng.
 - Luật của plugin khác đã cài và khai phụ thuộc vào plugin này được chính các hook này giao.
 
 **Chế độ đời thường**, cho người làm việc thường chứ không làm phần mềm, được mô tả ở [Chế độ đời thường](#chế-độ-đời-thường).
@@ -77,7 +77,7 @@ Plugin không cần plugin nào khác và không đọc repo nào khác.
 | `bash` | các adapter `.sh` | đã thử trên Linux và macOS |
 | `gh` (GitHub CLI), đã đăng nhập | `intake` (issue theo dõi), `ship` (mở PR), `install-gates` (kiểm runner), `batonrun` | quy trình viết cho GitHub |
 
-Chưa thử trên Windows.
+Trên Windows (`bash` của Git for Windows, Python của chính Windows) các hook và chế độ everyday chạy, các lệnh `log`, `list`, `mode` và `grant revoke` của baton cũng chạy: brain đóng hay thay một focus thì thu hồi được các charter của focus đó ở đó. Viết và chạy một baton (`new`, `check`, `go`, `run`, `rehearse`, `sign`, `pack`, đổi mode, `permissions --print` và `--install-launcher`) và hộp thoại của owner chưa chạy trên Windows: mỗi lệnh nói vậy trong một dòng và không chạy gì; chúng chạy trên Linux và macOS. `permissions --check` nói trong một dòng rằng ở đó không có gì để kiểm.
 
 ## Cài đặt và cập nhật
 
@@ -133,7 +133,7 @@ Skill được gọi theo tên, `vibemaestro-sdlc:<tên>`. Chúng ghi vào `kb/`
 | `batonrun` | Chạy một hành động ghi ra ngoài phiên thành một baton script: kiểm, diễn tập, ký, chạy, kiểm sau, ghi log. | merge, đẩy registry, xóa, force-push, đổi cấu hình plugin của người dùng |
 | `bootstrap` | Dựng một máy cho BatonRun trong một run do chủ ký: launcher và khối quyền. `coordinator-bootstrap` là tên cũ của nó, bị bỏ ở bản phát hành kế tiếp. | một máy mới, hoặc kiểm quyền lúc mở phiên báo lỗi |
 | `local-parallel` | Chạy nhiều việc cùng lúc trên một máy: mỗi việc một subagent (worktree riêng, `intake` đến PR nháp, model `agents.worker_model`); phiên chính giữ hàng đợi, chuyển lời duyệt spec, hậu kiểm từng PR và merge bằng `kit:merge-pr`. | người dùng muốn làm nhiều việc song song |
-| `owner-sign` | Chỉ chủ gọi (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): liệt kê các run baton mà một phiên đã xếp hàng chờ chữ ký của chủ (`go --queue`) và mở một hộp thoại của chủ cho mỗi mục được chọn, trong phiên của chính chủ. | có run đang chờ chủ ký trong hàng chờ |
+| `owner-sign` | Chỉ chủ gọi (`/vibemaestro-sdlc:owner-sign`, "ký các mục đang chờ"): liệt kê các run baton mà một phiên đã xếp hàng chờ chữ ký của chủ (`go --queue`) và mở một hộp thoại của chủ cho mỗi mục được chọn, trong phiên của chính chủ: một terminal, tiện ích Claude Code của VS Code hoặc app Claude desktop. | có run đang chờ chủ ký trong hàng chờ |
 | `history` | Ở chế độ đời thường: liệt kê các bản lưu ngầm của thư mục bằng lời thường và chép bản được chọn vào `ban-cu/`, không bao giờ ghi đè thư mục làm việc; người dùng tự lấy tệp cần, và bản chép chỉ bị xoá khi họ đồng ý. | người dùng hỏi đã lưu những gì hay muốn lấy lại bản cũ của một tệp |
 
 Các cách đọc `kb/` mà không nạp cả file: `kb.py find <từ khóa>`, `kb.py list [--type T] [--status S]`, `kb.py outline <file>`. Cả ba chỉ đọc.
@@ -242,7 +242,7 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | Key | Mặc định | Ý nghĩa |
 |---|---|---|
 | `schema` | `1` | Số schema của config, phiên bản lớn của định dạng. Plugin từ chối số lớn hơn của nó và nêu lệnh cập nhật cần chạy. |
-| `hooks` | `"auto"` | `"off"` làm mọi hook của plugin im. |
+| `hooks` | `"auto"` | `"off"` làm mọi hook của plugin im ở thư mục này và các thư mục con, và lần lưu lặng lẽ bỏ thư mục này ra. |
 | `profile` | `"auto"` | `"everyday"` hay `"developer"` cố định chế độ của kit trong thư mục này; `"auto"` để kit tự chọn (xem [Chế độ đời thường](#chế-độ-đời-thường)). |
 | `language` | `"vi"` | `"vi"` hoặc `"en"`: ngôn ngữ của nội dung kb (mọi phiên viết bằng nó) và của nhãn story, tên mục spec, tiêu đề thân PR, các dòng luồng. `kb.py init` ghi khoá này vào mọi config mới, `"en"` nếu không được trả lời, nên chỉ config tạo từ trước mới dùng mặc định. |
 | `update_check` | `true` | `false` tắt lời nhắc cập nhật của bản cài public trong repo này, cho vibemaestro-sdlc và vibemaestro-brain (xem README của kit, mục Cập nhật). |
