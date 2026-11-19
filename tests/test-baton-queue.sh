@@ -4,8 +4,8 @@
 # =============================================================================
 # Run: bash tests/test-baton-queue.sh
 #
-# A session queues a sealed run that needs the owner and goes on working; the owner signs it later in their own session, through
-# the same guard and dialog as `sign --by owner --seal`; the session runs it once, within 24 h, if the plan still matches. Each
+# A session queues a sealed run that needs the owner and goes on working; the owner signs it later, in that session or another,
+# through the same guard and dialog as `sign --by owner --seal`; the session runs it once, within 24 h, if the plan still matches. Each
 # family runs on a copy of the real plugin (its baton isolated from the machine: baton_isolate). No network, nothing outside
 # the scratch tree.
 # =============================================================================
@@ -108,8 +108,8 @@ if len(sys.argv) > 3:
 open(p, "w").write(json.dumps(it))
 PY
 }
-# write_asked_record <plugin> <session> [claude JSON] — an asked record for the owner's command as if a guard had written it (the guard
-# refuses to, for the session that queued): proves the sign's own check, not only the guard's
+# write_asked_record <plugin> <session> [claude JSON] — an asked record for the owner's command as if a guard had written it
+# (the guard refuses to, for an item it would not show): proves the sign's own check, not only the guard's
 write_asked_record() {
   ( cd "$OWD" && cenv XDG_STATE_HOME="$ST" python3 -c 'import json, os, sys
 sys.path.insert(0, sys.argv[1] + "/scripts")
@@ -219,18 +219,34 @@ fam_queue_refusals() {  # [R] unsigned, expired, a changed plan or script, anoth
   eq "$(bt "$P" "$W" s-coord run --queued nothex)" 64 "[R] run --queued with a malformed id: rc 64"
 }
 
-fam_queue_coordinator() {  # [C] the session that queued never signs: no record, its own record, after /clear
+fam_queue_coordinator() {  # [C] the session that queued signs through the owner's dialog: no record, a rejection, a click, after /clear
   local P=$1 L pl
-  setup; OWD=$(fresh)
+  setup; OWD=$W
   queue "$P"
-  eq "$(osign "$P" s-coord)" 3 "[C] the coordinator's own session signs without a dialog record: rc 3"
+  eq "$(osign "$P" s-coord)" 3 "[C] the session that queued signs without a dialog record: rc 3"
   has "$(cat "$BT_OUT")" "no fresh record of the owner's dialog" "[C] …the refusal names the missing dialog"
-  eq "$(ask "$P" s-coord)/$(asked_n)" "deny/0" "[C] the coordinator's own session asks: the guard denies, no dialog, no record"
-  has "$(cat "$TMP/guard.reason")" "queued" "[C] …the guard names the session that queued it"
-  write_asked_record "$P" s-coord
+  eq "$(ask "$P" s-coord)/$(asked_n)" "ask/1" "[C] the session that queued asks: the guard opens the dialog, one record"
+  has "$(cat "$TMP/guard.reason")" "the owner signs queued item $ID (act.sh)" "[C] …the dialog names the item"
+  has "$(cat "$TMP/guard.reason")" "Why:      example act" "[C] …and shows its card"
+  # the owner rejects the dialog: Claude Code never runs the command, and the session's next Bash call voids the record
+  eq "$(ASKCMD="ls" ask "$P" s-coord)/$(asked_n)" "none/0" "[C] a rejected dialog: the session's next Bash call voids the record"
+  eq "$(osign "$P" s-coord)" 3 "[C] …a sign after the rejection: rc 3"
+  bt "$P" "$W" s-coord log --queue >/dev/null
+  has "$(cat "$BT_OUT")" "$ID  pending" "[C] …the item stays pending"
+  eq "$(bt "$P" "$W" s-coord log --wait-queued "$ID" --timeout 1)" 9 "[C] …log --wait-queued: rc 9 at the deadline"
+  eq "$(ask "$P" s-coord)/$(asked_n)" "ask/1" "[C] the session asks again: a new dialog, one record"
+  # the item changed between the dialog and the click, in the session that queued it
+  poke "$(item)" 'it["args"] = [it["args"][0], "other"]; it["call"] = [it["call"][0], "other"]' rehash
   eq "$(osign "$P" s-coord)/$(python3 -c 'import json, sys; print("signature" in json.load(open(sys.argv[1])))' "$(item)")" "3/False" \
-     "[C] a dialog record in the coordinator's own session: sign rc 3, the item unsigned"
-  has "$(cat "$BT_OUT")" "queued" "[C] …the sign names the session that queued it"
+     "[C] the item changed between the session's dialog and the click: sign rc 3, unsigned"
+  has "$(cat "$BT_OUT")" "changed since the dialog" "[C] …it says the item changed since the dialog"
+  setup; OWD=$W; queue "$P"
+  eq "$(ask "$P" s-coord)/$(osign "$P" s-coord)/$(asked_n)" "ask/0/0" "[C] the session that queued: dialog, click, sign rc 0, the record used up"
+  eq "$(python3 -c 'import json, sys; s = json.load(open(sys.argv[1]))["signature"]; print(s["by"], s["session"], bool(s["dialog"]))' "$(item)" 2>/dev/null)" \
+     "owner s-coord True" "[C] …the owner's signature is in the item, with the dialog's id"
+  eq "$(qrun "$P")/$(cat "$W/out.txt" 2>/dev/null)" "0/hello" "[C] …run --queued from that session: rc 0, the act done"
+  eq "$(qrun "$P")" 3 "[C] …a second run: rc 3"
+  has "$(cat "$BT_OUT")" "was used already" "[C] …it says the item was used already"
   eq "$(bt "$P" "$W" s-coord sign --by coordinator-auto --queued "$ID")" 64 "[C] sign --by coordinator-auto --queued: rc 64"
   # /clear: a new session id in the same Claude Code process. A stand-in whose pid is the CLAUDE_PID its children read, as Claude
   # Code's is, queues as session s-A and asks and signs as s-B.
@@ -241,13 +257,6 @@ q() { CLAUDE_PID=$$ CLAUDE_CODE_SESSION_ID=s-A python3 "$L/scripts/baton.py" go 
 id() { grep -L '/d2"' "$XDG_STATE_HOME"/vibemaestro/baton/queue/*.json | sed -n 's|.*/\([0-9a-f]*\)\.json$|\1|p' | head -1; }   # not the setsid one
 ask() { printf '{"session_id":"s-B","permission_mode":"default","cwd":"%s","tool_name":"Bash","tool_input":{"command":"python3 %s/scripts/baton.py sign --by owner --queued %s"}}' "$W" "$L" "$(id)" \
         | CLAUDE_PID=$$ python3 "$L/scripts/baton-guard.py" | python3 -c 'import json,sys; t=sys.stdin.read().strip(); print(json.loads(t)["hookSpecificOutput"]["permissionDecision"] if t else "none")'; }
-ask_record() { python3 -c 'import json, os, sys
-sys.path.insert(0, sys.argv[1] + "/scripts")
-import baton
-lin = baton.lineage(); ci = baton.claude_index(lin, sys.argv[3])
-it = json.load(open(sys.argv[2]))
-baton.record_asked("s-B", "default", ["--by", "owner", "--queued", it["id"]], os.path.realpath(os.getcwd()),
-                   [lin[ci][0], lin[ci][2]], lin[0][2] - 5, queued=[it["id"], it["body_sha256"]])' "$L" "$XDG_STATE_HOME/vibemaestro/baton/queue/$(id).json" $$; }
 sign() { CLAUDE_PID=$$ CLAUDE_CODE_SESSION_ID=s-B python3 "$L/scripts/baton.py" sign --by owner --queued "$(id)"; echo "rc=$?"; }
 q >/dev/null 2>&1
 echo "items=$(ls "$XDG_STATE_HOME/vibemaestro/baton/queue" | grep -c '\.json$')"
@@ -264,17 +273,18 @@ print(",".join(sorted(str((o.get("claude") or [None])[0]) for o in out if o.get(
 echo "standin=$$"
 echo "ask=$(ask)"
 echo "asked=$(ls "$XDG_STATE_HOME/vibemaestro/baton/asked" 2>/dev/null | grep -c .)"
-ask_record; sign
+sign
+echo "signed=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("signature", {}).get("session"))' "$XDG_STATE_HOME/vibemaestro/baton/queue/$(id).json")"
 SH
   # one stand-in process for the three steps: queue as s-A, then ask and sign as s-B
   out=$(cd "$W" && cenv XDG_STATE_HOME="$ST" W="$W" L="$L" bash "$W/claude-standin.sh" 2>&1)
   has "$out" "items=1" "[C] /clear: the stand-in queued one item as session s-A"
   eq "$(printf '%s\n' "$out" | sed -n 's/^setsid-claude=//p')" "$(printf '%s\n' "$out" | sed -n 's/^standin=//p')" \
      "[C] go --queue under setsid (not a descendant of Claude Code): the item names the CLAUDE_PID process"
-  has "$out" "ask=deny" "[C] /clear: the same Claude Code process as session s-B asks: the guard denies"
-  has "$out" "asked=0" "[C] /clear: …and writes no record"
-  has "$out" "rc=3" "[C] /clear: a record for s-B in the same Claude Code process: sign rc 3"
-  has "$out" "Claude Code process that queued" "[C] /clear: …the refusal names the process that queued it"
+  has "$out" "ask=ask" "[C] /clear: the same Claude Code process as session s-B asks: the guard opens the dialog"
+  has "$out" "asked=1" "[C] /clear: …and writes one record"
+  has "$out" "rc=0" "[C] /clear: the click in the same Claude Code process: sign rc 0"
+  has "$out" "signed=s-B" "[C] /clear: …the item is signed, from session s-B"
   rm -rf "$L"
 }
 

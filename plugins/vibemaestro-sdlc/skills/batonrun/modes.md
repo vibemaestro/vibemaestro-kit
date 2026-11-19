@@ -91,11 +91,11 @@ at the screen (or the session is busy with other work), queue the run instead of
 2. Tell the owner, with the card, that an item waits for them, and start `log --wait-queued <id> --timeout 86400` in the
    background (`run_in_background`): it exits 0 when the item is signed, 3 when it never can be (expired, used, damaged), 9 at
    the deadline. Never poll by hand.
-3. The owner signs in a Claude Code session of their own, when they choose: `/vibemaestro-sdlc:owner-sign` (or "ký các mục
+3. The owner signs when they choose, in this session or another Claude Code session, and only when they ask (the dialog holds
+   the session until they click, which is what the queue avoids): `/vibemaestro-sdlc:owner-sign` (or "ký các mục
    đang chờ") lists `log --queue` and runs `sign --by owner --queued <id>` once per item they pick. That is the same hook,
-   dialog, record and lineage as `--seal`; the dialog shows the item's card. The session that queued the item never runs that
-   command: the hook denies it there, with no dialog, by session id and by Claude Code process (a `/clear` keeps the process),
-   and `sign` refuses it again.
+   dialog, record and lineage as `--seal`; the dialog shows the item's card. In the session that queued the item (also after
+   `/clear`), the same command opens the same dialog: the owner's click is the signature.
 4. On the wait's exit 0: `run --queued <id>` from the directory it was queued in. It runs once, before the expiry, and only while
    its rehearse gives the sealed plan: a moved PR head, base or file is rc 3, and the run is queued again. Report its one line.
 

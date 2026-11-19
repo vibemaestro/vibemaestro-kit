@@ -91,8 +91,8 @@ fingerprint of the variables that steer the tools (STEERING) and the plan; `sign
 it, and its writes (DO lines) must be the signed plan. Mode `manual` (the default) accepts only `--by owner`; mode `auto` also
 `--by coordinator-auto`, for `Stops: none` and no argument or Param value that names a Claude Code settings file or its
 directory (settings_value). This guards an honest but fallible session, not one that sets out to forge a record.
-`go --queue` leaves a run that needs the owner in the queue instead of a dialog: the owner signs it later from a Claude Code session
-of their own (`sign --by owner --queued <id>`, never from the session or Claude Code process that queued it), and `run --queued
+`go --queue` leaves a run that needs the owner in the queue instead of a dialog: the owner signs it later through the same dialog,
+in the session that queued it or another Claude Code session (`sign --by owner --queued <id>`), and `run --queued
 <id>` runs it once within 24 h while its plan is the sealed one; `log --queue` lists the items, `log --wait-queued <id>` waits.
 A plan approval is the owner's one signature of a plan: the session writes a spec (1 to 20 plans pinned by commit, an expiry at
 most 30 days ahead; a spec that still lists `rows` signs those rows only) and runs `sign --by owner --approve <spec>`; the dialog
@@ -142,7 +142,7 @@ Exit codes:
       that very call (the plugin's hook baton-guard.py writes it when it opens the dialog), or it stopped before the run phase
       (an interrupt or an error); the signature stays unused; a kept baton not pinned on this machine, a loose project root;
       pack: no ok run of these bytes here, the bytes kept under another name, another Stops; a queued item absent, unsigned,
-      expired, used, damaged, signed by the session that queued it, or run elsewhere; log --wait-queued: never signable;
+      expired, used, damaged, or run elsewhere; log --wait-queued: never signable;
       sign --by owner --approve: the approval (the spec, a plan's rows, the directory) changed since the dialog showed it;
       sign --by owner --charter: the charter (the spec, the focus's words, the directory) changed since the dialog showed it
   4   the run or its post-check failed, and undo put the state back
@@ -4171,7 +4171,7 @@ def owner_signs(asked):
             pass
         raise Stop(REFUSED, "sign refused: %s", why)
     RUN["asked_kept"] = (rec.get("script_path"), rec.get("script_sha256"))
-    RUN["asked_queued"], RUN["asked_claude"], RUN["asked_grant"] = rec.get("queued"), rec.get("claude"), rec.get("grant")
+    RUN["asked_queued"], RUN["asked_grant"] = rec.get("queued"), rec.get("grant")
     return rec["id"]
 
 
@@ -4440,9 +4440,8 @@ def guard_owner(inp):
     kept = queued = it = grant = body = focus = None
     if argv[2] == "--queued":                          # a queued item: the dialog shows its card and binds its bytes
         _p, it, state = load_item(argv[3])
-        why = queue_why(argv[3], state, it) if state != "pending" else queuer(it, sid, [this_claude(lin)])
-        if why:
-            return deny(why)
+        if state != "pending":
+            return deny(queue_why(argv[3], state, it))
         queued = [it["id"], it["body_sha256"]]
     elif argv[2] in ("--approve", "--charter"):         # every row (or the focus) resolved here, all shown, the body's digest bound
         here = os.getcwd()
@@ -4494,12 +4493,11 @@ def guard_owner(inp):
 
 # ── the owner's queue ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 # A run that needs the owner waits for them in a file instead of a dialog that freezes the session: `go --queue` seals it as `go`
-# does and writes an item; the owner signs the item later, in a Claude Code session of their own, with `sign --by owner --queued
-# <id>`, through the same guard, dialog and record as `--seal`; `run --queued <id>` runs it once, within QUEUE_LIFE, while its
-# rehearse still gives the sealed plan. The session that queued an item never signs it, nor does its Claude Code process under a
-# new session id (/clear): a click there would freeze the session the queue keeps working. body_sha256 binds every field and the
-# signature names it, so bytes changed after the dialog opened, or after signing, are refused. Like the rest of baton, it guards
-# against slips, not same-user forgery of the state files.
+# does and writes an item; the owner signs the item later, in that session or another, with `sign --by owner --queued <id>`,
+# through the same guard, dialog and record as `--seal`; `run --queued <id>` runs it once, within QUEUE_LIFE, while its
+# rehearse still gives the sealed plan. body_sha256 binds every field and the signature names it, so bytes changed after the
+# dialog opened, or after signing, are refused. Like the rest of baton, it guards against slips, not same-user forgery of the
+# state files.
 QUEUE_LIFE = 24 * 3600
 QUEUE_KEEP = 7 * 24 * 3600                             # an item this long past its expiry is removed, a used one too
 QUEUE_ID = re.compile(r"[0-9a-f]{16}\Z")
@@ -4548,7 +4546,7 @@ def queue_why(qid, state, it):
             "damaged": "item %s is damaged: its bytes changed since baton wrote them, so it is never signed or run" % qid,
             "used": "item %s was used already: one run per signature" % qid,
             "expired": "item %s expired at %s: the session queues it again" % (qid, (it or {}).get("expires")),
-            "pending": ("item %s is not signed yet: the owner signs it in a Claude Code session of their own "
+            "pending": ("item %s is not signed yet: the owner signs it through the owner's dialog "
                         "(/vibemaestro-sdlc:owner-sign)" % qid),
             "signed": "item %s is signed already" % qid}[state]
 
@@ -4572,23 +4570,6 @@ def this_claude(lin=None):
         return [lin[ci][0], lin[ci][2]]
     start = proc_start(int(hint)) if re.fullmatch(r"[1-9][0-9]{0,9}", hint) else None
     return [int(hint), start] if start is not None else None
-
-
-def same_claude(a, b):
-    """The same Claude Code process: its pid, and a start time within a minute (a start derived from the clock moves with it; a
-    false match only refuses a sign)."""
-    return (isinstance(a, list) and isinstance(b, list) and len(a) == len(b) == 2 and None not in a and None not in b
-            and a[0] == b[0] and abs(a[1] - b[1]) < 60)
-
-
-def queuer(it, session, claudes):
-    """Why the caller is the one that queued `it` (None when it is not): its session id, or its Claude Code process."""
-    if it.get("session") and session == it["session"]:
-        return "this is the session that queued item %s: the owner signs it in a Claude Code session of their own" % it["id"]
-    if any(same_claude(it.get("claude"), c) for c in claudes):
-        return ("this is the Claude Code process that queued item %s (a /clear gives it a new session id, not a new process): the "
-                "owner signs it in a Claude Code session of their own" % it["id"])
-    return None
 
 
 def prune_queue(q, now):
@@ -4648,9 +4629,6 @@ def signed_queued(qid, dialog):
         refuse(queue_why(qid, state, it))
     if RUN.get("asked_queued") != [qid, it["body_sha256"]]:
         refuse("item %s changed since the dialog opened (or the dialog showed another one): show it and ask again" % qid)
-    why = queuer(it, session_id(), [this_claude(), RUN.get("asked_claude")])
-    if why:
-        refuse(why)
     here = os.getcwd()
     try:
         os.chdir(it["cwd"])
@@ -4709,7 +4687,7 @@ def queue_list(rest):
         if it.get("detail"):
             say("  detail: %s (check and rehearse output)", it["detail"])
         if state == "pending":
-            say("  the owner signs, in a Claude Code session of their own: %s sign --by owner --queued %s", entry_command(), qid)
+            say("  the owner signs, through the owner's dialog: %s sign --by owner --queued %s", entry_command(), qid)
         elif state == "signed":
             sig = it["signature"]
             say("  signed by owner at %s; the session runs it: %s run --queued %s", sig.get("time"), entry_command(), qid)
@@ -6443,7 +6421,7 @@ def cmd_go(rest):
             raise Stop(USAGE, "go --queue in a sandbox session: the owner never signs there, so nothing is queued")
         if not session_id():
             raise Stop(USAGE, "go --queue needs a Claude Code session (CLAUDE_CODE_SESSION_ID): the item names the session that "
-                              "never signs it")
+                              "queued it")
         queue, rest = True, rest[1:]
         if rest and (rest[0] == "--by" or rest[0].startswith("--by=")):
             raise Stop(USAGE, "%s: --queue waits for the owner; it never goes with --by", usage)
@@ -6540,8 +6518,8 @@ def cmd_go(rest):
             if queue and not needs_quoting(s, args):
                 word = path if re.match(r"(?:kit|kind|project|user):", path) else os.path.abspath(path)
                 it = queue_item(s, word, call, args, plan, s.call_stops(), mode, card, detail)
-                say("go: queued %s — %s: %d write%s; the owner signs it in a Claude Code session of their own before %s "
-                    "(/vibemaestro-sdlc:owner-sign); wait: %s log --wait-queued %s; then: %s run --queued %s", it["id"], s.name,
+                say("go: queued %s — %s: %d write%s; the owner signs it through the owner's dialog, in this session or another, "
+                    "before %s (/vibemaestro-sdlc:owner-sign); wait: %s log --wait-queued %s; then: %s run --queued %s", it["id"], s.name,
                     len(plan), "" if len(plan) == 1 else "s", it["expires"], entry_command(), it["id"], entry_command(), it["id"])
                 return OK
             for ln in card:

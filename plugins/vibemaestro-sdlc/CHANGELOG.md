@@ -2,6 +2,12 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.7.4
+
+Released together: vibemaestro-sdlc 0.7.4, vibemaestro-brain 0.5.3
+
+- patch: The session that queued a run for the owner can now have it signed right there: `sign --by owner --queued <id>` from that session (also after `/clear`) opens the same owner dialog with the item's card, as for a direct sign, and `run --queued <id>` then runs it. No second Claude Code session is needed. Every other check of a queued item stays as it was.
+
 ## 0.7.3
 
 Released together: vibemaestro-sdlc 0.7.3, vibemaestro-brain 0.5.3

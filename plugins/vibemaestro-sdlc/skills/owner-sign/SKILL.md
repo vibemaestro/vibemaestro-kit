@@ -1,17 +1,16 @@
 ---
 name: owner-sign
-description: "Use when: the owner types /vibemaestro-sdlc:owner-sign or says \"ký các mục đang chờ\" (user-invoked only): the owner signs the baton runs waiting in the queue, from a Claude Code session of their own. Lists the pending items with their cards, then one owner dialog per item the owner picks."
+description: "Use when: the owner types /vibemaestro-sdlc:owner-sign or says \"ký các mục đang chờ\" (user-invoked only): the owner signs the baton runs waiting in the queue, in the session that queued them or another. Lists the pending items with their cards, then one owner dialog per item the owner picks."
 disable-model-invocation: true
 ---
 
 # owner-sign: the owner signs the queued runs
 
 A session that needs the owner's signature and must keep working queues the run (`go --queue`); the owner signs it here, in
-an interactive Claude Code session of their own on this machine, when they choose. Standard: the plugin's `docs/batonrun.md`
+an interactive Claude Code session on this machine (the one that queued it or another), when they choose. Standard: the plugin's `docs/batonrun.md`
 (section 6, the owner's queue).
 
-Not here: the session that queued the items (the hook denies the sign there, with no dialog, also after `/clear`), a sandbox,
-a call carrying an `agent_id`, a `-p` run.
+Not here: a sandbox, a call carrying an `agent_id`, a `-p` run.
 
 The program is the launcher `<state-dir>/bin/baton`, until installed `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/baton.py`.
 
