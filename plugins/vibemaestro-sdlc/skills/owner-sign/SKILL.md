@@ -8,7 +8,9 @@ disable-model-invocation: true
 
 A session that needs the owner's signature and must keep working queues the run (`go --queue`); the owner signs it here, in
 an interactive Claude Code session on this machine (the one that queued it or another), when they choose. Standard: the plugin's `docs/batonrun.md`
-(section 6, the owner's queue).
+(section 6, the owner's queue). A baton whose `Stops` names `secrets` is never in the queue: `go --queue`
+refuses it (a secret is given only to a `run` or `go --row` phase), so such a run goes through `go` with the owner's dialog,
+or `go --row`.
 
 Not here: a sandbox, a call carrying an `agent_id`, a `-p` run.
 
@@ -36,5 +38,7 @@ The program is the launcher `<state-dir>/bin/baton`, until installed `python3 ${
    alone in its own Bash call: nothing before or after it, no variable, no pipe. Claude Code opens a dialog that shows the
    item's card; the owner's click there is the signature. Never answer the dialog, never run the command again after a refusal
    or a rejected dialog, never sign another way.
-5. Report one line per item: `signed`, or the refusal line the command printed. The session that queued the item learns it by
+5. An item the owner no longer wants (or a signature `kit:plugin-update` names that will never run) is withdrawn instead: the
+   command `<program> sign --by owner --void <id or binding>`, exactly, alone in its Bash call, through the same dialog.
+6. Report one line per item: `signed`, or the refusal line the command printed. The session that queued the item learns it by
    itself (`log --wait-queued`); nothing to send to it.

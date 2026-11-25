@@ -12,7 +12,9 @@
 #   [O] outline: every start line holds its heading, sections sum to the file, a section's bytes equal sed|wc -c
 #   [B] byte budgets: find <= 3000 B at the default limit, list <= 300 B per line, outline <= 150 B per row
 #   [C] kb.py check: lifecycle (good, unknown status, dangling and one-sided links, superseded without superseded_by), --strict,
-#       the spec size warning and its config key `kb.spec_warn_bytes`
+#       and `kb.spec_warn_bytes`, which no longer warns
+#   [Z] byte limits of a story, a spec and a plan (16384, 32768, 32768): the edges, a file the change does not touch, an edit of
+#       an over-limit file, multi-byte text, the config keys
 #   [S] SessionStart: the kb/ paragraph names the three finders by the plugin's kb.py path, lists no file, stays in 9000 characters
 # Each family runs on the real plugin.
 # =============================================================================
@@ -203,7 +205,8 @@ fam_budget() {
 # lc <name> — a fresh repo with an empty kb/ for one lifecycle case; prints its path
 lc() { local r="$TMP/lc-$1"; rm -rf "$r"; mkdir -p "$r/kb"; git_ init -q -b main "$r"; printf '%s' "$r"; }
 # chk_ <plugin> <repo> [args] — kb.py check in <repo>; sets CO (stdout), CE (stderr), CRC
-chk_() { local p=$1 r=$2; shift 2; CO=$(cd "$r" && python3 "$p/scripts/kb.py" check "$@" 2>"$TMP/chk.err"); CRC=$?; CE=$(cat "$TMP/chk.err"); }
+chk_() { local p=$1 r=$2 w=${CHKW-}; shift 2; CO=$(cd "$r" && $w python3 "$p/scripts/kb.py" check "$@" 2>"$TMP/chk.err"); CRC=$?; CE=$(cat "$TMP/chk.err"); }
+chkr_() { CHKW=capped chk_ "$@"; }   # a red-expected run (fixtures/capped.sh)
 
 fam_life() {
   local p=$1 r
@@ -261,13 +264,12 @@ fam_life() {
   r=$(lc size)
   doc "$r" specs/2026-01-01-big.md 'description: "big"' "$(head -c 50000 /dev/zero | tr '\0' x)"
   doc "$r" plans/2026-01-02-bigplan.md 'description: "big plan"' "$(head -c 50000 /dev/zero | tr '\0' x)"
-  chk_ "$p" "$r"; eq "$CRC" 0 "[C] a spec over 40000 B: rc stays 0"
-  has "$CO" 'WARNING kb/specs/2026-01-01-big.md: 500' "[C] the default threshold lists the big spec with its size"
-  hasnt "$CO" 'bigplan' "[C] the size guard looks at specs only"
+  chk_ "$p" "$r"; eq "$CRC" 0 "[C] no merge base: the sweep judges no size, rc 0"
+  hasnt "$CO" 'bytes' "[C] …and prints no size line"
   mkdir -p "$r/.vibemaestro"; printf '{"schema": 1, "kb": {"spec_warn_bytes": 100000}}' > "$r/.vibemaestro/sdlc.json"
-  chk_ "$p" "$r"; hasnt "$CO" 'WARNING' "[C] kb.spec_warn_bytes 100000: no warning"
+  chk_ "$p" "$r"; eq "$CRC" 0 "[C] kb.spec_warn_bytes 100000: valid, rc 0"; hasnt "$CO" 'WARNING' "[C] …no warning"
   printf '{"schema": 1, "kb": {"spec_warn_bytes": null}}' > "$r/.vibemaestro/sdlc.json"
-  chk_ "$p" "$r"; hasnt "$CO" 'WARNING' "[C] kb.spec_warn_bytes null: the guard is off"
+  chk_ "$p" "$r"; hasnt "$CO" 'WARNING' "[C] kb.spec_warn_bytes null: valid, no warning"
   printf '{"schema": 1, "kb": {"spec_warn_bytes": 0}}' > "$r/.vibemaestro/sdlc.json"
   chk_ "$p" "$r"; eq "$CRC" 65 "[C] kb.spec_warn_bytes 0: invalid config, rc 65"; has "$CE" 'kb.spec_warn_bytes' "[C] invalid config: names the key"
   for c in "find big" "list" "outline kb/specs/2026-01-01-big.md"; do
@@ -291,7 +293,111 @@ fam_start() {
   [ "$(nchars "$C")" -le 9000 ] && ok "[S] context $(nchars "$C") characters <= 9000" || bad "[S] context over 9000: $(nchars "$C")"
 }
 
-FAMS="find list outline budget life start"
+# fill_bytes <repo> <path under kb/> <bytes> — a document of exactly <bytes> bytes (a frontmatter, a title, then x)
+fill_bytes() {
+  local f="$1/kb/$2"; mkdir -p "$(dirname "$f")"
+  printf -- '---\ndescription: "d"\n---\n\n# t\n\n' > "$f"
+  head -c $(( $3 - $(wc -c < "$f") )) /dev/zero | tr '\0' x >> "$f"
+}
+# zbase <name> — an empty kb/ on a commit that origin/main names (the merge base the size check reads)
+zbase() {
+  local r; r=$(lc "$1"); mkdir -p "$r/kb/intent" "$r/kb/specs" "$r/kb/plans"; printf '# kb\n' > "$r/kb/README.md"
+  git_ -C "$r" add -A; git_ -C "$r" commit -q -m base; git_ -C "$r" update-ref refs/remotes/origin/main HEAD; printf '%s' "$r"
+}
+# zedge <dir> <bytes> <rc> <size line or empty> — one new file of <bytes> bytes in kb/<dir>/: the sweep's rc and its size line
+zedge() {
+  local r; r=$(zbase "e$2"); fill_bytes "$r" "$1/2026-01-01-x.md" "$2"
+  if [ "$3" = 65 ]; then chkr_ "$PLUGIN" "$r"; else chk_ "$PLUGIN" "$r"; fi; eq "$CRC" "$3" "[Z] kb/$1 of $2 bytes: rc $3"
+  if [ -n "$4" ]; then has "$CO$CE" "$4" "[Z] …$4"; else hasnt "$CO$CE" ' bytes, ' "[Z] …no size line"; fi
+}
+
+fam_bytes() {
+  local p=$1 r o rc
+  local LIM="(the whole file, UTF-8)"
+  zedge intent 13107 0 ""
+  zedge intent 13108 0 "the story is 13108 bytes, 80 percent of its limit of 16384 $LIM: keep the request, the ACs and the questions; move code-reading notes to the spec"
+  zedge intent 16384 0 "the story is 16384 bytes, 100 percent of its limit of 16384 $LIM: keep the request, the ACs and the questions; move code-reading notes to the spec"
+  zedge intent 16385 65 "the story is 16385 bytes, over its limit of 16384 (the whole file, UTF-8; kb.intent_max_bytes): keep the request, the ACs and the questions; move code-reading notes to the spec"
+  zedge specs 26214 0 ""
+  zedge specs 26215 0 "the spec is 26215 bytes, 80 percent of its limit of 32768 $LIM: split it by service or module"
+  zedge specs 32768 0 "the spec is 32768 bytes, 100 percent of its limit of 32768 $LIM: split it by service or module"
+  zedge specs 32769 65 "the spec is 32769 bytes, over its limit of 32768 (the whole file, UTF-8; kb.spec_max_bytes): split it by service or module"
+  zedge plans 26214 0 ""
+  zedge plans 26215 0 "the plan is 26215 bytes, 80 percent of its limit of 32768 $LIM: split it into waves"
+  zedge plans 32768 0 "the plan is 32768 bytes, 100 percent of its limit of 32768 $LIM: split it into waves"
+  zedge plans 32769 65 "the plan is 32769 bytes, over its limit of 32768 (the whole file, UTF-8; kb.plan_max_bytes): split it into waves"
+
+  # a file already over its limit that the change does not touch never fails; an edit of its body must bring it under
+  r=$(zbase untouched); fill_bytes "$r" plans/2026-01-01-big.md 40000; fill_bytes "$r" specs/2026-01-02-big.md 50000
+  git_ -C "$r" add -A; git_ -C "$r" commit -q -m big; git_ -C "$r" update-ref refs/remotes/origin/main HEAD
+  fill_bytes "$r" specs/2026-01-03-small.md 3000
+  chk_ "$p" "$r"; eq "$CRC" 0 "[Z] an unrelated new spec beside an untouched 40000-byte plan and 50000-byte spec: rc 0"
+  hasnt "$CO$CE" ' bytes, ' "[Z] …and the sweep lists neither"
+  chk_ "$p" "$r" plan kb/plans/2026-01-01-big.md
+  eq "$CRC" 0 "[Z] check plan on the untouched over-limit plan by name: rc 0"
+  has "$CO" "WARNING kb/plans/2026-01-01-big.md: the plan is 40000 bytes, over its limit of 32768 (kb.plan_max_bytes) and this change does not touch it; its next edit must bring it under: split it into waves" "[Z] …a warning says its next edit owes the limit"
+  printf 'one more line\n' >> "$r/kb/plans/2026-01-01-big.md"
+  chkr_ "$p" "$r"; eq "$CRC" 65 "[Z] a body edit of that plan that leaves it over: the sweep is red"
+  has "$CE" "- kb/plans/2026-01-01-big.md: the plan is 40014 bytes, over its limit of 32768 (the whole file, UTF-8; kb.plan_max_bytes): split it into waves" "[Z] …naming the file and its size"
+  hasnt "$CE" 'kb/specs/2026-01-02-big.md' "[Z] …and not the spec the change does not touch"
+  chkr_ "$p" "$r" plan kb/plans/2026-01-01-big.md; eq "$CRC" 65 "[Z] check plan by name on it: rc 65"
+  fill_bytes "$r" plans/2026-01-01-big.md 30000
+  chk_ "$p" "$r"; eq "$CRC" 0 "[Z] the edit that brings it to 30000 bytes: the sweep passes, rc 0"
+  has "$CO" "WARNING kb/plans/2026-01-01-big.md: the plan is 30000 bytes, 91 percent of its limit of 32768" "[Z] …with the 80 percent warning"
+  git_ -C "$r" checkout -q -- kb/plans/2026-01-01-big.md
+  printf -- '---\nstatus: done\ndescription: "d"\n---\n\n# t\n\n' > "$TMP/zfm"; sed 1,6d "$r/kb/plans/2026-01-01-big.md" >> "$TMP/zfm"; cp "$TMP/zfm" "$r/kb/plans/2026-01-01-big.md"
+  chk_ "$p" "$r"; eq "$CRC" 0 "[Z] a frontmatter-only edit (status: done) of the over-limit plan is no touch: rc 0"
+  hasnt "$CO$CE" 'big.md' "[Z] …and the sweep names nothing"
+
+  # bytes, not characters: 5000 letters of three bytes (ạ) are 15000 bytes in under 13108 characters
+  r=$(zbase multibyte); printf -- '---\ndescription: "d"\n---\n\n# t\n\n' > "$r/kb/intent/2026-01-01-vi.md"
+  printf 'ạ%.0s' $(seq 1 5000) >> "$r/kb/intent/2026-01-01-vi.md"
+  chk_ "$p" "$r"; eq "$CRC" 0 "[Z] 5000 three-byte letters: rc 0"
+  has "$CO" "the story is 15031 bytes, 91 percent of its limit of 16384" "[Z] …counted in bytes, 15031, not in characters"
+  r=$(zbase emoji); printf -- '---\ndescription: "d"\n---\n\n# t\n\n' > "$r/kb/specs/2026-01-01-e.md"
+  printf '😀%.0s' $(seq 1 7000) >> "$r/kb/specs/2026-01-01-e.md"
+  chk_ "$p" "$r"; eq "$CRC" 0 "[Z] 7000 four-byte emoji: rc 0"
+  has "$CO" "the spec is 28031 bytes, 85 percent of its limit of 32768" "[Z] …counted in bytes, 28031"
+
+  # a story under 3500 characters but over 80 percent in bytes: 3300 four-byte emoji are 13231 bytes
+  r=$(zbase fourbyte); printf -- '---\ndescription: "d"\n---\n\n# t\n\n' > "$r/kb/intent/2026-01-01-em.md"
+  printf '😀%.0s' $(seq 1 3300) >> "$r/kb/intent/2026-01-01-em.md"
+  chk_ "$p" "$r"; has "$CO" "the story is 13231 bytes, 80 percent of its limit of 16384" "[Z] 3300 characters in 13231 bytes: the byte warning, though the characters are under 3500"
+  # no merge base: a file named to check is judged as touched
+  r=$(lc nobase); mkdir -p "$r/kb/plans"; fill_bytes "$r" plans/2026-01-01-big.md 40000
+  chkr_ "$p" "$r" plan kb/plans/2026-01-01-big.md; eq "$CRC" 65 "[Z] no merge base: check plan by name on a 40000-byte plan is red"
+  has "$CE" "the plan is 40000 bytes, over its limit of 32768 (the whole file, UTF-8; kb.plan_max_bytes)" "[Z] …as a touched file"
+  # a stray non-UTF-8 byte in an untouched over-limit spec: read the same way on both sides, so it is no touch
+  r=$(zbase strayb); fill_bytes "$r" specs/2026-01-01-big.md 40000; printf '\377' >> "$r/kb/specs/2026-01-01-big.md"
+  git_ -C "$r" add -A; git_ -C "$r" commit -q -m big; git_ -C "$r" update-ref refs/remotes/origin/main HEAD; fill_bytes "$r" specs/2026-01-02-small.md 3000
+  chk_ "$p" "$r"; eq "$CRC" 0 "[Z] an untouched 40001-byte spec holding the byte 0xFF: the sweep passes, rc 0"
+  # an over-limit story already on the base: untouched it passes, its body edited it is red; a dangling symlink is no crash
+  r=$(zbase intentedit); fill_bytes "$r" intent/2026-01-01-big.md 17000; ln -s nowhere "$r/kb/specs/2026-01-02-dangling.md"
+  git_ -C "$r" add -A; git_ -C "$r" commit -q -m big; git_ -C "$r" update-ref refs/remotes/origin/main HEAD
+  chk_ "$p" "$r"; eq "$CRC" 0 "[Z] an untouched 17000-byte story and a dangling symlink in kb/specs: the sweep passes, rc 0"
+  printf 'more\n' >> "$r/kb/intent/2026-01-01-big.md"
+  chkr_ "$p" "$r"; eq "$CRC" 65 "[Z] a body edit of that story: the sweep is red"
+  has "$CE" "- kb/intent/2026-01-01-big.md: the story is 17005 bytes, over its limit of 16384" "[Z] …naming the story and its size"
+  printf -- '---\ndescription: "d"\n---\n\n# t\n\n' > "$r/kb/intent/2026-01-01-big.md"; head -c 900 /dev/zero | tr '\0' x >> "$r/kb/intent/2026-01-01-big.md"
+  chk_ "$p" "$r"; eq "$CRC" 0 "[Z] the edit that brings it under: the sweep passes"
+
+  # the config keys move the limit and its 80 percent
+  r=$(zbase keys); mkdir -p "$r/.vibemaestro"
+  printf '{"schema": 1, "kb": {"intent_max_bytes": 1000, "spec_max_bytes": 2000, "plan_max_bytes": 3000}}' > "$r/.vibemaestro/sdlc.json"
+  git_ -C "$r" add -A; git_ -C "$r" commit -q -m cfg; git_ -C "$r" update-ref refs/remotes/origin/main HEAD
+  fill_bytes "$r" intent/2026-01-01-k.md 801; fill_bytes "$r" specs/2026-01-01-k.md 2001; fill_bytes "$r" plans/2026-01-01-k.md 2399
+  chkr_ "$p" "$r"; eq "$CRC" 65 "[Z] limits 1000, 2000 and 3000: the spec of 2001 bytes is red"
+  has "$CO" "kb/intent/2026-01-01-k.md: the story is 801 bytes, 80 percent of its limit of 1000" "[Z] …the story of 801 bytes warns at 80 percent of 1000"
+  has "$CE" "- kb/specs/2026-01-01-k.md: the spec is 2001 bytes, over its limit of 2000 (the whole file, UTF-8; kb.spec_max_bytes)" "[Z] …the spec is over 2000"
+  hasnt "$CO$CE" 'kb/plans/2026-01-01-k.md' "[Z] …the plan of 2399 bytes is under 80 percent of 3000: silent"
+  r=$(zbase warnkey); mkdir -p "$r/.vibemaestro"; printf '{"schema": 1, "kb": {"spec_warn_bytes": 100000}}' > "$r/.vibemaestro/sdlc.json"
+  git_ -C "$r" add -A; git_ -C "$r" commit -q -m cfg; git_ -C "$r" update-ref refs/remotes/origin/main HEAD
+  fill_bytes "$r" specs/2026-01-01-w.md 50000
+  chkr_ "$p" "$r"; eq "$CRC" 65 "[Z] kb.spec_warn_bytes 100000 raises nothing: a new spec of 50000 bytes is red against the default 32768"
+  has "$CE" "the spec is 50000 bytes, over its limit of 32768" "[Z] …naming the limit of kb.spec_max_bytes"
+}
+
+FAMS="find list outline budget life bytes start"
 for f in $FAMS; do echo "== $f (real plugin) =="; "fam_$f" "$PLUGIN"; done
 
 echo "== instrument controls =="

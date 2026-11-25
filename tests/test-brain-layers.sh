@@ -43,22 +43,36 @@
 #   [h] focus: a focus points to a live goal (else rc 1) and carries the owner's words; Next renders the items of each live
 #       focus first, by focus, tagged `[P1]`, then the rest by id; a closed focus orders nothing, a superseded one passes its
 #       items to its successor, which keeps the quote bytes and the goal; a Next item ties to a live focus only
+#   [n] a focus the session opens: refused without a live goal or a done when (naming each missing, a blank done when, a control
+#       or invisible character too), never with half of the owner's words; its line says `[opened by the session]` before its
+#       text and has no quote line, however its text imitates one; `brain show` says who opened a focus; a close without a
+#       pointer (none, empty, spaces) refused for every focus; a supersede that changes only a focus's text refused, saying
+#       where progress goes, one that changes its done when or carries the owner's newer words accepted; a running session
+#       names a live focus (`[P3]`), a dead one refused; after a compaction (not at a startup) the card lists live Next
+#       items and sessions with no live focus, a closed focus's included, no line when each has one, seventy cut with +13; a supersede repeating the same done when (spaces aside) or the owner's
+#       same words refused; doctor calls a hot.md with no focus marks an older brain's render, one with a Next tag dropped an
+#       edit; a full Focus section queues a focus the session opens, its line marked in `brain overflow`
 #   [i] requests: a quote of 600 units holding `"` stored and shown by `brain show` byte for byte, 601 refused, never cut; a
 #       supersede keeps the quote bytes; a close without --pointer refused, with one closed and in Done; a request closes by its
 #       --closes anchor (the pointer) and is marked stale like N, X, S and Q; a full Requests section queues
 #   [j] due days on a fixed clock: the Due line at 8, 7, 1, 0 and −2 days, soonest first, the first line of the right brain; the
 #       item line's `due 11-07`; a hot.md rendered days ago still matches (its Due line and a goal's review part move with the
 #       clock), a forged one does not
-#   [k] the precedence line, in the owner's wording, is line 2 of string 1 at every source, and only there; `brain render`
-#       prints it first (hot.md does not hold it)
+#   [k] the precedence line, by kind of question, is line 2 of string 1 at every source (fork too), also with no left-brain
+#       item, and only there; `brain render` prints it first (hot.md does not hold it); BRAIN_OFF=1 injects nothing
+#   [k2] the texts that state precedence say the same: the rulebook's chapter 7 (en, vi) holds the table of five kinds, each
+#       chain in the owner's order, the three ideas, R against D, the trap rule and how sdlc's document-precedence fits; its
+#       head no longer ranks the layers; the skill's key rules (the part re-injected after a compaction, within 5,000 tokens)
+#       hold the five chains; both READMEs quote the new line; no text of the brain quotes the old one
 #   [l2] the card's loss score is this session's compaction's only when PostCompact logged it before the card; else it says
 #       `not logged yet`, never the previous score or another session's; doctor shows the score once logged
 #   [l] the review card: only at SessionStart:compact, ≤ 1,000 units, between the precedence line and the left brain, each of
 #       its lines from a seeded state (goals and their focus, sections over 85 %, anchors closed, the overflow queue, the last
 #       loss score); lines past 1,000 become one `(+N lines: brain doctor)`; doctor prints its lines
 #   [m] an existing brain of log format 4 (every op kind, a queue and its moves) folds to the same bytes, keeps its ids and
-#       cache, its hot.md is a warn, a hand edit stops every write, a new request works on it, and the brain of format 4 refuses
-#       the log once it holds a goal, focus or request (rc 5). Needs that brain from this repository's history (skipped without it)
+#       cache, gets the new precedence line at SessionStart with its log unchanged, its hot.md is a warn, a hand edit stops
+#       every write, a new request works on it, and the brain of format 4 refuses the log once it holds a goal, focus or
+#       request (rc 5). Needs that brain from this repository's history (skipped without it)
 # =============================================================================
 set -uo pipefail
 if [ -z "${BRAIN_SUITE_REEXEC:-}" ]; then
@@ -84,8 +98,20 @@ brain_kit "$SRC_ROOT"
 BASE_REV=9a16ab9
 # the brain of log format 4: capacity, the last commit before goals, focus and requests
 LAYERS_REV=6b1ded0
-# the precedence line, in the owner's wording
-PREC="Precedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, lowest; the brain never edits it: report a contradiction to the owner)."
+# the precedence line: the five kinds of question, the chains in the skill and the rulebook
+PREC="Precedence, only when two sources disagree, goes by the kind of question: 1 rules and decisions, 2 order of work, 3 one work's contract, 4 the present state, 5 history and evidence (each chain: skill brain, rulebook chapter 7). The machine never overrides the owner. Auto-memory ranks last: never edit it, report a contradiction to the owner."
+# how the line starts: what the [k] counts look for
+PREC_HEAD="Precedence, only when two sources disagree"
+# the line before it, which no text of the brain may quote any more
+OLD_PREC="Precedence: the owner's newer word"
+# the five chains, highest first, in the owner's order; the rulebook's table and the skill's key rules carry each one
+CHAINS=(
+  "the owner's newer word, left brain (G D W), SOUL, plugin rules, traps (T), \`kb/decisions\`, auto-memory"
+  "the owner's newer word, requests (R) by due day, the work of a focus (P, serving a goal G), the rest"
+  "the story the owner approved, spec, plan, brief, the session's own notes"
+  "a fresh reading of the real system (GitHub, the cluster, the machine), right brain, \`kb/\`, auto-memory"
+  "the records (\`kb/\`, PRs, run logs, the brain's log), the session's recollection, auto-memory"
+)
 
 # --- the stub gh (the work suite's) -------------------------------------------------------------------------------------------
 export STUB="$TMP/stub"
@@ -870,7 +896,7 @@ case_focus() {
   br op add --kind focus --text "capacity first" --owner-quote "làm capacity trước" --where chat --goal G9
   c_rc 1 "[h] a focus whose goal is not live: refused"; c_has "$OUT" "G9 is not a live goal" "[h] naming it"
   br op add --kind focus --text "capacity first" --owner-quote "làm capacity trước" --where chat; c_rc 64 "[h] a focus with no goal: usage"
-  br op add --kind focus --text "capacity first" --goal G1; c_rc 64 "[h] a focus without the owner's words: usage"
+  br op add --kind focus --text "capacity first" --goal G1; c_rc 64 "[h] a focus without the owner's words or a done when: usage"
   br op add --kind next --text "words" --owner-quote q --where w; c_rc 64 "[h] the owner's words on a Next item: usage"
   br op add --kind focus --text "capacity first" --owner-quote "làm capacity trước" --where chat --goal G1
   c_rc 0 "[h] a focus pointing to a live goal"; c_has "$OUT" "added P1" "[h] as P1"
@@ -886,7 +912,8 @@ case_focus() {
   c_has "$SR" "  \"làm capacity trước\" · chat" "[h] and the owner's words"
   br op close P2 --reason done --pointer kb/x.md
   startall; c_eq "$(nextorder)" "X3 [P1],X5 [P1],X1 x,X2 x,X4 x," "[h] a closed focus orders nothing"
-  br op supersede P1 --text "capacity first, then the strings" --reason widened; c_has "$OUT" "superseded P1 with P3" "[h] a supersede of a focus"
+  br op supersede P1 --text "capacity first, then the strings" --reason widened --done-when "the strings land"
+  c_has "$OUT" "superseded P1 with P3" "[h] a supersede of a focus"
   c_eq "$(bpy 'st = s.load(s.state_dir())[1]; i = st["items"]; print(s.dumps(i["P3"]["source"]) == s.dumps(i["P1"]["source"]), i["P3"]["goal"])')" "True G1" \
        "[h] keeps the owner's words byte for byte and the goal"
   startall; c_eq "$(nextorder)" "X3 [P3],X5 [P3],X1 x,X2 x,X4 x," "[h] a superseded focus passes its items to its successor"
@@ -898,6 +925,166 @@ case_focus() {
   startall; c_has "$SR" "- P3 capacity first, then the strings · goal G2 · since " "[h] a focus follows its goal's supersede"
   owner_ok unpin G2; c_rc 0 "[h] instrument: the owner unpins the goal"
   startall; c_has "$SR" "- P3 capacity first, then the strings · goal G2 (retired) · since " "[h] a focus whose goal retired says so"
+}
+
+# --- [n] -----------------------------------------------------------------------------------------------------------------------
+case_session_focus() {
+  np
+  goal_args "ship the layers" "$(dplus 30)"; owner_ok "${GA[@]}"
+  br op add --kind focus --text "the card" --goal G1
+  c_rc 64 "[n] a focus the session opens without --done-when: usage"; c_has "$OUT" "missing: --done-when D (" "[n] naming it"
+  br op add --kind focus --text "the card" --done-when "both rows merged"
+  c_rc 64 "[n] without --goal: usage"; c_has "$OUT" "missing: --goal G1 (" "[n] naming it"
+  br op add --kind focus --text "the card"; c_has "$OUT" "missing: --goal G1, --done-when D (" "[n] with neither: naming both"
+  br op add --kind focus --text "the card" --done-when "   "
+  c_has "$OUT" "missing: --goal G1, done when is blank: only spaces" "[n] no goal and a blank done when: naming both"
+  br op add --kind focus --text "the card" --done-when ""
+  c_has "$OUT" "missing: --goal G1, done when is empty" "[n] no goal and an empty done when: naming both"
+  br op add --kind focus --text "the card" --goal X1 --done-when "both rows merged"; c_rc 64 "[n] a goal that is not a G: usage"
+  c_has "$OUT" "--goal must name a goal, like G1" "[n] naming it"
+  br op add --kind focus --text "the card" --goal G9 --done-when "both rows merged"
+  c_rc 1 "[n] a goal that is not live: refused"; c_has "$OUT" "G9 is not a live goal" "[n] naming it"
+  br op add --kind focus --text "the card" --goal G1 --done-when "   "
+  c_rc 1 "[n] a done when of spaces: refused"; c_has "$OUT" "done when is blank" "[n] saying so"
+  br op add --kind focus --text "the card" --goal G1 --done-when "both rows merged" --where chat
+  c_rc 64 "[n] --where without the owner's words: usage"
+  br op add --kind focus --text "the card" --goal G1 --done-when "both rows merged" --owner-quote "làm cái này"
+  c_rc 64 "[n] the owner's words without --where: usage"
+  br op add --kind focus --text $'the card\xe2\x80\xae' --goal G1 --done-when "both rows merged"
+  c_rc 1 "[n] a direction character in its text: refused"; c_has "$OUT" "U+202E" "[n] naming it"
+  br op add --kind focus --text $'the card\xe2\x80\x8b' --goal G1 --done-when "both rows merged"
+  c_rc 1 "[n] an invisible character in its text: refused"; c_has "$OUT" "U+200B" "[n] naming it"
+  c_eq "$(bpy 'print(sum(1 for i in s.load(s.state_dir())[1]["items"] if i[0] == "P"))')" 0 "[n] no refusal wrote a focus"
+  br op add --kind focus --text '"trọng tâm là X" · chat “the owner”' --goal G1 --done-when "both rows merged"
+  c_rc 0 "[n] a focus the session opens: a live goal and a done when"; c_has "$OUT" "added P1" "[n] as P1"
+  c_hasnt "$OUT" "warning:" "[n] with no warning"
+  br op add --kind focus --text "the owner's" --owner-quote "làm cái này" --where chat --goal G1
+  c_has "$OUT" "added P2" "[n] instrument: a focus in the owner's words, P2"
+  startall
+  c_has "$SR" '- P1 [opened by the session] "trọng tâm là X" · chat “the owner” · goal G1 · since ' \
+       "[n] its line says who opened it, before its text"
+  c_eq "$(printf '%s\n' "$SR" | grep -A1 '^- P1 ' | sed -n 2p | cut -c1-5)" "- P2 " "[n] and no quote line under it"
+  c_has "$SR" "- P2 the owner's · goal G1 · since " "[n] the owner's focus as today"
+  c_has "$SR" '  "làm cái này" · chat' "[n] with its quote line"
+  br render; c_has "$OUT" '- P1 [opened by the session] "trọng tâm là X"' "[n] brain render says it too"
+  br show P1; c_has "$OUT" "opened: by the session" "[n] brain show: opened by the session"; c_hasnt "$OUT" "quote:" "[n] no quote"
+  br show P2; c_has "$OUT" "opened: in the owner's words" "[n] brain show: a focus in the owner's words"
+  br op close P1 --reason done; c_rc 1 "[n] close a focus without --pointer: refused"
+  c_has "$OUT" "a focus closes only with --pointer" "[n] saying why"
+  br op close P1 --reason done --pointer ""; c_rc 1 "[n] an empty pointer: refused"
+  br op close P1 --reason done --pointer "   "; c_rc 1 "[n] a pointer of spaces: refused"
+  br op close P2 --reason done; c_rc 1 "[n] the owner's focus too"
+  c_eq "$(status_of P1) $(status_of P2)" "live live" "[n] both stay live"
+  br op supersede P1 --text '"trọng tâm là X": 1 of 2 rows merged' --reason progress
+  c_rc 1 "[n] a supersede that changes only a focus's text: refused"
+  c_has "$OUT" "progress is a Now item" "[n] saying where progress goes"
+  c_has "$OUT" "to rename the wave, close it with --pointer and open a new focus" "[n] and how a wave is renamed"
+  br op supersede P1 --text '"trọng tâm là X": 1 of 2 rows merged' --reason progress --done-when "both rows merged"
+  c_rc 1 "[n] the same done when is no change: refused"
+  br op supersede P1 --text '"trọng tâm là X": 1 of 2 rows merged' --reason progress --done-when "both  rows merged "
+  c_rc 1 "[n] a done when that differs only by spaces is no change: refused"; c_eq "$(status_of P1)" live "[n] P1 stays live"
+  br op supersede P1 --text '"trọng tâm là X" · chat “the owner”, and the card' --reason "a firmer end" \
+     --done-when "both rows merged and the card shown"
+  c_rc 0 "[n] a supersede that changes its done when: accepted"; c_has "$OUT" "superseded P1 with P3" "[n] as P3"
+  br show P3; c_has "$OUT" "opened: by the session" "[n] P3 is still the session's"; c_hasnt "$OUT" "quote:" "[n] with no quote"
+  br op supersede P2 --text "the owner's, restated" --reason "the owner said it again" --owner-quote "làm cái kia"
+  c_rc 64 "[n] the owner's newer words without --where: usage"
+  c_has "$OUT" "the owner's newer words of a focus go together" "[n] saying they go together"
+  br op supersede P2 --text "the owner's: 1 of 2 merged" --reason progress --owner-quote "làm cái này" --where chat
+  c_rc 1 "[n] the owner's same words again are not newer: refused"
+  br op supersede P2 --text "the owner's: 1 of 2 merged" --reason progress --owner-quote "làm cái này" --where "chat 17/11"
+  c_rc 1 "[n] the same words from another place: refused"
+  br op supersede P2 --text "the owner's: 1 of 2 merged" --reason progress --owner-quote $'la\xcc\x80m ca\xcc\x81i na\xcc\x80y' --where chat
+  c_rc 1 "[n] the same words in another Unicode form (decomposed): refused"; c_eq "$(status_of P2)" live "[n] P2 stays live"
+  br op supersede P2 --text "the owner's, restated" --reason "the owner said it again" --owner-quote "làm cái kia" --where chat
+  c_rc 0 "[n] the owner's newer words: accepted though only the text changes"; c_has "$OUT" "superseded P2 with P4" "[n] as P4"
+  br show P4; c_has "$OUT" "quote: làm cái kia" "[n] with those words"
+  br op add --kind session --text "worker A on part one" --focus P3; c_rc 0 "[n] a running session names its focus"
+  c_has "$OUT" "added S1" "[n] as S1"
+  br op add --kind session --text "worker B" --focus P9; c_rc 1 "[n] a running session tied to a focus that is not live: refused"
+  c_has "$OUT" "P9 is not a live focus: a running session points to one that is" "[n] naming it"
+  br op add --kind session --text "worker B" --focus P1; c_rc 1 "[n] a running session tied to a superseded focus: refused"
+  br op add --kind session --text "the upkeep run"; c_rc 0 "[n] a running session with no focus: written"
+  br op add --kind next --text "part two" --focus P3; br op add --kind next --text "tidy the docs"
+  c_has "$OUT" "added X2" "[n] instrument: X1 tied to P3, X2 with no focus"
+  br op add --kind now --text "the run" --focus P3; c_rc 64 "[n] --focus on a Now item: usage"
+  br op supersede X2 --text "tidy the docs" --reason words --owner-quote q --where chat
+  c_rc 64 "[n] the owner's words on a Next item's supersede: usage"
+  c_has "$OUT" "--owner-quote and --where on a supersede are for a focus the owner restated" "[n] naming what they are for"
+  br op add --kind session --text "worker D on part two" --focus P3; c_has "$OUT" "added S3" "[n] instrument: S3 tied to P3, after S2 with none"
+  startall; c_has "$SR" "- S1 [P3] worker A on part one · since " "[n] a running session tied to a live focus starts [P3]"
+  c_eq "$(printf '%s\n' "$SR" | grep -E '^- S[0-9]+ ' | cut -d' ' -f2,3 | tr '\n' ',')" "S1 [P3],S3 [P3],S2 the," \
+       "[n] Sessions: each live focus's items first, then the rest"
+  older_md() {  # older_md id|kept — hot.md with no focus marks, sessions by id (as a brain before the focus rule wrote it) or
+                # kept in focus order (which no brain wrote): an input for doctor, not a break
+    python3 - "$(sdir)/hot.md" "$1" <<'PY'
+import re, sys
+p, order = sys.argv[1], sys.argv[2]
+s = open(p, encoding="utf-8").read()
+assert "[opened by the session] " in s and "- S1 [P3] " in s and "- S3 [P3] " in s
+s = s.replace("[opened by the session] ", "").replace("- S1 [P3] ", "- S1 ").replace("- S3 [P3] ", "- S3 ")
+if order == "id":
+    lines = s.split("\n")
+    at = [i for i, l in enumerate(lines) if re.match(r"- S\d+ ", l)]
+    for i, l in zip(at, sorted((lines[i] for i in at), key=lambda l: int(re.match(r"- S(\d+) ", l).group(1)))):
+        lines[i] = l
+    s = "\n".join(lines)
+open(p, "w", encoding="utf-8").write(s)
+PY
+  }
+  older_md id; br doctor
+  c_has "$OUT" "warn     hot.md holds an older brain's render" "[n] doctor: no focus marks, sessions by id: an older brain's render"
+  br render >/dev/null; older_md kept; br doctor
+  c_has "$OUT" "problem  hot.md does not match a fresh render" "[n] … the marks dropped but the focus order kept: an edit"
+  br render >/dev/null
+  python3 - "$(sdir)/hot.md" <<'PY'  # a Next item's tag dropped, which no brain ever rendered: an input, not a break
+import sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+assert "- X1 [P3] " in s
+open(p, "w", encoding="utf-8").write(s.replace("- X1 [P3] ", "- X1 "))
+PY
+  br doctor; c_has "$OUT" "problem  hot.md does not match a fresh render" "[n] … and a Next item's tag dropped is an edit"
+  br render >/dev/null
+  local card
+  startall compact; card=$(printf '%s\n' "$S1" | sed -n '/^Review card/,/^## Brain/p')
+  c_has "$card" "- work with no focus: X2, S2" "[n] the card lists live work with no live focus"
+  br op close P3 --reason "both rows merged" --pointer kb/x.md; c_rc 0 "[n] a close with a pointer"
+  startall compact; card=$(printf '%s\n' "$S1" | sed -n '/^Review card/,/^## Brain/p')
+  c_has "$card" "- work with no focus: X1, X2, S1, S2, S3" "[n] a closed focus's live items stay, with no focus"
+  br op add --kind session --text "worker C" --focus P3; c_rc 1 "[n] a running session tied to a closed focus: refused"
+  conf '{"caps": {"P": 1}}'
+  br op add --kind focus --text "the next wave" --goal G1 --done-when "its plan merged"
+  c_has "$OUT" "queued P5 (Focus holds 1 of 1" "[n] a full Focus section queues a focus the session opens"
+  br overflow; c_has "$OUT" "- P5 [opened by the session] the next wave · goal G1" "[n] brain overflow marks it"; conf '{}'
+}
+
+case_no_focus_line() {  # [n] which work the card's no-focus line names after a compaction, from the session's own writes
+  local card
+  np
+  goal_args "ship the layers" "$(dplus 30)"; owner_ok "${GA[@]}"
+  br op add --kind focus --text "the wave" --goal G1 --done-when "both rows merged"; c_rc 0 "[n] instrument: P1 opened by the session"
+  br op add --kind session --text "worker on the wave" --focus P1; br op add --kind session --text "worker on nothing"
+  br op add --kind next --text "a step of the wave" --focus P1; br op add --kind next --text "a loose step"
+  startall startup; c_hasnt "$S1" "work with no focus" "[n] at a startup: no review card, no line"
+  startall compact; card=$(printf '%s\n' "$S1" | sed -n '/^Review card/,/^## Brain/p')
+  c_has "$card" "- work with no focus: X2, S2" "[n] after a compaction: the Next item and the session with no focus, the ones on P1 not"
+  br op close P1 --reason "both merged" --pointer kb/x.md; c_rc 0 "[n] instrument: P1 closed with its pointer"
+  startall compact; card=$(printf '%s\n' "$S1" | sed -n '/^Review card/,/^## Brain/p')
+  c_has "$card" "- work with no focus: X1, X2, S1, S2" "[n] its focus closed: the work that was on it is named too"
+  br op add --kind focus --text "the next wave" --goal G1 --done-when "merged"
+  br op supersede X1 --text "a step of the next wave" --focus P2 --reason refocus; br op supersede X2 --text "a loose step, now of the wave" --focus P2 --reason refocus
+  br op supersede S1 --text "worker on the next wave" --focus P2 --reason refocus; br op supersede S2 --text "worker on the next wave too" --focus P2 --reason refocus
+  startall compact; c_hasnt "$S1" "work with no focus" "[n] every piece of work on a live focus: no line"
+}
+
+case_no_focus_card() {  # [n] the card's line of work with no focus, cut for room with the count of the rest
+  np; conf '{"caps": {"X": 80}}'
+  local i card specs=()
+  for ((i = 1; i <= 70; i++)); do specs+=("X$i@$C20"); done
+  seed "${specs[@]}"
+  startall compact; card=$(printf '%s\n' "$S1" | sed -n '/^Review card/,/^## Brain/p')
+  c_has "$card" "- work with no focus: X1, X2, X3, X4, X5, X6, X7, X8, X9, X10, X11, X12, X13, X14, X15, X16, X17, X18, X19, X20, X21, X22, X23, X24, X25, X26, X27, X28, X29, X30, X31, X32, X33, X34, X35, X36, X37, X38, X39, X40, X41, X42, X43, X44, X45, X46, X47, X48, X49, X50, X51, X52, X53, X54, X55, X56, X57 +13" "[n] seventy Next items with no focus: as many as fit the card's line, then +13"
+  conf '{}'
 }
 
 # --- [i] -----------------------------------------------------------------------------------------------------------------------
@@ -977,16 +1164,74 @@ print(s.render_key(md, st, t) == f, "review OVERDUE 5 d" in later, s.render_key(
 case_precedence() {
   np; br op add --kind next --text "one"
   local src
-  for src in startup resume clear compact; do
+  c_eq "$(bpy 'print(sum(1 for i in s.load(s.state_dir())[1]["items"] if i[0] in s.LEFT_LETTERS))')" 0 "[k] instrument: no left-brain item"
+  for src in startup resume clear compact fork; do
     startall "$src"
-    c_eq "$(printf '%s\n' "$S1" | sed -n 2p)" "$PREC" "[k] SessionStart:$src: line 2 of string 1 is the precedence line, in the owner's wording"
+    c_eq "$(printf '%s\n' "$S1" | sed -n 2p)" "$PREC" "[k] SessionStart:$src: line 2 of string 1 is the precedence line, by kind of question"
   done
-  c_eq "$(printf '%s\n' "$ALL" | grep -cF "Precedence: ")" 1 "[k] once, in string 1 only"
-  c_hasnt "$(bpy 'print(s.render_all(s.load(s.state_dir())[1]))')" "Precedence: " "[k] not in hot.md: the hook's line"
+  c_eq "$(printf '%s\n' "$ALL" | grep -cF "$PREC_HEAD")" 1 "[k] once, in string 1 only"
+  c_hasnt "$(bpy 'print(s.render_all(s.load(s.state_dir())[1]))')" "$PREC_HEAD" "[k] not in hot.md: the hook's line"
   br render; c_eq "$(printf '%s\n' "$OUT" | sed -n 1p)" "$PREC" "[k] brain render prints it first, as SessionStart injects it"
-  c_eq "$(printf '%s\n' "$OUT" | grep -cF "Precedence: ")" 1 "[k] once"
-  c_hasnt "$(cat "$(sdir)/hot.md")" "Precedence: " "[k] and hot.md, which doctor compares with a fresh render, still holds none"
-  br render --check; c_hasnt "$OUT" "Precedence: " "[k] render --check prints the sizes only"
+  c_eq "$(printf '%s\n' "$OUT" | grep -cF "$PREC_HEAD")" 1 "[k] once"
+  c_hasnt "$(cat "$(sdir)/hot.md")" "$PREC_HEAD" "[k] and hot.md, which doctor compares with a fresh render, still holds none"
+  br render --check; c_hasnt "$OUT" "$PREC_HEAD" "[k] render --check prints the sizes only"
+  c_has "$(cat "$TMP"/out.session-start*)" "additionalContext" "[k] instrument: the 14 commands' output is read where they wrote it"
+  BRAIN_OFF=1 startall startup; c_eq "$(cat "$TMP"/out.session-start*)" "" "[k] BRAIN_OFF=1: none of the 14 commands prints anything, the precedence line neither"
+}
+
+# --- [k2] ----------------------------------------------------------------------------------------------------------------------
+case_precedence_texts() {
+  local doc="$BROOT/docs" n
+  # chapter 7, as a reader takes it: from its heading to the next chapter's
+  ch7() { sed -n '/^## 7\. /,/^## 8\. /p' "$1"; }
+  # each row whole, as a line: a source added at either end of a chain, or a kind renamed, fails it
+  local kinds=("1. Rules and decisions | What may I do, and how must it be done?"
+               "2. Direction and order of work | Which work comes first?"
+               "3. The contract of one piece of work | What must this work deliver?"
+               "4. The present state | Where does the work stand, what is true now?"
+               "5. History and evidence | What happened, and why was it decided?")
+  for n in 0 1 2 3 4; do
+    c_eq "$(ch7 "$doc/rulebook.md" | grep -cxF "| ${kinds[$n]} | ${CHAINS[$n]} |")" 1 "[k2] rulebook ch. 7: kind $((n + 1))'s row whole, its chain in the owner's order"
+  done
+  c_eq "$(ch7 "$doc/rulebook.md" | grep -cE '^\| [1-5]\. ')" 5 "[k2] rulebook ch. 7: five kinds, no sixth"
+  c_has "$(ch7 "$doc/rulebook.md")" "- What the owner signed beats everything the machine wrote." "[k2] rulebook: the first idea"
+  c_has "$(ch7 "$doc/rulebook.md")" "- What can be measured now beats what was written down, and a record beats recollection." "[k2] rulebook: the third idea"
+  c_has "$(ch7 "$doc/rulebook.md")" "the rule holds until then" "[k2] rulebook: a trap against a plugin rule"
+  c_has "$(ch7 "$doc/rulebook.md")" "\`document-precedence\`" "[k2] rulebook: how sdlc's document-precedence fits"
+  c_has "$(ch7 "$doc/rulebook.md")" "The machine never overrides the owner." "[k2] rulebook: chapter 7 keeps the owner on top"
+  c_hasnt "$(cat "$doc/rulebook.md")" "Four layers, by precedence" "[k2] rulebook: its head no longer ranks the layers"
+  for n in \
+    "| 1. Quy tắc và quyết định | Tôi được làm gì, và phải làm thế nào? | lời mới hơn của owner, não trái (G D W), SOUL, luật của plugin, bẫy (T), \`kb/decisions\`, auto-memory |" \
+    "| 2. Hướng và thứ tự việc | Việc nào làm trước? | lời mới hơn của owner, request (R) theo ngày hạn, việc của một focus (P, phục vụ một goal G), phần còn lại |" \
+    "| 3. Hợp đồng của một phần việc | Việc này phải giao gì? | story owner đã duyệt, spec, plan, brief, ghi chú riêng của phiên |" \
+    "| 4. Trạng thái hiện tại | Việc đang ở đâu, điều gì đúng lúc này? | một lần đọc mới từ hệ thống thật (GitHub, cluster, máy), não phải, \`kb/\`, auto-memory |" \
+    "| 5. Lịch sử và bằng chứng | Chuyện gì đã xảy ra, và vì sao đã quyết như thế? | các bản ghi (\`kb/\`, PR, nhật ký run, log của brain), hồi ức của phiên, auto-memory |"; do
+    c_eq "$(ch7 "$doc/rulebook.vi.md" | grep -cxF "$n")" 1 "[k2] rulebook.vi ch. 7: the row whole, ${n:2:28}…"
+  done
+  c_eq "$(ch7 "$doc/rulebook.vi.md" | grep -cE '^\| [1-5]\. ')" 5 "[k2] rulebook.vi ch. 7: five kinds, no sixth"
+  # the skill's key rules: from its heading to the next ##, whitespace folded as a reader sees the wrapped lines
+  R=$(python3 - "$BROOT/skills/brain/SKILL.md" "${CHAINS[@]}" <<'PY'
+import sys
+t = open(sys.argv[1], encoding="utf-8").read()
+a = t.index("## Key rules"); b = t.index("\n## ", a + 1)
+key = " ".join(t[a:b].split())
+# each chain with its kind before it and its end after it: a source added at either end fails
+labels = ("rules and decisions", "direction and order of work", "the contract of one piece of work", "the present state",
+          "history and evidence")
+at = [key.find("- %s: %s%s" % (l, c, ";" if i < 4 else ".")) for i, (l, c) in enumerate(zip(labels, sys.argv[2:]))]
+print(all(i >= 0 for i in at), at == sorted(at), len(t[:b].encode()) <= 15000)
+PY
+)
+  c_eq "$R" "True True True" "[k2] skill: its key rules hold the five chains, in kind order, within 15,000 bytes (5,000 tokens at 3 bytes each)"
+  c_has "$(cat "$BROOT/README.md")" "\`$PREC\`" "[k2] README: the paragraph quotes the new line"
+  c_has "$(cat "$BROOT/README.vi.md")" "\`$PREC\`" "[k2] README.vi: the paragraph quotes the new line"
+  for n in README.md README.vi.md; do
+    c_has "$(cat "$BROOT/$n")" "Precedence, only when two sources disagree, goes by the kind of question: 1 rules and decisions, … (each chain: skill brain, rulebook chapter 7). …" "[k2] $n: the brain render example starts with the new line"
+  done
+  c_eq "$(grep -rlF "$OLD_PREC" "$BROOT" | wc -l | tr -d ' ')" 0 "[k2] no text of the brain quotes the old line"
+  c_hasnt "$(cat "$BROOT/README.md")" "the precedence line's order" "[k2] README: the board's layers are not ranked by the line"
+  c_hasnt "$(cat "$BROOT/README.vi.md")" "theo thứ tự của dòng ưu tiên" "[k2] README.vi: the board's layers are not ranked by the line"
+  c_eq "$(grep -lF "$OLD_PREC" "$HERE/test-brain-layers.sh" | wc -l | tr -d ' ')" 1 "[k2] instrument: the same grep finds the old line where it is"
 }
 
 case_card_loss() {  # the card after a compaction never shows the previous compaction's loss score as this one's
@@ -1080,6 +1325,10 @@ case_compat4() {
   c_eq "$(bpy 'print(s.dumps(s.fold(s.verify(s.state_dir())[1])))')" "$old_fold" "[m] the new store folds the format-4 log to the same bytes"
   c_eq "$(bpy 'd = s.state_dir(); print(s.cache_state(d, s.head_of(s.verify(d)[0])) is not None)')" True "[m] its hot.json cache is used as it is"
   c_eq "$(bpy 'print(" ".join(sorted(s.load(s.state_dir())[1]["items"])))')" "D1 D2 F1 N1 Q1 S1 T1 T2 W1 X1 X2 X3 X4 X5" "[m] every item keeps its id"
+  d=$(sdir); old_fold=$(sha256sum "$d/hot.jsonl" | cut -c1-64)
+  startall startup
+  c_eq "$(printf '%s\n' "$S1" | sed -n 2p)" "$PREC" "[m] a session that starts on the format-4 state gets the new precedence line"
+  c_eq "$(sha256sum "$d/hot.jsonl" | cut -c1-64)" "$old_fold" "[m] and the log, its chain with it, is unchanged byte for byte"
   br doctor; c_has "$OUT" "warn     hot.md holds an older brain's render" "[m] doctor: its hot.md is a warn"
   c_hasnt "$OUT" "problem  hot.md" "[m] not a problem"
   conf '{"caps": {"X": 1}, "text_max": 100}'
@@ -1108,8 +1357,8 @@ except s.Refused as e:
 }
 
 echo "== cases =="
-for c in case_config case_root case_queue case_invariant case_left_cap case_worst case_compat case_goals case_focus case_requests \
-         case_due case_precedence case_card case_card_loss case_compat4; do run_case $c; done
+for c in case_config case_root case_queue case_invariant case_left_cap case_worst case_compat case_goals case_focus case_session_focus \
+         case_no_focus_line case_no_focus_card case_requests case_due case_precedence case_precedence_texts case_card case_card_loss case_compat4; do run_case $c; done
 cd "$TMP" || exit 1
 
 summary

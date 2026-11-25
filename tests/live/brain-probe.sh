@@ -20,8 +20,8 @@
 # --resume. --strict-mcp-config keeps the user's MCP servers out too.
 # The brain's plugin.json depends on vibemaestro-sdlc, which --setting-sources project,local leaves not enabled, and Claude Code
 # does not load a plugin whose dependency is missing (its hooks never run). So every session, in both arms, also loads this
-# checkout's sdlc by --plugin-dir; the scratch project's .vibemaestro/sdlc.json says `hooks: off`, so the sdlc is loaded and
-# silent. The preflight checks the manifest's dependencies before spending and stops if the sdlc's SessionStart text shows.
+# checkout's sdlc by --plugin-dir, as a scratch copy with an empty hooks/hooks.json (`hooks: off` would silence the brain too), so
+# the sdlc is loaded and silent. The preflight checks the manifest's dependencies before spending and stops if the sdlc's SessionStart text shows.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

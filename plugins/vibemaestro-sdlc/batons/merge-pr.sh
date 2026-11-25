@@ -59,6 +59,9 @@ if [ $# -eq 0 ]; then
 fi
 ARGS=("$@")
 HEAD=""
+REPO=""
+PR=""
+AUTO=""
 PREV=""
 for a in "$@"; do
   case "$a" in
@@ -67,10 +70,16 @@ for a in "$@"; do
       exit 64
       ;;
     --head=*) HEAD=${a#--head=} ;;
+    --repo=*) REPO=${a#--repo=} ;;
+    --pr=*) PR=${a#--pr=} ;;
+    --behind=auto) AUTO=1 ;;
   esac
-  if [ "$PREV" = "--head" ]; then
-    HEAD=$a
-  fi
+  case "$PREV" in
+    --head) HEAD=$a ;;
+    --repo) REPO=$a ;;
+    --pr) PR=$a ;;
+    --behind) [ "$a" != auto ] || AUTO=1 ;;
+  esac
   PREV=$a
 done
 HEAD=$(printf '%s' "$HEAD" | tr 'ABCDEF' 'abcdef')
@@ -86,6 +95,11 @@ act() {
   printf '%s\n' "$out"
   if [ "$rc" -ne 0 ]; then
     echo "REFUSE the guarded merge says no (rc $rc): nothing to merge, nothing to sign" >&2
+    # behind with --behind auto: the next step is the update baton, then CI on the new head, then this baton at the new head;
+    # not for a back-merge, which is never updated from the base (its refusal names the release resolution)
+    if [ -n "$AUTO" ] && printf '%s\n' "$out" | grep '^  FAIL  behind:' | grep -qv 'a back-merge'; then
+      echo "NEXT baton go kit:pr-update-branch --repo $REPO --pr $PR --head $HEAD" >&2
+    fi
     return 3
   fi
   plan=$(printf '%s\n' "$out" | sed -n 's/^merge-plan: //p')

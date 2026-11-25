@@ -45,7 +45,7 @@ answers by exact anchor, never a model. The runs use Opus, 3 runs per probe.
   a re-injection must not cut the lines that matter.
 - `brain cost` counts one call per `message.id`.
 - The probe compacts behind a neutral step and asks its questions in a second process, so the compaction never sees them. Each
-  probe session loads sdlc with its hooks silenced (`.vibemaestro/sdlc.json` `{"hooks": "off"}`), and the preflight checks the
+  probe session loads a scratch copy of sdlc with no hooks (`hooks: off` would silence the brain too), and the preflight checks the
   brain's manifest dependencies before anything is spent.
 - The live owner-dialog test picks every menu option by its text and the cursor, never by position.
 

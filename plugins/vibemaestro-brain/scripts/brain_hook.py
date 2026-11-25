@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """vibemaestro-brain hooks: one entry for every event, `brain_hook.py <event>` with the hook JSON on stdin.
 
-    session-start  string 1: the head line, the precedence line, the configuration line, the review card (at
+    session-start  put this brain's bin first on PATH for the session's Bash commands (one line in CLAUDE_ENV_FILE, once; not on
+                   Windows); string 1: the head line, the precedence line, the line naming the brain a bare `brain` runs, the
+                   configuration line, the review card (at
                    SessionStart:compact only), the left brain's first string (goals, pins with their quotes, windows) and the
                    Shelf index through additionalContext (≤ 9,500 UTF-16 units); log the episode; start a due backup in the
                    background (`brain backup --if-due`, never waited on); mark an
@@ -30,12 +32,17 @@
                    exists, or it never ran) in the background; never waits
     close-linked-bg  that run: `brain op close-linked` as the writer, its outcome or refusal one episode line
     merge-evidence-bg  `brain op merge-evidence` the same way
+    guard-path     on a `brain` command (hooks.json's `if`): a bare `brain` that resolves, on the PATH this hook sees, to another
+                   brain than this one: its writes (op, owner, import) are denied, its reads get one line; silent when this
+                   session's start put this brain first on PATH (a hook gets Claude Code's environment, not the Bash one's)
+    cwd-changed    CwdChanged: the PATH line again (Claude Code may clear the file's lines at a directory change)
     note-format    on a `brain` command (hooks.json's `if`): a session whose last start ran an older brain was reloaded
                    (/reload-plugins), since this hook runs this one: log `session-format` once, so doctor stops warning
     update-check   the update reminder: vibemaestro-sdlc's scripts/update_check.py run with brain's own root and data
                    (one `systemMessage` line when a newer public brain exists); silent when sdlc is not found
 
-Every event is silent under BRAIN_OFF and in a worker session (VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and SEAT); every
+Every event is silent under BRAIN_OFF, in a worker session (VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and SEAT) and in a folder where
+the sdlc config sets `hooks: off` (hooks_off, sdlc_config's own reader); every
 event but guard-owner and
 session-end is silent in a project with no hot memory. A plugin that extends the brain adds lines to string 1 (brain_ext,
 imported only when one is found). Fail-open: an error is one line on stderr and rc 0. A guard denies or
@@ -114,6 +121,7 @@ import subprocess  # noqa: E402
 import time  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+BIN = os.path.join(os.path.dirname(HERE), "bin")   # this, the installed, brain's
 sys.path.insert(0, HERE)
 
 STRINGS = 14                            # SessionStart string commands in hooks.json: brain_store.SLOTS (test-brain-layers.sh [e] holds them equal)
@@ -137,6 +145,25 @@ def off():
     """BRAIN_OFF, or a worker session: VIBEMAESTRO_ROLE exactly `worker`, or INTENT_SLUG and SEAT both set (brain_store.worker)."""
     return (os.environ.get("BRAIN_OFF", "") not in ("", "0") or os.environ.get("VIBEMAESTRO_ROLE") == "worker"
             or bool(os.environ.get("INTENT_SLUG") and os.environ.get("SEAT")))
+
+
+def hooks_off(inp):
+    """The sdlc config turns hooks off for this session: `hooks: "off"` in a folder from the session's folder up to the top of its
+    git history, decided as sdlc's own update reminder decides it, with sdlc's reader (sdlc_config, found as brain finds sdlc's
+    files: brain depends on sdlc). sdlc not found, or any error reading: not off, so brain runs as before."""
+    try:
+        import importlib.util
+        f = store().sdlc_file(os.path.join("scripts", "sdlc_config.py"))
+        if not f:
+            return False
+        spec = importlib.util.spec_from_file_location("vibemaestro_sdlc_config", f)
+        c = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(c)
+        start = os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or cwd_of(inp))
+        top = c.repo_root(start)
+        return bool(c.hooks_off_at(top) or c.off_below(start, top) is not None)
+    except Exception:  # noqa: BLE001 — an unreadable config never silences the brain
+        return False
 
 
 def emit(event, **fields):
@@ -624,7 +651,60 @@ def ext_lines(s, d, st, ops, source, sid, project, closed=False):
         return ["extensions could not be read (%s): brain doctor" % e.__class__.__name__]
 
 
+def env_path(inp):
+    """Put this brain's bin first on PATH for the session's later Bash commands: Claude Code runs CLAUDE_ENV_FILE before each
+    one, so a bare `brain` is this, the installed, brain whatever older bin the shell's PATH holds; marked for guard-path.
+    True when the line is in the file."""
+    f, sid = os.environ.get("CLAUDE_ENV_FILE", ""), inp.get("session_id")
+    # shortcut: not on Windows, where a `$PATH` line keeps every hook's variables from PowerShell commands (Claude Code's hooks
+    # reference) and Git Bash needs another path form; layer 1 and guard-path still hold there
+    if os.name == "nt" or not os.path.isabs(f) or not isinstance(sid, str) or not sid:
+        return False
+    line = "export PATH=%s:\"$PATH\"" % shlex.quote(BIN)
+    try:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as h:
+                have = h.read()
+        except FileNotFoundError:
+            have = ""
+        if line not in have.splitlines():
+            with open(f, "a", encoding="utf-8") as h:
+                h.write(("\n" if have and not have.endswith("\n") else "") + line + "\n")
+        if store_loads():
+            store().mark_env(sid, BIN)
+    except OSError as e:
+        sys.stderr.write("brain: the installed brain was not put first on PATH: %s\n" % e.__class__.__name__)
+        return False
+    return True
+
+
+def bare_root(first):
+    """The root of the brain a bare `brain` runs: this one when `first`, else the first on the PATH this hook sees (doctor's
+    lookup); None."""
+    if first:
+        return os.path.dirname(HERE)
+    bins = store().brain_bins() if store_loads() else []
+    return bins[0][1] if bins else None
+
+
+def bare_line(s, first):
+    """String 1's line naming the brain a bare `brain` runs, and the installed one when that is another."""
+    mine, runs = os.path.dirname(HERE), bare_root(first)
+    if runs and s.same_path(os.path.realpath(runs), os.path.realpath(mine)):
+        text = "brain: a bare `brain` runs %s" % mine
+    elif runs and s.in_tree(os.path.realpath(runs)):
+        text = ("brain: a bare `brain` runs %s, not the installed brain %s; it runs from a repository's tree, so its writes are "
+                "let through" % (runs, mine))
+    elif runs:
+        text = ("brain: a bare `brain` runs %s, not the installed brain %s: its writes are refused (brain doctor)"
+                % (runs, mine))
+    else:
+        text = "brain: the installed brain is %s; which brain a bare `brain` runs is not known here (brain doctor)" % mine
+    return s.clean_line(text)[:600]
+
+
 def session_start(inp):
+    first = env_path(inp)
     if not store_loads():
         emit("SessionStart", additionalContext=NO_STORE)
         return
@@ -669,8 +749,8 @@ def session_start(inp):
         card = (review_card(s, st, d, did, ops, ext, sid) if source == "compact" else
                 s.card_text(ext, s.EXT_TITLE) if ext else "")       # no card: the extensions' lines take its room
         block, gone = cut(head_line + s.PRECEDENCE + "\n" + (cfg + "\n" if cfg else "") + card
-                          + (did["sweep"] + "\n" if did.get("sweep") else "") + strings[0][1] + "\n" + shelf_index(s, project),
-                          s.STRING_MAX)
+                          + (did["sweep"] + "\n" if did.get("sweep") else "") + bare_line(s, first) + "\n" + strings[0][1] + "\n"
+                          + shelf_index(s, project), s.STRING_MAX)
     except BaseException:
         hand["error"] = "failed"                    # the other commands render their own parts
         raise
@@ -753,7 +833,8 @@ def session_part(inp, n):
 # --- PreCompact, PostCompact, SessionEnd ----------------------------------------------------------------------------------------
 
 def last_context(path):
-    """S1: input + cache-read + cache-write tokens of the last `usage` in the transcript's tail; None when not found."""
+    """S1: input + cache-read + cache-write tokens of the last main-thread `usage` in the transcript's tail (a sidechain or
+    `<synthetic>` line is skipped, as in brain_cost); None when not found."""
     try:
         with open(path, "rb") as f:
             f.seek(0, os.SEEK_END)
@@ -769,7 +850,10 @@ def last_context(path):
             o = json.loads(line)
         except ValueError:
             continue
-        u = (o.get("message") or {}).get("usage") if isinstance(o, dict) and isinstance(o.get("message"), dict) else None
+        m = o.get("message") if isinstance(o, dict) else None
+        if not isinstance(m, dict) or o.get("isSidechain") is True or m.get("model") == "<synthetic>":
+            continue
+        u = m.get("usage")
         if isinstance(u, dict):
             return sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
     return None
@@ -878,6 +962,8 @@ def session_end(inp):
     finally:
         if sid and inp.get("reason") not in ("clear", "resume"):  # the record lives as long as the session; after
             s.drop_session(sid)                     # /clear or a switch the Bash environment may still carry this id
+            with contextlib.suppress(OSError):
+                os.unlink(s.session_file(sid) + ".env")
     if not os.path.isdir(d):
         return
     if sid:
@@ -923,6 +1009,44 @@ def guard_bash(inp):
             decide("deny", "brain: hot memory is written by the main session only; report back, and the main session runs "
                            "`brain op` or `brain import`")
             return
+
+
+# words that can stand before the command a segment runs: shell keywords and wrappers (their `-` options are skipped too)
+LEAD = {"!", "{", "(", "if", "then", "elif", "else", "do", "while", "until", "time", "exec", "command", "builtin", "env",
+        "nohup", "nice", "stdbuf", "timeout"}
+
+
+def guard_path(inp):
+    """A bare `brain` that resolves, on the PATH this hook sees, to another brain than this, the installed, one: a write is
+    denied, a read gets one line; one in a repository's tree only gets the line, as its own check only warns. A hook gets Claude
+    Code's environment, not the Bash command's: when this session's start put this brain first on PATH, a bare `brain` is this
+    one. Only a `brain` in command position counts: after `VAR=value` words, shell keywords and command wrappers (LEAD)."""
+    sid = inp.get("session_id")
+    if isinstance(sid, str) and sid and store_loads() and store().env_marked(sid):
+        return
+    runs = bare_root(False)
+    mine = os.path.dirname(HERE)
+    if not runs or os.path.normcase(os.path.realpath(runs)) == os.path.normcase(os.path.realpath(mine)):
+        return
+    found = []
+    for text, _ in segments(command_of(inp), heredoc=True):
+        ws = words(text) or text.split()
+        i = next((k for k, w in enumerate(ws) if not (w in LEAD or w.startswith("-") or re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w))),
+                 len(ws))
+        if ws[i:i + 1] == ["brain"]:
+            found.append(ws[i + 1:i + 2])
+    if not found:
+        return
+    if store().in_tree(os.path.realpath(runs)):
+        emit("PreToolUse", additionalContext="brain: a bare `brain` here runs %s, not the installed brain %s; it runs from a "
+                                             "repository's tree, so its writes are let through" % (runs, mine))
+        return
+    if any(nxt and nxt[0] in ("op", "owner", "import") for nxt in found):
+        decide("deny", "brain: a bare `brain` here runs %s, not the installed brain %s, so its writes are refused: run %s with the "
+                       "same arguments" % (runs, mine, os.path.join(BIN, "brain")))
+        return
+    emit("PreToolUse", additionalContext="brain: a bare `brain` here runs %s, not the installed brain %s; its answer comes from "
+                                         "that code" % (runs, mine))
 
 
 def guard_edit(inp):
@@ -1177,7 +1301,7 @@ def guard_owner(inp):
             _, st, ops = s.load_ops(d) if has_state(d) else (None, s.empty_state(), [])
             line = dialog_line(s, ns, st, ops, d, sid)
             sl = s.soul_line_for(ns)                # the line and the file shown: bound to the record, checked at the write
-            plan = s.soul_digest(sl) if sl else None
+            plan = s.soul_digest(sl) if sl else getattr(ns, "_plan", None)    # or an extension's op, as the dialog showed it
     except s.Refused as e:
         return deny(s.printable(e.msg), "state")
     try:
@@ -1213,8 +1337,8 @@ def update_check(inp):
 
 HANDLERS = {"session-start": session_start, "pre-compact": pre_compact, "post-compact": post_compact,
             "session-end": session_end, "guard-bash": guard_bash, "guard-edit": guard_edit, "guard-owner": guard_owner,
-            "update-check": update_check, "note-format": note_format, "prompt": prompt, "close-linked-bg": close_linked_bg,
-            "merge-evidence-bg": merge_evidence_bg}
+            "update-check": update_check, "note-format": note_format, "guard-path": guard_path, "cwd-changed": env_path,
+            "prompt": prompt, "close-linked-bg": close_linked_bg, "merge-evidence-bg": merge_evidence_bg}
 HANDLERS.update({e: (lambda n: lambda inp: session_part(inp, n))(n) for e, n in SLOT_EVENTS.items()})
 
 
@@ -1229,6 +1353,12 @@ def main(argv):
     except ValueError:
         return 0
     if not isinstance(inp, dict):
+        return 0
+    if hooks_off(inp):
+        sid = inp.get("session_id")
+        if event in ("guard-owner", "session-end") and isinstance(sid, str) and sid:    # silent, but a declined dialog's record still dies at the next call or at /clear
+            with contextlib.suppress(Exception):
+                clear_pending(store(), sid)
         return 0
     try:
         HANDLERS[event](inp)

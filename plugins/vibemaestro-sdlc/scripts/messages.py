@@ -283,6 +283,12 @@ rc: 0 done · 1 `retry-issue` could not create the issue (best-effort, NOT used
     "ib.help_issue": {
         "vi": "tạo GitHub issue theo dõi (best-effort), ghi số issue vào frontmatter hồ sơ intent",
         "en": "create the GitHub tracking issue (best-effort) and record its number in the intent file's frontmatter"},
+    "ib.help_infra_blocked": {
+        "vi": "issue xin hạ tầng giúp (infra.label): cái gì bị chặn; đi cùng --infra-tried",
+        "en": "the issue asks for infrastructure help (infra.label): what is blocked; goes with --infra-tried"},
+    "ib.help_infra_tried": {
+        "vi": "issue xin hạ tầng giúp: đã thử gì; đi cùng --infra-blocked",
+        "en": "the issue asks for infrastructure help: what was already tried; goes with --infra-blocked"},
     "ib.not_repo": {"vi": "không phải git repo: %s", "en": "not a git repo: %s"},
     "ib.no_gh": {"vi": "không có `gh` trên máy", "en": "no `gh` on this machine"},
     "ib.issue_body": {"vi": "%s\n\nChi tiết: `%s`\n", "en": "%s\n\nDetails: `%s`\n"},

@@ -4,13 +4,14 @@ A rule is a live decision (D), a trap or lesson (T), a fact (F), or a rule of CL
 session records `held` and `broke` (`brain op held|broke`, a trap's `brain op hit`) and a goal's progress (`brain op progress`)
 as ops in the hash-chained log. The ledger is computed from those ops whenever it is read, never kept in the fold or a cache: a
 compaction loses nothing, the chain guards every entry, and an older brain's log folds as it did. Each event counts under the
-rule it was written for.
+rule it was written for, and under the SOUL code an item became once the owner promoted it (promoted_to).
 
 The thresholds (`ledger` in .vibemaestro/brain.json) mark a rule in `brain ledger` and the record: `promote?` (it held enough to
 pin it, or to write it into CLAUDE.md), `drift` (it broke too often of late), `dormant` (an item untouched). The review card
 names the dormant items after a compaction; `brain ledger --record` prints the measurement record of a period. Standard
 library only.
 """
+import errno
 import json
 import math
 import os
@@ -66,15 +67,17 @@ def rule_arg(rule, hit=False):
 
 # --- the ledger, read from the log -------------------------------------------------------------------------------------------
 
-def read(ops):
+def read(ops, follow=False):
     """{key: {"key", "events"}}: every evidence and progress op of the log in log order, keyed by the item id or `[S07]` it was
-    written for. An event: {"t", "time", "seq", "result" (held, broke or progress), "session" (a session item's id, or `~` and
+    written for; with `follow`, an item an owner-promote took to a SOUL code still live is keyed by that code (promoted_to), the
+    log itself unchanged. An event: {"t", "time", "seq", "result" (held, broke or progress), "session" (a session item's id, or `~` and
     the writing session), "pointer", "differed", "measure", "via"}."""
-    out = {}
+    out, became = {}, promoted_to(ops) if follow else {}
     for op in ops:
         kind = op.get("op")
         if kind in ("evidence", "progress"):
             k = op.get("id") or "[%s]" % op.get("soul")
+            k = "[%s]" % became[k] if k in became else k
             who = op.get("session") or "~" + str((op.get("by") or {}).get("session") or "")
             out.setdefault(k, {"key": k, "events": []})["events"].append(
                 {"t": op.get("t"), "time": s.parse_iso(op.get("t") or "") or 0, "seq": op.get("seq") or 0,
@@ -84,28 +87,41 @@ def read(ops):
     return out
 
 
+def _exts(d, k):
+    e = d.get("ext") if isinstance(d, dict) else None
+    return [v.get(k) for v in e.values() if isinstance(v, dict)] if isinstance(e, dict) else []
+
+
+def promote_codes(op):
+    """The SOUL codes one `owner-promote` takes its item to: its `soul` and an extension's, else the one code in brackets of its
+    pointer (`brain owner promote D3 "CLAUDE.md [S14]"`)."""
+    codes = [op.get("soul")] + _exts(op, "soul")
+    if not any(isinstance(c, str) for c in codes) and isinstance(op.get("pointer"), str):
+        inner = re.findall(r"\[(%s)\]" % CODE, op["pointer"])
+        codes = inner if len(inner) == 1 else []
+    return [c for c in codes if isinstance(c, str) and s.SOUL_CODE.fullmatch(c)]
+
+
 def soul_state(ops):
     """({code: the time its promotion was written}, {demoted codes}): the SOUL codes an `owner-promote` of the log took an item
     to (its `soul`, an extension's `soul`, or the one code in brackets of its pointer, as `brain owner promote D3 "CLAUDE.md
-    [S14]"` stores it), less those a demotion took back (an `owner-demote`, or an owner item an extension marked
-    `demoted_from`)."""
-    def exts(d, k):
-        e = d.get("ext") if isinstance(d, dict) else None
-        return [v.get(k) for v in e.values() if isinstance(v, dict)] if isinstance(e, dict) else []
+    [S14]"` stores it), an owner's SOUL code step gave a line of the SOUL file (`owner-soul-code`, log format 10) or an
+    extension's op the owner approved names in its `soul` (an `ext` op with the dialog's `confirm`; one without names none), less those a
+    demotion took back (an `owner-demote`, or an owner item an extension marked `demoted_from`)."""
     live, gone = {}, set()
     for op in ops:
         kind = op.get("op")
-        if kind == "owner-promote":
-            codes = [op.get("soul")] + exts(op, "soul")
-            if not any(isinstance(c, str) for c in codes) and isinstance(op.get("pointer"), str):
-                inner = re.findall(r"\[(%s)\]" % CODE, op["pointer"])
-                codes = inner if len(inner) == 1 else []
-            for c in codes:
-                if isinstance(c, str) and s.SOUL_CODE.fullmatch(c):
-                    live[c] = s.parse_iso(op.get("t") or "") or 0
-                    gone.discard(c)                 # promoted again after a demotion
+        if kind == "ext":
+            soul = (op.get("data") or {}).get("soul") if op.get("confirm") else None
+            codes = [c for c in soul if isinstance(c, str) and s.SOUL_CODE.fullmatch(c)] if isinstance(soul, list) else []
         else:
-            for c in [op.get("soul")] if kind == "owner-demote" else exts(op.get("item"), "demoted_from"):
+            codes = promote_codes(op) if kind == "owner-promote" else [op.get("soul")] if kind == "owner-soul-code" else None
+        if codes is not None:
+            for c in codes:
+                live[c] = s.parse_iso(op.get("t") or "") or 0
+                gone.discard(c)                     # promoted again after a demotion
+        else:
+            for c in [op.get("soul")] if kind == "owner-demote" else _exts(op.get("item"), "demoted_from"):
                 if isinstance(c, str) and c in live:
                     del live[c]
                     gone.add(c)
@@ -117,13 +133,37 @@ def soul_live(ops):
     return soul_state(ops)[0]
 
 
+def promoted_to(ops):
+    """{item id: the SOUL code it became}: the decisions, traps and facts an `owner-promote` took to a code (the first of
+    promote_codes still held) that no later demotion took back, as soul_state reads a demotion; read as the log goes."""
+    got, out = {}, {}
+    for op in ops:
+        kind = op.get("op")
+        if kind == "owner-promote":
+            if isinstance(op.get("id"), str) and op["id"][:1] in RULE_LETTERS:
+                got[op["id"]] = promote_codes(op)
+        elif kind != "owner-soul-code":              # a demotion, as soul_state reads it
+            for c in [op.get("soul")] if kind == "owner-demote" else _exts(op.get("item"), "demoted_from"):
+                got = {k: [x for x in v if x != c] for k, v in got.items()}
+    for k, v in got.items():
+        if v:
+            out[k] = v[0]
+    return out
+
+
+def promoted_line(ops, key):
+    """The one line `brain ledger D3` prints for an item promoted to a live SOUL code (its events are read under the code), else None."""
+    code = promoted_to(ops).get(key)
+    return "%s promoted to [%s]; its evidence is read under `brain ledger [%s]`" % (key, code, code) if code else None
+
+
 def snapshot(d):
     """(state, ops, ledger) of the state directory `d`, read under the lock; empty when it holds no state yet."""
     if not os.path.isdir(d):
         return s.empty_state(), [], {}
     with s.locked(d):
         _, st, ops = s.load_ops(d)
-    return st, ops, read(ops)
+    return st, ops, read(ops, follow=True)
 
 
 def label(session):
@@ -259,7 +299,7 @@ def open_drift(st, ops, led, now, t=None):
     owner-queue item (Q, any status) added to the log after that broke and naming it (the owner decides on it). A broke after
     the handling opens it again. Order is the log's, not the clock's: two writes of one second keep theirs."""
     t = t or th()
-    gone, out = soul_state(ops)[1], []
+    gone, out, became = soul_state(ops)[1], [], promoted_to(ops)
     added = {}
     for op in ops:                                  # an item's first op: an add, or the supersede that gave it its id
         if isinstance(op.get("item"), dict):
@@ -272,7 +312,8 @@ def open_drift(st, ops, led, now, t=None):
         b, w, n = drift_of(events, now, t)
         if key[0] in ("T", "F"):
             do = "fix, narrow or drop it with the evidence (brain op supersede %s, or brain op close %s)" % (key, key)
-        elif any(it["id"][0] == "Q" and added.get(it["id"], 0) > last and names(it.get("text"), key)
+        elif any(it["id"][0] == "Q" and added.get(it["id"], 0) > last
+                 and any(names(it.get("text"), k) for k in [key] + [i for i, c in became.items() if "[%s]" % c == key])
                  for it in st["items"].values()):
             continue
         else:
@@ -294,30 +335,111 @@ def drift_text(rows, t=None):
 SOUL_FILE_MAX = 1024 * 1024
 
 
-def soul_file_line(ops):
-    """The card's line when the project's `soul_file` and the brain disagree: a code promoted with no `[Sxx]` in the file, a
-    `[Sxx]` of the file no owner step promoted (or one demoted); None when they agree or no file is set."""
-    path = s.conf().get("soul_file")
-    if not path:
-        return None
-    full = path if os.path.isabs(path) else os.path.join(s.config_root(), path)
+def soul_file_codes(full, follow=True):
+    """({codes}, None): the `[Sxx]` codes the SOUL file `full` holds, read as a regular file without waiting, at most
+    SOUL_FILE_MAX bytes, and with follow=False not through a link (its name or a directory on its path, also where the
+    system has no O_NOFOLLOW); (None, why) when it cannot be read."""
     try:
-        fd = os.open(full, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | s.O_BINARY)    # a FIFO or a device must not hold a SessionStart hook
+        if not follow and os.path.normcase(os.path.realpath(full)) != os.path.normcase(os.path.normpath(full)):
+            return None, "a link"
+    except ValueError as e:                             # a path the file system cannot encode
+        return None, e.__class__.__name__
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | s.O_BINARY | (0 if follow else getattr(os, "O_NOFOLLOW", 0))
+    try:
+        fd = os.open(full, flags)                       # O_NONBLOCK: a FIFO or a device must not hold a SessionStart hook
     except (OSError, ValueError) as e:                  # ValueError: a path the file system cannot encode
-        return "SOUL file %s cannot be read (%s)" % (s.clean_line(path), e.__class__.__name__)
+        return None, "a link" if not follow and getattr(e, "errno", None) == errno.ELOOP else e.__class__.__name__
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return "SOUL file %s cannot be read (not a regular file)" % s.clean_line(path)
+            return None, "not a regular file"
         data = os.read(fd, SOUL_FILE_MAX + 1)
     except OSError as e:
-        return "SOUL file %s cannot be read (%s)" % (s.clean_line(path), e.__class__.__name__)
+        return None, e.__class__.__name__
     finally:
         os.close(fd)
     if len(data) > SOUL_FILE_MAX:
-        return "SOUL file %s cannot be read (over 1 MiB)" % s.clean_line(path)
-    found = set(re.findall(r"\[(%s)\]" % CODE, data.decode("utf-8", "replace")))
+        return None, "over 1 MiB"
+    return set(re.findall(r"\[(%s)\]" % CODE, data.decode("utf-8", "replace"))), None
+
+
+def _ident(d):
+    """(device, inode) of the directory `d`, None when it cannot be read or the system gives no inode."""
+    try:
+        st = os.stat(d)
+    except (OSError, ValueError):
+        return None
+    return (st.st_dev, st.st_ino) if st.st_ino else None
+
+
+def parent_soul():
+    """The path of `soul_file` (joined to the project's real root) when it is a parent SOUL: a `CLAUDE.md` in a directory
+    above the project (`../CLAUDE.md`), which Claude Code loads into every session below it, so the projects there share its
+    rules: its codes are live here, read-only, and only the brain of that directory changes it. Judged by the file's
+    identity, not its spelling: as written, as the system resolves its directory, and at its real path (a link to the
+    parent's file), the name in any case and the directory by its inode, so every route to the parent's file is one (and a
+    route through a link reads as a link). None for the project's own SOUL file, a file of another name or in another
+    directory, or no `soul_file`."""
+    path = s.conf().get("soul_file")
+    if not path:
+        return None
+    nc = os.path.normcase
+    try:
+        root = os.path.realpath(s.config_root())
+        full = os.path.join(root, path)                 # an absolute `path` stays itself
+        routes = (os.path.normpath(full), full, os.path.realpath(full))
+    except ValueError:                                  # a path the file system cannot encode: never the parent's file
+        return None
+    above, d = set(), root
+    while os.path.dirname(d) != d:
+        d = os.path.dirname(d)
+        above.add(_ident(d))
+    above.discard(None)
+    for p in routes:
+        if os.path.basename(p).casefold() == "claude.md" and (
+                _ident(os.path.dirname(p)) in above or s.inside(nc(root), nc(os.path.normpath(os.path.dirname(p))))):
+            return full
+    return None
+
+
+def parent_codes():
+    """The codes the parent SOUL file holds now, read again at each call (a line removed ends its code); empty with no parent
+    SOUL or a file that cannot be read. Never another brain's log."""
+    full = parent_soul()
+    return (soul_file_codes(full, follow=False)[0] or set()) if full else set()
+
+
+def soul_codes(ops):
+    """The SOUL codes live in this brain: promoted by an owner step and not demoted (soul_state), and those of a parent SOUL
+    file now, less the ones this brain demoted."""
+    live, gone = soul_state(ops)
+    return set(live) | (parent_codes() - gone)
+
+
+def parent_note():
+    """The part of a refusal that names the parent SOUL file, "" with none."""
+    return ", nor a code of the parent SOUL file %s" % s.clean_line(s.conf().get("soul_file")) if parent_soul() else ""
+
+
+def not_live(key):
+    """The refusal for the SOUL code `key` when it is not in soul_codes."""
+    return "%s is not a SOUL code an owner step promoted (or it was demoted)%s" % (key, parent_note())
+
+
+def soul_file_line(ops):
+    """The card's line when the project's `soul_file` and the brain disagree: a code promoted with no `[Sxx]` in the file, a
+    `[Sxx]` of the file no owner step promoted (or one demoted), but for a parent SOUL, whose codes are live here; None when
+    they agree or no file is set."""
+    path = s.conf().get("soul_file")
+    if not path:
+        return None
+    parent = parent_soul()
+    full = path if os.path.isabs(path) else os.path.join(s.config_root(), path)
+    found, why = soul_file_codes(parent or full, follow=not parent)
+    if why:
+        return "SOUL file %s cannot be read (%s)" % (s.clean_line(path), why)
     live = set(soul_live(ops))
-    parts = ["[%s] no line" % c for c in sorted(live - found)] + ["[%s] not promoted" % c for c in sorted(found - live)]
+    parts = ["[%s] no line" % c for c in sorted(live - found)]
+    parts += [] if parent else ["[%s] not promoted" % c for c in sorted(found - live)]
     return s.fit_items("SOUL file %s differs: " % s.clean_line(path), parts, " · ") if parts else None
 
 
@@ -393,7 +515,7 @@ def episodes(d, nbytes):
 def card(st, ops, now, d=None):
     """{"goals" ({gid: parts}), "dormant", "soul", "record"}: the card's ledger lines (each a line or None) and each goal's progress
     part; `d`, the state directory, holds the last record's time."""
-    led, t = read(ops), th()
+    led, t = read(ops, follow=True), th()
     since = record_since(d, led) if d else None
     out = {"goals": {g["id"]: goal_parts(st, led, g["id"]) for g in s.live(st, "G")}}
     dorm = dormant(st, ops, led, now, t)
@@ -552,7 +674,7 @@ def record(d, st, ops, led, now, days, project):
     if not rules:
         out.append("- none")
     out += ["", "## Crossings", ""]
-    cross, entered, lines = crossings(st, led), {}, []
+    cross, entered, lines = crossings(st, read(ops)), {}, []   # raw: a crossing keeps the id it happened under, the promotion line follows
     for key, xs in cross.items():
         for when, kind, name in xs:
             if kind == "drift":

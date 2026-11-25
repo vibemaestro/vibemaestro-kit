@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Purpose: delete one branch of a private GitHub repository at a pinned head that is proven merged into its default branch, with a lease on that SHA, through the plugin's delete gate from a scratch repository no clone config reaches
-# Targets: the github.com repository named by repo, which the clone's origin names; its branch ref refs/heads/<branch>; a run record under the baton state directory
-# Blast: one branch ref at the pinned head, whose commit the default branch already holds, or whose merged PR keeps it (refs/pull/<n>/head); no commit is lost (no tag, no other ref, no unmerged branch)
-# Undo: recreates the branch at the pinned SHA through the API (create-only), while it is absent, when the run record says this run's delete landed; a refused delete is left alone; a branch there again at another SHA is left and named (non-zero); an unknown outcome (the branch gone) recreates it when its proof no longer holds or a read of it fails, and is left for the owner (non-zero) when the proof still keeps the SHA, the record names no proof, or the repository no longer reads as private or cannot be listed
-# Pre: the clone's origin URL names https or ssh github.com/<repo>; the repository reads private; the branch exists at the pinned head, is not the default branch, is not protected, no ruleset forbids its deletion, it has no tag of its name and no open pull request from or into it; the head is an ancestor of the default branch's tip (compare API), or a merged PR of this repository's branch at that head into the default branch proves the merge (a squash or a rebase: its merge commit on the default tip, refs/pull/<n>/head at the head); at the delete, its plan line is in the signed plan; after it, the same proof still holds
+# Purpose: delete 1 to 50 branches of one private GitHub repository, each at a pinned head proven merged into its default branch, under one signed plan, with a lease on each SHA, through the plugin's delete gate
+# Targets: the github.com repository named by repo, which the origin of the current directory's clone or of clone= names; its branch refs; a run record per branch
+# Blast: each branch ref at its pinned head, whose commit the default branch already holds, or whose merged PR keeps it (refs/pull/<n>/head); no commit is lost (no tag, no other ref, no unmerged branch)
+# Undo: recreates each branch at the pinned SHA through the API (create-only), while it is absent, when the run record says this run's delete landed; a refused delete is left alone; a branch there again at another SHA is left and named (non-zero); an unknown outcome (the branch gone) recreates it when its proof no longer holds or a read of it fails, and is left for the owner (non-zero) when the proof still keeps the SHA, the record names no proof, or the repository no longer reads as private or cannot be listed
+# Pre: the origin URL of the current directory's clone, or of clone=<absolute path> (its .git a directory whose config file is read as a file; no git runs in it), names https or ssh github.com/<repo>; the repository reads private; each branch is given once, with its head right after it; each branch exists at the pinned head, is not the default branch, is not protected, no ruleset forbids its deletion, it has no tag of its name and no open pull request from or into it; the head is an ancestor of the default branch's tip (compare API), or a merged PR of this repository's branch at that head into the default branch proves the merge (a squash or a rebase: its merge commit on the default tip, refs/pull/<n>/head at the head); every branch of the batch passes all of this before any plan line is written (one that fails refuses the whole run, nothing is written); at its delete, its plan line is in the signed plan; after it, the same proof still holds
 # Stops: none
 #   Why none: the stop list counts a branch delete as irreversible because a hand-written check cannot prove it merged. This
 #   kit proves it from GitHub before it acts (the pinned head is an ancestor of the default branch's tip, or its merged PR's
@@ -12,11 +12,18 @@
 #   cannot come back is lost. An unmerged branch (a SHA only another branch holds included), a tip moved off the pinned head,
 #   a tag, a protected or default branch, an open pull request and a public or internal repository are refused at rehearse:
 #   those stay hand-written batons the owner signs.
-# Params: repo=repo branch=ref head=sha40
-# Expect: delete merged branch * at * (merged into * at *, *) on *
+# Usage: repo=<owner/name> [clone=<absolute path>] branch=<name> head=<sha40> [branch=<name> head=<sha40>]...
+# Each: delete merged branch * at * (merged into * at *, *) on *
 #
-# The kit baton kit:branch-delete. Run it from a clone of the repository, only through the baton runner:
+# The kit baton kit:branch-delete. Run it from a clone of the repository, or from anywhere with clone=, only through the baton runner:
 #   <launcher> go kit:branch-delete repo='<owner/name>' branch='<name>' head='<full sha>'
+#   <launcher> go kit:branch-delete repo='<owner/name>' clone='<absolute path>' branch='<name>' head='<full sha>' branch='<name>' head='<full sha>' …
+# clone=<absolute path> (the same shape and origin check as kit:branch-delete-recoverable's; no object of the clone is read) names the clone to read the origin URL from, so a
+# session that never changes into a clone can run it; without it the current directory's clone is read, as before. A run with
+# several branch=/head= pairs is a batch (at most 50, each branch once, each head right after its branch): the run proves every
+# branch first and builds every plan line, and only then writes any, so one branch whose proof fails refuses the whole run at
+# rehearse (and at run) with nothing written; the signed plan holds one line per branch, in the order given. The post-check and
+# the undo take each branch in turn, each with its own run record; a batch whose post-check fails anywhere has every branch this run deleted put back.
 # head pins the branch: a branch whose tip on the remote is another SHA is refused (at rehearse, and again when the run reads
 # it), and the delete's lease is on it. The base is the repository's default branch, always. The clone only says which
 # transport to use (its origin URL must name https or ssh github.com/<repo>); the URL is built from repo, and every git call to
@@ -63,16 +70,28 @@ write() {
 }
 
 # ── arguments and reads: every phase runs them ──
-usage() { echo "usage: baton rehearse|run kit:branch-delete repo=<owner/name> branch=<name> head=<full sha>  (only through the baton runner)" >&2; }
-if [ -z "${BATON_PLUGIN_ROOT:-}" ] || [ $# -ne 3 ]; then
+MAX=50
+usage() { echo "usage: baton rehearse|run kit:branch-delete repo=<owner/name> [clone=<absolute path>] branch=<name> head=<full sha> [branch=<name> head=<full sha>]...  (1 to $MAX branches of one repository; only through the baton runner)" >&2; }
+if [ -z "${BATON_PLUGIN_ROOT:-}" ] || [ $# -lt 3 ]; then
   usage
   exit 64
 fi
-P_REPO="$1"
-P_BRANCH="$2"
-P_HEAD="$3"
-REPO="$P_REPO" BR="$P_BRANCH" SHA="$P_HEAD" REMOTE=origin
-if ! [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+REPO="" CLONE="" REMOTE=origin HAVE_REPO="" HAVE_CLONE=""
+BRS=() SHAS=()
+for w in "$@"; do
+  k=${w%%=*} v=${w#*=}
+  [ "$k" != "$w" ] || { usage; exit 64; }
+  case "$k" in repo | clone | branch | head) ;; *) usage; exit 64 ;; esac
+  case "$k:${#BRS[@]}:${#SHAS[@]}" in
+    repo:0:0) [ -z "$HAVE_REPO" ] && [ -z "$HAVE_CLONE" ] || { usage; exit 64; }; REPO=$v HAVE_REPO=1 ;;
+    clone:0:0) [ -n "$HAVE_REPO" ] && [ -z "$HAVE_CLONE" ] || { usage; exit 64; }; CLONE=$v HAVE_CLONE=1 ;;
+    branch:*) [ -n "$HAVE_REPO" ] && [ ${#BRS[@]} -eq ${#SHAS[@]} ] || { usage; exit 64; }; BRS+=("$v") ;;
+    head:*) [ ${#BRS[@]} -eq $((${#SHAS[@]} + 1)) ] || { usage; exit 64; }; SHAS+=("$v") ;;
+    *) usage; exit 64 ;;
+  esac
+done
+if [ ${#BRS[@]} -ne ${#SHAS[@]} ] || [ ${#BRS[@]} -eq 0 ] || [ ${#BRS[@]} -gt $MAX ] || ! [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+  || { [ -n "$HAVE_CLONE" ] && ! [[ "$CLONE" =~ ^/[A-Za-z0-9._/@+-]+$ ]]; }; then
   usage
   exit 64
 fi
@@ -83,11 +102,23 @@ branchname() {
     && ! [[ "$b" =~ ^(HEAD|[A-Z_]+_HEAD|AUTO_MERGE|BISECT_EXPECTED_REV)$ ]] && [ "$first" != refs ] && [ "$first" != heads ] \
     && [ "$first" != tags ] && [ "$first" != remotes ] && ! [[ "$b" =~ ^[0-9a-fA-F]{40}$ ]]
 }
-if ! branchname "$BR"; then
-  echo "REFUSE branch $BR: not a branch name this kit takes (letters, digits and ._/- only; git refuses it, or resolves it first as another ref)" >&2
-  exit 64
-fi
-URL=$(git config --get "remote.$REMOTE.url" || true)
+for i in "${!BRS[@]}"; do
+  if ! [[ "${SHAS[$i]}" =~ ^[0-9a-f]{40}$ ]]; then
+    usage
+    exit 64
+  fi
+  if ! branchname "${BRS[$i]}"; then
+    echo "REFUSE branch ${BRS[$i]}: not a branch name this kit takes (letters, digits and ._/- only; git refuses it, or resolves it first as another ref)" >&2
+    exit 64
+  fi
+  for ((j = 0; j < i; j++)); do
+    if [ "${BRS[$j]}" = "${BRS[$i]}" ]; then
+      echo "REFUSE branch ${BRS[$i]} is given twice" >&2
+      usage
+      exit 64
+    fi
+  done
+done
 # the repository the URL names, lower-cased, or nothing when it is not github.com over https or ssh
 url_repo() {
   local u=$1 r="" host=github.com
@@ -103,10 +134,6 @@ url_repo() {
   fi
 }
 HOST=github.com
-case "$URL" in
-  https://*) PUSH_URL="https://$HOST/$REPO.git" ;;
-  *) PUSH_URL="git@$HOST:$REPO.git" ;;
-esac
 
 # the baton state directory, as baton computes it; the run record lives under it
 case "${XDG_STATE_HOME:-}" in
@@ -120,9 +147,26 @@ sha256_text() {
     printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
   fi
 }
-# one record per target (repository and branch) and per baton process ($PPID: the runner that runs this run's phases, run,
-# post-check and undo): another run, or one running at the same time, never reads this run's record
-RECORD="$STATE_BASE/vibemaestro/baton/records/kit-branch-delete-$(sha256_text "$REPO $BR" | cut -c1-16)-$PPID.last"
+# select_branch <i> — the branch the functions below work on: BR and SHA, its run record, and nothing proven yet. One record per
+# target (repository and branch) and per baton process ($PPID: the runner that runs this run's phases, run, post-check and
+# undo): another run, or one running at the same time, never reads this run's record
+select_branch() {
+  BR=${BRS[$1]} SHA=${SHAS[$1]} PROOF="" PLANLINE="" PRN="" SQ="" CMP=""
+  RECORD="$STATE_BASE/vibemaestro/baton/records/kit-branch-delete-$(sha256_text "$REPO $BR" | cut -c1-16)-$PPID.last"
+}
+# each <function> — the function once per branch, each in a subshell with its own errexit, so one branch's failure never skips the
+# next; rc 0 when every call was, else the last non-zero rc
+each() {
+  local i rc bad=0
+  for i in "${!BRS[@]}"; do
+    set +e
+    ( set -e; select_branch "$i"; "$1" )
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || bad=$rc
+  done
+  return "$bad"
+}
 # plan_id — the sha256 of the signed plan baton hands the run and its undo (BATON_PLAN): which run a record belongs to
 plan_id() {
   if [ -n "${BATON_PLAN:-}" ] && [ -f "$BATON_PLAN" ]; then
@@ -150,7 +194,23 @@ sgit() {
     -c log.showSignature=false -c credential.helper= -c 'credential.helper=!gh auth git-credential' -C "$SCRATCH/repo.git" "$@"
 }
 cleanenv git init -q --bare --template= "$SCRATCH/repo.git"
-BASE="" BASESHA="" NOW="" PLANLINE="" OWNER="" FULL="" DEFAULT="" PROOF="" PRN="" SQ="" CMP=""
+# the origin URL: of clone=<path>, its config file read as a file (no git run inside the clone; a .git that is not a directory
+# reads as no origin), or, without it, of the current directory's clone
+if [ -n "$CLONE" ]; then
+  URL=""
+  if [ -d "$CLONE/.git" ] && [ ! -L "$CLONE/.git" ] && [ -f "$CLONE/.git/config" ]; then
+    URL=$(cleanenv git config --file "$CLONE/.git/config" --get "remote.$REMOTE.url" 2> /dev/null || true)
+  fi
+  FROM="the origin of clone $CLONE"
+else
+  URL=$(git config --get "remote.$REMOTE.url" || true)
+  FROM="remote $REMOTE"
+fi
+case "$URL" in
+  https://*) PUSH_URL="https://$HOST/$REPO.git" ;;
+  *) PUSH_URL="git@$HOST:$REPO.git" ;;
+esac
+BASE="" BASESHA="" BATCH_BASE="" NOW="" PLANLINE="" OWNER="" FULL="" DEFAULT="" PROOF="" PRN="" SQ="" CMP=""
 
 # refs <ref>... — those refs as the remote advertises them now, "<sha> <ref>" per line; a remote that cannot be read fails
 refs() { sgit ls-remote "$PUSH_URL" "$@"; }
@@ -289,15 +349,10 @@ del() {
 }
 
 # ── the act: every change through write() ──
-act() {
-  local named want all prot rules n q ahead anc
-  named=$(url_repo "$URL")
-  want=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
-  if [ -z "$named" ] || [ "$named" != "$want" ]; then
-    echo "REFUSE remote $REMOTE is ${URL:-not set}: this kit deletes only on github.com/$REPO" >&2
-    return 3
-  fi
-  repo_info
+# prove_one — the selected branch checked and proven merged, as one run proves it: sets PROOF and PLANLINE; rc 3, a REFUSE line
+# naming the branch, when anything fails
+prove_one() {
+  local all prot rules n q ahead anc
   if [ "$BR" = "$DEFAULT" ]; then
     echo "REFUSE $BR is the default branch: never deleted by this kit" >&2
     return 3
@@ -308,6 +363,13 @@ act() {
   fi
   NOW=$(ref_sha "$all" "refs/heads/$BR")
   BASESHA=$(ref_sha "$all" "refs/heads/$BASE")
+  # one default-branch SHA for the whole batch: a base that moved while the branches are read would give lines of two SHAs, and the
+  # signed plan holds one, so the gate would refuse the later lines after the earlier ones were deleted
+  if [ -n "$BATCH_BASE" ] && [ "$BASESHA" != "$BATCH_BASE" ]; then
+    echo "REFUSE $BASE moved from $BATCH_BASE to ${BASESHA:-nothing} while the branches were read (at $BR): nothing is written" >&2
+    return 3
+  fi
+  BATCH_BASE=$BASESHA
   if ! [[ "$NOW" =~ ^[0-9a-f]{40}$ ]]; then
     echo "REFUSE $PUSH_URL has no branch $BR" >&2
     return 3
@@ -356,16 +418,48 @@ act() {
     PROOF="pr:$PRN"
   fi
   PLANLINE="delete merged branch $BR at $SHA (merged into $BASE at $BASESHA, $(proof_text "$PROOF")) on $PUSH_URL"
-  write "$PLANLINE" del
+}
+# act — every branch proven and its plan line built first; only when all pass is any line written, so one that fails refuses the
+# whole run with nothing written
+act() {
+  local i named want plans=() proofs=()
+  named=$(url_repo "$URL")
+  want=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+  if [ -z "$named" ] || [ "$named" != "$want" ]; then
+    echo "REFUSE $FROM is ${URL:-not set}: this kit deletes only on github.com/$REPO" >&2
+    return 3
+  fi
+  repo_info
+  for i in "${!BRS[@]}"; do
+    select_branch "$i"
+    prove_one
+    plans+=("$PLANLINE")
+    proofs+=("$PROOF")
+  done
+  # a signed plan (only the run phase has one) holds every line before the first delete: a line that differs (a proof that read
+  # another way since signing) would otherwise be refused by the gate only after the earlier branches were deleted
+  if [ -n "${BATON_PLAN:-}" ] && [ -s "$BATON_PLAN" ]; then
+    for i in "${!BRS[@]}"; do
+      if ! grep -Fxq -e "${plans[$i]}" -- "$BATON_PLAN"; then
+        echo "REFUSE the plan line for ${BRS[$i]} is not in the signed plan (its proof or the base read another way since signing): nothing deleted" >&2
+        return 3
+      fi
+    done
+  fi
+  for i in "${!BRS[@]}"; do
+    select_branch "$i"
+    PLANLINE=${plans[$i]} PROOF=${proofs[$i]}
+    write "$PLANLINE" del
+  done
+  echo "PLAN-COUNT ${#BRS[@]}"
 }
 
 # ── post-check: the branch is gone, and its proof still holds (else undo puts it back) ──
-postcheck() {
+postcheck_one() {
   local all now base _plan _state
   if [ -f "$RECORD" ]; then
     read -r _plan SHA _state PROOF < "$RECORD"   # the post-check gets no signed plan: the run's own record names the SHA and proof
   fi
-  repo_info
   all=$(refs "refs/heads/$BR" "refs/heads/$BASE")
   now=$(ref_sha "$all" "refs/heads/$BR")
   base=$(ref_sha "$all" "refs/heads/$BASE")
@@ -375,14 +469,22 @@ postcheck() {
     echo "the proof (${PROOF:-none}) no longer holds ${SHA:-the deleted SHA} with $BASE at ${base:-nothing} (${SQ:-compare: ${CMP:-none}})" >&2
     return 1
   fi
-  rm -f -- "$RECORD"            # the run holds: no undo reads this record, and a later process with this PID never finds it
+}
+# drop_record — the run holds: no undo reads this record, and a later process with this PID never finds it
+drop_record() { rm -f -- "$RECORD"; }
+# a batch is put back whole or kept whole: the records go only when every branch holds, so an undo after one branch's failure
+# recreates every branch this run deleted
+postcheck() {
+  repo_info
+  each postcheck_one
+  each drop_record
 }
 
 # recreate — the branch back at the deleted SHA, create-only (the API refuses a ref that exists)
 recreate() { gh api --hostname "$HOST" -X POST "repos/$REPO/git/refs" -f "ref=refs/heads/$BR" -f "sha=$SHA" > /dev/null; }
 
 # ── undo: from the run record; the branch back at its SHA only when this run's delete landed ──
-undo() {
+undo_one() {
   local plan state all now mine base
   if [ ! -f "$RECORD" ]; then
     echo "no run record: this run never pushed a delete, nothing to put back"
@@ -452,6 +554,7 @@ undo() {
   esac
   write "drop the run record $RECORD" rm -f -- "$RECORD"
 }
+undo() { each undo_one; }
 
 case "$PHASE" in
   rehearse)

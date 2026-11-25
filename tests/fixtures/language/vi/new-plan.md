@@ -18,9 +18,9 @@ một AC của story thì hỏi chủ repo. Phiên nhận một hàng ghi `plan:
 
 ## Rows
 
-| Row | How | Delivers | Depends on | Trust touches | Link |
-|---|---|---|---|---|---|
-| A | <ĐIỀN: cách làm của PR này, chạm vào đâu> | AC<ĐIỀN: số> (tiêu chí <ĐIỀN: số>) | — | <ĐIỀN: none, hoặc `<kind> [<owner/repo>:]<path> [<object>] [Stops: <words>]`, nối bằng ;> | — |
+| Row | Title | How | Delivers | Depends on | Trust touches | Link |
+|---|---|---|---|---|---|---|
+| A | <ĐIỀN: kết quả ngắn của PR, khoảng 60 ký tự, không đường dẫn, không code> | <ĐIỀN: cách làm của PR này, chạm vào đâu> | AC<ĐIỀN: số> (tiêu chí <ĐIỀN: số>) | — | <ĐIỀN: none, hoặc `<kind> [<owner/repo>:]<path> [<object>] [Stops: <words>]`, nối bằng ;> | — |
 
 ## Decisions
 

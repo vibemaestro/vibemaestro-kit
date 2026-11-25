@@ -242,7 +242,7 @@ pending_runs() {
   done
   printf 'REFUSE a signed run or queued item of a plugin this update moves has not run yet%s; the move would void it (a signature binds a kit baton to its plugin directory) and the owner would sign it again:\n%s\n' \
     "$([ "$WAIT" -gt 0 ] && printf ' (still waiting after %s s)' "$WAIT")" "$o" >&2
-  echo "wait for it to run, or pass --wait <seconds, 1 to 300>" >&2
+  echo "wait for it to run, pass --wait <seconds, 1 to 300>, or clear one that will never run with the command on its line" >&2
   return 3
 }
 # main_of <owner/name> — that repository's main as GitHub reports it now, or nothing

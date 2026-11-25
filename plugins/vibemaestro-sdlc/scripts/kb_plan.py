@@ -105,9 +105,23 @@ def _plain(cell):
     return re.sub(r"[*`]", "", cell).strip()
 
 
+def _header_word(cell):
+    """A header cell's words: plain, its parentheses and `@…` dropped, lower case."""
+    return re.sub(r"\(.*?\)|@\S*", "", _plain(cell)).strip().lower()
+
+
 def _header_key(cell):
-    k = COLUMNS.get(re.sub(r"\(.*?\)|@\S*", "", _plain(cell)).strip().lower())
+    k = COLUMNS.get(_header_word(cell))
     return None if k == "current" and "@" not in cell else k     # `Current state` without `@SHA`: an older plan's own column
+
+
+def header_keys(header):
+    """The column kinds of a table's header cells. `Title` reads as the Must be true column (an earlier plan's) only when no other
+    header is one; beside a Delivers or Must be true column it is the row's own short title."""
+    keys = [_header_key(c) for c in header]
+    if any(k == "must" and _header_word(c) != "title" for k, c in zip(keys, header)):
+        keys = ["title" if k == "must" and _header_word(c) == "title" else k for k, c in zip(keys, header)]
+    return keys
 
 
 def kb_paths(text, src=""):
@@ -158,7 +172,7 @@ def read_plan(root, rel):
     """{path, rows, problems, decision_lines} of a plan, or None when the file cannot be read. A row: {id, line, must, acceptance,
     depends, versions, model, link, cells, cols, current_cell, current, shared, merge_main, touches, header, link_col}; `current`
     is {sha, text} or None, `cols` the column kinds its table has, `touches` the Trust touches cell as written (None without the
-    column), `header` its table's header cells, `link_col` the index of its Link cell; problems: [(line, message)] of the table
+    column), `title` the Title cell as written (None without it), `header` its table's header cells, `link_col` the index of its Link cell; problems: [(line, message)] of the table
     itself; focus: its frontmatter's `focus:` (None without one)."""
     try:
         with open(os.path.join(root, *rel.split("/")), encoding="utf-8") as f:
@@ -201,7 +215,7 @@ def read_plan_text(text, rel):
         nxt = lines[i + 1] if i + 1 < len(lines) else ""
         if ln.lstrip().startswith("|") and re.match(r"^\s*\|?\s*:?-{3,}", nxt):
             header = _cells(ln)
-            keys = [_header_key(c) for c in header]
+            keys = header_keys(header)
             j = i + 2
             if "row" in keys and "link" in keys:
                 tables += 1
@@ -226,6 +240,7 @@ def read_plan_text(text, rel):
                                      "current": {"sha": sha.group(1), "text": cur} if sha else None,
                                      "shared": shared, "merge_main": mm,
                                      "touches": get("touches") if "touches" in col else None,
+                                     "title": get("title") if "title" in col else None,
                                      "header": header, "link_col": col["link"]})
                     j += 1
             else:

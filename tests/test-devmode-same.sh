@@ -143,17 +143,17 @@ else
   bad "a hook run differs from main: $(diff <(printf '%s\n' "$WANT") <(printf '%s\n' "$GOT") | cut -c1-240 | head -n 40)"
 fi
 
-# The Stop hook (the everyday mode's quiet save, KIT-870) has no run on main to compare with: in a developer repository it must
+# The Stop hooks (the everyday mode's quiet save, KIT-870, and its notebook nudge) have no run on main to compare with: in a developer repository each must
 # print nothing, exit 0 and change not one byte, with an unsaved change present that a save would have committed.
 echo "== developer mode: the Stop hook says nothing and writes nothing =="
 gitsum() { (cd "$1/.git" && find . -type f -print0 | sort -z | xargs -0 sha1sum | sha1sum | cut -c1-12); }
 ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
-eq "$(hook_cmds "$SPL/hooks/hooks.json" Stop "" | grep -c .)" 1 "instrument: hooks.json declares one Stop command"
+eq "$(hook_cmds "$SPL/hooks/hooks.json" Stop "" | grep -c .)" 2 "instrument: hooks.json declares two Stop commands (the save, the notebook nudge)"
 for r in "$R1" "$R2"; do
   k=${r##*/}; printf 'unsaved\n' > "$r/stop-probe.txt"
   g0=$(gitsum "$r"); t0=$(tree_hash "$r"); c0=$(cksum < "$GIT_CONFIG_GLOBAL")
   t=$(ms); O=$(run_all "$k Stop" "$SPL/hooks/hooks.json" "$SPL" "$r" Stop "" "{\"session_id\":\"sSTOP\",\"cwd\":\"$r\",\"hook_event_name\":\"Stop\"}"); t=$(( $(ms) - t ))
-  eq "$O" "## $k Stop cmd 1 rc=0" "[stop] $k: rc 0 and no output"
+  eq "$O" "$(printf '## %s Stop cmd 1 rc=0\n\n## %s Stop cmd 2 rc=0' "$k" "$k")" "[stop] $k: both commands rc 0 and no output"
   eq "$(gitsum "$r")" "$g0" "[stop] $k: not one byte of .git changed"
   eq "$(tree_hash "$r")$(cksum < "$GIT_CONFIG_GLOBAL")" "$t0$c0" "[stop] $k: the work tree and the git config unchanged"
   echo "  note: the Stop hook took $t ms in $k"

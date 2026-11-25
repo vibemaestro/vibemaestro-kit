@@ -29,6 +29,13 @@
 #   [i] an export and import keep the PR sessions of merge-evidence apart
 #   [h] the prompt hook: rc 0 and silent at once, the run in the background logs one `merge-evidence` episode line; not again
 #       within 10 minutes; another session, a worker, no gh, no merge log: nothing started
+#   [w] a body with the line `Rule answers:`: held, marked proof, only for the rules whose last `signal applicability` for the
+#       PR is applied (not one listed, not-applicable accepted, or only on the `Rules applied:` line), said so; its `Traps met:`
+#       hit as before; a block and no signal (no post-check ran): no held, said so; a header with trailing blanks is the block;
+#       a body without the line: held from `Rules applied:` as before, no proof. The signals are written as a plugin that runs
+#       the post-check writes them, through the store's write path
+#   [p] a child of a parent SOUL (soul_file ../CLAUDE.md): a code of that file gets its held, by Rules applied and by Rule
+#       answers; a code not in it is skipped and named; a line removed: skipped at the next run, the helds kept
 # =============================================================================
 set -uo pipefail
 if [ -z "${BRAIN_SUITE_REEXEC:-}" ]; then
@@ -319,8 +326,66 @@ case_prompt() {
   c_eq "$(ev D1)" "held/-/acme/app¤5/pr:acme/app¤5" "[h] so the machine's first merge is read"
 }
 
+case_parent() {
+  np; local par=$P; P="$par/child"; mkdir -p "$P"; git_ -C "$P" init -q -b main; cd "$P" || return 1
+  git_ -C "$P" remote add origin https://github.com/acme/app.git
+  printf '# Shared rules\n\n- [S07] one review round\n' > "$par/CLAUDE.md"
+  mkdir -p "$P/.vibemaestro"; printf '{"soul_file": "../CLAUDE.md"}\n' > "$P/.vibemaestro/brain.json"
+  br op add --kind trap --text "a trap"; me
+  body 'acme/app¤5' 'Rules applied: [S07], [S10]'; mlog acme/app 5; me; c_rc 0 "[p] a run in a child of a parent SOUL: rc 0"
+  c_eq "$(ev '[S07]')" "held/-/acme/app¤5/pr:acme/app¤5" "[p] a code of the parent SOUL file: one held in the child's own log"
+  c_has "$OUT" "skipped [S10] acme/app¤5: [S10] is not a SOUL code an owner step promoted (or it was demoted), nor a code of the parent SOUL file ../CLAUDE.md" \
+    "[p] a code not in the file: skipped, named"
+  sig '[S07]' acme/app¤6 applied
+  body 'acme/app¤6' $'Rules applied: [S07]\n\nRule answers:\n[S07]: applied — x; evidence: file a.md\n'; mlog acme/app 6; me
+  c_has "$OUT" "acme/app¤6: answers, held only for what the post-check accepted ([S07])" "[p] Rule answers: the parent code accepted…"
+  c_eq "$(grep '"acme/app¤6"' "$(sdir)/hot.jsonl" | grep '"op":"evidence"' | grep -c '"proof":true')" 1 "[p] …its held carries the proof"
+  printf '# Shared rules\n' > "$par/CLAUDE.md"
+  body 'acme/app¤7' 'Rules applied: [S07]'; mlog acme/app 7; me
+  c_has "$OUT" "skipped [S07] acme/app¤7: [S07] is not a SOUL code" "[p] the line removed: its code skipped at the next run"
+  c_eq "$(ev '[S07]' | wc -l | tr -d ' ')" 2 "[p] …the helds already written stay"
+  c_eq "$(cd "$par" && bpy 'import os; print(os.path.isdir(s.state_dir()))')" False "[p] the parent directory's brain: never made"
+}
+
 echo "== cases =="
-for c in case_basic case_twice case_lines case_hostile case_session case_writer case_gh case_takeover case_soul case_repos case_import_label case_prompt; do run_case $c; done
+sig() {  # sig <rule> <pr> <state> — one `signal applicability`, as a plugin that runs the post-check writes it through the store's
+         # write path (an input, not a break)
+  bpy "s.write(lambda d, st: ({'op': 'signal', 'what': 'applicability', 'rule': '$1', 'pr': '$2', 'state': '$3'}, ['$2'], 'signal', None))" >/dev/null
+}
+case_answers() {
+  np; rules; me
+  sig D1 acme/app¤5 listed; sig D1 acme/app¤5 applied; sig F1 acme/app¤5 na-accepted; sig '[S07]' acme/app¤5 applied
+  sig F1 acme/app¤9 listed
+  body 'acme/app¤5' $'Rules applied: D1, F1, [S07]\nTraps met: T1\n\nRule answers:\nD1: applied — x; evidence: file a.md\n'
+  mlog acme/app 5; me; c_rc 0 "[w] a body with answers: rc 0"
+  c_has "$OUT" "acme/app¤5: answers, held only for what the post-check accepted (D1, [S07])" "[w] it says the helds come from the answers"
+  R=$(python3 - "$(sdir)/hot.jsonl" <<'PY'
+import json, sys
+for l in open(sys.argv[1], encoding="utf-8"):
+    o = json.loads(l)
+    if o.get("op") == "evidence":
+        print(o.get("id") or "[%s]" % o.get("soul"), o.get("via") or "-", o.get("proof", False))
+PY
+)
+  c_eq "$R" "T1 hit False
+D1 - True
+[S07] - True" "[w] D1 and S07 held with proof; F1 (not applicable) none; the trap's hit as before"
+  body 'acme/app¤6' 'Rules applied: F1'; mlog acme/app 6; me
+  c_eq "$(ev F1)" "held/-/acme/app¤6/pr:acme/app¤6" "[w] a body without the line: held from Rules applied as before"
+  c_eq "$(grep -c '"proof"' "$(sdir)/hot.jsonl")" 2 "[w] …and no proof on it"
+  body 'acme/app¤7' $'Rules applied: D1\nRule answers:\nD1: applied — x; evidence: file a.md'; mlog acme/app 7; me
+  c_has "$OUT" "acme/app¤7: answers, held only for what the post-check accepted (none)" "[w] a block and no signal (no post-check ran): says so…"
+  c_eq "$(ev D1 | wc -l | tr -d ' ')" 1 "[w] …and writes no held"
+  sig D1 acme/app¤10 na-accepted; sig F1 acme/app¤10 listed
+  body 'acme/app¤10' $'Rules applied: D1, F1\n\nRule answers:  \nD1: not-applicable — no hook'; mlog acme/app 10; me
+  c_has "$OUT" "acme/app¤10: answers, held only for what the post-check accepted (none)" "[w] a header with trailing blanks is the block"
+  c_eq "$(ev F1 | grep -c '¤10')" 0 "[w] …so its Rules applied line gives no held"
+  sig T1 acme/app¤11 applied
+  body 'acme/app¤11' $'Traps met: T1\nRule answers:\nT1: applied — x; evidence: file a.md'; mlog acme/app 11; me
+  c_eq "$(grep '"acme/app¤11"' "$(sdir)/hot.jsonl" | grep '"op":"evidence"' | grep -c '"proof":true')" 1 "[w] a trap met and accepted: its hit carries the proof"
+}
+
+for c in case_basic case_twice case_lines case_hostile case_session case_writer case_gh case_takeover case_soul case_repos case_import_label case_prompt case_answers case_parent; do run_case $c; done
 cd "$TMP" || exit 1
 
 summary

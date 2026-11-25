@@ -69,7 +69,7 @@ O=$(cl plugin install "vibemaestro-sdlc@$NAME"); rc=$?
 eq "$rc" 0 "install từ marketplace cục bộ: rc 0"; has "$O" 'Successfully installed' "install: thành công"
 O=$(cl plugin details "vibemaestro-sdlc@$NAME")
 has "$O" 'Skills (14)' "details: 14 skill"
-has "$O" 'Hooks (4)' "details: hook SessionStart + SubagentStart + PreToolUse + Stop"
+has "$O" 'Hooks (5)' "details: hook SessionStart + SubagentStart + PreToolUse + UserPromptSubmit + Stop"
 for s in $SKILLS; do has "$O" "$s" "details: liệt kê skill $s"; done
 # đối chứng: bỏ một skill thì details đếm 11 (số 12 ở trên không phải cố định do CLI)
 CP2="$TMP/repo2"; cp -r "$CP" "$CP2"; rm -rf "$CP2/plugins/vibemaestro-sdlc/skills/ship"

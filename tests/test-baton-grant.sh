@@ -583,7 +583,62 @@ fam_card() {  # [K] one dialog signs every row of a plan: the card shows the int
   has "$(reason)" "  Criteria: 41, too many to show here: read them in the spec above" "[K] …the card shows their count, not the list"
   BT_ENV=()
 }
-FAMILIES="fam_store fam_removed fam_usage fam_grant_digest fam_approve fam_card"
+# jv <python on d> — print an expression of the JSON document `log --grants --json` left in $BT_OUT; je <id> <python on e> — on one entry
+jv() { python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$BT_OUT" "$1"; }
+je() { python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); e = next(x for x in d["grants"] if x["id"] == sys.argv[2]); print(eval(sys.argv[3]))' "$BT_OUT" "$1" "$2"; }
+
+fam_json() {  # [J] log --grants --json: each grant once, from the reader the text uses; unreadable ones are error entries
+  local P=$1 a b c D G=0123456789abcdef M=fedcba9876543210
+  setup_a "$P"
+  eq "$(bt "$P" "$W" log --grants --json)/$(jv 'd')" "0/{'grants': [], 'schema': 1}" "[J] no grant: the document is schema 1 with no grants, rc 0"
+  approved "$P"; a=$GID
+  eq "$(bt "$P" "$W" log --grants --json)/$(jv 'len(d["grants"])')" "0/1" "[J] an approval in force: one entry"
+  eq "$(je "$a" '[e[k] for k in ("kind", "state", "reason", "error", "dir")]')" "['approval', 'in force', None, False, '$W']" "[J] …kind, state in force, no reason, no error, its directory"
+  eq "$(je "$a" 'e["signed_at"] == json.load(open("'"$(gfile)"'"))["created"] and e["expires"] == json.load(open("'"$(gfile)"'"))["expires"]')" "True" "[J] …signed_at and expires are the record's"
+  eq "$(je "$a" '(e["plans"], e["rows"])')" \
+     "([{'commit': '$AC', 'path': 'kb/plans/p.md', 'repo': 'acme/app'}], [{'merged': 0, 'plan': {'commit': '$AC', 'path': 'kb/plans/p.md', 'repo': 'acme/app'}, 'prs': 1, 'row': 'B'}])" \
+     "[J] …its plan {repo, path, commit} and its row with one PR allowed and none merged"
+  hasnt "$(out)" "focus" "[J] …no charter key on an approval"
+  logline touches used owner "acme/app:kb/plans/p.md@$AC#b"                      # a merge used the row: an input
+  bt "$P" "$W" log --grants --json >/dev/null; eq "$(je "$a" 'e["rows"][0]["merged"]')" 1 "[J] …after a merge used its row: merged 1"
+  approved "$P" B 3; b=$GID; sleep 4
+  bt "$P" "$W" log --grants --json >/dev/null
+  eq "$(je "$b" '(e["state"], e["reason"].startswith("grant " + e["id"] + " expired at "), e["error"], e["kind"])')" "('expired', True, False, 'approval')" "[J] an approval past its expiry: expired, the reason names when"
+  approved "$P" B; c=$GID; bt "$P" "$W" grant revoke "$c" >/dev/null
+  bt "$P" "$W" log --grants --json >/dev/null
+  eq "$(je "$c" '(e["state"], e["reason"].startswith("grant " + e["id"] + " was revoked at "), e["error"])')" "('revoked', True, False)" "[J] a revoked approval: revoked, the reason names when"
+  eq "$(je "$a" 'e["state"]')" "in force" "[J] …the first approval is still in force beside them"
+  oldgrant "$G"; bt "$P" "$W" log --grants --json >/dev/null
+  eq "$(je "$G" '[e[k] for k in ("kind", "state", "reason", "error", "signed_at", "expires", "dir")]')" \
+     "[None, 'not in force', 'grant $G is a plan grant: grants were removed, so it is never in force', False, None, None, None]" \
+     "[J] a plan grant left from before the removal: kind null, not in force, its reason, no error"
+  # an unreadable grant: an error entry with only the common keys, never dropped
+  printf 'not json' > "$(bdir)/grants/$M.json"; logline grant signed owner "$M 0000"
+  bt "$P" "$W" log --grants --json >/dev/null
+  eq "$(je "$M" 'sorted(e)')" "['dir', 'error', 'expires', 'id', 'kind', 'reason', 'signed_at', 'state']" "[J] a grant file that is not JSON: an entry with the common keys only"
+  eq "$(je "$M" '(e["kind"], e["state"], e["error"], e["reason"].startswith("grant " + e["id"] + " is damaged"))')" "(None, 'damaged', True, True)" "[J] …damaged, error true"
+  GID=$a; D=$(cat "$(gfile)"); poke 'g["rows"][0]["row"] = "A"'
+  bt "$P" "$W" log --grants --json >/dev/null; eq "$(je "$a" '(e["state"], e["error"], e["kind"])')" "('damaged', True, None)" "[J] an approval changed after signing: damaged, error true"
+  printf '%s' "$D" > "$(gfile)"
+  rm -f "$(bdir)/grants/$M.json"; bt "$P" "$W" log --grants --json >/dev/null
+  eq "$(je "$M" '(e["state"], e["error"], e["kind"], e["reason"])')" "('absent', True, None, 'no grant $M')" "[J] a signed log line whose file is gone: an absent error entry"
+  poke 'g["rows"] = [1]' rehash; bt "$P" "$W" log --grants --json >/dev/null
+  eq "$(je "$a" '(e["state"], e["error"], e["kind"], "rows" in e, "plans" in e)')" "('not in force', True, 'approval', False, False)" "[J] an approval with garbage rows, digest computed again: error true, no rows, not a crash"
+  printf '%s' "$D" > "$(gfile)"; poke 'g["rows"][0]["prs"] = float("nan")' rehash; bt "$P" "$W" log --grants --json >/dev/null
+  eq "$(python3 -c 'import json, sys
+def no(c): raise ValueError(c)
+d = json.loads(open(sys.argv[1]).read(), parse_constant=no)
+e = next(x for x in d["grants"] if x["id"] == sys.argv[2])
+print(e["state"], e["error"], e["rows"][0]["prs"])' "$BT_OUT" "$a")" "not in force True None" "[J] a forged row whose PRs is NaN: strict JSON, the value null, error true"
+  printf '%s' "$D" > "$(gfile)"
+  eq "$(bt "$P" "$W" log --grants --json x)" 64 "[J] --json with another word: rc 64"
+  eq "$(bt "$P" "$W" log --json)/$(grep -c schema "$BT_OUT")" "64/0" "[J] --json without --grants: rc 64, no JSON"
+  # the text, from the same grants, still names each state the JSON does
+  glist "$P" >/dev/null
+  has "$(out)" "$a  in force  approval, signed " "[J] the text lists the first approval in force, as the JSON does"
+  has "$(out)" "$c  revoked  approval, signed " "[J] …and the revoked one"
+}
+FAMILIES="fam_store fam_removed fam_usage fam_grant_digest fam_approve fam_card fam_json"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done

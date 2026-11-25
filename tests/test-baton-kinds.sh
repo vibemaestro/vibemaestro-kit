@@ -10,7 +10,7 @@
 #   [N] new --from: each kind is written, passes check as generated and is valid bash; an unknown kind, a missing value: rc 64
 #   [I] install-file: into a read-only directory, the plan carries the sha and the mode; run, post-check; a failed post-check
 #       is undone (the file gone, the mode back); a target with other bytes is refused
-#   [S] settings-merge: adds rules, removes none; backup and run record; undo restores byte for byte through the record, and
+#   [S] settings-merge: adds rules, removes only what a `remove` object names; backup and run record; undo restores byte for byte through the record, and
 #       leaves a file that changed since (exit 5)
 #   [R] remote-exec: over the fake ssh; the plan carries the host's own name; a host that does not answer is printed first
 #   [K] kubectl-exec: over the fake kubectl; the plan carries context, API server and pod uid; Stops cluster-lane (go: exit 8);
@@ -234,6 +234,33 @@ PY
   [ -f "$ST/vibemaestro/baton/records/t-settings-merge-d-$(pk "$W/a.json")-$b.json" ] && ok "[S] …a backup kept for another settings file with the same bytes stays" \
     || bad "[S] …a backup kept for another settings file with the same bytes stays"
   eq "$(nbackups t-settings-merge-d)" 1 "[S] …and run 2's own backup goes"
+}
+fam_kind_remove() {
+  local P=$1 W f s r before
+  ST="$(fresh)/state"; W=$(fresh); f=$(kind_in "$P" "$W" settings-merge)
+  s="$W/settings.json"; r="$W/rules.json"
+  printf '{\n  "model": "x",\n  "permissions": {\n    "allow": ["Bash(old:*)", "Bash(old:*x)", "Bash(cur:*)", "Bash(ls:*)", "Bash(old:*)"],\n    "ask": ["Bash(old:*)"]\n  }\n}\n' > "$s"
+  printf '{"remove": {"allow": ["Bash(old:*)"]}}\n' > "$r"
+  before=$(sha_of "$s"); cp "$s" "$W/settings.before"
+  eq "$(bt "$P" "$W" rehearse "$f" "$s" "$r")" 0 "[S] remove: rehearse rc 0"
+  has "$(cat "$BT_OUT")" 'PLAN merge allow +0, ask +0, deny +0, remove allow -2 ["Bash(old:*)", "Bash(old:*)"], ask -0, deny -0 into '"$s" "[S] …the plan names the rule removed, once per copy"
+  eq "$(sha_of "$s")" "$before" "[S] …rehearse wrote nothing"
+  eq "$(sg "$P" "$W" "$f" "$s" "$r")/$(bt "$P" "$W" run "$f" "$s" "$r")" "0/0" "[S] signed and run: rc 0"
+  eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=d["permissions"]; print(d["model"], p["allow"], p["ask"])' "$s")" \
+     "x ['Bash(old:*x)', 'Bash(cur:*)', 'Bash(ls:*)'] ['Bash(old:*)']" "[S] …every copy of the allow rule named is gone: a rule sharing its prefix, the same string in ask, the other rules and keys stay"
+  eq "$(bt "$P" "$W" rehearse "$f" "$s" "$r")" 1 "[S] the rule is not there any more: rehearse rc 1 (a plan with no write)"
+  has "$(cat "$BT_OUT")" "nothing to do" "[S] …nothing to do, no plan line"
+  hasnt "$(cat "$BT_OUT")" "PLAN merge" "[S] …no merge planned"
+  cp "$W/settings.before" "$s"; fail_postcheck "$f"
+  eq "$(sg "$P" "$W" "$f" "$s" "$r")/$(bt "$P" "$W" run "$f" "$s" "$r")" "0/4" "[S] a run whose post-check fails after a removal: rc 4, undone"
+  eq "$(sha_of "$s")" "$before" "[S] …undo put the removed rule back, byte for byte"
+  printf '{"remove": null}\n' > "$r"
+  eq "$(bt "$P" "$W" rehearse "$f" "$s" "$r")" 1 "[S] a null remove: rehearse refuses"
+  has "$(cat "$BT_OUT")" "REFUSE the settings must be a JSON object" "[S] …REFUSE, nothing written"
+  printf '{"remove": ["Bash(old:*)"]}\n' > "$r"
+  eq "$(bt "$P" "$W" rehearse "$f" "$s" "$r")" 1 "[S] a remove that is not an object of lists: rehearse refuses"
+  has "$(cat "$BT_OUT")" "REFUSE the settings must be a JSON object" "[S] …REFUSE, nothing written"
+  eq "$(sha_of "$s")" "$before" "[S] …the settings are unchanged"
 }
 # pk <path> — the path key the kind names a settings file's backup and record after
 pk() { printf '%s' "$1" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:16])'; }
@@ -547,7 +574,7 @@ fam_y() {
   has "$(HOME=/ctl-real home_leaks "$P/scripts" baton ancestors)" "'/ctl-real'" "[Y3] control: a bash above the call that was started with another HOME is named, so [Y2] can see a leak"
 }
 
-FAMILIES="fam_y fam_d5 fam_kinds_new fam_kind_install fam_kind_settings fam_kind_remote fam_kind_kubectl fam_kind_ci fam_kind_callable fam_kind_review fam_kind_value"
+FAMILIES="fam_y fam_d5 fam_kinds_new fam_kind_install fam_kind_settings fam_kind_remove fam_kind_remote fam_kind_kubectl fam_kind_ci fam_kind_callable fam_kind_review fam_kind_value"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for fam in $FAMILIES; do echo "-- $fam"; "$fam" "$REAL"; done

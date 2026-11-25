@@ -1074,15 +1074,27 @@ UPSTREAM_HAS_KB = {
 }
 
 
+def kb_missing(troot):
+    """This tree has no `kb/` directory: the one test of "no kb/", for `kb_reminder` and the `/init` hint."""
+    return not os.path.isdir(os.path.join(troot, "kb"))
+
+
+def kb_elsewhere(troot, lang="vi"):
+    """For a tree with no `kb/`: the sentence that says where `kb/` already is (the upstream, or the unmerged scaffold branch) so it is
+    not scaffolded twice, else ""."""
+    up = upstream_kb_ref(troot)
+    if up:
+        return UPSTREAM_HAS_KB.get(lang, UPSTREAM_HAS_KB["vi"]) % (up, up)
+    ref = scaffold_ref(troot)
+    return SCAFFOLD_ON_BRANCH.get(lang, SCAFFOLD_ON_BRANCH["vi"]) % ref if ref else ""
+
+
 def kb_reminder(troot, injected=False, rel="kb/current-state.md", lang="vi"):
     kb = os.path.join(troot, "kb")
-    if not os.path.isdir(kb):
-        up = upstream_kb_ref(troot)
-        if up:
-            return UPSTREAM_HAS_KB.get(lang, UPSTREAM_HAS_KB["vi"]) % (up, up)
-        ref = scaffold_ref(troot)
-        if ref:
-            return SCAFFOLD_ON_BRANCH.get(lang, SCAFFOLD_ON_BRANCH["vi"]) % ref
+    if kb_missing(troot):
+        elsewhere = kb_elsewhere(troot, lang)
+        if elsewhere:
+            return elsewhere
         # Repo chưa có kb/: chỉ chỉ đường tới skill dựng khung khi skill đó CÓ MẶT (A7), và chỉ trong cây git: ở thư mục trơn không có gì để dựng.
         if "init-kb" in plugin_skills() and in_git_work_tree(troot):
             return ("This repo has no `kb/` yet: use the skill `%s:init-kb` to scaffold it — this repo's intent, plan and spec "
@@ -1518,6 +1530,72 @@ def subagent_start():
 
 
 # ── vỏ fail-open ───────────────────────────────────────────────────────────────
+# ── `/init` ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# UserPromptSubmit (`init-hint.py`): a prompt that starts with `/init`, in a git work tree that lacks `kb/` or the project's brain, gets
+# the kit's own setup added after CLAUDE.md. Only context: a hook cannot run a skill, the model does, through the skill's own checks.
+INIT_PROMPT = re.compile(r"\s*/init(?:\s|$)")
+BRAIN_TIMEOUT = 5      # seconds `brain doctor --path` may take; a brain that hangs is no brain step, never a stuck prompt
+INIT_HEAD = {
+    "en": "The person typed /init. Finish CLAUDE.md first, as /init does. Then set up what this kit needs for the project, in this order:",
+    "vi": "Người dùng vừa gõ /init. Hãy viết xong CLAUDE.md trước, như /init vẫn làm. Rồi dựng những gì bộ công cụ này cần cho dự án, theo thứ tự:",
+}
+INIT_KB_STEP = {
+    "en": "This repo has no `kb/` yet: run the skill `%s:init-kb` to scaffold it.",
+    "vi": "Repo này chưa có `kb/`: chạy skill `%s:init-kb` để dựng khung.",
+}
+INIT_BRAIN_STEP = {
+    "en": "This project has no brain yet: use the skill `vibemaestro-brain:brain` and open the project's brain with `brain claim`, as the Quick start of the brain's README does.",
+    "vi": "Dự án này chưa có brain: dùng skill `vibemaestro-brain:brain` và mở brain của dự án bằng `brain claim`, như Quick start trong README của brain.",
+}
+
+
+def brain_missing(troot):
+    """True only when the vibemaestro-brain installed beside this plugin says (read-only, `brain doctor --path`) this project's state
+    directory and it holds no `hot.jsonl`, the test of brain's own `has_state`. No brain installed, a failing or slow brain: False."""
+    try:
+        import intent_branch
+        script = intent_branch.brain_script()
+        if not script:
+            return False
+        p = subprocess.Popen([sys.executable, script, "doctor", "--path"], cwd=troot, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, encoding="utf-8")
+        try:
+            out = p.communicate(timeout=BRAIN_TIMEOUT)[0]
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            return False
+        state = out.strip()
+        return p.returncode == 0 and os.path.isabs(state) and not os.path.isfile(os.path.join(state, "hot.jsonl"))
+    except Exception:
+        return False
+
+
+def init_hint(payload):
+    """The `/init` hint: one block of context, or nothing. Silent on every error and for `hooks: off`, an invalid config, a tree outside
+    git and a repo that has both `kb/` and a brain."""
+    prompt = payload.get("prompt")
+    if not (isinstance(prompt, str) and INIT_PROMPT.match(prompt)):
+        return 0
+    troot = project_root(payload)
+    if not in_git_work_tree(troot):
+        return 0
+    cfg, probs, _present = C.load(troot, quiet=True)
+    if probs or cfg["hooks"] == "off" or C.off_below(session_folder(payload), troot):
+        return 0
+    lang = cfg["language"] if cfg["language"] in INIT_HEAD else "vi"
+    steps = []
+    if kb_missing(troot):
+        step = kb_elsewhere(troot, lang) or ("init-kb" in plugin_skills() and INIT_KB_STEP[lang] % PLUGIN_NAME)
+        if step:
+            steps.append(step)
+    if brain_missing(troot):
+        steps.append(INIT_BRAIN_STEP[lang])
+    if steps:
+        emit("UserPromptSubmit", "\n".join([INIT_HEAD[lang]] + ["%d. %s" % (i, t) for i, t in enumerate(steps, 1)]))
+    return 0
+
+
 def run(fn, *args):
     """Mọi ngoại lệ → cảnh báo (nếu in được) và rc 0: hook KHÔNG làm công cụ lỗi cứng."""
     try:

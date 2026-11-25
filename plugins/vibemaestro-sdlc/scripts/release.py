@@ -42,8 +42,11 @@ change is read from the base and the diff, in this order:
              each raised plugin is named by one; no change file is left in `.changes/`; the marketplace does not change. (A
              `CONTRACT.md` surface change is red: tests/test-contract.sh.)
   back-merge `origin/release` exists and the commit the PR brings (HEAD, or the second parent of CI's test merge whose first parent
-             is the base) is on `origin/release` and not on the base, with a clean working tree: every released version equals
-             `origin/release`'s; no change file is needed (the hotfix consumed its own).
+             is the base) is not on the base, with a clean working tree, and is either on `origin/release`, or one merge commit
+             of exactly two parents, the `origin/release` tip and a commit on the base (a back-merge that conflicted, resolved
+             above the release tip), while that tip is not on the base: every released version equals `origin/release`'s; no
+             change file is needed (the hotfix consumed its own). Any other commit above the tip is no back-merge, and check
+             prints why (`not a back-merge: …`) before judging it as the kind it is.
   release    a released version here is not the merge-base's (a new first `## X.Y.Z` heading); `--public REPO` names the public
              repository, and its tag list is read (else red):
              - every change file pending on the base tip is consumed and none is left or added in `.changes/`;
@@ -925,8 +928,21 @@ def worktree_clean(repo):
     return rc == 0 and not out.strip()
 
 
-def kind_of(repo, base_ref, base, mb):
-    """bootstrap, hotfix, back-merge, release, fold or ordinary (the docstring of this file says how each is told)."""
+def above_release(repo, tip, rel, base):
+    """Why `tip`, a commit above the release tip `rel`, is no back-merge; None when it is one merge commit of exactly two parents,
+    `rel` and a commit on the base (a back-merge that conflicted, resolved above the release tip)."""
+    parents = git(repo, "rev-list", "--parents", "-n", "1", tip)[1].decode().split()[1:]
+    if len(parents) != 2:
+        return "it is not a merge (one parent)" if len(parents) == 1 else "it merges %d parents, not 2" % len(parents)
+    if rel not in parents:
+        return "neither of its parents is the release tip (a merge above another merge?)"
+    other = parents[1 - parents.index(rel)]
+    return None if is_ancestor(repo, other, base) else "its other parent %s is not on the base" % other[:12]
+
+
+def kind_of(repo, base_ref, base, mb, why=None):
+    """bootstrap, hotfix, back-merge, release, fold or ordinary (the docstring of this file says how each is told); `why`, a list,
+    gets the reason a commit above the release tip is no back-merge."""
     if not ever_had(repo, base, CHANGES + "/README.md"):
         return "bootstrap"
     if branch_of(base_ref) == RELEASE:
@@ -934,8 +950,16 @@ def kind_of(repo, base_ref, base, mb):
     rel = resolve(repo, RELEASE_REF)
     if rel:
         tip = back_merge_tip(repo, base)
-        if tip and tip != mb and is_ancestor(repo, tip, rel) and not is_ancestor(repo, tip, base) and worktree_clean(repo):
-            return "back-merge"
+        if tip and tip != mb and not is_ancestor(repo, tip, base) and worktree_clean(repo):
+            if is_ancestor(repo, tip, rel):
+                return "back-merge"
+            if is_ancestor(repo, rel, tip) and not is_ancestor(repo, rel, base):
+                no = above_release(repo, tip, rel, base)
+                if no is None:
+                    return "back-merge"
+                if why is not None:
+                    why.append("%s is above the release tip %s and is not one merge of it with a commit of the base: %s"
+                               % (tip[:12], rel[:12], no))
     if any_version_moved(repo, mb):
         return "release"
     return "fold" if folded(repo, mb) else "ordinary"
@@ -1761,8 +1785,10 @@ def check(repo, given, public=""):
     mb = out.decode().strip()
     paths, added = changed(repo, mb)
     touched = plugins_touched(paths)
-    bad, tags, joined = [], None, set()
-    kind = kind_of(repo, base_ref, base, mb)
+    bad, tags, joined, why = [], None, set(), []
+    kind = kind_of(repo, base_ref, base, mb, why)
+    for w in why:
+        print("not a back-merge: " + w)
     if kind == "bootstrap":
         print("kind: bootstrap (the history of %s never held %s/README.md)" % (base_ref, CHANGES))
         for name in touched:

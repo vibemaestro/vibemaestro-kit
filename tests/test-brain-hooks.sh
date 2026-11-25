@@ -27,6 +27,15 @@
 #       A and names both; outside a session, the cwd as before; /clear's new session id still A; session-end removes the
 #       record; a resume in another project says so; B never gets a state directory
 #   [K] the hard cut at 9,500 cuts at a line and names what it cut
+#   [PA] the installed brain first: session-start writes one line to CLAUDE_ENV_FILE that puts this brain's bin first on PATH
+#       (once, again at cwd-changed, quoted for a path with a space; not under BRAIN_OFF or in a worker), so a shell that runs
+#       the file finds this brain before an older one; string 1 names the brain a bare `brain` runs, and both when it is
+#       another; guard-path denies a write and notes a read through a bare `brain` that resolves to another brain on the
+#       hook's PATH, and is silent when the session's start put this brain first; session-end removes that mark. Round 1:
+#       a `brain` with no scripts/brain.py beside it is no brain; one in a repository's tree only gets the line; a `brain`
+#       word outside command position is not a call. Round 2: a shell keyword or wrapper before `brain` (`do`, `env`, `time`,
+#       `if`) keeps it in command position; string 1 says a tree brain's writes go through. Windows: no line is written, and the hook still finds an older
+#       brain's extensionless bin/brain and denies its write
 #   [Z] tests/live/brain-owner-dialog.sh parses, and its --plan mode lists the runs and starts nothing
 #   [P2] its key choice (--pick-key) on recorded menus: the trust dialog with No first or Yes first, a permission prompt
 #        (the plain Yes, never "don't ask again"), a numbered menu, no match
@@ -170,6 +179,21 @@ case_compact() {
   c_eq "$(find "$sd" -name '*.md' | wc -l | tr -d ' ')" 200 "[P] the newest 200 summaries are kept"
   c_eq "$(epfield hot_version)" "$(bpy 'print(s.read_head(s.state_dir())["seq"])')" "[P] the hot memory version is the head's seq"
   start compact; c_hasnt "$(ctx)" "SUMMARY-MARKER" "[P] the summary is never injected"
+  local real='{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":3,"cache_read_input_tokens":90000,"cache_creation_input_tokens":7}}}'
+  { echo "$real"
+    echo '{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}'; } > "$tr"
+  hk pre-compact "$(hin session_id="$SID" cwd="$P" hook_event_name=PreCompact trigger=auto transcript_path="$tr")"
+  c_eq "$(epfield context_before)" 90010 "[P] a <synthetic> zero line after a real one: the real line's size"
+  { echo "${real/90000/40000}"
+    echo '{"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-4-5","usage":{"input_tokens":1,"cache_read_input_tokens":5000,"cache_creation_input_tokens":2}}}'; } > "$tr"
+  hk pre-compact "$(hin session_id="$SID" cwd="$P" hook_event_name=PreCompact trigger=auto transcript_path="$tr")"
+  c_eq "$(epfield context_before)" 40010 "[P] a sidechain line after a main one: the main line's size"
+  echo "${real/90000/1000}" > "$tr"
+  hk pre-compact "$(hin session_id="$SID" cwd="$P" hook_event_name=PreCompact trigger=auto transcript_path="$tr")"
+  c_eq "$(epfield context_before)" 1010 "[P] a main-only transcript: unchanged"
+  echo '{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}' > "$tr"
+  hk pre-compact "$(hin session_id="$SID" cwd="$P" hook_event_name=PreCompact trigger=auto transcript_path="$tr")"
+  c_eq "$(epfield context_before)" null "[P] a transcript of only skipped lines: no size (null), not 0"
 }
 
 case_guards() {
@@ -358,6 +382,102 @@ case_off() {
   BRAIN_OFF=0 start startup; c_has "$(ctx)" "## Brain · left brain" "[O] instrument: BRAIN_OFF=0 injects"
 }
 
+case_hooks_off() {  # the sdlc config's `hooks: off` silences every event of the brain; without it the same inputs do what they did
+  newp
+  fill_caps                                      # string 2 exists
+  local e="$TMP/env$NP" old="$TMP/old$NP/plugins/vibemaestro-brain" tr="$TMP/tr$NP.jsonl" gh="$TMP/gh$NP" root="$XDG_STATE_HOME/vibemaestro/brain" r sub="$P/sub" off='{"hooks": "off"}'
+  mkdir -p "$old/bin" "$old/scripts" "$gh" "$sub"; : > "$old/scripts/brain.py"; : > "$tr"
+  printf '#!/bin/sh\necho "stand-in brain ran"\n' > "$old/bin/brain"; chmod +x "$old/bin/brain"
+  printf '#!/bin/sh\nexit 1\n' > "$gh/gh"; chmod +x "$gh/gh"
+  bpy "import json; f = open(s.state_dir() + '/episodes.jsonl', 'a')
+f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'sOld', 'format': 3}) + '\n')
+f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'sOld2', 'format': 3}) + '\n')"
+  eps() { python3 -c 'import json, sys
+print(sum(1 for l in open(sys.argv[1] + "/episodes.jsonl") if json.loads(l).get("kind") == sys.argv[2]))' "$(sdir)" "$1"; }
+  hookin() { hin session_id="${2:-sA}" cwd="$P" hook_event_name="$1" "${@:3}"; }
+  round() {  # round <prefix> <note-format session> — every event once; ${prefix}_<event> holds what it did
+    local pre=$1 c ev
+    hk session-start "$(hookin SessionStart source=startup)"; c=$(ctx); printf -v "${pre}_start" %s "${c:0:8}"
+    hk session-start-2 "$(hookin SessionStart source=startup)"; c=$(ctx); printf -v "${pre}_start2" %s "${c:0:8}"
+    ev=$(eps pre-compact); hk pre-compact "$(hookin PreCompact trigger=auto transcript_path="$tr")"
+    printf -v "${pre}_precompact" %s "$(( $(eps pre-compact) - ev ))"
+    hk post-compact "$(hookin PostCompact trigger=auto compact_summary="SUMMARY-MARKER")"
+    printf -v "${pre}_postcompact" %s "$(ls "$(sdir)/summaries" 2>/dev/null | wc -l | tr -d ' ')"
+    : > "$e"; CLAUDE_ENV_FILE="$e" hk cwd-changed "$(hookin CwdChanged)"
+    printf -v "${pre}_cwdchanged" %s "$(grep -c PATH= "$e")"
+    hk guard-bash "$(hookin PreToolUse sA agent_id=sub1 tool_name=Bash tool_input='{"command":"brain op add --kind now --text x"}')"
+    printf -v "${pre}_guardbash" %s "$(hfield permissionDecision)"
+    hk guard-edit "$(hookin PreToolUse sA tool_name=Edit tool_input="{\"file_path\":\"$root/x/hot.jsonl\"}")"
+    printf -v "${pre}_guardedit" %s "$(hfield permissionDecision)"
+    hk guard-owner "$(hookin PreToolUse sA tool_name=Bash permission_mode=default tool_input='{"command":"brain owner backup off"}')"
+    printf -v "${pre}_guardowner" %s "$(hfield permissionDecision)"
+    PATH="$old/bin:$PATH" hk guard-path "$(hookin PreToolUse sB tool_name=Bash tool_input='{"command": "brain op add --kind now --text y"}')"
+    printf -v "${pre}_guardpath" %s "$(hfield permissionDecision)"
+    ev=$(eps session-format); hk note-format "$(hookin PreToolUse "$2" tool_name=Bash permission_mode=default tool_input='{"command":"brain doctor"}')"
+    printf -v "${pre}_noteformat" %s "$(( $(eps session-format) - ev ))"
+    rm -f "$(sdir)/merge-evidence-bg.json" "$(sdir)/close-linked-bg.json"
+    PATH="$gh:$PATH" hk prompt "$(hookin UserPromptSubmit sA prompt=next)"
+    printf -v "${pre}_prompt" %s "$([ -e "$(sdir)/merge-evidence-bg.json" ] && echo started || echo none)"
+    ev=$(eps session-end); hk session-end "$(hookin SessionEnd sA reason=other)"
+    printf -v "${pre}_sessionend" %s "$(( $(eps session-end) - ev ))"
+  }
+  mkdir -p "$P/.vibemaestro"; printf '%s' "$off" > "$P/.vibemaestro/sdlc.json"
+  round X sOld
+  rm -f "$P/.vibemaestro/sdlc.json"
+  round Y sOld2
+  c_eq "$X_start|$Y_start" "|# vibema" "[HF] session-start: nothing under hooks: off, the strings without it"
+  c_eq "$X_start2|$Y_start2" "|## Brain" "[HF] session-start-2: nothing under hooks: off, string 2 without it"
+  c_eq "$X_precompact|$Y_precompact" "0|1" "[HF] pre-compact: no episode line under hooks: off, one without it"
+  c_eq "$X_postcompact|$Y_postcompact" "0|1" "[HF] post-compact: no summary saved under hooks: off, one without it"
+  c_eq "$X_cwdchanged|$Y_cwdchanged" "0|1" "[HF] cwd-changed: no PATH line under hooks: off, one without it"
+  c_eq "$X_guardbash|$Y_guardbash" "|deny" "[HF] guard-bash: no decision under hooks: off, deny without it"
+  c_eq "$X_guardedit|$Y_guardedit" "|deny" "[HF] guard-edit: no decision under hooks: off, deny without it"
+  c_eq "$X_guardowner|$Y_guardowner" "|deny" "[HF] guard-owner: no decision under hooks: off, deny without it"
+  c_eq "$X_guardpath|$Y_guardpath" "|deny" "[HF] guard-path: no decision under hooks: off, deny without it"
+  c_eq "$X_noteformat|$Y_noteformat" "0|1" "[HF] note-format: no session-format line under hooks: off, one without it"
+  c_eq "$X_prompt|$Y_prompt" "none|started" "[HF] prompt: no background job under hooks: off, one without it"
+  c_eq "$X_sessionend|$Y_sessionend" "0|1" "[HF] session-end: no episode line under hooks: off, one without it"
+  # where the file sits and what it holds: the reader is sdlc's, so the answers are sdlc's
+  local lone="$TMP/lone$NP" errf="$TMP/err$NP"
+  sstart() {  # sstart <cwd> [brain root] — the first characters of string 1 for a new session in <cwd>, `none` when silent
+    local b=${2:-$BROOT}
+    OUT=$(hin session_id=sV cwd="$1" hook_event_name=SessionStart source=startup | hookpy "$b/scripts/brain_hook.py" session-start 2>"$errf"); RC=$?
+    local c; c=$(ctx); if [ -n "$c" ]; then echo "${c:0:8}"; else echo none; fi
+  }
+  mkdir -p "$lone/plugins"; cp -R "$BROOT" "$lone/plugins/"
+  printf '%s' "$off" > "$P/.vibemaestro/sdlc.json"
+  c_eq "$(sstart "$sub")" none "[HF] the file at the top of the history, the session in a subfolder: silent"
+  c_eq "$(sstart "$P" "$lone/plugins/vibemaestro-brain")|$RC|$(cat "$errf")" "# vibema|0|" "[HF] no sdlc beside the brain: it runs, nothing on stderr"
+  rm -f "$P/.vibemaestro/sdlc.json"; mkdir -p "$sub/.vibemaestro"; printf '%s' "$off" > "$sub/.vibemaestro/sdlc.json"
+  c_eq "$(sstart "$sub")|$(sstart "$P")" "none|# vibema" "[HF] the file in a subfolder: silent there, the folder above still runs"
+  rm -f "$sub/.vibemaestro/sdlc.json"; mkdir -p "$P/.vibemaestro"
+  printf '{"hooks": "off", "schema": 9}' > "$P/.vibemaestro/sdlc.json"
+  c_eq "$(sstart "$P")" none "[HF] hooks: off beside a key that makes the file invalid: still silent (sdlc_config.hooks_off_at reads it raw)"
+  printf 'not json' > "$P/.vibemaestro/sdlc.json"
+  c_eq "$(sstart "$P")|$RC|$(cat "$errf")" "# vibema|0|" "[HF] a file that is not JSON: the brain runs"
+  printf '{"hooks": "auto"}' > "$P/.vibemaestro/sdlc.json"
+  c_eq "$(sstart "$P")" "# vibema" "[HF] hooks: auto: the brain runs"
+  rm -f "$P/.vibemaestro/sdlc.json"; mkdir "$P/.vibemaestro/sdlc.json"
+  c_eq "$(sstart "$P")|$RC|$(cat "$errf")" "# vibema|0|" "[HF] a directory at the config path: the brain runs"
+  rmdir "$P/.vibemaestro/sdlc.json"; printf '%s' "$off" > "$P/.vibemaestro/sdlc.json"
+  c_eq "$(CLAUDE_PROJECT_DIR="$P" sstart "$TMP")" none "[HF] CLAUDE_PROJECT_DIR names the folder, whatever the input's cwd: silent"
+  # a declined dialog's record dies at the session's next Bash call, with hooks off too (the file can appear mid-session)
+  asked() { rec default sA backup off; bpy 'import hashlib, os
+d = os.path.join(os.environ["XDG_STATE_HOME"], "vibemaestro", "brain", "pending"); os.makedirs(d, exist_ok=True)
+open(os.path.join(d, hashlib.sha256(b"sA").hexdigest()[:32]), "w").write(s.state_dir())'; }
+  local nrec; nrec() { find "$(sdir)/asked" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
+  asked; c_eq "$(nrec)" 1 "[HF] instrument: an asked record and its pending marker exist"
+  hk guard-owner "$(hookin PreToolUse sA tool_name=Bash permission_mode=default tool_input='{"command":"ls"}')"
+  c_eq "$(nrec)|$OUT" "0|" "[HF] hooks: off: the next Bash call still voids the declined dialog's record"
+  asked; hk session-end "$(hookin SessionEnd sA reason=clear)"
+  c_eq "$(nrec)|$OUT" "0|" "[HF] hooks: off: /clear (session-end) voids the declined dialog's record too"
+  rm -f "$P/.vibemaestro/sdlc.json"; asked
+  hk guard-owner "$(hookin PreToolUse sA tool_name=Bash permission_mode=default tool_input='{"command":"ls"}')"
+  c_eq "$(nrec)|$OUT" "0|" "[HF] without it: the same call voids it too"
+  asked; hk session-end "$(hookin SessionEnd sA reason=clear)"
+  c_eq "$(nrec)" 0 "[HF] without it: session-end voids it too"
+}
+
 case_corrupt() {
   newp
   br op add --kind now --text "x"
@@ -436,8 +556,83 @@ case_codepage() {  # a hook's input read in the system code page (Windows' pipes
   c_eq "$(hfield permissionDecision)" deny "[CP] an edit under a state root named in Vietnamese is denied with the hook's streams in the code page (main: read as cp1252, let through)"
 }
 
+card() { ctx | grep -F 'bare `brain`'; }
+
+case_path() {
+  newp
+  br op add --kind now --text "x"
+  local e="$TMP/env$NP" old="$TMP/old$NP/plugins/vibemaestro-brain" G
+  mkdir -p "$old/bin" "$old/scripts"; : > "$old/scripts/brain.py"
+  printf '#!/bin/sh\necho "stand-in brain ran"\n' > "$old/bin/brain"; chmod +x "$old/bin/brain"
+  : > "$e"
+  if [ "${OS:-}" = Windows_NT ]; then
+    CLAUDE_ENV_FILE="$e" PATH="$old/bin:$PATH" start startup
+    c_eq "$(cat "$e")" "" "[PA] Windows: no PATH line (it would keep every hook's variables from PowerShell commands)"
+    PATH="$old/bin:$PATH" hk guard-path "$(hin session_id=sW cwd="$P" tool_name=Bash tool_input='{"command": "brain op add --kind now --text y"}')"
+    c_eq "$(hfield permissionDecision)" deny "[PA] Windows: the hook finds the older brain's bin/brain, which has no extension, and denies its write (e2cf850: shutil.which found none)"
+    c_skip "[PA] the PATH line and the path-literal checks" "POSIX only: no line on Windows, and its paths are spelled C:/…"
+    return
+  fi
+  CLAUDE_ENV_FILE="$e" PATH="$old/bin:$PATH" start startup
+  c_eq "$(cat "$e")" "export PATH=$BROOT/bin:\"\$PATH\"" "[PA] session-start puts this brain's bin first on PATH in CLAUDE_ENV_FILE (main: the file stays empty)"
+  c_eq "$(card)" "brain: a bare \`brain\` runs $BROOT" "[PA] string 1 names the brain a bare \`brain\` runs (main: no line)"
+  c_eq "$(PATH="$old/bin:$PATH" bash -c '. "$1"; command -v brain' _ "$e")" "$BROOT/bin/brain" "[PA] a shell that runs the file finds this brain before the older one first on its PATH"
+  CLAUDE_ENV_FILE="$e" start resume
+  c_eq "$(grep -c PATH= "$e")" 1 "[PA] a second start leaves one line"
+  : > "$e"
+  CLAUDE_ENV_FILE="$e" hk cwd-changed "$(hin session_id="$SID" cwd="$P" hook_event_name=CwdChanged)"
+  c_eq "$(cat "$e")" "export PATH=$BROOT/bin:\"\$PATH\"" "[PA] cwd-changed writes it again after Claude Code cleared the file"
+  G="$(hin session_id="$SID" cwd="$P" tool_name=Bash tool_input='{"command": "brain op add --kind now --text y"}')"
+  PATH="$old/bin:$PATH" hk guard-path "$G"
+  c_eq "$OUT" "" "[PA] guard-path is silent when the session's start put this brain first, whatever older one the hook's PATH holds"
+  SID=sB
+  G="$(hin session_id=sB cwd="$P" tool_name=Bash tool_input='{"command": "cd /tmp && brain op add --kind now --text y"}')"
+  PATH="$old/bin:$PATH" hk guard-path "$G"
+  c_eq "$(hfield permissionDecision)" deny "[PA] another session, no PATH line: a write through a bare \`brain\` that is another brain is denied (main: no such hook)"
+  c_eq "$(hfield permissionDecisionReason)" "brain: a bare \`brain\` here runs $TMP/old$NP/plugins/vibemaestro-brain, not the installed brain $BROOT, so its writes are refused: run $BROOT/bin/brain with the same arguments" "[PA] …naming both and the command to run"
+  PATH="$old/bin:$PATH" hk guard-path "$(hin session_id=sB cwd="$P" tool_name=Bash tool_input='{"command": "brain show N1"}')"
+  c_eq "$(hfield permissionDecision)|$(hfield additionalContext)" "|brain: a bare \`brain\` here runs $TMP/old$NP/plugins/vibemaestro-brain, not the installed brain $BROOT; its answer comes from that code" "[PA] a read runs, with one line for Claude"
+  PATH="$BROOT/bin:$old/bin:$PATH" hk guard-path "$G"
+  c_eq "$OUT" "" "[PA] control: this brain first on the hook's PATH, nothing said"
+  local unrel="$TMP/unrel$NP" tree="$TMP/tree$NP/plugins/vibemaestro-brain"
+  mkdir -p "$unrel/bin"; printf '#!/bin/sh\n' > "$unrel/bin/brain"; chmod +x "$unrel/bin/brain"
+  PATH="$unrel/bin:$PATH" hk guard-path "$G"
+  c_eq "$OUT" "" "[PA] a \`brain\` with no scripts/brain.py beside it is not a brain: nothing said (e2cf850: denied, naming it)"
+  mkdir -p "$TMP/tree$NP/.git" "$tree/bin" "$tree/scripts"; : > "$tree/scripts/brain.py"
+  cp "$old/bin/brain" "$tree/bin/brain"
+  PATH="$tree/bin:$PATH" hk guard-path "$G"
+  c_eq "$(hfield permissionDecision)|$(hfield additionalContext)" "|brain: a bare \`brain\` here runs $tree, not the installed brain $BROOT; it runs from a repository's tree, so its writes are let through" "[PA] a brain in a repository's tree: its write goes on with one line, as its own check only warns (e2cf850: denied)"
+  PATH="$old/bin:$PATH" hk guard-path "$(hin session_id=sB cwd="$P" tool_name=Bash tool_input='{"command": "brain show N1 | grep -c brain; echo brain op"}')"
+  c_eq "$(hfield permissionDecision)" "" "[PA] a \`brain\` word outside command position is not a write (e2cf850: denied)"
+  PATH="$old/bin:$PATH" hk guard-path "$(hin session_id=sB cwd="$P" tool_name=Bash tool_input='{"command": "BRAIN_X=1 brain op touch N1"}')"
+  c_eq "$(hfield permissionDecision)" deny "[PA] …a \`VAR=value\` before it still leaves it in command position"
+  local cmd
+  for cmd in 'for id in N1 N2; do brain op touch "$id"; done' 'env brain op touch N1' 'time brain op touch N1' 'if brain op touch N1; then :; fi'; do
+    PATH="$old/bin:$PATH" hk guard-path "$(hin session_id=sB cwd="$P" tool_name=Bash tool_input="$(hin command="$cmd")")"
+    c_eq "$(hfield permissionDecision)" deny "[PA] round 2: a write after a shell keyword or wrapper is still denied: $cmd (814a198: let through)"
+  done
+  PATH="$tree/bin:$PATH" start startup
+  c_eq "$(card)" "brain: a bare \`brain\` runs $tree, not the installed brain $BROOT; it runs from a repository's tree, so its writes are let through" "[PA] round 2: string 1 says a tree brain's writes go through, as both checks let them (814a198: said refused)"
+  PATH="$old/bin:$PATH" start startup
+  c_eq "$(card)" "brain: a bare \`brain\` runs $TMP/old$NP/plugins/vibemaestro-brain, not the installed brain $BROOT: its writes are refused (brain doctor)" "[PA] no PATH line, an older brain first: string 1 names both"
+  PATH="/usr/bin:/bin" start startup
+  c_eq "$(card)" "brain: the installed brain is $BROOT; which brain a bare \`brain\` runs is not known here (brain doctor)" "[PA] no PATH line and no brain on the hook's PATH: said so"
+  : > "$e"
+  CLAUDE_ENV_FILE="$e" BRAIN_OFF=1 start startup; CLAUDE_ENV_FILE="$e" VIBEMAESTRO_ROLE=worker start startup
+  c_eq "$(cat "$e")" "" "[PA] BRAIN_OFF and a worker write no line"
+  SID=sA
+  local mark; mark=$(bpy 'print(s.session_file("sA") + ".env")')
+  c_eq "$(cat "$mark")" "$BROOT/bin" "[PA] the session's mark names the bin put first"
+  hk session-end "$(hin session_id=sA cwd="$P" hook_event_name=SessionEnd reason=other)"
+  c_eq "$([ -e "$mark" ] && echo kept || echo gone)" gone "[PA] session-end removes the mark"
+  local sp="$TMP/with space $NP"
+  mkdir -p "$sp/plugins"; cp -R "$BROOT" "$sp/plugins/"; : > "$e"
+  OUT=$(printf '%s' "$(hin session_id=sC cwd="$P" hook_event_name=SessionStart source=startup)" | CLAUDE_ENV_FILE="$e" hookpy "$sp/plugins/vibemaestro-brain/scripts/brain_hook.py" session-start 2>&1)
+  c_eq "$(PATH="$old/bin:$PATH" bash -c '. "$1"; command -v brain' _ "$e")" "$sp/plugins/vibemaestro-brain/bin/brain" "[PA] a bin whose path holds a space is quoted in the line"
+}
+
 echo "== cases =="
-for c in case_root case_caps case_shelf case_compact case_guards case_session case_end case_off case_corrupt case_cut case_live case_pick case_codepage; do run_case $c; done
+for c in case_path case_root case_caps case_shelf case_compact case_guards case_session case_end case_off case_hooks_off case_corrupt case_cut case_live case_pick case_codepage; do run_case $c; done
 
 echo "== [NW] the store cannot load (Windows: no fcntl, no pwd): Claude is told, the person sees no fixed line, the guards refuse =="
 # A sitecustomize on PYTHONPATH takes fcntl and pwd out of the module table: what Windows Python lacks

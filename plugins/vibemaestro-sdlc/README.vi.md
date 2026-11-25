@@ -50,6 +50,8 @@ Giới hạn đã biết của lưu ngầm:
 
 **Cuốn sổ.** Khi được nhờ lập sổ, skill `init-kb` dựng `kb/` ngay tại chỗ: thư mục chưa có lịch sử thì nó cho kit lưu một lần, rồi chạy `kb.py init --everyday`, lệnh này chỉ tạo `kb/current-state.md` và `kb/preferences.md` (không cấu hình, không luật, không thư mục nào khác), để Claude viết bằng tiếng của người dùng; `kb/preferences.md` chỉ ghi điều người dùng đã nói. Không worktree, không nhánh, không tự commit, không đẩy, không gate, không câu hỏi nào về merge hay CI; lần lưu ngầm kế tiếp giữ cuốn sổ. Thư mục chưa có tệp nào của người dùng thì nhận một dòng lời thường: sổ có khi thư mục có tệp đầu tiên.
 
+Cuối mỗi việc, phiên ghi đè `kb/current-state.md` bằng nơi công việc đang đứng (chỉ trạng thái hiện tại, ngắn, không nhật ký). Khi một lượt đã đổi tệp mà bản đồ chưa đổi, một hook `Stop` thứ hai (`notebook_nudge.py`) nhắc phiên đúng một lần; nó không bao giờ lặp, còn chế độ developer và phiên có điều phối thì không nhận gì.
+
 **Chuyển sang developer.** Khi muốn đưa bài lên GitHub:
 
 1. Tạo một repo trống trên GitHub.
@@ -104,6 +106,8 @@ Rồi mở phiên mới. Bản cài được lưu cache, và `claude plugin upda
 ## Bắt đầu nhanh
 
 Mở một phiên trong repo ứng dụng và bảo Claude chạy skill `init-kb`. Skill ghi `kb/` (`intent/`, `specs/`, `plans/`, `decisions/`, một `README.md`, `current-state.md`), `.vibemaestro/sdlc.json` và một thư mục luật có một luật mẫu, commit chúng trên branch `chore/kb-init` và push lên. Nó không ghi đè gì và chạy lại an toàn. Merge branch đó trước để khởi đầu gọn; khi nó chưa được merge, `intake` cắt branch intent đầu tiên từ `chore/kb-init`, và pull request đó mang theo commit dựng khung. Rồi mô tả một thay đổi; lời nhắc lúc mở phiên chỉ Claude tới `vibemaestro-sdlc:intake`.
+
+Gõ `/init` có sẵn trong một repo git chưa có `kb/`, hoặc dự án chưa có brain (khi đã cài `vibemaestro-brain`), thì Claude viết xong `CLAUDE.md` còn chạy `init-kb` và mở brain bằng `brain claim`; repo đã có cả hai, và mọi lời gõ khác, giữ nguyên.
 
 Các script đứng sau skill cũng chạy tay được. Các lệnh dùng `$SDLC` cho thư mục plugin: bản đã cài, `~/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/<version>/`, hoặc `plugins/vibemaestro-sdlc` của một bản checkout. Trong phiên, các skill dùng `${CLAUDE_PLUGIN_ROOT}` cho cùng thư mục đó.
 
@@ -160,6 +164,8 @@ Khi nào chúng chạy:
 - Một lần chạy bị bỏ qua không kiểm gì: merge guard giữ kết luận của lần chạy thật gần nhất trên head đó, và một check bắt buộc chưa có lần chạy thật nào là đỏ.
 
 `install_gates.py` không bao giờ ghi đè file: file đã có được giữ nguyên, và `kept (differs)` đánh dấu file khác với thứ plugin sẽ ghi. Với `--update` nó thay các bản chép của chính plugin trong `.vibemaestro/gates/` (workflow, allowlist và danh sách signing-rules là của repo và vẫn được giữ), và `--only` còn cài cổng `signing-rules` (chỉ khi được gọi tên) hay cổng mà một plugin phụ thuộc khai trong `gates/install.json` của nó. Nó không ghi `.vibemaestro/sdlc.json`; nó in ra mỗi cổng đọc những key nào. Có `gh` thì nó kiểm tiếp, chỉ đọc, rằng biến repo tên `ci.runner_var` đã được đặt, và in một cảnh báo khi chưa.
+
+`kb-check` là cổng opt-in: `install_gates.py --only kb-check` ghi `.github/workflows/kb-check.yml` và chép `kb.py`, các module nó nạp và `kb-check.pin` vào `.vibemaestro/gates/`. Workflow chạy trên mỗi PR ready, từ bản chép ở nhánh base và trên cây của PR: `kb.py check`, rồi `kb.py check links`. Chạy cả hai: `check` trần chỉ xét vòng đời tài liệu, còn một hàng plan story không có `Title`, có Title rỗng, dài hơn 80 ký tự hay có dấu backtick chỉ đỏ ở `check links`. File pin ghi commit của kit khi plugin là một bản git checkout (`-` với bản đã cài, vì nó không có `.git`) và sha256 của tập đã chép (băm `<tên>\0<byte>\0` của các file theo thứ tự tên). Bản chép không bao giờ bị ghi đè (`--update` thay chúng), và base chưa có `kb.py` (PR nhận cổng) thì nhận một cảnh báo và qua. Repo đã onboard từ trước nhận cổng cùng cách: một phiên chạy `install_gates.py --only kb-check` rồi mở PR, và một người merge, vì `.github/**` là lớp tin cậy.
 
 Hai kiểm tra nữa chạy bên trong các script bạn vốn đã gọi, không phải workflow:
 
@@ -294,6 +300,7 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | `public.private` | `null` | Các glob giữ riêng khi repo công bố cây của mình: repo công bố mọi file ngoài `kb/` và các glob này. `null` nghĩa là không công bố; `[]` là câu trả lời hợp lệ. Viết một thư mục là `dir/**`. Bật luật `public-tree`. |
 | `evidence.ui_paths` | `null` | Các glob của đường dẫn UI trong repo, cho cổng `pr-evidence`: PR đổi một đường dẫn như vậy cần bằng chứng E2E ghim head. `null` nghĩa là không có UI, không đòi E2E. Chỉ đặt khi mọi plugin đọc config đã biết key này (luật `config-compat`). |
 | `evidence.trusted_app` | `null` | Slug của GitHub App riêng của repo, cho cổng `pr-evidence`: comment vòng mà tài khoản bot của App đó đăng (login `<slug>[bot]`, kiểu Bot, đăng qua chính App đó) được tính như của một thành viên. `null` nghĩa là không App nào được tính. `github-actions` bị từ chối: mọi workflow của repo đều đăng dưới tên nó, kể cả workflow chép lại chữ do một PR viết. Đọc ở base; đặt biến repo `PR_EVIDENCE_APP` cùng slug để comment của App cũng chạy lại một check đỏ. Chỉ đặt khi mọi plugin đọc config đã biết key này (luật `config-compat`). |
+| `evidence.exempt` | `null` | `{"app": "<slug>", "paths": [glob]}`, cho cổng `pr-evidence`: PR do tài khoản bot của App đó mở (login `<slug>[bot]`, kiểu Bot; nếu GitHub ghi một App trên PR thì phải là App đó) được qua mà không cần comment review hay E2E khi mọi file đổi được sửa tại chỗ dưới một glob của `paths` và toàn bộ diff của mỗi file là một dòng đặt image: `newTag: <tag>` hoặc `digest: sha256:<64 hex>` (kustomize `images`), hoặc `image: <tham chiếu>` nêu cùng image với tag hay digest khác; cùng khoá và thụt lề ở hai bên, không gì sau giá trị. Mọi thứ khác bị từ chối: `newName`, khoá khác, comment, hai dòng, file thêm, xoá hay đổi tên. Cổng xét ai mở PR, không xét ai đẩy commit vào nhánh của nó sau đó; miễn trừ chỉ giới hạn ở một dòng tag hay digest của cùng image dưới các đường dẫn được nêu. PR không được miễn có một dòng `not exempt:` nêu điều kiện hỏng, rồi các kiểm tra thường lệ. Thiếu `app` hoặc `paths` rỗng thì không miễn gì. Đọc ở base, nên PR tự thêm key cho mình không bao giờ được miễn. Chỉ đặt khi mọi plugin đọc config đã biết key này (luật `config-compat`). |
 | `sensitive.allowlist` | `".pr-sensitive-allow"` | File các hash sha256 của giá trị mà cổng `pr-sensitive` được cho qua, mỗi dòng một hash kèm `# lý do`. Trong CI đọc từ nhánh base. |
 | `sensitive.scan` | `["pr_body", "pr_comments", "commit_messages"]` | Những gì `pr-sensitive` quét. |
 | `dead_branches.max_merged_on_remote` | `0` | Số branch remote đã merge mà còn sống tối đa trước khi `dead-branches` đỏ. |
@@ -316,10 +323,14 @@ Mọi key của schema 1, kèm mặc định của plugin. Chỗ nào mặc đ�
 | `upstream_issues` | `true` | Được chấp nhận và kiểm hợp lệ; không có gì trong plugin này đọc nó. |
 | `intake.focus` | `"warn"` | `type:` (story, task, bug) và `focus:` (một trọng tâm đang mở của brain) của intent, ở `intent-branch.sh create-intent` và trong `kb.py check intent`: `"required"` từ chối intent thiếu chúng (rc 9), `"warn"` in một dòng WARNING rồi đi tiếp, `"off"` không đọc. Bản phát hành sau đặt mặc định là `"required"`. |
 | `issue.code` | `null` | Mã 3 chữ của repo (3 chữ in hoa, như `KIT`). Khi đặt: `intent-branch.sh create-intent` mở issue trước, ghi khóa `<mã>-<số issue>` vào `key:` của intent và đặt tên branch `intent/<khóa>-<slug>`; file intent giữ tên có ngày, và `kb.py plan status` nối PR qua tên branch nào cũng được. `null`: branch vẫn là `intent/<ngày>-<slug>`, không có khóa. |
+| `infra.label` | `null` | Nhãn mà issue kit mở cho việc cần hạ tầng giúp (runner, biến CI, runner group, secret, cluster, Cloudflare, Vault) mang: `intent-branch.sh create-intent` hoặc `retry-issue` với `--infra-blocked <cái bị chặn> --infra-tried <đã thử>`, hoặc `issue-create` của `kit:gh-write` với `"infra": true`. Repo có nhãn thì issue được gắn nhãn; không có thì tiêu đề mở đầu bằng `[<nhãn>] `. Không bao giờ tạo nhãn. Thân issue mang một dòng `Infra: blocked: <what> · tried: <what>`. `null`: không thêm gì. |
 | `agents.review_model` | `"opus"` | Model của review bằng context mới trước khi ready (`ship`, `before-ready`). |
 | `agents.search_model` | `"haiku"` | Model của một lần tìm chỉ đọc (`brainstorm`). |
 | `agents.worker_model` | `"sonnet"` | Model của worker dựng một task (`plan`, `batonrun`, `workflow-core`). |
-| `kb.spec_warn_bytes` | `40000` | `kb.py check` liệt kê spec lớn hơn mức này. `null` tắt. |
+| `kb.intent_max_bytes` | `16384` | Số byte tối đa của một story (`kb/intent/*.md`): cả file, UTF-8. `kb.py check` cảnh báo từ 80 phần trăm và đỏ khi vượt, với file mà thay đổi chạm tới (file mới, hoặc phần thân đổi; chỉ đổi frontmatter thì không tính). File đã vượt mà thay đổi không chạm tới chỉ bị cảnh báo. Vượt: story giữ yêu cầu, AC và câu hỏi, chuyển ghi chú đọc code sang spec. |
+| `kb.spec_max_bytes` | `32768` | Như trên cho spec (`kb/specs/*.md`). Vượt: tách theo service hoặc module. |
+| `kb.plan_max_bytes` | `32768` | Như trên cho plan (`kb/plans/*.md`). Vượt: tách thành các đợt. |
+| `kb.spec_warn_bytes` | `40000` | Đã bị bỏ: vẫn đọc được, không lỗi và không còn tác dụng; một cảnh báo chỉ sang `kb.spec_max_bytes`. |
 | `tokens.summary_heading` | `"Tóm tắt"` (`"Summary"`) | Tiêu đề phần tóm tắt của thân PR. |
 | `tokens.criteria_heading` | `"Tiêu chí chấp nhận"` (`"Acceptance criteria"`) | Tiêu đề danh sách tiêu chí. |
 | `tokens.evidence_heading` | `"Bằng chứng chạy"` (`"Run evidence"`) | Tiêu đề phần bằng chứng. |
@@ -391,7 +402,7 @@ Chạy các lệnh này trong repo đang có vấn đề. `$SDLC` là thư mục
 | Manifest có vẻ hỏng | `claude plugin validate "$SDLC"` | `Validation passed`, hoặc điều gì sai. |
 | Không thấy lời nhắc nào | `python3 "$SDLC/scripts/sdlc_config.py" get hooks` | `off` nghĩa là repo đã làm hook im. |
 | Cảnh báo về config lúc mở phiên, hoặc một script thoát 65 | `python3 "$SDLC/scripts/kb.py" config check` | Key không hợp lệ và lý do, kèm các cảnh báo, chẳng hạn một key plugin này không biết (plugin mới hơn có thể biết: `claude plugin update vibemaestro-sdlc@vibemaestro`). |
-| Một tài liệu trong `kb/` bị từ chối | `python3 "$SDLC/scripts/kb.py" check` | Lỗi vòng đời trong front matter và các spec vượt `kb.spec_warn_bytes`. |
+| Một tài liệu trong `kb/` bị từ chối | `python3 "$SDLC/scripts/kb.py" check` | Lỗi vòng đời trong front matter, và story, spec hay plan mà thay đổi chạm tới nhưng vượt giới hạn byte (`kb.intent_max_bytes`, `kb.spec_max_bytes`, `kb.plan_max_bytes`). |
 | Một spec bị từ chối | `python3 "$SDLC/scripts/kb.py" check spec <ngày>-<slug>` | Mục thiếu, rỗng hay sai chỗ; chỗ trống còn lại; tiêu chí không có lệnh. Mã thoát 65. |
 | `kb/current-state.md` bị từ chối | `python3 "$SDLC/scripts/kb.py" check current-state` | Từng dòng vi phạm, hoặc kích thước vượt trần. Mã thoát 65. |
 | Liên kết giữa intent, spec và plan bị hỏng | `python3 "$SDLC/scripts/kb.py" check links --base origin/main` | Các liên kết hỏng trong những file thay đổi của bạn. |

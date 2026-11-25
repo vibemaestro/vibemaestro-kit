@@ -565,6 +565,7 @@ new_repo_b() {
   gw fetch -q origin; gw checkout -q -b backmerge/x origin/release
 }
 
+s12() { gw rev-parse "$1" | cut -c1-12; }
 fam_backmerge() { PV=$1
   new_repo_b; pv
   expect B1 0 "a back-merge: the release tip into main, no change file"
@@ -572,6 +573,8 @@ fam_backmerge() { PV=$1
   new_repo_b; echo r2 >> "$W/README.md"; cm "one more"; pv
   expect B2 1 "a back-merge branch with a commit that is not on release"
   hasnt "$OUT" "kind: back-merge" "[B2b] …is not the back-merge kind"
+  has "$OUT" "not a back-merge: $(s12 HEAD) is above the release tip $(s12 origin/release) and is not one merge of it with a commit of the base: it is not a merge (one parent)" \
+      "[B2c] …and says why"
   new_repo_b; gw checkout -q -b hf2 origin/release; echo fix2 >> "$W/plugins/alpha/a.txt"; rel_bump alpha 2.10.1 2.10.2
   cm "second hotfix"; gw push -q origin hf2:release; gw fetch -q origin; gw checkout -q backmerge/x; pv
   expect B3 1 "a back-merge of an older release tip: its versions are not release's"
@@ -580,6 +583,39 @@ fam_backmerge() { PV=$1
   has "$OUT" "kind: back-merge" "[B4b] …is the back-merge kind"
   new_repo_b; echo u > "$W/untracked.txt"; pv
   expect B5 1 "a back-merge with an untracked file in the working tree"
+  # a back-merge that conflicted, resolved as one merge commit of the release tip and main (either parent order), and what is not
+  new_repo_b; gw merge -q --no-ff -m "resolve" origin/main; pv
+  expect B7 0 "a back-merge resolved as one merge commit of the release tip and main"
+  has "$OUT" "kind: back-merge" "[B7b] …is the back-merge kind"
+  gw checkout -q --detach origin/main; gw merge -q --no-ff -m "test merge" backmerge/x; pv
+  expect B7c 0 "CI's test merge of that head into main"
+  has "$OUT" "kind: back-merge" "[B7d] …is the back-merge kind"
+  new_repo_b; gw checkout -q --detach origin/main; gw merge -q --no-ff -m "resolve from main" origin/release; gw checkout -q -B backmerge/x
+  gw checkout -q --detach origin/main; gw merge -q --no-ff -m "test merge" backmerge/x; pv
+  expect B7e 0 "CI's test merge of a resolution made from main (the release tip its second parent)"
+  has "$OUT" "kind: back-merge" "[B7f] …is the back-merge kind"
+  new_repo_b; gw merge -q --no-ff -m "resolve" origin/main; gw checkout -q main; gw merge -q --ff-only origin/main
+  gw merge -q --no-ff -m "the back-merge PR, merged with a merge commit" backmerge/x; echo b3 >> "$W/plugins/beta/b.txt"
+  cfw nxt.md beta patch "beta again"; cm "a feature"; gw push -q origin main; gw checkout -q -b rel2
+  OUT=$(cd "$W" && env -u GITHUB_ACTIONS -u GITHUB_BASE_REF python3 "$PV" cut --public "$P" 2>&1); RC=$?
+  hasnt "$OUT" "holds a hotfix that HEAD lacks" "[B7g] once merged with a merge commit, the next release's cut finds release on main"
+  # side: a commit on no branch of the remote, from main
+  new_repo_b; gw checkout -q -b side origin/main; echo s > "$W/side.txt"; cm "not on main"; gw checkout -q backmerge/x
+  gw merge -q --no-ff -m "resolve with side" side; pv
+  expect B8 1 "a merge of the release tip with a commit not on main"
+  hasnt "$OUT" "kind: back-merge" "[B8b] …is not the back-merge kind"
+  has "$OUT" "not a back-merge: $(s12 HEAD) is above the release tip $(s12 origin/release) and is not one merge of it with a commit of the base: its other parent $(s12 side) is not on the base" \
+      "[B8c] …naming the parent"
+  new_repo_b; gw merge -q --no-ff -m "resolve" origin/main; gw checkout -q main; echo m2 >> "$W/main.txt"; cm "main again"
+  gw push -q origin main; gw fetch -q origin; gw checkout -q backmerge/x; gw merge -q --no-ff -m "resolve again" origin/main; pv
+  expect B9 1 "a second merge above the resolution"
+  has "$OUT" "is not one merge of it with a commit of the base: neither of its parents is the release tip (a merge above another merge?)" \
+      "[B9b] …says why"
+  # git's own octopus drops a parent another one reaches: the three parents are written as they are (the tree of a resolution)
+  new_repo_b; gw merge -q --no-ff -m "resolve" origin/main
+  gw reset -q --hard "$(gw commit-tree "HEAD^{tree}" -p origin/release -p origin/main -p origin/main~1 -m octopus)"; pv
+  expect B10 1 "an octopus merge: the release tip and two main commits"
+  has "$OUT" "is not one merge of it with a commit of the base: it merges 3 parents, not 2" "[B10b] …says why"
   new_repo_r; echo more >> "$W/plugins/alpha/a.txt"; rel_bump alpha 2.9.0 9.9.9; cm "an ordinary PR raises alpha, no change file"
   gw tag origin/release HEAD; pv
   expect B6 1 "an ordinary PR with a tag named origin/release at its head (the tag must not stand in for the branch)"

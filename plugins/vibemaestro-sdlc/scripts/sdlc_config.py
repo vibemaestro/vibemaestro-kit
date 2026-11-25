@@ -64,6 +64,8 @@ DEPRECATED = {
                 "note": "PR bodies have no flow checklist; the pr-evidence gate checks the review and E2E evidence pinned to the head"},
     "pr.tester_exempt": {"since": "2026-10-20", "use": None,
                          "note_key": "config.tester_exempt_note"},
+    "kb.spec_warn_bytes": {"since": "2026-11-17", "use": None,
+                           "note": "a spec is judged by kb.spec_max_bytes (32768 by default): a warning from 80 percent, red over it"},
 }
 
 # {n: function(config of schema n) -> config of schema n + 1}; `migrate` applies them in order up to SCHEMA. The PR that raises
@@ -199,8 +201,9 @@ DEFAULTS = {
     "public": {"private": None},
     # the pr-evidence gate: null (the repo has no UI, no E2E evidence asked), or the globs of its UI paths. Set it in a repo only
     # once every reader in use knows the key (rule config-compat, rollout). trusted_app: null, or the slug of the repo's own GitHub
-    # App, whose round comments count as evidence (its bot account, not a person posting through it)
-    "evidence": {"ui_paths": None, "trusted_app": None},
+    # App, whose round comments count as evidence (its bot account, not a person posting through it). exempt: null, or {app, paths}:
+    # a PR that App's bot opened, whose every changed file is under paths and changes one image line, needs no evidence
+    "evidence": {"ui_paths": None, "trusted_app": None, "exempt": None},
     "sensitive": {"allowlist": ".pr-sensitive-allow", "scan": list(SENSITIVE_SCOPES)},
     "dead_branches": {"max_merged_on_remote": 0},
     "ci": {"runner_var": "CI_RUNNER", "runner_default": "ubuntu-latest", "backend": "github-actions"},
@@ -222,10 +225,15 @@ DEFAULTS = {
     # create-intent then opens the issue first, writes the key `<code>-<issue number>` as the intent's `key:`, and names the branch
     # `intent/<key>-<slug>` (intent_branch.py)
     "issue": {"code": None},
+    # infra.label: null (the default: off), or the name of the label an issue the kit opens for work that needs infrastructure help
+    # carries when the repository has it; when it does not, the title starts with `[<label>] ` instead (infra_mark). Never created
+    "infra": {"label": None},
     # the model a skill passes to the Agent tool, by the subagent's job (see the skills that spawn agents)
     "agents": {"review_model": "opus", "search_model": "haiku", "worker_model": "sonnet"},
-    # a spec over this many bytes is listed by `kb.py check` (~10k tokens at ~4 bytes a token: reading it whole stops being cheap)
-    "kb": {"spec_warn_bytes": 40000},
+    # the byte limits `kb.py check` holds the story (kb/intent), the spec and the plan to: bytes of the whole file, UTF-8; a warning
+    # from 80 percent, red over 100 percent on a file the change touches. spec_warn_bytes is deprecated (DEPRECATED): it is still read
+    # without error and does nothing
+    "kb": {"spec_warn_bytes": 40000, "intent_max_bytes": 16384, "spec_max_bytes": 32768, "plan_max_bytes": 32768},
     "tokens": {
         "summary_heading": "Tóm tắt",
         "criteria_heading": "Tiêu chí chấp nhận",
@@ -353,12 +361,17 @@ def is_present(root):
 # A node is a tuple: ("int", min) ("intnull", min) ("num", min, strict) ("ratio",) ("bool",) ("str",) ("enum", values) ("regex",)
 # ("regexnull",) ("hole", "{x}") ("heading",) ("mark",) ("groupre",) ("strlist",) ("idlist", ids) ("pathlist",) ("relpath",) ("flow",) ("obj", {key: node}) ("objnull", {key: node},
 # required keys) ("tokenlist",) ("gate",) ("keyword",) ("ident",) ("patterns",) ("tables",) ("gitfile",) ("gitprefixes",) ("pageglob",)
-# ("labelre",) ("codenull",)
+# ("labelre",) ("codenull",) ("labelnull",)
 _STR = ("str",)
 ISSUE_CODE_RX = re.compile(r"[A-Z]{3}")     # `issue.code`: the 3-letter repository code of the sandbox slugs (kit, vgo), upper case
 # `ci.runner_default` is a runner label, or this value: no fallback label at all, the workflows install-gates writes fail at the start of a
 # run while the runner variable is unset (an organisation with self-hosted runners only has no hosted machine to fall back to). It holds a
 # space, so it can never equal a label; to a reader that predates the form it is an ordinary string.
+# `infra.label`: a name `gh issue create --label` passes whole (it splits on a comma) and gh_write's label_list takes (1 to 50)
+LABEL_NAME_RX = re.compile(r"(?=.{1,50}$)[^\s,\x00-\x1f\x7f](?:[^,\x00-\x1f\x7f]*[^\s,\x00-\x1f\x7f])?")
+# The one line an issue for work that needs infrastructure help carries, so a reader parses what is blocked and what was tried.
+# `blocked` holds no `·`, so the separator is found without doubt.
+INFRA_LINE_RX = re.compile(r"Infra: blocked: ([^\s·][^·\n]*?) · tried: (\S[^\n]*?)")
 RUNNER_SELF_HOSTED_ONLY = "self-hosted only"
 RUNNER_LABEL = re.compile(r"[A-Za-z0-9._-]+")
 LABEL_PROBE_SECONDS = 1     # the `labelre` probes are 10 characters at most: a regex that needs longer backtracks
@@ -451,7 +464,8 @@ SCHEMA_TREE = {
     }),
     "rules": ("obj", {"dirs": ("pathlist",), "disable": ("strlist",)}),
     "public": ("obj", {"private": ("globsnull",)}),
-    "evidence": ("obj", {"ui_paths": ("globsnull",), "trusted_app": ("appnull",)}),
+    "evidence": ("obj", {"ui_paths": ("globsnull",), "trusted_app": ("appnull",),
+                         "exempt": ("objnull", {"app": ("appnull",), "paths": ("globsnull",)}, ())}),
     "sensitive": ("obj", {"allowlist": ("relpath",), "scan": ("idlist", SENSITIVE_SCOPES)}),
     "dead_branches": ("obj", {"max_merged_on_remote": ("int", 0)}),
     "ci": ("obj", {"runner_var": ("ident",), "runner_default": _STR, "backend": ("backend", ("github-actions",))}),
@@ -476,9 +490,11 @@ SCHEMA_TREE = {
     "upstream_issues": ("bool",),
     "intake": ("obj", {"focus": ("enum", ("required", "warn", "off"))}),
     "issue": ("obj", {"code": ("codenull",)}),
+    "infra": ("obj", {"label": ("labelnull",)}),
     "agents": ("obj", {"review_model": ("enum", MODEL_ALIASES), "search_model": ("enum", MODEL_ALIASES),
                        "worker_model": ("enum", MODEL_ALIASES)}),
-    "kb": ("obj", {"spec_warn_bytes": ("intnull", 1)}),
+    "kb": ("obj", {"spec_warn_bytes": ("intnull", 1), "intent_max_bytes": ("int", 1), "spec_max_bytes": ("int", 1),
+                   "plan_max_bytes": ("int", 1)}),
     "tokens": ("obj", {
         "summary_heading": _STR, "criteria_heading": _STR, "evidence_heading": _STR, "flow_heading": _STR,
         "fixes_line": _STR, "not_run": _STR, "no_state_change": ("tokenlist",), "commit_exception": _STR,
@@ -664,6 +680,10 @@ def _check(node, v, key, out):
     elif kind == "codenull":
         if v is not None and not (isinstance(v, str) and ISSUE_CODE_RX.fullmatch(v)):
             out.append((key, "must be null or the repository's code: 3 capital letters A-Z, like KIT"))
+    elif kind == "labelnull":
+        if v is not None and not (isinstance(v, str) and LABEL_NAME_RX.fullmatch(v)):
+            out.append((key, "must be null or a label name: 1 to 50 characters, no comma or control character, no leading or "
+                             "trailing space"))
     elif kind == "enum":
         if not isinstance(v, str) or v not in node[1]:
             out.append((key, "must be one of %s" % ", ".join(node[1])))
@@ -1229,6 +1249,36 @@ def load_notes(root):
         return []
     probs, notes = check(data)
     return [] if probs else notes
+
+
+def infra_line(blocked, tried):
+    """`Infra: blocked: <blocked> · tried: <tried>`; ValueError naming the part when the line would not parse back (infra_problem)."""
+    line = "Infra: blocked: %s · tried: %s" % (str(blocked).strip(), str(tried).strip())
+    if infra_problem(line) or "\n" in line or "\r" in line:      # a newline in `tried` would pass the one-line check
+        raise ValueError("an Infra line is `Infra: blocked: <what> · tried: <what>`, each part one line and not empty, `blocked` "
+                         "without `·`: %r" % line)
+    return line
+
+
+def infra_problem(body):
+    """None when `body` holds exactly one line `Infra: blocked: <what> · tried: <what>`, else what is wrong."""
+    lines = [x for x in body.split("\n") if x.startswith("Infra:")]
+    if len(lines) != 1:
+        return "the body holds %d lines that start with `Infra:`, not one" % len(lines)
+    if not INFRA_LINE_RX.fullmatch(lines[0].rstrip("\r")):
+        return "%r is not `Infra: blocked: <what> · tried: <what>` (each part not empty, `blocked` without `·`)" % lines[0][:200]
+    return None
+
+
+def infra_mark(label, has_label, title, labels):
+    """(title, labels) of an issue for work that needs infrastructure help, by `infra.label`: unset, both unchanged; the repository
+    has the label, it is added; it does not, the title starts with `[<label>] ` (once). The label is never created."""
+    if not label:
+        return title, list(labels)
+    if has_label:
+        return title, list(labels) + ([] if label.lower() in (x.lower() for x in labels) else [label])
+    prefix = "[%s] " % label
+    return (title if title.startswith(prefix) else prefix + title), list(labels)
 
 
 def render_problems(problems, rel=CONFIG_REL):

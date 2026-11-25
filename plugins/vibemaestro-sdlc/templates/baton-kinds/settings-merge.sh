@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Purpose: add permission rules (and attribution keys that are absent) to a Claude Code settings file; remove none
+# Purpose: add permission rules (and attribution keys that are absent) to a Claude Code settings file; remove only the rules a `remove` key of the rules file names
 # Targets: the settings file named by the first argument; a backup and a run record under the baton state directory
-# Blast: that one file; its other keys and rules are kept (it is rewritten as JSON with two-space indent)
+# Blast: that one file; its other keys and rules are kept, a rule removed is one the rules file's `remove` names, character for character (it is rewritten as JSON with two-space indent)
 # Undo: restores the backup the run record names, only when the record is this run's (it holds the sha256 of the signed plan baton hands undo) and the file still has the merged sha256; else it stops, exit 5
-# Pre: both files are JSON: the settings an object, the rules an object of allow, ask and deny string lists and an optional attribution object; the settings path is not a symbolic link
+# Pre: both files are JSON: the settings an object, the rules an object of allow, ask and deny string lists, an optional `remove` object of the same lists and an optional attribution object; the settings path is not a symbolic link
 # Stops: security-boundary
 # Usage: <settings.json> <rules.json>
 # Expect: backup *
@@ -15,7 +15,11 @@
 # settings-merge` to change it. The contract (the header above, the phases, the write() gate, check, rehearse, sign, run) is the
 # one `baton new` writes without --from: its comments explain each part. Run the launcher bare, one command per call:
 # <launcher> go __NAME__.sh <args>
-# A rule in `allow` widens what a session may do: keep Stops: security-boundary then; `none` fits ask and deny rules only.
+# A rule in `allow` widens what a session may do: keep Stops: security-boundary then; `none` fits ask and deny rules only, and not a `remove` of an ask or deny rule, which widens too.
+# A `remove` object in the rules file ({"allow": [...], "ask": [...], "deny": [...]}) takes out exactly those strings (every copy of one) where the
+# file holds them, before the rules are added; the plan line then names each: "remove allow -N [the rules], ask -N, deny -N". A rule it names
+# that the file lacks changes nothing, so a run that has nothing to add or remove is `same … nothing to do`. The kind does not judge
+# which rule to remove: the session or kit that writes the rules file does, and the owner signs the plan that lists them.
 # An `attribution` object in the rules file is add-only (the kit's setup turns attribution off): with no
 # `attribution` key in the settings it is added whole; an object there gains only the keys it lacks; any other explicit value
 # (`false`, a value of a key already there) is never changed.
@@ -75,9 +79,9 @@ RECORD="$RECORDS/__NAME__-$(path_key).last"
 
 sha_of() { python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
 mode_of() { python3 -I -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])' "$1"; }
-# merged <settings> <rules> [counts|total] — the merged settings on stdout (rules added in order, none removed), or with `counts`
-# the line "allow +N [the rules], ask +N, deny +N[, attribution +N [the keys]]", so the plan line (and the owner's card) names
-# each rule, or with `total` the number of rules and keys added; exit 3 on a file that is not the expected JSON
+# merged <settings> <rules> [counts|total] — the merged settings on stdout (rules named by `remove` taken out, rules added in order), or with `counts`
+# the line "allow +N [the rules], ask +N, deny +N[, remove allow -N [the rules], ask -N, deny -N][, attribution +N [the keys]]", so the plan line (and the owner's card) names
+# each rule, or with `total` the number of rules and keys added or removed; exit 3 on a file that is not the expected JSON
 merged() {
   python3 -I - "$1" "$2" "${3:-}" <<'PY'
 import json, sys
@@ -90,20 +94,31 @@ except (OSError, ValueError) as e:
     sys.exit(3)
 keys = ("allow", "ask", "deny")
 attr = r.pop("attribution", None) if isinstance(r, dict) else None
+has_rem = isinstance(r, dict) and "remove" in r
+rem = r.pop("remove", None) if isinstance(r, dict) else None
 if not isinstance(s, dict) or not isinstance(s.get("permissions", {}), dict) or not isinstance(r, dict) or set(r) - set(keys) \
         or any(not isinstance(r[k], list) or any(not isinstance(x, str) for x in r[k]) for k in r) \
+        or (has_rem and (not isinstance(rem, dict) or set(rem) - set(keys)
+                                 or any(not isinstance(v, list) or any(not isinstance(x, str) for x in v) for v in rem.values()))) \
         or (attr is not None and (not isinstance(attr, dict) or any(not isinstance(v, (str, bool)) for v in attr.values()))):
-    sys.stderr.write("REFUSE the settings must be a JSON object, the rules an object of allow/ask/deny string lists and an "
-                     "optional attribution object of strings and booleans\n")
+    sys.stderr.write("REFUSE the settings must be a JSON object, the rules an object of allow/ask/deny string lists, an optional "
+                     "remove object of the same lists and an optional attribution object of strings and booleans\n")
     sys.exit(3)
 perms = s.get("permissions", {})
 added = {}
 names = {}
+gone = {}
 for k in keys:
     have = perms.get(k, [])
     if not isinstance(have, list):
         sys.stderr.write("REFUSE permissions.%s is not a list\n" % k)
         sys.exit(3)
+    if has_rem:
+        gone[k] = [x for x in have if x in rem.get(k, [])]          # one entry per copy removed, so the plan counts what goes
+        if gone[k]:
+            have = [x for x in have if x not in gone[k]]
+            perms[k] = have
+            s["permissions"] = perms
     new = [x for i, x in enumerate(r.get(k, [])) if x not in have and x not in r[k][:i]]
     added[k] = len(new)
     names[k] = " " + json.dumps(new) if new else ""
@@ -111,6 +126,8 @@ for k in keys:
         perms[k] = have + new
         s["permissions"] = perms                    # a settings file without one gains it only with a rule added
 parts = ["%s +%d%s" % (k, added[k], names[k]) for k in keys]
+if has_rem:
+    parts.append("remove " + ", ".join("%s -%d%s" % (k, len(gone[k]), " " + json.dumps(gone[k]) if gone[k] else "") for k in keys))
 if attr is not None:
     have = s.get("attribution")
     if "attribution" not in s:
@@ -126,7 +143,7 @@ if attr is not None:
 if mode == "counts":
     print(", ".join(parts))
 elif mode == "total":
-    print(sum(added.values()))
+    print(sum(added.values()) + sum(len(v) for v in gone.values()))
 else:
     sys.stdout.write(json.dumps(s, indent=2) + "\n")
 PY

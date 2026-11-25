@@ -16,6 +16,9 @@ the reference files of the skill batonrun (`help <topic>`).
                                                                    merges what a row declared, up to the row's PRs
   baton.py sign --by owner --charter <spec>                        the owner's charter for a focus of the brain, the same dialog:
                                                                    its repositories, kinds, maximum Stops and expiry
+  baton.py sign --by owner --void <binding or id>                  the owner retires a signature that never ran, or withdraws a
+                                                                   queued item, the same dialog; its bytes are kept
+  baton.py queue withdraw <id> --reason <word>                     the session that queued an unsigned item withdraws it
   baton.py run <script> [args...]                                  signed run: rehearse again, run, post-check, undo on failure;
                                                                    one line `run: ok — <n> writes — <run log>` when it holds
   baton.py go [--by coordinator-auto] [--reuse] <script> [args...] check, rehearse, seal, sign, run, post-check and log in one
@@ -39,6 +42,7 @@ the reference files of the skill batonrun (`help <topic>`).
   baton.py log --grants                                            each approval or charter: in force, expired, revoked or
                                                                    damaged, an approval's rows and whether each merged (a plan
                                                                    grant left from before the grants were removed: not in force)
+  baton.py log --grants --json                                     the same as one JSON document (schema 1), read from the same records
   baton.py log --digest [--since <N>h|<N>d|<UTC time>] [--plan <id>]  what was done since then (default 24h) not signed by the
                                                                    owner, grouped by approval with each row's PRs and runs used,
                                                                    and by charter, then the owner's own signatures by kind;
@@ -90,10 +94,17 @@ A signature binds the script's sha256 (and a kept baton's place), its arguments 
 fingerprint of the variables that steer the tools (STEERING) and the plan; `sign` names the seal rehearse printed. `run` consumes
 it, and its writes (DO lines) must be the signed plan. Mode `manual` (the default) accepts only `--by owner`; mode `auto` also
 `--by coordinator-auto`, for `Stops: none` and no argument or Param value that names a Claude Code settings file or its
-directory (settings_value). This guards an honest but fallible session, not one that sets out to forge a record.
-`go --queue` leaves a run that needs the owner in the queue instead of a dialog: the owner signs it later through the same dialog,
+directory (settings_value), or for Stops a window of the owner covers: a W item of the brain the owner pinned for this session
+with a scope, read at each signature and run (`brain windows --json`; window_cover; the record keeps `window`, the log names the
+signer coordinator-auto@W<n>). This guards an honest but fallible session, not one that sets out to forge a record.
+`go --queue` leaves a run that needs the owner in the queue instead of a dialog (never a `Stops: secrets` one: a secret is given
+only to a `run` or `go --row` phase): the owner signs it later through the same dialog,
 in the session that queued it or another Claude Code session (`sign --by owner --queued <id>`), and `run --queued
 <id>` runs it once within 24 h while its plan is the sealed one; `log --queue` lists the items, `log --wait-queued <id>` waits.
+An item that will never run is withdrawn, kept and marked (who, when, why) and never signed or run after: `queue withdraw <id>
+--reason <word>` from the session that queued it (same session id or Claude Code process; an unsigned item only), or the owner's
+`sign --by owner --void <id>` (unsigned or signed). The owner retires an unused signature with `sign --by owner --void <binding>`:
+the record moves to `voided/`, so no run matches it. A used item or signature, or one whose run has started, is refused.
 A plan approval is the owner's one signature of a plan: the session writes a spec (1 to 20 plans pinned by commit, an expiry at
 most 30 days ahead; a spec that still lists `rows` signs those rows only) and runs `sign --by owner --approve <spec>`; the dialog
 reads each plan at its commit through `gh api` with the intent and the spec its `Intent:` and `Spec:` line names, and shows their
@@ -128,7 +139,8 @@ State, outside every repository: $XDG_STATE_HOME/vibemaestro/baton (a relative X
 ~/.local/state/vibemaestro/baton: `mode`, `signatures/`, `used/`, `log.tsv`, `runs/` (the newest 200 run outputs are kept; `runs/LAST` names the newest, written before the script runs),
 `stdin/` (the scripts `go -` read), `inputs/` (file values' copies: a call that never reaches its run phase removes its own,
 the copies runs used are kept, the newest 200, until a call of the same bytes that never runs ends), `records/` (a script's run records and backups), `kept/` (keep records `pack` writes),
-`queue/` (the owner's queue; `queue/used/` the items that ran; both removed 7 days after their expiry), `grants/` (the owner's
+`queue/` (the owner's queue; `queue/used/` the items that ran; both removed 7 days after their expiry; `queue/withdrawn/` the
+withdrawn items, kept), `voided/` (the signatures the owner voided, kept), `grants/` (the owner's
 approvals and charters and `<id>.revoked` files; a plan grant left from before the grants were removed stays there, never in force),
 `touches/` (one marker per use a merge or a `go --row` run took of a plan row).
 
@@ -138,11 +150,13 @@ Exit codes:
       pack: the source fails check as a kept one
   2   environment: no bash, or the state directory cannot be written; pack: a lock held 30 s
   3   refused, nothing ran: no signature matches the script, its arguments, its directory, its environment and its plan (for
-      sign: the seal shown), the mode does not allow the signer, `sign --by owner` has no record of the owner's dialog for
+      sign: the seal shown), the mode does not allow the signer, the owner's window a run was signed under no longer covers it, `sign --by owner` has no record of the owner's dialog for
       that very call (the plugin's hook baton-guard.py writes it when it opens the dialog), or it stopped before the run phase
       (an interrupt or an error); the signature stays unused; a kept baton not pinned on this machine, a loose project root;
       pack: no ok run of these bytes here, the bytes kept under another name, another Stops; a queued item absent, unsigned,
-      expired, used, damaged, or run elsewhere; log --wait-queued: never signable;
+      expired, used, damaged, withdrawn, or run elsewhere; log --wait-queued: never
+      signable; queue withdraw: the item not pending, or queued by another session; sign --by owner --void: the signature or item
+      used, in a run, absent, or changed since the dialog showed it;
       sign --by owner --approve: the approval (the spec, a plan's rows, the directory) changed since the dialog showed it;
       sign --by owner --charter: the charter (the spec, the focus's words, the directory) changed since the dialog showed it
   4   the run or its post-check failed, and undo put the state back
@@ -156,8 +170,10 @@ Exit codes:
   10  permissions --check, or --install-launcher without --force: the registry no longer lists this installed copy and the
       launcher runs another (the session started before a plugin update); restart Claude Code; nothing written
   64  bad usage, a call that does not fit the Params, an unknown prefix or a bare name; pack: no place, a kit, kind or copy name;
-      go --queue in a sandbox, with no session id, with --by, or on a baton the session may sign itself; --queued with a
-      malformed id, another signer, or a word after the id; --approve with another signer, a relative path or a word after
+      go --queue in a sandbox, with no session id, with --by, on a baton the session may sign itself, or on a Stops: secrets
+      baton; --queued with a
+      malformed id, another signer, or a word after the id; --void the same with an id or a binding; queue withdraw with a
+      malformed id or reason; --approve with another signer, a relative path or a word after
       it, or a spec that breaks its rules (each named); --charter with another signer, a relative path or a word after it;
       grant revoke with a malformed id or focus; go --grant and sign --by owner
       --grant (the grants were removed); go --row with a malformed plan line, with --by or --queue, in a sandbox, or for a user:
@@ -3717,11 +3733,13 @@ NO_OWNER_DIALOG = ("sign --by owner is the owner's click in Claude Code's dialog
                    "after the decision card, and the plugin's hook opens the dialog")
 SHAPE = ("the guard asks only for the printed command, exactly: <program> sign --by owner --seal <seal> <absolute script path, "
          "or kit:/kind:/project:/user:<name>> [plain arguments], or <program> sign --by owner --queued <id>, or <program> sign --by "
-         "owner --approve <absolute spec path>, or <program> sign --by owner --charter <absolute spec path>; printable ASCII, no "
+         "owner --void <id or binding>, or <program> sign --by owner --approve <absolute spec path>, or <program> sign --by owner --charter <absolute spec path>; printable ASCII, no "
          "quote or shell character; the program is this plugin's baton.py (`python3 [-I -B …] <it>`) or the installed launcher, by "
          "absolute path")
 SAFE_WORD = re.compile(r"[A-Za-z0-9_./:@%+,=-]+\Z")   # no quote, glob, brace, tilde, `$`, `#`, `\`, `;&|()<>` or space
 SEAL_WORD = re.compile(r"[0-9a-f]{16}\.[0-9a-f]{16}\Z")
+BINDING_WORD = re.compile(r"[0-9a-f]{64}\Z")             # a signature's binding: signatures/<binding>.json
+REASON_WORD = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")   # why a queued item is withdrawn: one word, never free text
 LITERAL = ("write the `sign --by owner …` command alone in the Bash call, with literal arguments: no variable, substitution, "
            "backslash, glob, redirect or wrapper, and nothing before or after it, so the dialog shows exactly what runs")
 # A mode change (`mode manual|auto`, `mode trust|untrust <remote>`) takes the same dialog and record as `sign --by owner`: the ask
@@ -3768,10 +3786,11 @@ def void_asked(session, now=None):
                 pass
 
 
-def record_asked(session, mode, argv, cwd, claude, after, kept=None, queued=None, grant=None):
+def record_asked(session, mode, argv, cwd, claude, after, kept=None, queued=None, grant=None, void=None):
     """claude: [pid, start] of the Claude Code process that asked (None when unknown); after: the hook process's start.
     kept: (real path, sha256) of the pinned file a project: or user: name resolved to when the dialog opened.
-    queued: [id, body_sha256] of the queued item the dialog showed. grant: the digest of the approval body the dialog showed."""
+    queued: [id, body_sha256] of the queued item the dialog showed. grant: the digest of the approval body the dialog showed.
+    void: the sha256 of the signature record's bytes the dialog showed."""
     d = ensure_state()
     os.makedirs(os.path.join(d, "asked"), mode=0o700, exist_ok=True)
     rid = sha256(os.urandom(32))[:32]
@@ -3783,6 +3802,8 @@ def record_asked(session, mode, argv, cwd, claude, after, kept=None, queued=None
         rec["queued"] = list(queued)
     if grant:
         rec["grant"] = grant
+    if void:
+        rec["void"] = void
     write_private(os.path.join(d, "asked", rid + ".json"), json.dumps(rec, sort_keys=True) + "\n")
     return rid
 
@@ -4172,6 +4193,7 @@ def owner_signs(asked):
         raise Stop(REFUSED, "sign refused: %s", why)
     RUN["asked_kept"] = (rec.get("script_path"), rec.get("script_sha256"))
     RUN["asked_queued"], RUN["asked_grant"] = rec.get("queued"), rec.get("grant")
+    RUN["asked_void"] = rec.get("void")
     return rec["id"]
 
 
@@ -4252,6 +4274,8 @@ def owner_shape(cmd):
     rest = ws[i:]
     if rest[:4] == ["sign", "--by", "owner", "--queued"]:
         return rest[1:] if len(rest) == 5 and QUEUE_ID.match(rest[4]) else None
+    if rest[:4] == ["sign", "--by", "owner", "--void"]:
+        return rest[1:] if len(rest) == 5 and (QUEUE_ID.match(rest[4]) or BINDING_WORD.match(rest[4])) else None
     if rest[:4] in (["sign", "--by", "owner", "--approve"], ["sign", "--by", "owner", "--charter"]):
         return rest[1:] if len(rest) == 5 and os.path.isabs(rest[4]) else None
     if rest[:4] != ["sign", "--by", "owner", "--seal"] or len(rest) < 6 or not SEAL_WORD.match(rest[4]):
@@ -4437,12 +4461,24 @@ def guard_owner(inp):
                                                                    remote_canon(argv[2])))
         return "ask", ("baton: the owner %s. Your click is the owner's decision; the session never answers this dialog for you."
                        % change)
-    kept = queued = it = grant = body = focus = None
+    kept = queued = it = grant = body = focus = void = None
     if argv[2] == "--queued":                          # a queued item: the dialog shows its card and binds its bytes
         _p, it, state = load_item(argv[3])
         if state != "pending":
             return deny(queue_why(argv[3], state, it))
         queued = [it["id"], it["body_sha256"]]
+    elif argv[2] == "--void" and QUEUE_ID.match(argv[3]):   # a queued item withdrawn: its card shown, its bytes bound
+        _p, it, state = load_item(argv[3])
+        if state not in ("pending", "signed") or item_in_run(state_dir(), it):
+            return deny(queue_why(argv[3], state, it) if state not in ("pending", "signed") else
+                        "a run of item %s has started and not ended: it is in use" % argv[3])
+        queued = [it["id"], it["body_sha256"]]
+    elif argv[2] == "--void":                           # a signature voided: the record shown, its bytes bound
+        try:
+            _p, data, vrec = unused_signature(state_dir(), argv[3])
+        except Stop as e:
+            return deny(e.text)
+        void = sha256(data)
     elif argv[2] in ("--approve", "--charter"):         # every row (or the focus) resolved here, all shown, the body's digest bound
         here = os.getcwd()
         try:
@@ -4479,9 +4515,18 @@ def guard_owner(inp):
             len(body["rows"]), "" if len(body["rows"]) == 1 else "s", shown_join("\n", approval_lines(body)))
     log_event(ensure_state(), event="owner-ask", result="asked", mode=mode, dir=cwd, args=argv)
     record_asked(sid, mode, argv, os.path.realpath(cwd), [lin[ci][0], lin[ci][2]] if ci is not None else None,
-                 lin[0][2] if lin else None, kept, queued, grant)    # last: the hook voids it when its `ask` cannot be written
+                 lin[0][2] if lin else None, kept, queued, grant, void)    # last: the hook voids it when its `ask` cannot be written
     if card is not None:
         return "ask", card
+    if void is not None:
+        return "ask", shown("baton: the owner voids a signature that never ran, signed by %s at %s:\n%s\nNo run matches it after; "
+                            "its bytes are kept under voided/. Your click is the owner's decision; the session never answers this "
+                            "dialog for you.", vrec.get("signed_by"), vrec.get("time"), shown_join("\n", signature_lines(vrec)))
+    if it is not None and argv[2] == "--void":
+        return "ask", shown("baton: the owner withdraws queued item %s (%s, %s): it is never signed or run after; its bytes are "
+                            "kept under queue/withdrawn/.\n%s\nYour click is the owner's decision; the session never answers this "
+                            "dialog for you.", it["id"], it["name"], "signed" if it.get("signature") else "not signed",
+                            shown_join("\n", item_lines(it)))
     if it is not None:
         return "ask", shown("baton: the owner signs queued item %s (%s), which the session may run until %s:\n%s\nYour click is "
                             "the owner's signature; the session never answers this dialog for you.", it["id"], it["name"],
@@ -4510,16 +4555,18 @@ def queue_dir():
 
 
 def item_digest(item):
-    """sha256 of every field of a queued item but its body_sha256 and signature."""
-    body = {k: v for k, v in item.items() if k not in ("body_sha256", "signature")}
+    """sha256 of every field of a queued item but its body_sha256, signature and withdrawn mark."""
+    body = {k: v for k, v in item.items() if k not in ("body_sha256", "signature", "withdrawn")}
     return sha256(json.dumps(body, sort_keys=True, separators=(",", ":")))
 
 
 def load_item(qid, now=None):
-    """(path, item, state) of a queued item; state is pending, signed, expired, used, damaged (bytes changed since baton wrote
-    them, or not an item: item None, nothing of it is trusted) or absent (path None)."""
+    """(path, item, state) of a queued item; state is withdrawn, pending, signed, expired, used, damaged (bytes changed since
+    baton wrote them, or not an item: item None, nothing of it is trusted) or absent (path None). queue/withdrawn/ is read first:
+    an item there is never signed or run, whatever a copy elsewhere says (a sign that wrote the item back meanwhile)."""
     now = time.time() if now is None else now
-    for path, used in ((os.path.join(queue_dir(), qid + ".json"), False), (os.path.join(queue_dir(), "used", qid + ".json"), True)):
+    for path, used in ((os.path.join(queue_dir(), "withdrawn", qid + ".json"), "withdrawn"),
+                       (os.path.join(queue_dir(), qid + ".json"), False), (os.path.join(queue_dir(), "used", qid + ".json"), "used")):
         if not os.path.lexists(path):
             continue
         try:
@@ -4533,7 +4580,7 @@ def load_item(qid, now=None):
                                              and sig.get("body_sha256") == it["body_sha256"]))):
             return path, None, "damaged"
         if used:
-            return path, it, "used"
+            return path, it, used
         if now > exp:
             return path, it, "expired"
         return path, it, "signed" if sig is not None else "pending"
@@ -4542,7 +4589,10 @@ def load_item(qid, now=None):
 
 def queue_why(qid, state, it):
     """Why item `qid` in `state` cannot be signed (pending excepted) or run (signed excepted)."""
+    w = (it or {}).get("withdrawn") or {}
     return {"absent": "no queued item %s" % qid,
+            "withdrawn": "item %s was withdrawn by %s at %s (%s): it is never signed or run" % (qid, w.get("by", "?"), w.get("time", "?"),
+                                                                                              w.get("reason", "?")),
             "damaged": "item %s is damaged: its bytes changed since baton wrote them, so it is never signed or run" % qid,
             "used": "item %s was used already: one run per signature" % qid,
             "expired": "item %s expired at %s: the session queues it again" % (qid, (it or {}).get("expires")),
@@ -4570,6 +4620,18 @@ def this_claude(lin=None):
         return [lin[ci][0], lin[ci][2]]
     start = proc_start(int(hint)) if re.fullmatch(r"[1-9][0-9]{0,9}", hint) else None
     return [int(hint), start] if start is not None else None
+
+
+def same_claude(a, b):
+    """The same Claude Code process: its pid, and a start time within a minute (a start derived from the clock moves with it; a
+    false match only refuses a sign)."""
+    return (isinstance(a, list) and isinstance(b, list) and len(a) == len(b) == 2 and None not in a and None not in b
+            and a[0] == b[0] and abs(a[1] - b[1]) < 60)
+
+
+def queuer(it, session, claudes):
+    """True when the caller is the one that queued `it`: its session id, or its Claude Code process (a /clear gives a new id)."""
+    return bool(it.get("session") and session == it["session"]) or any(same_claude(it.get("claude"), c) for c in claudes)
 
 
 def prune_queue(q, now):
@@ -4641,6 +4703,8 @@ def signed_queued(qid, dialog):
         refuse("its script changed since it was queued (now %s at sha256 %s): the session queues it again" % (s.real, s.sha))
     it["signature"] = {"by": "owner", "dialog": dialog, "session": session_id(), "time": now_iso(), "body_sha256": it["body_sha256"]}
     write_private(path, json.dumps(it, indent=1, sort_keys=True) + "\n")
+    if load_item(qid)[2] == "withdrawn":                 # withdrawn between the read and the write: the signature never counts
+        refuse("item %s was withdrawn meanwhile: the signature does not count" % qid)
     log_event(d, event="queue", result="signed", name=it["name"], script=it["script_sha256"][:12], binding=it["binding"][:12],
               args=it["args"], dir=it["cwd"], signed_by="owner", mode=it["mode"], output=qid, baton=it["baton"])
     say("signed queued %s by owner: %s, %d planned write%s, from %s; the session runs it before %s", qid, it["name"], len(it["plan"]),
@@ -4666,7 +4730,7 @@ def queue_list(rest):
     if rest:
         raise Stop(USAGE, "usage: baton.py log --queue")
     ids = set()
-    for sub in ("", "used"):
+    for sub in ("", "used", "withdrawn"):
         try:
             ids.update(n[:-5] for n in os.listdir(os.path.join(queue_dir(), sub)) if n.endswith(".json") and QUEUE_ID.match(n[:-5]))
         except OSError:
@@ -4680,7 +4744,9 @@ def queue_list(rest):
             say("%s  %s  (its bytes changed since baton wrote them: never signed, never run)", qid, state)
             continue
         say("%s  %s  %s  created %s  expires %s", qid, state, it.get("name"), it.get("created"), it.get("expires"))
-        if state == "used":
+        if state == "withdrawn":
+            say("  %s", queue_why(qid, state, it))
+        if state in ("used", "withdrawn"):
             continue
         for ln in item_lines(it):
             say("  %s", ln)
@@ -4688,6 +4754,7 @@ def queue_list(rest):
             say("  detail: %s (check and rehearse output)", it["detail"])
         if state == "pending":
             say("  the owner signs, through the owner's dialog: %s sign --by owner --queued %s", entry_command(), qid)
+            say("  the session that queued it withdraws it: %s queue withdraw %s --reason <word>", entry_command(), qid)
         elif state == "signed":
             sig = it["signature"]
             say("  signed by owner at %s; the session runs it: %s run --queued %s", sig.get("time"), entry_command(), qid)
@@ -4723,6 +4790,145 @@ def queue_wait(rest):
         return WAIT_UNMET
     say("wait: %s", queue_why(qid, state, it))
     return REFUSED
+
+
+def run_marks(d):
+    """({binding[:12]: latest run-start}, {binding[:12]: latest run}) from log.tsv, in epoch seconds: a binding whose run-start is at
+    or after its signature and has no later `run` line is being spent (in_run)."""
+    started, ended = {}, {}
+    try:
+        with open(os.path.join(d, "log.tsv"), encoding="utf-8", errors="backslashreplace", newline="") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        lines = []
+    for f in (ln.split("\t")[-len(LOG_FIELDS):] for ln in lines):
+        t = iso_seconds(f[0]) if len(f) >= 12 and f[1] in ("run-start", "run") else None
+        if t is not None:
+            got = started if f[1] == "run-start" else ended
+            got[f[4]] = max(got.get(f[4], t), t)
+    return started, ended
+
+
+def in_run(marks, binding, signed_at):
+    when, b = iso_seconds(str(signed_at)), str(binding)[:12]
+    started, ended = marks
+    return when is not None and started.get(b, -1) >= when and ended.get(b, -1) < started[b]
+
+
+def item_in_run(d, it):
+    """A signed queued item whose run has started and not ended (in_run)."""
+    return isinstance(it.get("signature"), dict) and in_run(run_marks(d), it.get("binding"), it["signature"].get("time"))
+
+
+def unused_signature(d, binding):
+    """(path, bytes, record) of the signature signatures/<binding>.json that no run used and none is spending, else Stop(REFUSED)."""
+    path = os.path.join(d, "signatures", binding + ".json")
+    try:
+        data = read_capped(path, QUEUE_MAX)[0]
+        rec = json.loads(data.decode("utf-8"))
+    except OSError:
+        if glob.glob(os.path.join(glob.escape(d), "used", "*-%s.json" % binding)):
+            raise Stop(REFUSED, "signature %s was used already: one run per signature", binding)
+        raise Stop(REFUSED, "no signature %s", binding)
+    except (ValueError, RecursionError):
+        raise Stop(REFUSED, "signature %s cannot be read", binding)
+    if not isinstance(rec, dict) or rec.get("binding") != binding:
+        raise Stop(REFUSED, "signature %s is not a signature record for that binding", binding)
+    if in_run(run_marks(d), binding, rec.get("time")):
+        raise Stop(REFUSED, "a run of signature %s has started and not ended: it is in use", binding)
+    return path, data, rec
+
+
+def signature_lines(rec):
+    """What the owner voids, from the record's own fields."""
+    return ["  Script:   %s (%s, sha256 %s)" % (os.path.basename(str(rec.get("script_path"))), rec.get("script_path"),
+                                              rec.get("script_sha256")),
+            "  Dir:      %s" % rec.get("cwd"),
+            "  Args:     %s" % (" ".join(quoted(str(a)) for a in rec.get("args") or []) or "(none)"),
+            "  Plan:     %d write%s" % (len(rec.get("plan") or []), "" if len(rec.get("plan") or []) == 1 else "s"),
+            "  Binding:  %s" % rec.get("binding")]
+
+
+def withdraw_item(qid, by, reason):
+    """Move queued item `qid` that has not run to queue/withdrawn/, marked (by, session, time, reason): load_item reads it there
+    first, so it is never signed or run after. by "session": the session or Claude Code process that queued it (queuer), an
+    unsigned item only; by "owner" (sign --by owner --void): unsigned or signed, the item the dialog showed."""
+    d = ensure_state()
+    path, it, state = load_item(qid)
+
+    def refuse(why):
+        log_event(d, event="queue", result="withdraw-refused", name=(it or {}).get("name"), args=(it or {}).get("args"),
+                  dir=(it or {}).get("cwd"), signed_by=by if by == "owner" else None, output=qid)
+        raise Stop(REFUSED, "withdraw refused: %s", why)
+
+    if state == "signed" and by != "owner":
+        refuse("item %s is signed: only the owner withdraws it now (%s sign --by owner --void %s)" % (qid, entry_command(), qid))
+    if state not in ("pending", "signed"):
+        refuse(queue_why(qid, state, it))
+    if by == "owner" and RUN.get("asked_queued") != [qid, it["body_sha256"]]:
+        refuse("item %s changed since the dialog opened (or the dialog showed another one): show it and ask again" % qid)
+    if by != "owner" and not queuer(it, session_id(), [this_claude()]):
+        refuse("item %s was queued by another session: only that session (same session id or Claude Code process), or the owner "
+               "(%s sign --by owner --void %s), withdraws it" % (qid, entry_command(), qid))
+    if item_in_run(d, it):
+        refuse("a run of item %s has started and not ended: it is in use" % qid)
+    dest = os.path.join(queue_dir(), "withdrawn", qid + ".json")
+    try:
+        os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+        os.rename(path, dest)                           # atomic: a run --queued that renames it to used/ first wins, and this fails
+    except OSError as e:
+        refuse("item %s cannot be moved (%s): it was used or withdrawn meanwhile" % (qid, e.strerror or e))
+    try:
+        moved = json.loads(read_small(dest, QUEUE_MAX))
+    except (OSError, ValueError, RecursionError):
+        moved = None
+    if (not isinstance(moved, dict) or moved.get("body_sha256") != it["body_sha256"]
+            or (by != "owner" and moved.get("signature") is not None)):
+        os.rename(dest, path)                           # signed or changed between the read and the move: put back as it is
+        refuse("item %s changed meanwhile (signed by the owner, or its bytes): read it again" % qid)
+    moved["withdrawn"] = {"by": by, "session": session_id(), "time": now_iso(), "reason": reason}
+    write_private(dest, json.dumps(moved, indent=1, sort_keys=True) + "\n")
+    log_event(d, event="queue", result="withdrawn", name=it.get("name"), script=str(it.get("script_sha256"))[:12],
+              binding=str(it.get("binding"))[:12], args=it.get("args"), dir=it.get("cwd"), signed_by=by if by == "owner" else None,
+              output="%s %s" % (qid, reason), baton=it.get("baton"))
+    say("withdrew queued %s (%s) by %s: %s; it is never signed or run, and stays in %s", qid, it.get("name"), by, reason, dest)
+    return OK
+
+
+def cmd_queue(rest):
+    """queue withdraw <id> --reason <word>: the session that queued an unsigned item withdraws it (withdraw_item)."""
+    if len(rest) != 4 or rest[0] != "withdraw" or not QUEUE_ID.match(rest[1]) or rest[2] != "--reason" or not REASON_WORD.match(rest[3]):
+        raise Stop(USAGE, "usage: baton.py queue withdraw <id> --reason <word>  (the 16-hex id log --queue shows; one word of "
+                          "a-z, 0-9 and -, at most 32)")
+    return withdraw_item(rest[1], "session", rest[3])
+
+
+def voided(word, dialog):
+    """sign --by owner --void: a queued item withdrawn by the owner, or the signature signatures/<binding>.json moved to voided/
+    with its bytes, so no run matches it; dialog: the id of the owner's dialog record cmd_sign used up."""
+    if QUEUE_ID.match(word):
+        return withdraw_item(word, "owner", "owner-void")
+    d = ensure_state()
+    try:
+        path, data, rec = unused_signature(d, word)
+        if sha256(data) != RUN.get("asked_void"):
+            raise Stop(REFUSED, "signature %s changed since the dialog opened (or the dialog showed another one): show it and ask "
+                                "again", word)
+        dest = os.path.join(d, "voided", "%s-%d-%s.json" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), os.getpid(), word))
+        os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+        try:
+            os.rename(path, dest)                       # atomic: a run that renames it to used/ first wins, and this fails
+        except OSError as e:
+            raise Stop(REFUSED, "signature %s cannot be moved (%s): it was used or voided meanwhile", word, e.strerror or e)
+    except Stop as e:
+        log_event(d, event="signature", result="void-refused", binding=word[:12], signed_by="owner", output=e.text)
+        raise Stop(REFUSED, "void refused: %s", e.text)
+    log_event(d, event="signature", result="voided", name=os.path.basename(str(rec.get("script_path"))),
+              script=str(rec.get("script_sha256"))[:12], binding=word[:12], args=rec.get("args"), dir=rec.get("cwd"),
+              signed_by="owner", output=dest)
+    say("voided signature %s (%s, signed %s): no run matches it; its bytes are kept in %s", word[:12],
+        os.path.basename(str(rec.get("script_path"))), rec.get("time"), dest)
+    return OK
 
 
 # ── the owner's approval store ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -4888,16 +5094,49 @@ def grant_ids(seen):
     return sorted(set(ids) | set(i for i, _b in seen["signed"] if GRANT_ID.match(i)))   # a signed line whose file is gone: absent
 
 
+GRANTS_JSON_SCHEMA = 1
+
+
+def grant_entry(gid, g, state, why):
+    """One grant of `log --grants --json`, from the load_grant result the text line reads: the same record, state and reason."""
+    e = {"id": gid, "kind": g.get("kind") if g else None, "state": state, "reason": why, "error": g is None and state in ("absent", "damaged"),
+         "signed_at": g.get("created") if g else None, "expires": g.get("expires") if g else None, "dir": g.get("dir") if g else None}
+    try:                                                # a record rewritten with its digest is never in force; still listed, as the text does
+        if g and g["kind"] == "charter":
+            e.update({k: g[k] for k in ("focus", "repos", "kinds", "max_stops")})
+        elif g:
+            plans = [dict(p) for p in g["plan"]]
+            e["rows"] = [{"plan": dict(r["plan"]), "row": r["row"], "prs": r.get("prs") or 1,
+                          "merged": len(touch_uses(touch_key(r["plan"], r["row"])))} for r in g["rows"]]
+            e["plans"] = plans
+    except (AttributeError, TypeError, ValueError, KeyError):
+        e["error"] = True
+        for k in ("plans", "rows"):
+            e.pop(k, None)
+    try:
+        json.dumps(e, allow_nan=False)
+    except ValueError:                                  # a forged record's NaN or Infinity is no JSON: null, and the entry says so
+        e = json.loads(json.dumps(e), parse_constant=lambda _c: None)
+        e["error"] = True
+    return e
+
+
 def grant_list(rest):
-    if rest:
-        raise Stop(USAGE, "usage: baton.py log --grants")
+    as_json = rest == ["--json"]
+    if rest and not as_json:
+        raise Stop(USAGE, "usage: baton.py log --grants [--json]")
     seen = grant_log()
     ids = grant_ids(seen)
-    if not ids:
+    if not ids and not as_json:
         say("grants: none")
         return OK
     rows = [(gid,) + load_grant(gid, seen, kind=None) for gid in ids]
-    for gid, g, state, why in sorted(rows, key=lambda r: (str((r[1] or {}).get("created", "")), r[0])):
+    rows.sort(key=lambda r: (str((r[1] or {}).get("created", "")), r[0]))
+    if as_json:                                         # json.dumps writes ASCII only, so esc changes no byte of a line
+        for ln in json.dumps({"schema": GRANTS_JSON_SCHEMA, "grants": [grant_entry(*r) for r in rows]}, indent=1, sort_keys=True).split("\n"):
+            say("%s", ln)
+        return OK
+    for gid, g, state, why in rows:
         if g is None:
             say("%s  %s  (%s)", gid, state, why)
             continue
@@ -5388,12 +5627,222 @@ def focus_item(focus):
     return it, None
 
 
+# ── the owner's delegation window ──────────────────────────────────────────────────────────────────────────────────────────────
+# A window is a W item the owner pinned in the brain through the brain's own owner dialog, with a scope (`brain owner add --kind
+# window --lower <word>… [--exclude <word>…]`): the Stops categories, or the kit batons by name, whose runs mode auto may sign as
+# coordinator-auto, for the session that pinned it, until its expiry (at most WINDOW_LIFE_MAX after it was pinned). The brain is
+# the one record: baton keeps no copy and reads it at each signature and each run (`brain windows --json` of the brain installed
+# beside this copy, which verifies the whole chain first), so an unpin, a close or an expiry ends it at once. Never lowered,
+# whatever a window says: a WINDOW_NEVER category, a WINDOW_NEVER_BATONS baton, a call naming a Claude Code settings file and
+# security-boundary of a baton that is not a kit: one (each may change the machine's own permissions, which would outlive the
+# window), a category or baton the window excludes, a worker
+# session, mode manual, `go --row` and `go --queue`. The brain refuses such a scope before its dialog; this is what enforces it.
+# Like the rest of baton, it guards against slips, not a same-user process that rewrites the brain's chain or its session id.
+WINDOW_NEVER = ("secrets", "cluster-lane", "irreversible-delete", "history-rewrite", "money-org")
+WINDOW_NEVER_BATONS = ("kit:bootstrap", "kit:coordinator-bootstrap", "kit:permissions-upgrade", "kit:plugin-install",
+                       "kind:settings-merge")   # with KIT_ALIASES' old names, which the brain cannot resolve
+WINDOW_LIFE_MAX = 24 * 3600
+WINDOW_ID = re.compile(r"W[1-9][0-9]*\Z")
+# The signing floor: the files that decide who signs and what a window may lower. A window never lowers kit:owner-merge of a pull
+# request that changes one (its old name too, for a rename): otherwise a window could merge the change that widens windows.
+WINDOW_FLOOR_PATHS = (
+    ".github/workflows/signing-rules.yml",                  # the job that makes a change of the signing lists an owner merge
+    ".vibemaestro/sdlc.json",                               # merge config: deny globs, required and touch checks
+    "plugins/vibemaestro-brain/.claude-plugin/plugin.json",  # what the brain plugin loads
+    "plugins/vibemaestro-brain/hooks/hooks.json",           # registers the brain's owner guard
+    "plugins/vibemaestro-brain/scripts/brain.py",           # the owner commands' grammar the dialog is built from
+    "plugins/vibemaestro-brain/scripts/brain_hook.py",      # the brain's owner guard (guard-owner)
+    "plugins/vibemaestro-brain/scripts/brain_store.py",     # owner items, a window's scope and `brain windows`
+    "plugins/vibemaestro-brain/scripts/pyrun.sh",           # runs the brain's hooks, its owner guard among them
+    "plugins/vibemaestro-sdlc/.claude-plugin/plugin.json",  # what this plugin loads
+    "plugins/vibemaestro-sdlc/batons/owner-merge.sh",       # the owner merge itself
+    "plugins/vibemaestro-sdlc/gates/baton.py",              # a copy there shadows scripts/baton.py for the signing-rules gate
+    "plugins/vibemaestro-sdlc/gates/gate_common.py",        # the signing-rules gate's helper
+    "plugins/vibemaestro-sdlc/gates/merge_guard.py",        # what kit:merge-pr merges without the owner
+    "plugins/vibemaestro-sdlc/gates/signing_rules.py",      # the signing-rules gate and its list
+    "plugins/vibemaestro-sdlc/hooks/hooks.json",            # registers the owner's dialog guard and the settings guard
+    "plugins/vibemaestro-sdlc/scripts/baton-guard.py",      # the owner's dialog guard
+    "plugins/vibemaestro-sdlc/scripts/baton-launcher.py",   # the launcher the permission rules name
+    "plugins/vibemaestro-sdlc/scripts/baton.py",            # the runner: who signs, and this check
+    "plugins/vibemaestro-sdlc/scripts/kb_plan.py",          # the touch kinds the merge guard and the gate read
+    "plugins/vibemaestro-sdlc/scripts/pyrun.sh",            # runs every hook, the guards among them
+    "plugins/vibemaestro-sdlc/scripts/sdlc_config.py",      # MERGE_DENY_DEFAULT and the config's reader
+    "plugins/vibemaestro-sdlc/scripts/settings-guard.py",   # the guard on widening Claude Code's settings
+)
+WINDOW_FLOOR_PREFIXES = (".vibemaestro/",)                # the repository's gate config, vendored gates and project batons
+WINDOW_FLOOR_BATON_DIRS = ("batons", "templates/baton-kinds")   # an edit, a removal or a rename there changes who signs a baton
+OWNER_MERGE_VALUED = ("--accept-red", "--require-image")    # kit:owner-merge's options that take a value
+PR_FILES_CAP = 3000                                         # GitHub lists no more files of a pull request: a list that long is cut
+
+
+def window_time(v):
+    """Seconds since the epoch of a brain time (YYYY-MM-DDTHH:MM:SSZ, or +00:00 for Z), or None."""
+    return iso_seconds(v[:-len("+00:00")] + "Z" if isinstance(v, str) and v.endswith("+00:00") else str(v))
+
+
+def log_last_time():
+    """The newest time in the last 64 KiB of log.tsv, or None: a clock behind it was set back, and reads no window. The newest, not
+    the last line's: a clock set back writes later lines with earlier times."""
+    try:
+        with open(os.path.join(state_dir(), "log.tsv"), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            tail = f.read().decode("utf-8", "replace").split("\n")
+    except OSError:
+        return None
+    return max((t for t in (iso_seconds(ln.split("\t")[-len(LOG_FIELDS):][0]) for ln in tail if ln) if t is not None), default=None)
+
+
+def window_miss(w, sid, word, stops, now):
+    """Why window `w` (a brain item) does not cover a call of baton `word` with these Stops from session `sid`; None when it does."""
+    if not isinstance(w, dict) or not WINDOW_ID.match(str(w.get("id"))):
+        return "a window item that cannot be read"
+    wid, lowers, excludes = w["id"], w.get("lowers"), w.get("excludes") or []
+    if not (isinstance(lowers, list) and lowers and all(isinstance(x, str) for x in lowers)
+            and isinstance(excludes, list) and all(isinstance(x, str) for x in excludes)):
+        return "%s lowers no signing (it has no scope)" % wid
+    if w.get("status") != "live" or w.get("import") is not None:
+        return "%s is not a live window pinned here" % wid
+    if w.get("session") != sid:
+        return "%s was pinned by another session" % wid
+    born, ends = window_time(w.get("created")), window_time(w.get("expires"))
+    if born is None or ends is None or ends - born > WINDOW_LIFE_MAX:
+        return "%s has no readable time, or lasts more than %d hours" % (wid, WINDOW_LIFE_MAX // 3600)
+    if not born <= now < ends:
+        return "%s is not in force now (pinned %s, until %s)" % (wid, w.get("created"), w.get("expires"))
+    out = [x for x in stops + [word] if x in excludes]
+    if out:
+        return "%s excludes %s" % (wid, ", ".join(out))
+    if not (word.startswith("kit:") and word in lowers or all(x in lowers for x in stops)):
+        return "%s does not lower %s" % (wid, ", ".join(x for x in stops if x not in lowers))
+    return None
+
+
+def in_baton_dir(path):
+    """`path` lies under a WINDOW_FLOOR_BATON_DIRS directory at any depth, case-folded (signing_rules.in_baton_dir)."""
+    parent = path.casefold().split("/")[:-1]
+    return any(parent[i:i + len(d.split("/"))] == d.split("/") for d in WINDOW_FLOOR_BATON_DIRS
+               for i in range(len(parent) - len(d.split("/")) + 1))
+
+
+def on_floor(f):
+    """The names of GitHub's file entry `f` that lie on the signing floor: a WINDOW_FLOOR_PATHS file or one under a
+    WINDOW_FLOOR_PREFIXES directory (either name), or a baton file that is not newly added (either name)."""
+    names = [f["filename"]] + ([f["previous_filename"]] if "previous_filename" in f else [])
+    return [n for n in names if n in WINDOW_FLOOR_PATHS or n.startswith(WINDOW_FLOOR_PREFIXES)
+            or in_baton_dir(n) and f.get("status") != "added"]
+
+
+def floor_touch(args):
+    """Why a kit:owner-merge call (args: its groups `<owner/repo> <pr> <sha40> [options]`) changes the signing floor (on_floor),
+    or None when no pull request of it does. The files are GitHub's for each pull request (the old name of a renamed file too); a
+    call or an answer that cannot be read fails closed."""
+    prs, i = [], 0
+    while i < len(args):
+        if args[i] in OWNER_MERGE_VALUED:
+            i += 2
+        elif args[i].startswith("--"):
+            i += 1
+        else:
+            prs.append(tuple(args[i:i + 2]))
+            i += 3
+    for pr in prs:
+        if len(pr) != 2 or not WORD_RE["repo"].match(pr[0]) or not WORD_RE["int"].match(pr[1]):
+            return "a pull request of the owner merge cannot be read from its arguments"
+        name = "%s#%s" % pr
+        try:
+            r = subprocess.run(["gh", "api", "repos/%s/pulls/%s/files?per_page=100" % pr, "--paginate"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=GH_READ_TIMEOUT, universal_newlines=True,
+                               errors="replace")
+            text, hit, at, count = r.stdout, [], 0, 0
+            while r.returncode == 0 and text[at:].strip():          # gh joins the pages into one array; one array per page reads the same
+                page, at = json.JSONDecoder().raw_decode(text, len(text) - len(text[at:].lstrip()))
+                if not isinstance(page, list) or not all(isinstance(f, dict) and isinstance(f.get("filename"), str)
+                                                         and isinstance(f.get("previous_filename", ""), str) for f in page):
+                    raise ValueError("a page that is not a list of files")
+                hit += [n for f in page for n in on_floor(f)]
+                count += len(page)
+            if r.returncode != 0 or not count or count >= PR_FILES_CAP:
+                raise ValueError("gh rc %d, %d files%s" % (r.returncode, count, " (GitHub's cap: the list may be cut)"
+                                                           if count >= PR_FILES_CAP else ""))
+        except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError, RecursionError) as e:
+            return "the changed files of %s cannot be read (%s)" % (name, e)
+        if hit:
+            return "a window never lowers an owner merge of %s: it changes %s, which decides who signs" % (name, ", ".join(sorted(set(hit))))
+    return None
+
+
+def window_cover(s, stops, args):
+    """(window, None) when a live window of this session's brain covers a coordinator-auto call of `s` with these declared Stops;
+    else (None, why), why None when there is nothing to say (no brain here, no live window in it, the brain unreadable: the
+    owner signs, exactly as with no window)."""
+    sid = session_id()
+    if in_sandbox() or not sid:
+        return None, None
+    word = s.baton_id().split("@")[0]                    # kit:<name> by its file (an old alias: the new name), kind:, project:, scratch
+    brain = brain_script()
+    if brain is None:
+        return None, None
+    try:                                                 # with the session id: the brain reads the session's project, the one it pinned in
+        r = subprocess.run([sys.executable, brain, "windows", "--json"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=BRAIN_TIMEOUT, universal_newlines=True, errors="replace")
+        data = json.loads(r.stdout) if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, RecursionError):
+        data = None
+    ws = data.get("windows") if isinstance(data, dict) else None
+    ws = [w for w in ws if isinstance(w, dict) and w.get("lowers")] if isinstance(ws, list) else []
+    if not ws:                                           # a window with no scope lowers nothing: the card says nothing of it
+        return None, None
+    if word in WINDOW_NEVER_BATONS or s.value_stop is not None or any(w in WINDOW_NEVER for w in stops):
+        return None, ("a window never lowers %s" % (word if word in WINDOW_NEVER_BATONS else "a call naming a Claude Code settings "
+                      "file" if s.value_stop is not None else ", ".join(w for w in stops if w in WINDOW_NEVER)))
+    if "security-boundary" in stops and not s.kit:      # only reviewed kit code: a session's or a kept baton may write the settings
+        return None, "a window never lowers security-boundary of a baton that is not a kit: (it may change the machine's permissions)"
+    now = time.time()
+    floor = [t for t in (window_time(data.get("last_t")), log_last_time()) if t is not None]
+    if floor and now < max(floor):
+        return None, "this clock is behind the newest line the brain or baton wrote: no window is read"
+    misses = []
+    for w in ws:
+        miss = window_miss(w, sid, word, list(stops), now)
+        if miss is None:
+            floor = floor_touch(args) if word == "kit:owner-merge" else None
+            return (None, floor) if floor else (w, None)
+        misses.append(miss)
+    return None, "; ".join(misses)
+
+
+def window_record(w):
+    """What a signature record keeps of the window it was signed under."""
+    return {"id": w["id"], "created": w.get("created"), "expires": w.get("expires"), "lowers": w.get("lowers"),
+            "excludes": w.get("excludes") or []}
+
+
+def lowerable(signer, mode, stops, s):
+    """A coordinator-auto signature or run that `allowed` refuses only for its declared Stops, which a window may lower."""
+    return signer == "coordinator-auto" and mode == "auto" and bool(stops) and not s.value_why()
+
+
 def focus_words(it):
     """What the card shows of the focus: its text, goal, the owner's quote and where, done when and not doing; focus_sha256 is
     their digest, so a word changed between the dialog and the click is not signed."""
     src = it.get("source") if isinstance(it.get("source"), dict) else {}
     return {"text": it.get("text"), "goal": it.get("goal"), "quote": src.get("quote"), "where": src.get("where"),
             "done": it.get("done"), "not_doing": it.get("not_doing")}
+
+
+# Characters that draw nothing yet are not Cc, Cf, Mn or Me: the fillers and Unicode's Default_Ignorable_Code_Point ranges, as the
+# brain's own text guard refuses them (brain_store.INVISIBLE, DEFAULT_IGNORABLE; a Python's unassigned ones included).
+BLANK_RANGES = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
+                (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFE00, 0xFE0F),
+                (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+
+
+def has_words(v):
+    """True for a string with a character that shows: not a space, a control, a format character, a combining mark or one of
+    BLANK_RANGES alone."""
+    return isinstance(v, str) and any(not c.isspace() and unicodedata.category(c) not in ("Cc", "Cf", "Mn", "Me") and
+                                      not any(a <= ord(c) <= b for a, b in BLANK_RANGES) for c in v)
 
 
 def charters_in_force(focus, here, key, seen=None):
@@ -5505,11 +5954,14 @@ def charter_lines(g):
 
 
 def charter_card(g, it):
-    """The dialog's card of a charter: the focus and its words as the brain holds them, the envelope, what it covers, what never,
-    and what the owner types."""
+    """The dialog's card of a charter: the focus and its words as the brain holds them (a focus with no owner's quote and where, or
+    a blank one, shows `opened by the session` in the quote's place), the envelope, what it covers, what never, and what the owner
+    types."""
     w = focus_words(it)
+    owners = all(has_words(w[k]) for k in ("quote", "where"))     # the brain's fields, never the focus's text
     head = [shown("baton: the owner signs a charter for focus %s %s (goal %s):", g["focus"], w["text"], w["goal"]),
-            shown('  Quote:     "%s" · %s', w["quote"], w["where"]), shown("  Done when: %s", w["done"])]
+            shown('  Quote:     "%s" · %s', w["quote"], w["where"]) if owners else shown("  opened by the session"),
+            shown("  Done when: %s", w["done"])]
     head += [shown("  Not doing: %s", w["not_doing"])] if w["not_doing"] else []
     tail = [shown("  Covers:    the merges and `go --row` runs of every plan whose frontmatter says `focus: %s`, when every change is a "
                   "touch its row declares and inside this envelope, as many PRs and runs as the row says", g["focus"]),
@@ -5897,6 +6349,11 @@ def cmd_sign(rest):
         if rest[1] != "owner" or len(rest) != 4 or not QUEUE_ID.match(rest[3]):
             raise Stop(USAGE, "usage: baton.py sign --by owner --queued <id>  (only the owner signs a queued item; nothing follows the id)")
         return signed_queued(rest[3], owner_signs(asked))
+    if rest[2:3] == ["--void"]:                         # a signature voided or a queued item withdrawn: the owner only, nothing after
+        if rest[1] != "owner" or len(rest) != 4 or not (QUEUE_ID.match(rest[3]) or BINDING_WORD.match(rest[3])):
+            raise Stop(USAGE, "usage: baton.py sign --by owner --void <id or binding>  (only the owner voids; a queued item's 16-hex "
+                              "id or a signature's 64-hex binding; nothing follows it)")
+        return voided(rest[3], owner_signs(asked))
     if rest[2:3] and rest[2].split("=")[0] == "--grant":
         raise Stop(USAGE, "sign --grant: the plan grants were removed; the owner signs a plan's trust-layer touches with --approve")
     if rest[2:3] == ["--approve"]:                      # a plan approval: the owner only, one absolute spec path after it
@@ -5936,8 +6393,10 @@ def signed(by, seal, path, args, out, dialog=None):
     binding = binding_of(s.bind_sha, args, cwd, env, s.inputs)
     stops, _u = s.stops()
     why = allowed(by, mode, stops, s.value_why())
-    common = dict(name=s.name, script=s.sha[:12], binding=binding[:12], args=args, dir=cwd, signed_by=by, mode=mode,
-                  baton=s.baton_id())
+    win = window_cover(s, stops, args)[0] if why and lowerable(by, mode, stops, s) else None
+    why = None if win else why
+    common = dict(name=s.name, script=s.sha[:12], binding=binding[:12], args=args, dir=cwd,
+                  signed_by="%s@%s" % (by, win["id"]) if win else by, mode=mode, baton=s.baton_id())
     if why is None and by == "owner" and not dialog:
         why = "an owner signature needs the owner's dialog (cmd_sign)"
     if why is None and by == "owner" and s.kept is not None and RUN.get("asked_kept") != (s.real, s.sha):
@@ -5963,13 +6422,15 @@ def signed(by, seal, path, args, out, dialog=None):
            "env": env, "plan_sha256": plan_sha(plan), "plan": plan, "stops": s.call_stops(), "signed_by": by, "mode": mode, "time": now_iso()}
     if dialog:
         rec["dialog"] = dialog
+    if win:
+        rec["window"] = window_record(win)
     if s.inputs is not None:
         rec["inputs"] = s.inputs
     text = json.dumps(rec, indent=1, sort_keys=True) + "\n"
     RUN["signed"] = (d, os.path.join(d, "signatures", binding + ".json"), common, text)    # before the write: go may withdraw it
     write_private(RUN["signed"][1], text)
     log_event(d, event="sign", result="signed", **common)
-    say("signed %s by %s (mode %s): binding %s, %d planned write%s; one run, from %s%s", s.name, by, mode, binding[:12], len(plan),
+    say("signed %s by %s (mode %s): binding %s, %d planned write%s; one run, from %s%s", s.name, common["signed_by"], mode, binding[:12], len(plan),
         "" if len(plan) == 1 else "s", cwd, shown("; %s %s sha256 %s, %s", s.word, s.real, s.sha, s.label()) if s.kept is not None
         else "", out=out)
     return OK
@@ -6109,6 +6570,15 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None, planned=None)
     signer = rec.get("signed_by")
     stops, _u = s.stops()
     why = None if planned is not None else allowed(signer, mode, stops, s.value_why())   # a plan run's check is its match, below
+    signed_under = rec.get("window") if isinstance(rec.get("window"), dict) else None
+    if why and signed_under and lowerable(signer, mode, stops, s):    # the window it was signed under, read again now
+        win, wwhy = window_cover(s, stops, args)
+        if win and win["id"] == signed_under.get("id"):
+            why, signer = None, "%s@%s" % (signer, win["id"])
+        else:
+            why = "%s; window %s, which it was signed under, does not cover it now: %s" % (
+                why, signed_under.get("id"), "%s covers it instead" % win["id"] if win
+                else wwhy or "the brain lists no live window for this session")
     if why is None and signer == "owner" and (rec.get("v") != 2 or not rec.get("dialog")):
         why = "the signature names no owner's dialog (a baton that signs without one wrote it): have it signed again"
     if why:
@@ -6174,7 +6644,7 @@ def signed_run(path, args, quiet=None, preamble=None, queued=None, planned=None)
                     os.rename(sig, spent or os.path.join(queue_dir(), "used", item["id"] + ".json"))
                     consumed = RUN["consumed"] = True
                 except OSError:
-                    refuse("the signature was used meanwhile", signer, out_path)
+                    refuse("the signature was used, voided or withdrawn meanwhile", signer, out_path)
             rc, lines, done = run_phase(s, args, "run", sinks, plan=rec.get("plan") or [], undo_only=undo_only)
             unanswered = rc == UNANSWERED_RC and lines[-1:] == [UNANSWERED_LINE]
             if rc != 0 or not verdict_ok(lines, "run"):
@@ -6461,7 +6931,10 @@ def cmd_go(rest):
         if probs:
             print_problems(s, probs)
             raise Stop(BAD_SCRIPT, "check failed: fix the script, then check again")
-        args = bind_call(s, args)                       # Params: every value checked, file values copied, before anything runs
+        if queue and "secrets" in s.stops()[0]:         # a secret is given only to a run or go --row phase: a queued run never gets one
+            raise Stop(USAGE, "go --queue: %s declares Stops: secrets, and a secret is given only to a run or go --row phase, so "
+                              "a queued run can never hold one; run it with go (the owner's dialog) or go --row", s.name)
+        args = bind_call(s, args)                     # Params: every value checked, file values copied, before anything runs
         stale = None if reuse else input_staleness(s)
         if stale:
             key, p, why, sha = stale
@@ -6488,6 +6961,9 @@ def cmd_go(rest):
         stops, _u = s.stops()
         mode, chosen = mode_state()
         why = allowed("coordinator-auto", mode, stops, s.value_why())
+        win, wwhy = (window_cover(s, stops, args) if why and not queue and row is None and lowerable("coordinator-auto", mode, stops, s)
+                     else (None, None))
+        why = None if win else why
         if queue and not why:
             raise Stop(USAGE, "go --queue: %s needs no owner here (mode %s, Stops none): go without --queue runs it", s.name, mode)
         if why and row is not None:                     # where go would stop for the owner, the owner's approval or charter may cover it
@@ -6524,6 +7000,8 @@ def cmd_go(rest):
                 return OK
             for ln in card:
                 say("%s", ln)
+            if wwhy:                                    # a live window of this session's brain that does not cover it
+                say("%s", shown("window: not lowered: %s", wwhy))
             say("detail: %s (check and rehearse output)", detail)
             sign_cmd, run_cmd = owner_commands(path, args, seal)
             say("script: %s", s.real)
@@ -6609,7 +7087,7 @@ def cmd_go(rest):
             say("go: stopped at %s (exit %d): %s", "post-check" if at_check else "run", rc, result)
             return rc if rc != OK else UNKNOWN
         step = "log"
-        tail = " — " + planned[1]["signed_by"] if planned else ""
+        tail = " — " + planned[1]["signed_by"] if planned else " — window " + win["id"] if win else ""
         if s.kept is None:
             say("go: ok — %d write%s — %s%s", len(plan), "" if len(plan) == 1 else "s", out_path, tail)
         else:                                           # go holds the sign line back: its one line carries the label
@@ -6722,7 +7200,7 @@ def digest_list(rest):
         lines = []
     recs = [f for f in (ln.split("\t")[-len(LOG_FIELDS):] for ln in lines) if len(f) >= 12]   # a glued fragment does not shift its fields
     ended = {f[11] for f in recs if f[1] == "run"}      # the run logs that have a `run` line: a start with none was killed or is still going
-    top, counts, acts, owner = [], {}, {}, dict.fromkeys(("grant", "sign", "merge", "queue"), 0)
+    top, counts, acts, owner, wins = [], {}, {}, dict.fromkeys(("grant", "sign", "merge", "queue"), 0), {}
     for f in recs:
         t = iso_seconds(f[0])
         if t is not None and t < since:                 # a time that cannot be read is listed: the window never hides a line
@@ -6742,9 +7220,11 @@ def digest_list(rest):
             line = [f[0], f[2], f[7], "touches " + f[11], "-"] + ([first_arg(f[5])] if under else [])   # under it: the PR too
         else:
             continue                                    # a refused attempt, a marker, or a start that has its end line
-        who = f[7].split(":", 1)[0] if f[7].startswith(("approval:", "charter:", "plan:")) else f[7]
+        win = f[7].split("@", 1)[1] if f[7].startswith("coordinator-auto@") else None     # signed under the owner's window
+        who = (f[7].split(":", 1)[0] if f[7].startswith(("approval:", "charter:", "plan:")) else
+               "coordinator-auto" if win else f[7])
         counts[who] = counts.get(who, 0) + 1
-        (acts.setdefault(under, []) if under else top).append(shown_join("\t", line))
+        (wins.setdefault(win, []) if win else acts.setdefault(under, []) if under else top).append(shown_join("\t", line))
     holds, note = hold_events(since)
     if only is None:
         say("digest since %s", iso_at(since))
@@ -6772,6 +7252,10 @@ def digest_list(rest):
                 say("%s", shown_join("\t", ["  hold", t, event, detail or "-"]))
         else:
             approval_digest(gid, seen, now, acts.get(gid, []), holds.get("approval-" + gid, []))
+    for wid in sorted(wins) if only is None else []:
+        say("%s", shown("window %s of the brain: %d act(s) signed coordinator-auto under it", wid, len(wins[wid])))
+        for a in wins[wid]:
+            say("%s", a)
     say("owner signatures in the window, any act: plan dialogs %d, per-run %d (merges through kit:merge-pr %d), queued %d",
         owner["grant"], owner["sign"],
         owner["merge"], owner["queue"])
@@ -8156,6 +8640,19 @@ def mention_probes():
             ("a grep", "grep -rn 'baton sign --by owner' kb"), ("a grep", 'grep -rn "/baton mode auto" .')]
 
 
+STALE_ALLOW_KIT = ": kit:bootstrap removes it"   # a stale allow rule in the user settings ends so: the one rule kind kit:bootstrap removes
+
+
+def stale_allows(rules):
+    """The texts of the allow Bash rules in `rules` (as read_rules gives them) that name baton and an sdlc version other than the
+    one this baton.py runs from. Nothing when this copy is not under a version directory: the installed version is then unknown."""
+    mine = VERSIONED.search(os.path.abspath(__file__) + "/")
+    if mine is None:
+        return []
+    return [text for k, tool, content, text, _w in rules if k == "allow" and tool == "Bash" and "baton" in (content or "")
+            and VERSIONED.search(content or "") and VERSIONED.search(content).group(1) != mine.group(1)]
+
+
 def perm_findings(sources):
     """[(kind, text)]: kind is MISSING, STALE, UNSAFE or UNREADABLE. Empty when the rules in force hold the snippet's split."""
     rules, probs = load_rules(sources)
@@ -8216,7 +8713,8 @@ def perm_findings(sources):
                         % (q(text), where)))
         m = VERSIONED.search(content or "")
         if m and (mine is None or m.group(1) != mine.group(1)) and "baton" in (content or ""):
-            out.append(("STALE", "%s (%s) names version %s" % (q(text), where, m.group(1))))
+            kit = STALE_ALLOW_KIT if where.startswith("user ") and stale_allows([(k, tool, content, text, where)]) else ""
+            out.append(("STALE", "%s (%s) names version %s%s" % (q(text), where, m.group(1), kit)))
     if not os.path.exists(launcher_path()):
         out.append(("MISSING", "the launcher %s is not installed" % launcher_path()))
     elif not launcher_current():
@@ -8282,7 +8780,7 @@ def session_warning():
         # what each kit clears (gates/permissions_upgrade.py: an old ask in the user settings; gates/bootstrap.py: a rule it
         # adds and the launcher, the old asks set aside for permissions-upgrade); anything else both refuse
         old = [t.startswith(OLD_ASK_FINDING) and t.endswith(OLD_ASK_KIT) for _k, t in found]
-        hand = [t for (k, t), o in zip(found, old) if not (o or t.startswith("the launcher ")
+        hand = [t for (k, t), o in zip(found, old) if not (o or t.startswith("the launcher ") or t.endswith(STALE_ALLOW_KIT)
                                                             or (k == "MISSING" and not t.startswith("the deny rule ")))]
         if hand:
             parts.insert(0, shown("%s. No kit fixes %s: name it to the owner, who removes or changes it in Claude Code's "
@@ -8363,7 +8861,8 @@ def cmd_permissions(rest):
 
 WINDOWS_NOT_YET = ("new", "check", "rehearse", "sign", "run", "go", "pack")   # a signed run's commands, and its owner's: not there
 COMMANDS = {"new": cmd_new, "check": cmd_check, "rehearse": cmd_rehearse, "sign": cmd_sign, "run": cmd_run, "go": cmd_go,
-            "list": cmd_list, "pack": cmd_pack, "log": cmd_log, "mode": cmd_mode, "permissions": cmd_permissions, "grant": cmd_grant}
+            "list": cmd_list, "pack": cmd_pack, "log": cmd_log, "mode": cmd_mode, "permissions": cmd_permissions, "grant": cmd_grant,
+            "queue": cmd_queue}
 
 
 class SafeOut:

@@ -12,6 +12,8 @@
 #                           spellings and the envelope's rules (repos, kinds, expires, the five keys) refused, each named
 #   [charter-card]          the dialog shows the card: the focus, its goal, quote, done when and not doing, the envelope, what it
 #                           covers, what never, what the owner types; words changed after the dialog are not signed
+#   [charter-session]       a focus the session opened (no owner's quote or where, or a blank one) shows `opened by the session` in the
+#                           quote's place, whatever its text says; a quoted focus keeps its card
 #   [charter-second]        a second charter for the focus and directory (or a worktree of its repository) while one is in force:
 #                           the dialog denied and the sign refused rc 65, naming it; another focus or project, or after a revoke: signed
 #   [charter-ended]         past its expiry, revoked, revoked with its focus (`grant revoke --focus`), or its focus closed through a
@@ -141,6 +143,8 @@ csign() {
 }
 # charter <spec> [dir] — a charter the owner signed: the dialog, then the click's command
 charter() { ask "$1" "${2:-}" >/dev/null; csign "$1" "${2:-}"; }
+# the sha256 of P7's words (a focus the session opened: quote and where null) as the card shows them
+P7_WORDS=a8391b08864f2c5db3753d14df2ad7a66816042fa1cbed7df60f6cc4817f48f9
 # the sha256 of P8's words as the card shows them (JSON of text, goal, quote, where, done, not_doing; keys sorted, no spaces)
 P8_WORDS=03e3aeba71e14657aad29635a2ae96d263e67e8728354fe131af5d72c7d4ae70
 # reader <python on baton> — run code with the copy's baton imported, from W
@@ -170,6 +174,12 @@ print(sorted(g), g["v"], g["kind"], g["focus"], g["repos"], g["kinds"], g["max_s
   Kinds:     baton, workflow, script, test
   Stops:     at most secrets
   Until:     $exp, or the close or supersede of P8 in the brain (either revokes this charter), whichever comes first" "[$T] …with its envelope"
+  eq "$(bt "$W" log --grants --json)/$(python3 -c 'import json, sys
+d = json.load(open(sys.argv[1])); e = d["grants"][0]
+print(d["schema"], len(d["grants"]), e["id"] == sys.argv[2], [e[k] for k in ("kind", "state", "reason", "error", "dir", "focus", "repos", "kinds", "max_stops")],
+      e["expires"] == sys.argv[3], "rows" in e)' "$BT_OUT" "$GID" "$exp")" \
+     "0/1 1 True ['charter', 'in force', None, False, '$W', 'P8', ['acme/app', 'acme/ops'], ['baton', 'workflow', 'script', 'test'], ['secrets']] True False" \
+     "[$T] log --grants --json: the charter in force with its focus, repos, kinds, max_stops, directory and expiry"
   eq "$(reader 'print(baton.load_grant("'"$GID"'"), baton.approvals_for("acme/app", "kb/plans/p.md", "B"))')" \
      "(None, 'not in force', 'grant $GID is a charter, never read as an approval') ([], [])" \
      "[$T] an approval reader (load_grant, approvals_for): not in force, nothing found or near"
@@ -249,6 +259,94 @@ Your click is the owner's signature; the session never answers this dialog for y
   has "$(reason)" 'for focus P8 <\u{1b}[31mred\u{2028}x> (goal G3):' "[$T] …both written as \\u{…} on the card"
 }
 
+fam_session() {  # [charter-session] the card of a focus the session opened: no quote line, the session named
+  local T=charter-session exp r n
+  local ses='i["P7"] = {"kind": "focus", "status": "live", "text": "the wave", "goal": "G3", "source": {"type": "coordinator"}, "done": "every row merged"}'
+  setup; items "$ses"; cspec "$W/c.json" 's["focus"] = "P7"'; exp=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["expires"])' "$W/c.json")
+  eq "$(ask "$W/c.json")" ask "[$T] a focus the brain holds with no owner's words (source {type: coordinator}): the guard asks"
+  eq "$(reason)" "baton: the owner signs a charter for focus P7 the wave (goal G3):
+  opened by the session
+  Done when: every row merged
+  Focus:     P7 (its words sha256 ${P7_WORDS:0:12})
+  Dir:       $W (a merge or a run from any other project directory is not covered)
+  Repos:     acme/app, acme/ops
+  Kinds:     baton, workflow, script, test
+  Stops:     at most secrets
+  Until:     $exp, or the close or supersede of P7 in the brain (either revokes this charter), whichever comes first
+  Covers:    the merges and \`go --row\` runs of every plan whose frontmatter says \`focus: P7\`, when every change is a touch its row declares and inside this envelope, as many PRs and runs as the row says
+  Never:     the floor (the judge paths and every touch_inputs path, a .claude-plugin path, a baton or run with security-boundary, irreversible-delete, no-way-back or history-rewrite, a secrets run of a baton outside vault-put-text, vault-put-file, credential-import, credential-upload, kubeconfig-install, script-run, script-run-upload, a signing-rules finding of kind other, a touch marked (signs again)), nor any touch outside this envelope: those stay a plan approval or the owner's merge
+  The owner types: the GPG passphrase on the passphrase holder's page, once for the focus's charter-covered secrets runs, held at most 24 h
+Your click is the owner's signature; the session never answers this dialog for you." "[$T] the whole card: opened by the session where the Quote line was, every other line as for a quoted focus, no None"
+  items "$ses"'
+i["P7"]["source"].update(quote="q7", where="chat")'
+  csign "$W/c.json"; eq "$RC/$(grants_n)" "3/0" "[$T] the focus given an owner's quote after the dialog: sign rc 3, nothing signed"
+  items "$ses"; ask "$W/c.json" >/dev/null; csign "$W/c.json"; eq "$RC/$(grants_n)" "0/1" "[$T] the words as the dialog showed them: signed"
+  eq "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["focus_sha256"])' "$(gfile)")" "$P7_WORDS" \
+     "[$T] …focus_sha256: the digest of the words the card showed (quote and where null)"
+  bt "$W" grant revoke --focus P7 >/dev/null     # one charter per focus: the cases below each ask again
+  # item 3's inputs: each is asked, and shows the session's line and no Quote line
+  for r in 'del i["P7"]["source"]|no source' \
+           'i["P7"]["source"] = "chat"|a source that is not an object' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": None, "where": None}|quote and where null' \
+           'i["P7"]["source"] = {"type": "coordinator", "where": "chat 08/11"}|a where and no quote' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": None, "where": "chat 08/11"}|a where and a null quote' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "", "where": "chat 08/11"}|an empty quote' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "   ", "where": "chat 08/11"}|a quote of spaces' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "​‮", "where": "chat 08/11"}|a quote of format characters' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": 7, "where": "chat 08/11"}|a quote that is not a string' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "\u3164\u2800\u115f", "where": "chat 08/11"}|a quote of fillers that draw nothing' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "q7", "where": "\uffa0\U000e0041"}|a where of a filler and a tag character' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "\u2065", "where": "chat 08/11"}|a quote of an unassigned code point in the 2060 block' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "\ufff0\U000e0080", "where": "chat 08/11"}|a quote of a reserved special and an unassigned tag-block code point' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "q7", "where": "\u180e\U0001d173"}|a where of a Mongolian vowel separator and a musical format mark' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "q7"}|a quote and no where' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "q7", "where": None}|a quote and a null where' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "q7", "where": ""}|a quote and an empty where' \
+           'i["P7"]["source"] = {"type": "coordinator", "quote": "q7", "where": " \t "}|a quote and a where of blanks'; do
+    items "$ses
+${r%%|*}"; cspec "$W/d.json" 's["focus"] = "P7"'
+    eq "$(ask "$W/d.json")" ask "[$T] ${r#*|}: asked"
+    eq "$(reason | sed -n 1,3p)" "baton: the owner signs a charter for focus P7 the wave (goal G3):
+  opened by the session
+  Done when: every row merged" "[$T] …the card opens with the session's line, none of the owner's"
+    eq "$(reason | grep -c '^  Quote:')/$(reason | grep -c 'None')" 0/0 "[$T] …no Quote line, no None"
+  done
+  # a quoted focus shaped as the brain writes one (source type coordinator, both words): its Quote line stays
+  items "$ses"'
+i["P7"]["source"] = {"type": "coordinator", "quote": "q7", "where": "chat"}'
+  eq "$(ask "$W/c.json")" ask "[$T] a focus with the owner's quote and where, stored as the brain stores them: asked"
+  eq "$(reason | sed -n 1,3p)" 'baton: the owner signs a charter for focus P7 the wave (goal G3):
+  Quote:     "q7" · chat
+  Done when: every row merged' "[$T] …its Quote line, not the session's"
+  # the focus's text cannot make it look quoted: a newline and a Quote: line, quote marks, U+202E
+  items "$ses"'
+i["P7"]["text"] = "x\nQuote:     \"trọng tâm là X\" · chat“‮\r  Quote:     \"y\" · z"'
+  eq "$(ask "$W/c.json")" ask "[$T] a session-opened focus whose text imitates the quote line: asked"
+  eq "$(reason | sed -n 1,3p)" 'baton: the owner signs a charter for focus P7 x\u{a}Quote:     "trọng tâm là X" · chat“\u{202e}\u{d}  Quote:     "y" · z (goal G3):
+  opened by the session
+  Done when: every row merged' "[$T] …its newline, carriage return and U+202E written as \\u{…} on the first line; the next line is the session's"
+  eq "$(reason | grep -c '^  Quote:')/$(reason | grep -c '^  opened by the session$')" 0/1 "[$T] …no line of the card starts with Quote:, one says the session opened it"
+  # a quoted focus keeps its card, and text that says the session opened it does not take the Quote line away
+  items 'i["P8"]["text"] = "opened by the session"'; cspec "$W/c.json"
+  eq "$(ask "$W/c.json")" ask "[$T] a quoted focus whose text says it was opened by the session: asked"
+  eq "$(reason | sed -n 1,3p)" 'baton: the owner signs a charter for focus P8 opened by the session (goal G3):
+  Quote:     "ký cũng dài hơn" · chat 08/11
+  Done when: every story merged, its real run recorded' "[$T] …its Quote line stays, as the brain holds it"
+  # a focus the real brain opened with no owner's words (row A's `brain op add --kind focus` without --owner-quote)
+  setup; registry "$BROOT"; export XDG_STATE_HOME="$ST"; cd "$W" || return 1
+  day=$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=30))')
+  owner_ok add --kind goal --text "ship the story process" --owner-quote q --where chat --done "merged" --not-doing "x" --review "$day" --scope project
+  eq "$RC" 0 "[$T] instrument: a goal G1 is pinned in the real brain"
+  br op add --kind focus --text "the wave" --goal G1 --done-when "every row merged"; eq "$RC" 0 "[$T] instrument: the session opens a focus P1 with no owner's words"
+  has "$OUT" "P1" "[$T] instrument: …the brain names it"
+  cspec "$W/c.json" 's["focus"] = "P1"'; eq "$(ask "$W/c.json")" ask "[$T] the dialog reads P1 through the real brain"
+  eq "$(reason | sed -n 1,3p)" "baton: the owner signs a charter for focus P1 the wave (goal G1):
+  opened by the session
+  Done when: every row merged" "[$T] …the card opens with the session's line"
+  csign "$W/c.json"; eq "$RC" 0 "[$T] …signed"
+  cd "$TMP" || return 1; export XDG_STATE_HOME="$HOME/.local/state"
+}
+
 fam_second() {  # [charter-second] one charter per focus and directory while one is in force
   local T=charter-second first W2 WT
   setup; cspec "$W/c1.json"; cspec "$W/c2.json" 's["kinds"] = ["test"]'
@@ -318,35 +416,35 @@ print(bad)')" "[]" "[$T] a grants/ file nested 800 to 1199 deep: read damaged at
 print(baton.focus_item("P1")[1])' "$S/scripts") 2>&1)" "P1 is not an open focus of this brain (brain show: brain: no brain state for this project yet)" \
      "[$T] from another project in a session recorded on W: the focus is read in the project the charter binds, not W"
   tok="ghp_$(python3 -c 'print("a1B2c3D4e5" * 4)' | cut -c1-36)"
-  br op close P1 --reason "$tok"; eq "$RC" 1 "[$T] a close the sensitive filter refuses: rc 1"
+  br op close P1 --reason "$tok" --pointer kb/story.md; eq "$RC" 1 "[$T] a close the sensitive filter refuses: rc 1"
   has "$(glist)" "$a  in force  charter" "[$T] …nothing written, and the charter is not revoked"
-  br op close P1 --reason "the story landed"; eq "$RC" 0 "[$T] brain op close P1: rc 0"
+  br op close P1 --reason "the story landed" --pointer kb/story.md; eq "$RC" 0 "[$T] brain op close P1: rc 0"
   has "$OUT" "closed P1" "[$T] …the focus is closed"
   has "$OUT" "grant $a revoked: the charter for P1 ended" "[$T] …and its charter revoked, said in the same output"
   has "$(glist)" "$a  revoked  charter" "[$T] …listed revoked"
   br op add --kind focus --text "a second focus" --owner-quote q2 --where chat --goal G1 --done-when "it shipped"
-  br op close P2 --reason "dropped"; eq "$RC" 0 "[$T] closing a focus with no charter: rc 0"
+  br op close P2 --reason "dropped" --pointer kb/story.md; eq "$RC" 0 "[$T] closing a focus with no charter: rc 0"
   hasnt "$OUT" "revoked" "[$T] …nothing revoked"
   # a supersede ends the focus too: its charter is revoked, and the owner signs again for the successor
   br op add --kind focus --text "a third focus" --owner-quote q3 --where chat --goal G1 --done-when "it landed"
   cspec "$W/c.json" 's["focus"] = "P3"'; charter "$W/c.json"; a=$GID; eq "$RC" 0 "[$T] instrument: a charter for P3"
-  br op supersede P3 --text "a third" --reason "shorter"; eq "$RC" 1 "[$T] a supersede its own shrink check refuses: rc 1"
+  br op supersede P3 --text "a third" --reason "shorter" --done-when "it landed, shorter"; eq "$RC" 1 "[$T] a supersede its own shrink check refuses: rc 1"
   has "$(glist)" "$a  in force  charter" "[$T] …nothing written, and the charter is not revoked"
   # an older vibemaestro-sdlc beside the brain, whose baton.py knows only `grant revoke <id>`: the focus does not end
   osd="$TMP/oldsdlc"; mkdir -p "$osd/scripts" "$TMP/oldcfg/plugins"
   printf 'import sys\nsys.stderr.write("usage: baton.py grant revoke <id>  (the id log --grants shows)\\n")\nsys.exit(64)\n' > "$osd/scripts/baton.py"
   printf '{"version": 2, "plugins": {"vibemaestro-sdlc@vibemaestro": [{"installPath": "%s"}]}}' "$osd" > "$TMP/oldcfg/plugins/installed_plugins.json"
-  CLAUDE_CONFIG_DIR="$TMP/oldcfg" br op close P3 --reason "the story landed"; eq "$RC" 1 "[$T] brain op close P3 beside an older sdlc: rc 1"
+  CLAUDE_CONFIG_DIR="$TMP/oldcfg" br op close P3 --reason "the story landed" --pointer kb/story.md; eq "$RC" 1 "[$T] brain op close P3 beside an older sdlc: rc 1"
   has "$OUT" "this vibemaestro-sdlc predates \`grant revoke --focus\`, update it" "[$T] …naming the update"
   has "$(glist)" "$a  in force  charter" "[$T] …the focus not closed, its charter in force"
   printf 'import sys\nsys.stderr.write("usage: baton.py grant revoke --focus <P>\\n")\nsys.exit(64)\n' > "$osd/scripts/baton.py"
-  CLAUDE_CONFIG_DIR="$TMP/oldcfg" br op close P3 --reason "the story landed"; eq "$RC" 1 "[$T] a baton that refuses --focus another way (rc 64): rc 1"
+  CLAUDE_CONFIG_DIR="$TMP/oldcfg" br op close P3 --reason "the story landed" --pointer kb/story.md; eq "$RC" 1 "[$T] a baton that refuses --focus another way (rc 64): rc 1"
   hasnt "$OUT" "predates" "[$T] …no update hint: only an older baton's usage gets one"
-  br op supersede P3 --text "a third focus, said again" --reason "the owner's new words"; eq "$RC" 0 "[$T] brain op supersede P3: rc 0"
+  br op supersede P3 --text "a third focus, said again" --reason "the owner's new words" --owner-quote "q3 lần nữa" --where chat; eq "$RC" 0 "[$T] brain op supersede P3: rc 0"
   has "$OUT" "superseded P3 with P4" "[$T] …P4 succeeds it"
   has "$OUT" "grant $a revoked: the charter for P3 ended" "[$T] …and P3's charter is revoked, said in the same output"
   has "$(glist)" "$a  revoked  charter" "[$T] …listed revoked"
-  br op supersede P4 --text "a third focus, said a third time" --reason "again"; eq "$RC" 0 "[$T] superseding a focus with no charter: rc 0"
+  br op supersede P4 --text "a third focus, said a third time" --reason "again" --done-when "it landed again"; eq "$RC" 0 "[$T] superseding a focus with no charter: rc 0"
   hasnt "$OUT" "revoked" "[$T] …nothing revoked"
   cd "$TMP" || return 1; export XDG_STATE_HOME="$HOME/.local/state"
 }
@@ -409,7 +507,7 @@ fam_done() {  # [charter-no-done-when] the focus: live in the brain, with its do
   has "$(out)" "P8 is not an open focus of this brain" "[$T] …named"
 }
 
-for f in fam_sign fam_card fam_second fam_ended fam_floor fam_done; do
+for f in fam_sign fam_card fam_session fam_second fam_ended fam_floor fam_done; do
   echo "-- $f"; f0=$FAIL; "$f"
   t=$(declare -f "$f" | sed -n 's/.*local T=\([a-z-]*\).*/\1/p' | head -n 1)
   [ "$FAIL" = "$f0" ] && echo "[$t] ok" || echo "[$t] FAIL"

@@ -5,15 +5,21 @@ world file.
 Usage: owner_merge_gh.py <world.json> <log> <gh args...>
 
 The world:
-  "prs": {"<owner/repo>#<n>": {"state", "isDraft", "head", "mergeable", "base", "files": [...], "unknown_reads": <n>,
+  "prs": {"<owner/repo>#<n>": {"state", "isDraft", "head", "mergeable", "base", "files": [...], "renamed": {new: old},
+          "added": [...], "removed": [...], "files_fail": <bool>, "pages": <n>, "page_junk": <text> (`api …/pulls/<n>/files`,
+          the runner's read under a window; a file in no list is "modified"),
+          "unknown_reads": <n>,
           "queue": <bool>, "on_merge": {"<owner/repo>#<n>": {field: value}}, "merge_5xx": ["landed"|"lost", ...],
           "merged_head": <sha>, "merged_base": <branch>, "late_reads": <n>, "after_call": {field: value}}}
   "view_fail": <n>   the next n `pr view` calls fail with GitHub's 502; a PR's "view_fail_after_merge": <n> sets it when it merges
   "checks": {"<owner/repo>@<sha>": [[name, started_at, status, conclusion, workflow?]]}   (workflow defaults to "ci")
   "workflow_runs": {"<owner/repo>@<sha>/<workflow>": {"status", "conclusion"}}               (else completed, red when a run is)
   "statuses": {"<owner/repo>@<sha>": [[context, state, created_at]]}
+  "git": {"<owner/repo>": {"commits": {<sha>: [parent sha, ...]}, "refs": {<branch>: <sha>}}}   (the back-merge lane's reads: a
+          PR's "headRef" (default topic), `api repos/<o>/<r>` (default branch main), `git/ref/heads/release` (404 when absent),
+          `compare/<a>...<b>` from the commit graph, `git/commits/<sha>` its parents; with "fail": true that read is HTTP 500)
 GitHub's own answers: check-runs without `filter=all` lists only the newest run per name (GitHub's default `filter=latest`);
-`pr view` prints the kit's seven fields joined by the unit separator; `pr merge` is refused unless the PR is OPEN, MERGEABLE and its head is --match-head-commit; then it reads MERGED with a merge
+`pr view` prints the kit's seven fields joined by the unit separator, and the head ref eighth when --json names headRefName; `pr merge` is refused unless the PR is OPEN, MERGEABLE and its head is --match-head-commit; then it reads MERGED with a merge
 commit, mergeability UNKNOWN, and the PR's on_merge changes apply to the others; a PR with "queue" is only queued (an auto-merge
 request, exit 0), as on a base that requires a merge queue. An open PR with unknown_reads > 0 reads UNKNOWN that many more
 times. "merge_5xx" serves one fault per `pr merge` call, the first first, a 5xx in the words of gh's GraphQL client
@@ -21,7 +27,8 @@ times. "merge_5xx" serves one fault per `pr merge` call, the first first, a 5xx 
 "lost" answers 502 and merges nothing, "refused" is GitHub's GraphQL refusal (no status), "blocked" gh's own refusal before any request, "timeout" GitHub's own query timeout (status 200, merges nothing), "raced" has another hand merge the PR
 just before the call, "dropped" merges and then loses the connection (gh: `http2: client connection lost`), "late" merges but reads OPEN for "late_reads" (default 1) more `pr view` calls, then MERGED, and
 answers 502. "after_call" changes the PR itself once a call exits 0 (a queued PR whose head another hand moves). On a PR merged already `pr merge` does as gh does: `! Pull request … was already merged`, exit 0, no pin. "merged_head" and "merged_base" are the head and base the PR
-reads once merged (another head merged, or into another base). Each merge GitHub accepted is one log line `merge|queued <owner/repo>#<n> match <sha> admin yes|no`, each lost,
+reads once merged (another head merged, or into another base). Each merge GitHub accepted is one log line `merge|queued <owner/repo>#<n> match <sha> admin yes|no`
+(`merge-commit` for a call with --merge), each lost,
 refused, blocked or timed-out one `502|refused|blocked|timeout <owner/repo>#<n> match <sha>`; any other call exits 2.
 """
 import hashlib
@@ -48,6 +55,25 @@ def fail(msg, rc=1):
 
 def save():
     json.dump(world, open(world_path, "w"))
+
+
+def ancestors(g, sha):
+    """`sha` and every commit it reaches in the commit graph `g`."""
+    seen, todo = set(), [sha]
+    while todo:
+        c = todo.pop()
+        if c not in seen:
+            seen.add(c)
+            todo += g["commits"].get(c, [])
+    return seen
+
+
+def compare(g, a, b):
+    """GitHub's compare status of `a...b` (b against a), each a SHA or a branch of the graph."""
+    a, b = g["refs"].get(a, a), g["refs"].get(b, b)
+    if a == b:
+        return "identical"
+    return "ahead" if a in ancestors(g, b) else "behind" if b in ancestors(g, a) else "diverged"
 
 
 def commit_runs(repo, sha):
@@ -80,12 +106,26 @@ if args[:2] == ["pr", "view"]:
         mergeable = "UNKNOWN"
         save()
     print("\x1f".join([p["state"], str(p["isDraft"]).lower(), p["head"], mergeable, p["base"], p.get("mergeCommit", ""),
-                        str(bool(p.get("autoMerge"))).lower()]))
+                        str(bool(p.get("autoMerge"))).lower()] + ([p.get("headRef", "topic")] if "headRefName" in opt("--json") else [])))
 elif args[:1] == ["api"] and args[1].startswith("repos/"):
     path, _, query = args[1].partition("?")
     parts = path.split("/")                              # repos/<owner>/<repo>/...
     repo = "%s/%s" % (parts[1], parts[2])
-    if parts[3:4] == ["actions"] and parts[4:5] == ["runs"]:
+    g = world.get("git", {}).get(repo, {"commits": {}, "refs": {}})
+    if len(parts) == 3:
+        print(json.dumps({"full_name": repo, "default_branch": "main"}))
+    elif parts[3:] == ["git", "ref", "heads", "release"]:
+        if "release" not in g["refs"]:
+            fail("gh: Not Found (HTTP 404)")
+        print(json.dumps({"ref": "refs/heads/release", "object": {"sha": g["refs"]["release"], "type": "commit"}}))
+    elif parts[3:4] == ["compare"]:
+        a, _sep, b = parts[4].partition("...")
+        print(json.dumps({"status": compare(g, a, b)}))
+    elif parts[3:5] == ["git", "commits"]:
+        if g.get("fail"):
+            fail("gh: Server Error (HTTP 500)")
+        print(json.dumps({"sha": parts[5], "parents": [{"sha": c} for c in g["commits"].get(parts[5], [])]}))
+    elif parts[3:4] == ["actions"] and parts[4:5] == ["runs"]:
         sha = dict(q.split("=") for q in query.split("&"))["head_sha"]
         wfs, runs = commit_runs(repo, sha)
         out = []
@@ -106,6 +146,19 @@ elif args[:1] == ["api"] and args[1].startswith("repos/"):
                     newest[r["name"]] = r
             runs = list(newest.values())
         print(json.dumps({"total_count": len(runs), "check_runs": runs}))
+    elif parts[3:4] == ["pulls"] and parts[5:6] == ["files"]:     # one page; a PR's "renamed" {new: old}, "files_fail" a 502
+        pr = world["prs"]["%s#%s" % (repo, parts[4])]
+        if pr.get("files_fail"):
+            fail("gh: HTTP 502: Bad Gateway (https://api.github.com/%s)" % args[1])
+        ren, n = pr.get("renamed", {}), max(1, pr.get("pages", 1))     # "pages": the files as n arrays (real gh joins them into one)
+        status = lambda f: ("renamed" if f in ren else "added" if f in pr.get("added", ()) else "removed" if f in pr.get("removed", ())
+                            else "modified")                    # "added", "removed": lists of the PR's files with that status
+        rows = [dict({"filename": f, "status": status(f)}, **({"previous_filename": ren[f]} if f in ren else {})) for f in pr["files"]]
+        size = -(-len(rows) // n) or 1
+        for k in range(n):
+            print(json.dumps(rows[k * size:(k + 1) * size]))
+        if "page_junk" in pr:                                          # "page_junk": one more page, printed as given
+            print(pr["page_junk"])
     elif parts[3:4] == ["commits"] and parts[5:6] == ["statuses"]:
         rows = world.get("statuses", {}).get("%s@%s" % (repo, parts[4]), [])
         print(json.dumps([{"id": 3000 + i, "context": c, "state": s, "created_at": t} for i, (c, s, t) in enumerate(rows)]))
@@ -163,7 +216,7 @@ elif args[:2] == ["pr", "merge"]:
         word = "merge"
     save()
     with open(log_path, "a") as f:
-        f.write("%s %s match %s admin %s\n" % (word, key, match, "yes" if "--admin" in args else "no"))
+        f.write("%s %s match %s admin %s\n" % (word + ("-commit" if word == "merge" and "--merge" in args else ""), key, match, "yes" if "--admin" in args else "no"))
     if fault == "dropped":
         fail("Post \"https://api.github.com/graphql\": http2: client connection lost")
     if fault in ("landed", "late"):

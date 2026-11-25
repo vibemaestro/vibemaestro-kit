@@ -6,9 +6,15 @@
 #
 # Offline: the brain and sdlc are copied into the scratch tree, each case gets its own git project and XDG_STATE_HOME.
 #   [F] fold equals replay: hot.json's state is a fresh fold of hot.jsonl
+#   [F10] a log as brain 0.6.0 writes it (log format 10: an owner's SOUL code step, signals, a sweep keep, a broke with its
+#       catcher, a held with proof, a session on a focus the session opened): read and written, every item kept, the step's
+#       code live; caches brain 0.6.0 folded (its `kept` of a sweep keep) are a warning, never called edited, and rewritten at
+#       the next write; its export imports with every item
+#   [FF] fold first, append after: an op the fold refuses, from any caller of `write`, leaves the log, its head and the caches
+#       as they were, and the brain reads and writes on; a first write's claim is not left behind either
 #   [S] supersede keeps both items and carries the anchors over; it is refused below 60% of the FIRST item of its chain
 #       (80% three times is refused at the third) unless --shorter; --drop-anchor drops one, with its reason
-#   [D] `brain op` cannot add, close or supersede a `D` or `W` item
+#   [D] `brain op` cannot add, close or supersede a `D` item, nor add or supersede a `W` one; it closes a `W` (a narrowing)
 #   [B] the retirement budget: six single-ID closes in 30 minutes are refused at the sixth; --bulk passes and is logged
 #   [C] an add at a count cap is refused, naming the item to close; a text over 150 characters is refused
 #   [Z] a token-shaped text is refused, only its masked form printed (sure-positive: sdlc's filter says rc 1 on it); a 40-hex SHA
@@ -50,6 +56,11 @@
 #   [V] a `signal` op (a measurement a later brain writes) is folded unread: a write, render and doctor after it work, the items
 #       are as before it, a `what` of 32 characters passes; no `what`, a `what` that is not text, empty or over 32, or a
 #       `promote` on it: rc 5 naming the line
+#   [IB] a brain that is not the installed one (installed_plugins.json, enabled): `op` is refused rc 9 naming the installed
+#       one and nothing is written, a read runs after one warning; the installed one through a symlink, a registry that does not
+#       read, two enabled installs or none enabled refuse nothing; a repository's tree only warns, a marketplace clone under
+#       the plugins directory is no tree; a worker is rc 4 first. doctor names this brain against the installed one and each
+#       brain on PATH in order, the one a bare `brain` runs and the installed one, and where each entry came from (Linux)
 #   Windows (the port of the POSIX-only store; each case also runs on Linux and macOS unless it says Windows):
 #   [WS] the security descriptor reader: a profile folder's rules pass; another owner, any rule for another account (one only
 #        children inherit too), no DACL, an allow rule of another kind, and every offset or length that does not fit are
@@ -117,6 +128,95 @@ print(fresh["items"]["T1"]["hits"], fresh["items"]["N1"]["status"], fresh["items
 1 superseded N1 8" "[F] hot.json is a fresh fold of the log (hits 1, N1 superseded by N2, version 8 with the first claim)"
 }
 
+case_format10() {  # the lines as brain 0.6.0 wrote them, appended as the store appends any op: an input, not a break
+  newp
+  br op add --kind trap --text "check the base before a rebase"; br op add --kind now --text "the task at hand"
+  br op add --kind now --text "a task the sweep kept, then done"
+  owner_ok add --kind goal --text "ship the split" --owner-quote q --where chat --done "merged" --not-doing "the fleet" \
+    --review 2099-01-01 --scope project
+  br op add --kind focus --text "the release wave" --goal G1 --done-when "both PRs merged"; c_rc 0 "[F10] instrument: a focus the session opens"
+  br op add --kind session --text "worker A" --focus P1; c_rc 0 "[F10] instrument: a session on it"
+  bpy 'd = s.state_dir()
+with s.locked(d):
+    raw, ops = s.verify(d)
+    pr = "acme/app" + chr(35)                      # a PR key, spelled so the public-tree scan reads no reference
+    for o in ({"op": "owner-soul-code", "soul": "S20", "text": "one review round", "file": "/p/CLAUDE.md", "sha256": "ab" * 32,
+               "source": [{"kind": "page", "review": "r", "date": "2026-11-20"}], "confirm": {"asked": True, "mode": "default", "record": "r1"}},
+              {"op": "signal", "what": "applicability", "rule": "T1", "pr": pr + "5", "state": "applied"},
+              {"op": "touch", "id": "N1", "reason": "still the task"},
+              {"op": "touch", "id": "N2", "reason": "kept by the sweep"},
+              {"op": "evidence", "result": "broke", "id": "T1", "pointer": pr + "5", "differed": "skipped it", "caught_by": "owner"},
+              {"op": "evidence", "result": "held", "id": "T1", "pointer": pr + "6", "proof": True}):
+        raw = s.append(d, raw, dict(o, t=s.now_iso(), by=s.by()))'
+  br op close N2 --reason done --pointer kb/x.md; c_rc 0 "[F10] instrument: the kept task closed by brain 0.6.0's last write"
+  # the caches as brain 0.6.0 writes them: its mark (the head and format 10) and its fold, where the sweep step's keep (a touch
+  # with a reason) marks the item `kept`; built here as that brain writes them, not a break
+  bpy 'import json, os
+d = s.state_dir(); raw, ops = s.verify(d); st = s.fold(ops); head = dict(s.head_of(raw), format=10)
+for o in ops:                                       # brain 0.6.0 folds a touch with a reason (a sweep keep) as `kept`
+    if o["op"] == "touch" and isinstance(o.get("reason"), str):
+        st["items"][o["id"]]["kept"] = o["seq"]
+s._write_file(os.path.join(d, "hot.json"), s.dumps({"folded_from": head, "digest": s.digest(s.dumps(st)), "state": st}) + "\n")
+lines = s.archive_lines(st)
+s._write_file(os.path.join(d, "archive.jsonl"), "\n".join([s.dumps({"folded_from": head, "digest": s.digest("\n".join(lines))})] + lines) + "\n")
+s.write_render(d, s.render_all(st))'
+  br doctor; c_hasnt "$OUT" "problem" "[F10] caches brain 0.6.0 folded: no problem, never called edited"
+  c_has "$OUT" "warn     hot.json holds a fold of this log that differs from this brain's (another brain version's" "[F10] …a warning: another version's fold"
+  c_has "$OUT" "warn     archive.jsonl holds a fold of this log that differs from this brain's" "[F10] …its archive too"
+  br show N1; c_rc 0 "[F10] the log reads"
+  br op add --kind next --text "the next step"; c_rc 0 "[F10] the brain writes on"
+  br doctor; c_hasnt "$OUT" "problem" "[F10] doctor finds no problem in the chain"
+  c_hasnt "$OUT" "differs from this brain's" "[F10] the caches the write rewrote are this brain's fold"
+  c_eq "$(bpy 'import json, os
+print(json.load(open(os.path.join(s.state_dir(), "hot.json")))["folded_from"].get("format"))')" 10 "[F10] the caches say the log needs format 10"
+  c_eq "$(bpy 'import brain_ledger as L
+print(" ".join(sorted(L.soul_codes(s.verify(s.state_dir())[1]))))')" S20 "[F10] the step's code is live, as a promoted one"
+  br ledger T1; c_has "$(head -n 1 <<<"$OUT")" "T1 · lesson · held 1 from 1 session · broke 1" "[F10] the evidence counts"
+  br show S1; c_has "$OUT" "focus: P1" "[F10] the session keeps its focus"
+  br op held '[S20]' --pointer kb/a.md; c_rc 0 "[F10] a held on the step's code"
+  R=$(bpy 'f = s.fold(s.verify(s.state_dir())[1]); print(" ".join(sorted(i for i, it in f["items"].items() if it["status"] == "live")))')
+  c_eq "$R" "G1 N1 P1 S1 T1 X1" "[F10] no item lost"
+  local f="$TMP/f10-$NP.json"
+  br export --out "$f"; c_rc 0 "[F10] it exports"
+  newp
+  hk guard-owner "$(python3 -c 'import json, sys
+print(json.dumps({"session_id": sys.argv[1], "cwd": sys.argv[2], "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                  "permission_mode": "default", "tool_input": {"command": "brain owner import " + sys.argv[3]}}))' "$SID" "$P" "$f")"
+  c_eq "$(hfield permissionDecision)" ask "[F10] instrument: the owner import's dialog"
+  br owner import "$f"; c_rc 0 "[F10] its owner items import into a fresh brain"
+  br import "$f"; c_rc 0 "[F10] and its right brain"
+  R=$(bpy 'f = s.fold(s.verify(s.state_dir())[1]); print(" ".join(sorted(i for i, it in f["items"].items() if it["status"] == "live")))')
+  c_eq "$R" "G1 N1 P1 S1 T1 X1" "[F10] …every item lands"
+}
+
+case_foldfirst() {  # a caller of brain_store.write (a plugin that extends the brain uses it as a library) passes an op the
+                   # fold refuses: an input built here, not a break
+  newp
+  R=$(bpy 'import os
+d = s.state_dir()
+try:
+    s.write(lambda d, st: ({"op": "no-such-op"}, [], "x", None))
+except s.Refused as e:
+    print(e.rc, e.msg)
+print(os.path.exists(os.path.join(d, "hot.jsonl")))')
+  c_eq "$R" "5 hot.jsonl line 2: unknown op 'no-such-op'
+False" "[FF] a first write whose op the fold refuses: rc 5, and neither its claim nor the op reaches the log"
+  br op add --kind now --text "the task at hand"; c_rc 0 "[FF] the brain writes on"
+  R=$(bpy 'import os
+d = s.state_dir()
+keep = [open(os.path.join(d, f), "rb").read() for f in ("hot.jsonl", "head.json", "hot.json")]
+try:
+    s.write(lambda d, st: ({"op": "no-such-op"}, [], "x", None))
+except s.Refused as e:
+    print(e.rc, e.msg)
+print([open(os.path.join(d, f), "rb").read() for f in ("hot.jsonl", "head.json", "hot.json")] == keep)')
+  c_eq "$R" "5 hot.jsonl line 3: unknown op 'no-such-op'
+True" "[FF] a later write whose op the fold refuses: rc 5, the log, its head and the caches unchanged"
+  br doctor; c_hasnt "$OUT" "problem" "[FF] doctor finds no problem in the store"
+  br op add --kind next --text "the next step"; c_rc 0 "[FF] and the brain writes on"
+  br show N1; c_rc 0 "[FF] and reads"
+}
+
 case_supersede() {
   newp
   br op add --kind now --text "keep PR #130 and 1a2b3c4 in mind" --anchor "#130" --anchor "1a2b3c4"
@@ -152,7 +252,6 @@ case_dw() {
   c_rc 0 "[D] instrument: brain owner add --kind window writes W1"
   br op close D1 --reason "done"; c_rc 1 "[D] op close D1: refused"
   br op supersede D1 --text "the coordinator merges clusters/ PRs" --reason x; c_rc 1 "[D] op supersede D1: refused"
-  br op close W1 --reason "done"; c_rc 1 "[D] op close W1: refused"
   br op supersede W1 --text "May merge docs-only and any other PRs without asking" --reason x; c_rc 1 "[D] op supersede W1: refused"
   c_has "$OUT" "owner item" "[D] refused as an owner item, not by another rule"
   br op touch D1; c_rc 1 "[D] op touch D1: refused"
@@ -160,6 +259,9 @@ case_dw() {
   br op hit D1; c_rc 1 "[D] op hit D1: refused"
   R=$(bpy 'st = s.fold(s.verify(s.state_dir())[1])["items"]; print(st["D1"]["status"], st["W1"]["status"], len(st))')
   c_eq "$R" "live live 2" "[D] D1 and W1 stay live, and nothing else was written"
+  br op close W1 --reason "the owner said stop"; c_rc 0 "[D] op close W1: a window ends at once, no dialog (it only narrows)"
+  R=$(bpy 'st = s.fold(s.verify(s.state_dir())[1])["items"]; print(st["D1"]["status"], st["W1"]["status"], st["W1"]["reason"])')
+  c_eq "$R" "live closed the owner said stop" "[D] W1 closed with its reason, D1 untouched"
 }
 
 case_budget() {
@@ -847,7 +949,7 @@ case_focus_words() {  # a live focus gets its done when and not doing in place: 
   br op words P3 --done-when "$TOKEN"; c_rc 1 "[focus-words-not-focus] a token-shaped done when: refused"
   c_hasnt "$OUT" "$TOKEN" "[focus-words-not-focus] the token is not printed"
   br op words P3 --not-doing "a$(printf '\001')b"; c_rc 1 "[focus-words-not-focus] a control character: refused"
-  br op close P3 --reason "dropped"; c_rc 0 "[focus-words-not-focus] P3 closed (on Windows too: vibemaestro-sdlc's baton revokes its charters there)"
+  br op close P3 --reason "dropped" --pointer kb/x.md; c_rc 0 "[focus-words-not-focus] P3 closed (on Windows too: vibemaestro-sdlc's baton revokes its charters there)"
   br op words P3 --done-when "x"; c_rc 1 "[focus-words-not-focus] a closed focus: refused"
   br doctor; c_rc 0 "[focus-words-not-focus] doctor rc 0 after the refusals"
 }
@@ -903,7 +1005,7 @@ print(json.dumps({"session_id": sys.argv[1], "cwd": sys.argv[2], "hook_event_nam
   c_rc 0 "[jira] a focus with --jira: written"
   br show P1 --json
   c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the focus holds the key"
-  br op supersede P1 --text "capacity first, again" --reason wording; c_rc 0 "[jira] a focus superseded (on Windows too)"
+  br op supersede P1 --text "capacity first, again" --reason wording --done-when "capacity merged"; c_rc 0 "[jira] a focus superseded (on Windows too)"
   br show P2 --json
   c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["jira"])')" "KIT_X1-781" "[jira] the key goes over to the superseding focus"
   br op add --kind focus --text "second" --owner-quote q2 --where chat --goal G3
@@ -1284,8 +1386,77 @@ case_winacl() {  # Windows only: the real access rules of the brain's folders
   c_has "$OUT" "it is not this account's (its owner is S-1-5-18)" "[WA] the refusal names the owner"
 }
 
+ib_reg() {  # ib_reg <config dir> <settings JSON> <registry JSON> — Claude Code's config as a session sees it
+  mkdir -p "$1/plugins"
+  printf '%s\n' "$2" > "$1/settings.json"
+  printf '%s\n' "$3" > "$1/plugins/installed_plugins.json"
+}
+
+stand_in() {  # stand_in <dir> — a brain's layout with a `brain` that only says it ran (an older copy on PATH)
+  mkdir -p "$1/bin" "$1/scripts"
+  printf '#!/bin/sh\necho "stand-in brain ran"\n' > "$1/bin/brain"; chmod +x "$1/bin/brain"
+  : > "$1/scripts/brain.py"
+}
+
+case_installed() {
+  newp
+  if [ "${OS:-}" = Windows_NT ]; then c_skip "[IB]" "POSIX only: the registry's paths and the messages are spelled C:/… on Windows"; return; fi
+  local cfg="$TMP/cfg-ib" inst="$TMP/inst/plugins/vibemaestro-brain" on='{"enabledPlugins": {"vibemaestro-brain@m": true}}'
+  mkdir -p "$TMP/inst/plugins"; cp -R "$BROOT" "$TMP/inst/plugins/"
+  ib_reg "$cfg" "$on" "{\"plugins\": {\"vibemaestro-brain@m\": [{\"scope\": \"user\", \"installPath\": \"$inst\"}]}}"
+  CLAUDE_CONFIG_DIR="$cfg" br op add --kind now --text "through another copy"
+  c_rc 9 "[IB] a write through a brain that is not the installed one: rc 9 (main: 0, written by that code)"
+  c_eq "$OUT" "brain: this brain $BROOT is not the installed vibemaestro-brain $inst, so its writes are refused (the log is written by the installed code only): run $inst/bin/brain, or start a new session, whose start puts the installed brain first on PATH" "[IB] …naming both and the command to run"
+  c_eq "$([ -e "$(sdir)/hot.jsonl" ] && echo written || echo none)" none "[IB] …and nothing is written"
+  CLAUDE_CONFIG_DIR="$cfg" br doctor --path
+  c_rc 0 "[IB] a read through it runs: rc 0"
+  c_eq "$OUT" "brain: warning: this brain $BROOT is not the installed vibemaestro-brain $inst
+$(sdir)" "[IB] …after one warning line (main: no line)"
+  CLAUDE_CONFIG_DIR="$cfg" VIBEMAESTRO_ROLE=worker br op add --kind now --text x
+  c_rc 4 "[IB] a worker is told it is a worker first: rc 4"
+  ln -s "$BROOT" "$TMP/brain link"
+  ib_reg "$cfg" "$on" "{\"plugins\": {\"vibemaestro-brain@m\": [{\"scope\": \"user\", \"installPath\": \"$TMP/brain link\"}]}}"
+  CLAUDE_CONFIG_DIR="$cfg" br op add --kind now --text "installed through a symlink with a space"
+  c_eq "$RC|$OUT" "0|added N1" "[IB] the installed one named through a symlink with a space: written, no line"
+  ib_reg "$cfg" "$on" '{oops'
+  CLAUDE_CONFIG_DIR="$cfg" br op add --kind now --text "registry does not read"
+  c_eq "$RC|$OUT" "0|added N2" "[IB] a registry that does not read: nothing refused, no line"
+  ib_reg "$cfg" '{"enabledPlugins": {"vibemaestro-brain@m": true, "vibemaestro-brain@n": true}}' \
+    "{\"plugins\": {\"vibemaestro-brain@m\": [{\"installPath\": \"$inst\"}], \"vibemaestro-brain@n\": [{\"installPath\": \"$TMP\"}]}}"
+  CLAUDE_CONFIG_DIR="$cfg" br op add --kind now --text "two installs"
+  c_eq "$RC|$OUT" "0|added N3" "[IB] two enabled installs: which is installed cannot be told, nothing refused"
+  ib_reg "$cfg" '{"enabledPlugins": {"vibemaestro-brain@m": false}}' "{\"plugins\": {\"vibemaestro-brain@m\": [{\"installPath\": \"$inst\"}]}}"
+  CLAUDE_CONFIG_DIR="$cfg" br op add --kind now --text "not enabled"
+  c_eq "$RC|$OUT" "0|added N4" "[IB] an install that is not enabled: nothing refused"
+  ib_reg "$cfg" "$on" "{\"plugins\": {\"vibemaestro-brain@m\": [{\"scope\": \"user\", \"installPath\": \"$inst\"}]}}"
+  local tree="$TMP/repo"
+  mkdir -p "$tree/.git" "$tree/plugins"; cp -R "$KIT/plugins/vibemaestro-brain" "$KIT/plugins/vibemaestro-sdlc" "$tree/plugins/"
+  OUT=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_CODE_SESSION_ID="$SID" "$tree/plugins/vibemaestro-brain/bin/brain" op add --kind next --text "from a tree" 2>&1); RC=$?
+  c_eq "$RC|$OUT" "0|brain: warning: this brain $tree/plugins/vibemaestro-brain is not the installed vibemaestro-brain $inst; it runs from a repository's tree, so its writes are let through
+added X1" "[IB] from a repository's tree: written, one warning"
+  local mk="$cfg/plugins/marketplaces/m"
+  mkdir -p "$mk/.git" "$mk/plugins"; cp -R "$KIT/plugins/vibemaestro-brain" "$KIT/plugins/vibemaestro-sdlc" "$mk/plugins/"
+  OUT=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_CODE_SESSION_ID="$SID" "$mk/plugins/vibemaestro-brain/bin/brain" op add --kind now --text x 2>&1); RC=$?
+  c_rc 9 "[IB] a marketplace clone under the plugins directory is an install copy, not a tree: rc 9"
+  if [ ! -r /proc/self/environ ]; then c_skip "[IB] doctor's PATH lines" "no /proc to read where a PATH entry came from"; return; fi
+  local old="$TMP/old/plugins/vibemaestro-brain" me; stand_in "$old"
+  me="bash $(basename "$0")"
+  CLAUDE_CONFIG_DIR="$cfg" PATH="$old/bin:$inst/bin:$PATH" br doctor
+  c_has "$OUT" "warn     this brain $BROOT is not the installed one $inst: its writes are refused" "[IB] doctor: this brain against the installed one (main: no line)"
+  c_has "$OUT" "warn     brain on PATH 1 of 2: $old/bin (a bare \`brain\` runs it; set by $me, which started this brain)
+info     brain on PATH 2 of 2: $inst/bin (installed; set by $me, which started this brain)" "[IB] doctor: each brain on PATH in order, the first and the installed one marked, with where it came from"
+  OUT=$(CLAUDE_CONFIG_DIR="$cfg" CLAUDE_CODE_SESSION_ID="$SID" env PATH="$inst/bin:$old/bin:$PATH" bash -c '"$0" doctor; :' "$BROOT/bin/brain" 2>&1)
+  c_has "$OUT" "ok       brain on PATH 1 of 2: $inst/bin (a bare \`brain\` runs it; installed; from $me, which started bash with it)" "[IB] doctor: an entry a parent process was started with names that parent"
+  bpy "s.mark_env('$SID', '$inst/bin')"
+  CLAUDE_CONFIG_DIR="$cfg" PATH="$inst/bin:$old/bin:$PATH" br doctor
+  c_has "$OUT" "ok       brain on PATH 1 of 2: $inst/bin (a bare \`brain\` runs it; installed; put first by the brain's session start, CLAUDE_ENV_FILE)" "[IB] doctor: the session start's own line is named"
+  CLAUDE_CONFIG_DIR="$TMP/cfg-none" PATH="/usr/bin:/bin" br doctor
+  c_has "$OUT" "info     the installed brain cannot be told (no single enabled vibemaestro-brain in installed_plugins.json that reads): nothing is refused
+info     no brain on PATH" "[IB] doctor: no registry and no brain on PATH, each said"
+}
+
 echo "== cases =="
-for c in case_focus_words case_jira case_baton_windows case_focus_counts case_focus_done_when case_paths case_where case_joiners case_selbits case_mdlinks case_selectors case_timeleft case_ignorable case_mdtail case_flap case_cachefail case_blank case_nonchar case_abbrev case_repair case_reset case_wipe case_hotmd case_damage case_chars2 case_modes case_fold case_supersede case_shrink case_dw case_budget case_cap case_sensitive case_nofilter case_writer case_edit \
+for c in case_installed case_focus_words case_jira case_baton_windows case_focus_counts case_focus_done_when case_paths case_where case_joiners case_selbits case_mdlinks case_selectors case_timeleft case_ignorable case_mdtail case_flap case_cachefail case_blank case_nonchar case_abbrev case_repair case_reset case_wipe case_hotmd case_damage case_chars2 case_modes case_fold case_format10 case_foldfirst case_supersede case_shrink case_dw case_budget case_cap case_sensitive case_nofilter case_writer case_edit \
          case_tail case_cache case_control case_archive case_render case_lock case_record case_signal \
          case_win_sd case_tree case_harvest case_lockdeath case_lf case_order case_replace case_encoding case_spelled case_verbatim case_winacl; do run_case $c; done
 cd "$TMP" || exit 1

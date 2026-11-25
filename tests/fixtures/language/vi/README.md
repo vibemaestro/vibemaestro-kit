@@ -27,9 +27,9 @@ Check: `kb.py check [--strict]`.
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
 **Story** (intent loại story, viết bằng ngôn ngữ repo đặt): dòng "Là / tôi muốn / để", bối cảnh, AC đánh số (mỗi AC "khi … thì
-…"), phần không làm, khẩu phần, phần **Lời người hỏi → AC** (đúng bảng khuôn viết: mỗi hàng một lời trích nguyên văn | các AC
+…"), phần không làm, estimation, phần **Lời người hỏi → AC** (đúng bảng khuôn viết: mỗi hàng một lời trích nguyên văn | các AC
 nó đòi, AC1, AC2 hay AC1–AC3; mọi AC có mặt ở ít nhất một hàng), tối đa 3 câu hỏi; vừa một màn hình điện thoại, không lệnh,
-tên tệp hay code. Mỗi câu hỏi có bốn phần có nhãn, mỗi nhãn mở một dòng: **Vì sao có câu hỏi này** (kèm một ví dụ),
+tên tệp hay code; context và AC nói người hỏi muốn gì và sẽ thấy gì bằng lời thường, còn giá trị chính xác, tên tham số, mã trạng thái, luật so khớp và giao thức thuộc spec, và câu trả lời cho câu hỏi kỹ thuật vào spec, không ghi ngược vào AC. Mỗi câu hỏi có bốn phần có nhãn, mỗi nhãn mở một dòng: **Vì sao có câu hỏi này** (kèm một ví dụ),
 **Mỗi phương án nghĩa là gì**, **Tác động**, **Đề xuất** (kèm lý do). Kiểm: `kb.py check intent <ngày>-<slug>`: thiếu phần, phần rỗng,
 phần lời → AC không phải bảng ấy, lời không trỏ AC, AC không có hay AC không nằm hàng nào thì đỏ với story mới hoặc đổi thân;
 story đã có trên merge base, thân không đổi, chỉ bị cảnh báo. Mã ngắn không giải thích trong ngoặc ngay sau nó (D24 (…)) và

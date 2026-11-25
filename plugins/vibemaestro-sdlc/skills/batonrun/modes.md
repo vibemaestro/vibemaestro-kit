@@ -17,6 +17,16 @@ user's state directory, never in a repository; where the owner has not chosen, a
   needs `sign --by owner`, with the owner's dialog, as in manual. A failed precondition or an Expect mismatch is not a stop:
   fix the script and rehearse again, as long as the fix does not widen what it touches. A fix that widens it needs the owner.
 
+**The owner's window.** In mode auto a stop-list baton is signed `coordinator-auto` with no dialog while a window the owner
+pinned in the brain for this very session covers it (`brain owner add --kind window … --lower <word>…`, at most 24 hours):
+every Stops word is one it lowers, or the baton is a `kit:` it names, and none is excluded. `go`'s line then ends
+`— window W<n>`. Never under a window: `secrets`, `cluster-lane`, `irreversible-delete`, `history-rewrite`, `money-org`, the
+batons that change the machine's permissions, a call naming a Claude Code settings file, `security-boundary` of a baton that is
+not a `kit:`, an owner merge of a pull request that changes the signing floor (`WINDOW_FLOOR_PATHS`, anything under `.vibemaestro/`, an existing baton), `go --row`, `go --queue`, a sandbox
+session. The owner says "stop": run `brain op close W<n> --reason <why>` at once (no dialog), and every signature and run after
+it waits for the owner again. An exit-8 card that says `window: not lowered: <why>` names why the live window did not cover the
+call: tell the owner, never widen the window yourself (a window is the owner's dialog).
+
 **The machine policy.** Where nobody chose, a machine's builder may set the mode as root in `/etc/vibemaestro/baton-mode`
 (`auto` or `manual`; a sandbox image sets `auto`): the owner's choice wins, then this file, then manual. It counts only as a
 regular file, root's and closed to group and other, under directories that are all root's and closed (none a link), read in the
@@ -87,7 +97,7 @@ at the screen (or the session is busy with other work), queue the run instead of
 1. `go --queue <script> [args…]` in place of `go`: the same check, rehearse and seal; where `go` would stop at exit 8 it writes an
    item (`<state-dir>/queue/<id>.json`: seal, arguments, directory, script sha256, plan, card, the session and Claude Code
    process that queued it, an expiry 24 h later) and prints one line naming it. Nothing blocks. It is rc 64 in a sandbox, without a session id, or
-   for a baton the session may sign itself (mode `auto`, `Stops: none`: plain `go`). A value that needs quoting stays exit 8.
+   for a baton the session may sign itself (mode `auto`, `Stops: none`: plain `go`), or for a baton whose `Stops` names `secrets` (a secret is given only to a `run` or `go --row` phase, so a queued run gets none: plain `go`, or `go --row`). A value that needs quoting stays exit 8.
 2. Tell the owner, with the card, that an item waits for them, and start `log --wait-queued <id> --timeout 86400` in the
    background (`run_in_background`): it exits 0 when the item is signed, 3 when it never can be (expired, used, damaged), 9 at
    the deadline. Never poll by hand.
@@ -100,7 +110,29 @@ at the screen (or the session is busy with other work), queue the run instead of
    its rehearse gives the sealed plan: a moved PR head, base or file is rc 3, and the run is queued again. Report its one line.
 
 An item whose bytes changed after the dialog opened or after signing is `damaged` and never signed or run. `log --queue` shows
-every item as pending, signed, expired, used or damaged. Mode `manual` and `auto`, the stop list and a pod are unchanged.
+every item as pending, signed, expired, used, withdrawn or damaged. Mode `manual` and `auto`, the stop list and a pod are unchanged.
+
+**Withdraw an item that will never run** (its act landed another way, or it is no longer wanted), so it does not wait out its
+24 h and block `kit:plugin-update`:
+
+- The session that queued it, while it is unsigned: `queue withdraw <id> --reason <word>` (one word: `a-z`, `0-9`, `-`, at most
+  32). The check compares the caller's session id (`CLAUDE_CODE_SESSION_ID`) and Claude Code process with the ones the item
+  recorded; another session is refused. It guards against slips, not forgery: a process of the same user that sets another
+  session's id passes, and all it gains is that the other session queues the item again.
+- The owner, unsigned or signed, from any of their sessions: `sign --by owner --void <id>`, the same hook and dialog as
+  `--queued`; the dialog shows the item's card.
+
+The item moves to `queue/withdrawn/`, marked who, which session, when and why, and is kept (never pruned). It is never signed or
+run after, even if a copy reappears in the queue. A signed item is the owner's to withdraw; an item used, expired, damaged, or
+whose run has started is refused with the reason. One `queue withdrawn` line in `log.tsv` names the act.
+
+**Void a signature that will never run** (superseded, or refused for an environment that cannot come back): the owner runs
+`sign --by owner --void <binding>` (the 64-hex binding `kit:plugin-update` prints, the record `signatures/<binding>.json`). The
+dialog shows the record's script, time, directory, arguments and plan; the click moves the record to `voided/` with its bytes as
+they were, so no run matches it, and a `signature voided` line in `log.tsv` names it. A used signature, one whose run has started,
+or one whose bytes changed since the dialog opened is refused. A session never voids a signature: there is no session verb for it,
+and the dialog is denied wherever an owner signature's is. If a run and a void race for the same record,
+one atomic move decides: the loser is refused and nothing runs.
 
 ### Runs under the owner's plan approval
 

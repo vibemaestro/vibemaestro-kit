@@ -649,7 +649,7 @@ for sid in ('reloaded-one', 'stale-two'):
   br doctor
   c_hasnt "$OUT" "session reloaded" "[t] the reloaded session's brain command clears its warning"
   c_has "$OUT" "warn     session stale-tw… last started on an older brain (log format 3" "[t] a session that ran no brain command keeps it"
-  c_has "$(eplines session-format)" '"format":8' "[t] the hook logged the session's format"
+  c_has "$(eplines session-format)" '"format":11' "[t] the hook logged the session's format"
   hk note-format "$(bash_in reloaded-one "$P" "brain render")"
   c_eq "$(eplines session-format | grep -c reloaded-one)" 1 "[t] once per format per session"
   hk note-format "$(bash_in sA "$P" "brain doctor")"
@@ -717,7 +717,7 @@ case_argv() {
   start compact; br doctor; pr 'acme/app¤10' open; br op add --kind next --text t --closes acme/app¤10
   c_eq "$(nissues) $(npulls)" "4 1" "[p] instrument: issues and pulls lookups by SessionStart, doctor and a write"
   c_eq "$(grep -v -c -F -e '--hostname github.com' "$STUB/calls" || true)" 0 "[p] every gh argv carries --hostname github.com"
-  c_has "$(eplines session-start)" '"format":8' "[p] the session-start line carries format 8"
+  c_has "$(eplines session-start)" '"format":11' "[p] the session-start line carries format 11"
   bpy "import json; d = s.state_dir(); f = open(d + '/episodes.jsonl', 'a')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'old-one-session'}) + '\n')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'older-two', 'format': 1}) + '\n')
@@ -961,11 +961,11 @@ case_link() {
   c_eq "$(status_of X2)" live "[v] even once its other anchor merges (fresh lookups): work done before the link never closes it"
   c_has "$OUT" "acme/app¤8 done $A21" "[v] close-linked says why it skipped X2"
   c_has "$(opf 'o["id"], o["pointer"]')" "('X3', 'acme/app¤13')" "[v] by a link-close"
-  c_has "$(eplines session-start | tail -n 1)" '"format":8' "[v] the session-start line carries format 8"
+  c_has "$(eplines session-start | tail -n 1)" '"format":11' "[v] the session-start line carries format 11"
   bpy "import json; d = s.state_dir(); f = open(d + '/episodes.jsonl', 'a')
 f.write(json.dumps({'t': s.now_iso(), 'kind': 'session-start', 'session': 'older-seven', 'format': 7}) + '\n')"
   br doctor
-  c_has "$OUT" "session older-se… last started on an older brain (log format 7, this one writes 8)" "[v] doctor names a session started on format 7"
+  c_has "$OUT" "session older-se… last started on an older brain (log format 7, this one writes 11)" "[v] doctor names a session started on format 7"
   c_has "$OUT" "closes added later (link)" "[v] and says a link is what it would refuse"
   # a supersede chain: X1 named ¤20, X2 dropped it for ¤21, then ¤20 was linked to X2 after it merged
   np; seed "X1@$C20;closes=acme/app¤20" "X2@$A22;closes=acme/app¤21;sup=X1"; pr 'acme/app¤20' merged "$A21"; pr 'acme/app¤21' open

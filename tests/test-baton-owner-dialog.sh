@@ -447,8 +447,82 @@ fam_owner_wiring() {  # [H] hooks.json runs the guard on every Bash call, as its
      "[H] the hooks.json command, as Claude Code runs it: ask and a record"
 }
 
+fam_owner_void() {  # [X] sign --by owner --void <binding>: the owner retires an unused signature through the dialog; its bytes are kept
+  local P=$1 sig B keep VD vreason
+  setup "$P"; hook "$P" >/dev/null; sign "$P" >/dev/null
+  sig=$(find "$ST/vibemaestro/baton/signatures" -name '*.json' | head -1); B=$(basename "$sig" .json); keep="$TMP/void.keep"; cp "$sig" "$keep"
+  VD="$ST/vibemaestro/baton/voided"
+  # vrec <plugin> — a dialog record for the --void of $B as if the guard had written it (it denies a used one): sign's own check
+  vrec() { ( cd "$W" && cenv XDG_STATE_HOME="$ST" python3 -c 'import os, sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+import baton
+baton.record_asked("s-owner", "default", ["--by", "owner", "--void", sys.argv[2]], os.path.realpath(os.getcwd()), None, None,
+                   void=baton.sha256(open(sys.argv[3], "rb").read()))' "$1" "$B" "$keep" ); }
+  eq "$(bt "$P" "$W" s-owner sign --by owner --void "$B")/$(signed_n)" "3/1" "[X] no dialog record: --void rc 3, the signature stays"
+  CMD="python3 $P/scripts/baton.py sign --by owner --void $B"
+  eq "$(hook "$P")/$(asked_n)" "ask/1" "[X] the owner's --void: the guard asks, one record"
+  vreason=$(HOOK_FIELD=permissionDecisionReason hook "$P")
+  for k in "voids a signature that never ran" "Script:   act.sh ($W/act.sh" "Dir:      $W" "Args:     $W/out.txt hello" "Binding:  $B" \
+           "signed by owner at 20"; do
+    has "$vreason" "$k" "[X] …the card shows: $k"
+  done
+  eq "$(bt "$P" "$W" s-owner sign --by owner --void "$B")/$(signed_n)" "0/0" "[X] the owner clicked: rc 0, gone from signatures/"
+  has "$(cat "$BT_OUT")" "voided signature ${B:0:12}" "[X] …one line names it"
+  eq "$(cmp -s "$keep" "$(find "$VD" -name "*-$B.json" | head -1)" && echo same || echo differ)" same "[X] …its bytes kept as they were in voided/"
+  eq "$(grep -F "	signature	" "$ST/vibemaestro/baton/log.tsv" | grep -F "	${B:0:12}	" | grep -cF "	voided	")" 1 "[X] …one signature voided line in log.tsv"
+  eq "$(bt "$P" "$W" s-owner run act.sh "$W/out.txt" hello)/$([ -e "$W/out.txt" ] && echo ran || echo none)" "3/none" "[X] run of that call: rc 3, nothing ran"
+  has "$(cat "$BT_OUT")" "no signature for this script" "[X] …as if never signed"
+  eq "$(hook "$P")/$(asked_n)" "deny/0" "[X] --void again: the guard denies, no record"
+  has "$(HOOK_FIELD=permissionDecisionReason hook "$P")" "no signature $B" "[X] …it says there is none"
+  # used: the guard denies, and sign refuses even with a record
+  setup "$P"; hook "$P" >/dev/null; sign "$P" >/dev/null
+  sig=$(find "$ST/vibemaestro/baton/signatures" -name '*.json' | head -1); B=$(basename "$sig" .json); cp "$sig" "$keep"
+  bt "$P" "$W" s-owner run act.sh "$W/out.txt" hello >/dev/null
+  CMD="python3 $P/scripts/baton.py sign --by owner --void $B"
+  eq "$(hook "$P")/$(asked_n)" "deny/0" "[X] a used signature: the guard denies"
+  vrec "$P"
+  eq "$(bt "$P" "$W" s-owner sign --by owner --void "$B")" 3 "[X] …with a dialog record anyway: rc 3"
+  has "$(cat "$BT_OUT")" "was used already" "[X] …it says used"
+  # bytes changed between the dialog and the click
+  setup "$P"; hook "$P" >/dev/null; sign "$P" >/dev/null
+  sig=$(find "$ST/vibemaestro/baton/signatures" -name '*.json' | head -1); B=$(basename "$sig" .json)
+  CMD="python3 $P/scripts/baton.py sign --by owner --void $B"; hook "$P" >/dev/null
+  printf ' ' >> "$sig"   # not a break: the record's bytes after the dialog opened
+  eq "$(bt "$P" "$W" s-owner sign --by owner --void "$B")/$(signed_n)" "3/1" "[X] the record changed after the dialog: rc 3, it stays"
+  has "$(cat "$BT_OUT")" "changed since the dialog opened" "[X] …it says changed"
+  # in use: its run has started (a slow rehearse)
+  setup "$P"
+  mutate "$W/act.sh" $'act() {\n  if holds_text' $'act() {\n  if [ -e "$PWD/slow" ]; then sleep 4; fi\n  if holds_text' || return
+  reseal "$P"; hook "$P" >/dev/null; sign "$P" >/dev/null
+  sig=$(find "$ST/vibemaestro/baton/signatures" -name '*.json' | head -1); B=$(basename "$sig" .json); cp "$sig" "$keep"
+  : > "$W/slow"
+  ( cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-owner python3 "$P/scripts/baton.py" run act.sh "$W/out.txt" hello ) > "$TMP/bg.out" 2>&1 &
+  for _ in $(seq 50); do grep -qF "	run-start	" "$ST/vibemaestro/baton/log.tsv" 2>/dev/null && break; sleep 0.1; done
+  CMD="python3 $P/scripts/baton.py sign --by owner --void $B"
+  eq "$(hook "$P")" deny "[X] a signature whose run is in progress: the guard denies"
+  vrec "$P"
+  eq "$(bt "$P" "$W" s-owner sign --by owner --void "$B")" 3 "[X] …with a dialog record anyway: rc 3"
+  has "$(cat "$BT_OUT")" "in use" "[X] …it says in use"
+  wait
+  eq "$(cat "$W/out.txt" 2>/dev/null)" hello "[X] …and the run went on"
+  # who and how: a session never voids on its own
+  setup "$P"; hook "$P" >/dev/null; sign "$P" >/dev/null
+  B=$(basename "$(find "$ST/vibemaestro/baton/signatures" -name '*.json' | head -1)" .json)
+  eq "$(bt "$P" "$W" s-owner sign --by coordinator-auto --void "$B")" 64 "[X] --by coordinator-auto --void: rc 64"
+  eq "$(bt "$P" "$W" s-owner sign --by owner --void "${B:0:63}")" 64 "[X] a 63-hex binding: rc 64"
+  eq "$(bt "$P" "$W" s-owner sign --by owner --void "$B" extra)" 64 "[X] a word after the binding: rc 64"
+  CMD="python3 $P/scripts/baton.py sign --by owner --void $(printf '%s' "$B" | tr a-f A-F)"
+  eq "$(hook "$P")/$(asked_n)" "deny/0" "[X] an upper-case binding: the guard denies"
+  CMD="python3 $P/scripts/baton.py sign --by owner --void $B"
+  eq "$(hook "$P" '{"agent_id": "a1"}')/$(asked_n)" "deny/0" "[X] a subagent: denied"
+  BT_ENV=(INTENT_SLUG=s SEAT=1)
+  eq "$(hook "$P")/$(asked_n)" "deny/0" "[X] a sandbox session: denied"
+  BT_ENV=()
+  eq "$(signed_n)" 1 "[X] …the signature stays"
+}
+
 FAMILIES="fam_owner_record fam_owner_modes fam_owner_who fam_owner_spelling fam_owner_rules fam_owner_auto fam_owner_mode fam_owner_oldcopy
-fam_owner_version fam_owner_lineage fam_owner_wiring fam_owner_hosts"
+fam_owner_version fam_owner_lineage fam_owner_wiring fam_owner_hosts fam_owner_void"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done

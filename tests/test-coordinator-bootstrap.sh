@@ -16,6 +16,8 @@
 #   [V] a session whose sdlc is not the registry's (an older copy left in the cache): rehearse is refused with one line naming both
 #       versions, rc 3, nothing written or signed; the installed copy rehearses
 #   [R] a merge that cannot reach permissions --check rc 0 is refused at rehearse; nothing written
+#   [S] a baton allow rule of another sdlc version in the user settings: the plan names it, the run removes exactly it, undo puts the
+#       file back byte for byte; none left: nothing to do; the same rule only in the project settings or in ask: refused, nothing removed
 #   [G] the report: a dependent plugin's lines only when it is installed (the fixture tests/fixtures/dependent-plugin), and only
 #       its CHECK lines; a plugin that does not declare the dependency adds none; no path under the machine's home in a CHECK line
 # Assertions read exit codes, files, sha256 and JSON; of the output only the CHECK names, REFUSE and the baton verdict lines.
@@ -357,6 +359,76 @@ fam_old_name() {
   has "$(cat "$sk")" "leaves vibemaestro-sdlc in the next release" "[O] …and says when it leaves"
 }
 
+# fam_stale — a baton allow rule naming another sdlc version (1.9.0; the installed copy is a commit-named directory): the run removes
+# exactly that rule, the plan names it, undo puts the file back; a rule it must not touch is refused as before
+STALE_RULE='Bash(python3 /h/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)'
+# stale_machine <plugin copy> <user|project|ask|deny|read> — a machine set up by hand whose settings also hold the stale rule: in the
+# user settings' allow (with an unrelated allow rule), only in the project settings, in the user settings' ask or deny, or as a Read allow
+stale_machine() {
+  machine "$1"
+  set_up_by_hand
+  mkdir -p "$M/proj/.claude"
+  python3 - "$(SETTINGS)" "$M/proj/.claude/settings.json" "$STALE_RULE" "$2" <<'PY'
+import json, sys
+user, project, rule, where = sys.argv[1:5]
+s = json.load(open(user))
+if where == "user":
+    s["permissions"]["allow"] += [rule, "Bash(ls:*)"]
+elif where == "ask":
+    s["permissions"].setdefault("ask", []).append(rule)
+elif where == "deny":
+    s["permissions"].setdefault("deny", []).append(rule)
+elif where == "read":
+    s["permissions"]["allow"].append("Read(" + rule[len("Bash("):-1] + ")")
+else:
+    json.dump({"permissions": {"allow": [rule]}}, open(project, "w"))
+open(user, "w").write(json.dumps(s, indent=4))
+PY
+}
+
+fam_stale() {
+  local P=$1 C s cur
+  stale_machine "$P" user
+  cur=$(jq_ "$(SETTINGS)" 'd["permissions"]["allow"][0]')
+  eq "$(b permissions --check)" 7 "[S] instrument: the stale rule is a finding (permissions --check: rc 7)"
+  has "$(cat "$OUT")" "names version 1.9.0: kit:bootstrap removes it" "[S] …the finding says kit:bootstrap removes it"
+  eq "$(b rehearse kit:bootstrap)" 0 "[S] rehearse: rc 0"
+  has "$(cat "$OUT")" "remove allow -1 [\"$STALE_RULE\"], ask -0, deny -0" "[S] …the plan names the one rule it removes"
+  eq "$(grep -c '^  PLAN bootstrap settings ' "$OUT")" 1 "[S] …in one settings line"
+  eq "$(owner_run)" "0/0" "[S] signed by the owner and run: rc 0"
+  eq "$(jq_ "$(SETTINGS)" '[x for x in d["permissions"]["allow"] if "1.9.0" in x]')" "[]" "[S] …the stale rule is gone"
+  eq "$(jq_ "$(SETTINGS)" '"Bash(ls:*)" in d["permissions"]["allow"]')" True "[S] …the unrelated rule stays"
+  eq "$(jq_ "$(SETTINGS)" 'd["permissions"]["allow"].count("'"$cur"'")')" 1 "[S] …and the current rule stays, once"
+  eq "$(b permissions --check)" 0 "[S] …permissions --check: rc 0"
+  s=$(sha_of "$(SETTINGS)")
+  eq "$(b rehearse kit:bootstrap)" 1 "[S] run again, no stale rule: rehearse refuses"
+  has "$(cat "$OUT")" "REFUSE nothing to do" "[S] …REFUSE nothing to do"
+  eq "$(sha_of "$(SETTINGS)")" "$s" "[S] …the settings are unchanged"
+  # undo: a run whose post-check fails puts the file back byte for byte
+  C="$P.pcstale"; rm -rf "$C"; cp -R "$P" "$C"; fail_postcheck "$C"
+  stale_machine "$C" user
+  s=$(sha_of "$(SETTINGS)")
+  eq "$(owner_run)" "0/4" "[S] a run whose post-check fails: rc 4, undone"
+  eq "$(sha_of "$(SETTINGS)")" "$s" "[S] …the settings, stale rule included, are byte-identical"
+  # not the user's allow rule: refused as before, nothing removed
+  stale_machine "$P" project
+  s=$(sha_of "$(SETTINGS)")/$(sha_of "$M/proj/.claude/settings.json")
+  eq "$(b rehearse kit:bootstrap)" 1 "[S] the stale rule only in the project settings: rehearse refuses"
+  has "$(cat "$OUT")" "names version 1.9.0" "[S] …naming the rule"
+  eq "$(sha_of "$(SETTINGS)")/$(sha_of "$M/proj/.claude/settings.json")" "$s" "[S] …neither file is changed"
+  stale_machine "$P" ask
+  s=$(sha_of "$(SETTINGS)")
+  eq "$(b rehearse kit:bootstrap)" 1 "[S] the stale rule in the user settings' ask, not allow: rehearse refuses"
+  eq "$(sha_of "$(SETTINGS)")" "$s" "[S] …the settings are unchanged"
+  for w in deny read; do
+    stale_machine "$P" $w
+    s=$(sha_of "$(SETTINGS)")
+    eq "$(b rehearse kit:bootstrap)" 1 "[S] the stale rule as a $w rule, not a Bash allow: rehearse refuses"
+    has "$(cat "$OUT")" "names version 1.9.0" "[S] …naming the rule"
+    eq "$(sha_of "$(SETTINGS)")" "$s" "[S] …the settings are unchanged"
+  done
+}
+
 fam_hook() {
   local P=$1 G=$2 h
   machine "$P" "$G"
@@ -377,7 +449,7 @@ PY2
 
 echo "== the real plugin =="
 REAL="$TMP/real"; cp -R "$PLUGIN" "$REAL"; GREAL="$TMP/dependent"; cp -R "$DEP" "$GREAL"
-for fam in fam_fresh fam_setup fam_undo fam_unreachable fam_version fam_old_name; do echo "-- $fam"; "$fam" "$REAL"; done
+for fam in fam_fresh fam_setup fam_undo fam_unreachable fam_version fam_old_name fam_stale; do echo "-- $fam"; "$fam" "$REAL"; done
 echo "-- fam_report"; fam_report "$REAL" "$GREAL"
 echo "-- fam_hook"; fam_hook "$REAL" "$GREAL"
 

@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
 
 # `open_pr.py` luôn nằm cạnh file này (skill cài theo cả thư mục), nên phép dò
 # worktree chỉ có MỘT bản — kể cả phần gỡ GIT_DIR/GIT_WORK_TREE khỏi env.
@@ -32,6 +33,8 @@ PREFIX = "intent/"
 
 ISSUE_CODE = None   # `issue.code`: the repository's 3-letter code, or None (branches keep `intent/<date>-<slug>`)
 
+INFRA_LABEL = None  # `infra.label`: the label an issue for work that needs infrastructure help carries, or None (off)
+
 LANG = "vi"     # the language of the messages (messages.py): `main` sets it from the repo at `--cwd`
 
 
@@ -43,7 +46,7 @@ def M(key, *args):
 def apply_config(cwd):
     """Load the repo's config into PREFIX and PROTECTED. rc 0, or RC_USAGE (64) naming the key of an invalid config.
     A directory that is not a git repo keeps the defaults: the command reports that itself."""
-    global PREFIX, PROTECTED, REBASE_IDENTITY, INTAKE_FOCUS, ISSUE_CODE
+    global PREFIX, PROTECTED, REBASE_IDENTITY, INTAKE_FOCUS, ISSUE_CODE, INFRA_LABEL
     rc, top = git("rev-parse", "--show-toplevel", cwd=cwd)
     if rc != 0:
         return 0
@@ -56,6 +59,7 @@ def apply_config(cwd):
     REBASE_IDENTITY = cfg["rebase"]["identity"]
     INTAKE_FOCUS = cfg["intake"]["focus"]
     ISSUE_CODE = cfg["issue"]["code"]
+    INFRA_LABEL = cfg["infra"]["label"]
     return 0
 
 
@@ -226,7 +230,7 @@ ISSUE_LABEL = "intent"
 # nothing, so this is idempotent. Fixed constants, not configuration.
 ISSUE_LABEL_COLOR = "5319e7"
 ISSUE_LABEL_DESC = "Tracks a kb/intent record"
-ISSUE_URL_RX = re.compile(r"/issues/(\d+)\s*$")
+ISSUE_URL_RX = re.compile(r"(\S*/issues/(\d+))\s*$")
 FRONTMATTER_ISSUE_RX = re.compile(r"^issue:\s*\d+\s*$", re.M)
 
 
@@ -303,25 +307,27 @@ def keyed_intent(a, doc, root):
     if issue:
         number = int(issue)
     else:
-        number, issue_err = create_tracking_issue(doc, PREFIX + stem, root, a.cwd)
+        number, issue_err, url = create_tracking_issue(doc, PREFIX + stem, root, a.cwd, a.infra)
         if number is None:
             err("could not create the tracking issue: %s\n"
                 "       issue.code is %s, so the branch needs its number: NO BRANCH WAS CREATED. Check `gh issue list --label "
                 "intent` first (a call that timed out may still have created one: add `issue: N` to %s), then run create-intent "
                 "again once the cause is fixed" % (issue_err, ISSUE_CODE, rel))
             return 1, None
-        report_issue_created(doc, root, number)
+        report_issue_created(doc, root, number, url)
     key = "%s-%d" % (ISSUE_CODE, number)
     set_doc_key(doc, key)
     err("key %s recorded in %s" % (key, rel))
     return 0, PREFIX + kb_plan.branch_names("kb/intent/%s.md" % stem, {"key": key})[1]
 
 
-def create_tracking_issue(doc_path, intent_branch, root, cwd):
-    """(số_issue, lỗi). `lỗi` là None khi thành công — không bao giờ raise."""
+def create_tracking_issue(doc_path, intent_branch, root, cwd, infra=None):
+    """(số_issue, lỗi, URL của issue). `lỗi` là None khi thành công — không bao giờ raise. `infra`: the `Infra:` line of work that
+    needs infrastructure help (sdlc_config.infra_line); under `infra.label` the body carries it and the issue the label, or its
+    title the `[<label>] ` prefix when the repository lacks the label, which is never created."""
     gh = shutil.which("gh")
     if not gh:
-        return None, M("ib.no_gh")
+        return None, M("ib.no_gh"), None
     slug = slug_of(intent_branch)
     rel = os.path.relpath(doc_path, root)
     desc = doc_description(doc_path) or slug
@@ -336,19 +342,28 @@ def create_tracking_issue(doc_path, intent_branch, root, cwd):
                            cwd=cwd, capture_output=True, text=True, timeout=60)
         except Exception:
             pass                                 # the issue call below reports what is really wrong
+    title, names = "intent: %s" % slug, [name for name, _d, _c in labels]
+    if infra and INFRA_LABEL:
+        try:
+            has = subprocess.run([gh, "api", "repos/{owner}/{repo}/labels/%s" % urllib.parse.quote(INFRA_LABEL, safe="")],
+                                 cwd=cwd, capture_output=True, text=True, timeout=60).returncode == 0
+        except Exception:
+            has = False                          # unread counts as absent: the title prefix still marks the issue
+        title, names = sdlc_config.infra_mark(INFRA_LABEL, has, title, names)
+        body = body.rstrip("\n") + "\n\n" + infra + "\n"
     try:
         r = subprocess.run(
-            [gh, "issue", "create", "--title", "intent: %s" % slug,
-             "--body", body] + [x for name, _d, _c in labels for x in ("--label", name)],
+            [gh, "issue", "create", "--title", title,
+             "--body", body] + [x for name in names for x in ("--label", name)],
             cwd=cwd, capture_output=True, text=True, timeout=60)
     except Exception as e:
-        return None, str(e)
+        return None, str(e), None
     if r.returncode != 0:
-        return None, (r.stdout + r.stderr).strip()[:400]
+        return None, (r.stdout + r.stderr).strip()[:400], None
     m = ISSUE_URL_RX.search(r.stdout.strip())
     if not m:
-        return None, M("ib.issue_number", r.stdout.strip()[:200])
-    return int(m.group(1)), None
+        return None, M("ib.issue_number", r.stdout.strip()[:200]), None
+    return int(m.group(2)), None, m.group(1)
 
 
 # ---------------------------------------------------------------------------
@@ -469,13 +484,43 @@ def intake_refusal(doc, root, cwd):
     return focus_from_brain(brain, f, root)
 
 
-def report_issue_created(doc, root, number):
+REQUEST_RX = re.compile(r"^R[1-9][0-9]*$")
+
+
+def link_request(doc, root, number, url):
+    """A story whose frontmatter names the brain request it answers (`request: R<n>`) gets its new issue as that request's
+    `closes` (`brain op link`), so the request closes itself once the story's issue is completed. Only where a brain answers
+    and not in a worker (the coordinator links a worker's); one line either way, never a failure."""
+    fm = doc_front(doc)
+    req = str(fm.get("request") or "").strip()
+    if fm.get("type") != "story" or not req or worker():
+        return
+    brain = brain_script()
+    if brain is None:
+        return
+    if not REQUEST_RX.match(req):
+        err("request: %s in %s is not a request id like R3: not linked to issue #%d" % (req, os.path.relpath(doc, root), number))
+        return
+    try:
+        r = subprocess.run([sys.executable, brain, "op", "link", req, "--closes", url], cwd=root, capture_output=True,
+                           text=True, timeout=60)
+        rc, why = r.returncode, (r.stderr or r.stdout).strip()[:300]
+    except Exception as e:
+        rc, why = None, str(e)
+    if rc == 0:
+        err("request %s closes with issue #%d now (brain op link)" % (req, number))
+    else:
+        err("request %s not linked to issue #%d: %s; run brain op link %s --closes %s" % (req, number, why, req, url))
+
+
+def report_issue_created(doc, root, number, url):
     """In lời khai TRUNG THỰC về việc tạo issue #N — chỉ nói "đã ghi" khi
     `set_doc_issue` thật sự ghi được. Trước bản vá này, chỗ gọi hàm không đọc
     giá trị trả về nên hồ sơ không-frontmatter vẫn báo "đã ghi" dù không có
     dòng `issue:` nào được thêm."""
     if set_doc_issue(doc, number):
         err("created tracking issue #%d, recorded in %s" % (number, os.path.relpath(doc, root)))
+        link_request(doc, root, number, url)
     else:
         err("created issue #%d BUT could not record it in %s: the file does not start "
             "with `---` (no frontmatter). Add the line `issue: %d` at its top by hand."
@@ -509,11 +554,11 @@ def cmd_retry_issue(a):
     if front_issue(doc).isdigit():
         err(M("ib.retry_has_issue", os.path.relpath(doc, root)))
         return 0
-    number, issue_err = create_tracking_issue(doc, intent, root, a.cwd)
+    number, issue_err, url = create_tracking_issue(doc, intent, root, a.cwd, a.infra)
     if number is None:
         err("could not create the tracking issue: %s" % issue_err)
         return 1
-    report_issue_created(doc, root, number)
+    report_issue_created(doc, root, number, url)
     return 0
 
 
@@ -574,7 +619,7 @@ def cmd_create_intent(a):
     elif getattr(a, "issue", False) and worker() and front_issue(doc).isdigit():
         err("a worker's intent already names its issue (the one gate 1 labelled): no new issue is opened")
     elif getattr(a, "issue", False):
-        number, issue_err = create_tracking_issue(doc, intent, root, a.cwd)
+        number, issue_err, url = create_tracking_issue(doc, intent, root, a.cwd, a.infra)
         if number is None:
             err("could not create the tracking issue (best-effort, does NOT block the branch): %s\n"
                 "       branch %s is created; add `issue: N` to %s by hand if needed.\n"
@@ -583,7 +628,7 @@ def cmd_create_intent(a):
                 "intent-branch.sh retry-issue --slug %s"
                 % (issue_err, intent, os.path.relpath(doc, root), slug_of(intent)))
         else:
-            report_issue_created(doc, root, number)
+            report_issue_created(doc, root, number, url)
 
     print(intent)
     return 0
@@ -826,11 +871,21 @@ def main(argv):
     r = sub.add_parser("retry-issue")
     r.add_argument("--slug", required=True)
     r.set_defaults(fn=cmd_retry_issue)
+    for x in (c, r):                     # the issue asks for infrastructure help (`infra.label`): both or neither
+        x.add_argument("--infra-blocked", default=None, help=M("ib.help_infra_blocked"))
+        x.add_argument("--infra-tried", default=None, help=M("ib.help_infra_tried"))
 
     a = p.parse_args(argv)
     if not getattr(a, "cmd", None):
         p.print_usage(sys.stderr)
         return RC_USAGE
+    a.infra = None
+    if getattr(a, "infra_blocked", None) is not None or getattr(a, "infra_tried", None) is not None:
+        try:
+            a.infra = sdlc_config.infra_line(a.infra_blocked or "", a.infra_tried or "")
+        except ValueError as e:
+            err("refused, nothing created: %s (give --infra-blocked and --infra-tried both)" % e)
+            return RC_USAGE
     rc = apply_config(a.cwd)
     if rc:
         return rc

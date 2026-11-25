@@ -31,7 +31,8 @@
                                                          item (queue/, pending or signed) whose script lies in the cache
                                                          directory of one of those plugins and that has not run, by baton.py's
                                                          own readers; the run's own record (its script, arguments and
-                                                         directory) is not counted
+                                                         directory) is not counted; each line ends with the command
+                                                         that clears it (queue withdraw, sign --by owner --void)
 
 The record's `targets` file holds one line per plugin in scope: <plugin> <old commit or -> <target commit>.
 
@@ -556,16 +557,7 @@ def pending(cfg, own, plugins, args):
     own, here = os.path.realpath(own), os.path.realpath(os.getcwd())
     def mine(script, a, cwd):
         return isinstance(script, str) and script.startswith(roots) and not (os.path.realpath(script) == own and a == args and cwd == here)
-    started, ended = {}, {}
-    try:
-        with open(os.path.join(b.state_dir(), "log.tsv"), encoding="utf-8", errors="backslashreplace", newline="") as f:
-            lines = f.read().split("\n")
-    except OSError:
-        lines = []
-    for f in (ln.split("\t")[-len(b.LOG_FIELDS):] for ln in lines):
-        t = b.iso_seconds(f[0]) if len(f) >= 12 and f[1] in ("run-start", "run") else None
-        if t is not None:
-            (started if f[1] == "run-start" else ended)[f[4]] = max((started if f[1] == "run-start" else ended).get(f[4], t), t)
+    marks = b.run_marks(b.state_dir())
     found = []
     try:
         recs = b.pending(b.state_dir())
@@ -574,10 +566,9 @@ def pending(cfg, own, plugins, args):
             raise
         recs = []
     for r in recs:
-        when, bound = b.iso_seconds(str(r.get("time"))), str(r.get("binding"))[:12]
-        running = when is not None and started.get(bound, -1) >= when and ended.get(bound, -1) < started[bound]
-        if mine(r.get("script_path"), r.get("args"), r.get("cwd")) and not running:
-            found.append("signature %s signed %s in %s" % (os.path.basename(r["script_path"]), r.get("time"), r.get("cwd")))
+        if mine(r.get("script_path"), r.get("args"), r.get("cwd")) and not b.in_run(marks, r.get("binding"), r.get("time")):
+            found.append("signature %s signed %s in %s; the owner voids it: %s sign --by owner --void %s" % (
+                os.path.basename(r["script_path"]), r.get("time"), r.get("cwd"), b.entry_command(), r.get("binding")))
     try:
         ids = sorted(n[:-5] for n in os.listdir(b.queue_dir()) if n.endswith(".json") and b.QUEUE_ID.match(n[:-5]))
     except OSError as e:
@@ -587,7 +578,10 @@ def pending(cfg, own, plugins, args):
     for qid in ids:
         _p, it, state = b.load_item(qid)
         if state in ("pending", "signed") and mine(it.get("script_path"), it.get("args"), it.get("cwd")):
-            found.append("queued-item %s %s queued %s in %s" % (qid, it.get("name"), it.get("created"), it.get("cwd")))
+            way = ("the session that queued it withdraws it: %s queue withdraw %s --reason dead, or the owner: " % (b.entry_command(), qid)
+                   if state == "pending" else "the owner withdraws it: ")
+            found.append("queued-item %s %s queued %s in %s; %s%s sign --by owner --void %s" % (
+                qid, it.get("name"), it.get("created"), it.get("cwd"), way, b.entry_command(), qid))
     for line in found:                                       # a name that is not UTF-8 (a lone surrogate) prints as ?, never a crash
         out("PENDING", b.esc(line).encode("utf-8", "replace").decode("utf-8"))
     if found:

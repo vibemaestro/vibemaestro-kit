@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Purpose: set up a machine for BatonRun: install the baton launcher and add the printed permission block (and attribution off where a key is absent) to the user settings, after a machine report
 # Targets: <state-dir>/bin/baton; <claude-dir>/settings.json (created as {} when absent); backups and run records under <state-dir>/records
-# Blast: those two files only; no rule or key the settings already hold is removed or changed; the mode is never written
+# Blast: those two files only; no rule or key the settings already hold is changed, and the only rules removed are the stale allow rules of the user settings (Bash, naming baton and an sdlc version other than the installed one), each named in the plan line; the mode is never written
 # Undo: newest first, only what this signed run wrote and only while it is what the run left: the settings put back byte for byte by the kind settings-merge's undo (a file created as {} removed again), the old launcher put back or the new one removed; a target that changed since is left alone (LEAVE, exit 5)
-# Pre: vibemaestro-sdlc is installed in the plugin cache and this session runs the installed version (a session left on an older copy is refused at rehearse, rc 3: restart Claude Code); the settings are JSON and not a symbolic link; adding rules reaches permissions --check rc 0 but for the old broad ask rules, which kit:permissions-upgrade swaps after it (else refused); something to do (else refused, rc 3)
+# Pre: vibemaestro-sdlc is installed in the plugin cache and this session runs the installed version (a session left on an older copy is refused at rehearse, rc 3: restart Claude Code); the settings are JSON and not a symbolic link; adding rules and removing those stale allow rules reaches permissions --check rc 0 but for the old broad ask rules, which kit:permissions-upgrade swaps after it (else refused); something to do (else refused, rc 3)
 # Stops: security-boundary
-#   Why: it adds allow rules, which widen what a session may do, so the owner signs, in every mode.
+#   Why: it adds allow rules and removes stale ones, which change what a session may do, so the owner signs, in every mode.
 # Usage: no arguments (every value is this machine's; a new machine runs it through the plugin's scripts/baton.py)
 # Each: bootstrap *
 #

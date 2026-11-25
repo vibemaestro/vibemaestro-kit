@@ -122,7 +122,8 @@
     "ui_paths": [
       "web/**"
     ],
-    "trusted_app": null
+    "trusted_app": null,
+    "exempt": null
   },
   "sensitive": {
     "allowlist": ".allow",
@@ -196,13 +197,19 @@
   "issue": {
     "code": "ACM"
   },
+  "infra": {
+    "label": "needs infra"
+  },
   "agents": {
     "review_model": "fable",
     "search_model": "sonnet",
     "worker_model": "opus"
   },
   "kb": {
-    "spec_warn_bytes": 30000
+    "spec_warn_bytes": 30000,
+    "intent_max_bytes": 12000,
+    "spec_max_bytes": 24000,
+    "plan_max_bytes": 24000
   },
   "tokens": {
     "summary_heading": "Summary",

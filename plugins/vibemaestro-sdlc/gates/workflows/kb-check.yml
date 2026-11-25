@@ -1,0 +1,65 @@
+# =============================================================================
+# Gate: the kb/ of a PR keeps the kb rules (.vibemaestro/gates/kb.py check, then check links)
+# =============================================================================
+# Opt-in: `install_gates.py --only kb-check`. A bare `kb.py check` only judges the life of the documents; the trace of a plan (a Title column
+# per row, its length, no backtick) is judged by `check links`, so the step runs both. A bare `check` judges the whole kb/ tree, so a PR with
+# no file under kb/ fails only when the base's kb/ already does.
+#
+# Trust: the script, the modules it imports and the config are the BASE branch's (the gates are copied out of the base before the PR's tree is
+# checked out, and the PR's .vibemaestro/sdlc.json is put back to the base's), so a PR cannot relax the check it is judged by. Nothing is
+# fetched from another repository. The PR that installs the gates has no kb.py on its base yet: the step says so and passes, once. The workflow
+# file itself comes from the PR: review changes under .github/ like code.
+name: kb-check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+# A new commit on the PR cancels the run of the head it replaces; every other event gets a group of its own (as in the other gates).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}-${{ github.event.action == 'synchronize' && 'commit' || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  kb-check:
+    # No CI on a draft: ready_for_review starts the round
+    if: github.event.pull_request.draft == false
+    runs-on: ${{ vars.CI_GATE_RUNNER || vars.@@RUNNER_VAR@@ || '@@RUNNER_DEFAULT@@' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: kb.py check and check links, from the base's copy, on the PR's tree
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -f .vibemaestro/gates/kb.py ]; then
+            echo "::warning::the kb-check gate is not installed on the base branch yet, so it did not run for this PR"
+            exit 0
+          fi
+          gates="$RUNNER_TEMP/kb-check-gates"
+          rm -rf "$gates"
+          cp -R .vibemaestro/gates "$gates"
+          git fetch --no-tags origin "+refs/pull/$PR_NUMBER/head:refs/kb-check/head"
+          # the head this run's check is attached to, not whatever the PR holds by now (a newer push gets its own run)
+          git checkout -q --detach "$HEAD_SHA"
+          # the PR's .vibemaestro may be a link (or hold one for sdlc.json): remove it, never write through it
+          if [ -L .vibemaestro ]; then rm .vibemaestro; fi
+          rm -f .vibemaestro/sdlc.json
+          if git cat-file -e "origin/$BASE_REF:.vibemaestro/sdlc.json" 2>/dev/null; then
+            mkdir -p .vibemaestro
+            git show "origin/$BASE_REF:.vibemaestro/sdlc.json" > .vibemaestro/sdlc.json
+          fi
+          # a bare `check` finds its base through origin/HEAD, which actions/checkout does not set
+          git remote set-head origin -- "$BASE_REF"
+          python3 -B -I "$gates/kb.py" check
+          python3 -B -I "$gates/kb.py" check links --base "origin/$BASE_REF"

@@ -10,7 +10,8 @@
 # checkout has none yet, a config whose public.private is .vibemaestro/sdlc.json and private-dir/**, and planted files: the root kb/
 # and private-dir/ ones must stay out, the others (tests/, scripts/, .changes/, .github/, docs/, kbx/, a kb/ below the root,
 # private-dir.md) must be exported.
-#   [L] the file list equals the tree minus the root kb/ and the private list, computed here by this suite's own rule (never the script's)
+#   [L] the file list equals the tree minus the root kb/ and the private list, computed here by this suite's own rule (never the script's);
+#       each plugin's .claude-plugin/icon.png and icon.svg are exported equal to the source, the PNG 1024x1024 and under 200 KB
 #   [X] no path under the root kb/ or matching public.private; no planted private content; the planted public files are there
 #   [D] two exports of one rev: one stdout line, the same digest, the same names, bytes, modes and mtimes (umask 077 for the
 #       second); the digest is what `git init`, `git add -Af`, `git write-tree` give for the dir; a branch name gives the sha's digest
@@ -61,6 +62,12 @@ unset GH_TOKEN GITHUB_TOKEN
 PLUGINS="vibemaestro-sdlc vibemaestro-brain"
 HEX40='^[0-9a-f]{40}$'
 
+# icon_ok <file> — True when it is a PNG whose IHDR says 1024x1024 and it is under 200 KB, else False
+icon_ok() {
+  python3 -c 'import os, struct, sys
+b = open(sys.argv[1], "rb").read(24)
+print(b[:8] == b"\x89PNG\r\n\x1a\n" and b[12:16] == b"IHDR" and struct.unpack(">II", b[16:24]) == (1024, 1024) and os.path.getsize(sys.argv[1]) < 200 * 1024)' "$1" 2>/dev/null
+}
 # ex <rev> <outdir> [script] — run the export in $FX; sets RC, DIG (stdout) and ERR (stderr)
 ex() {
   DIG=$(cd "$FX" && bash "${3:-$EXPORT}" "$1" "$2" 2>"$TMP/ex.err"); RC=$?; ERR=$(cat "$TMP/ex.err")
@@ -195,7 +202,18 @@ done
 for p in $PLUGINS; do
   cmp -s "$O1/plugins/$p/LICENSE" "$FX/LICENSE" && cmp -s "$O1/plugins/$p/NOTICE" "$FX/NOTICE" &&
     ok "[L] plugins/$p carries LICENSE and NOTICE equal to the root files (Q7)" || bad "[L] plugins/$p: LICENSE or NOTICE missing or different"
+  # the directory listing takes .claude-plugin/icon.png once, at the first submission: the export carries it and its source byte for byte
+  for f in icon.png icon.svg; do
+    cmp -s "$O1/plugins/$p/.claude-plugin/$f" "$SRC_ROOT/plugins/$p/.claude-plugin/$f" &&
+      ok "[L] plugins/$p/.claude-plugin/$f exported equal to the source" || bad "[L] plugins/$p/.claude-plugin/$f missing from the export or different"
+  done
+  eq "$(icon_ok "$O1/plugins/$p/.claude-plugin/icon.png")" True "[L] plugins/$p icon.png is a 1024x1024 PNG under 200 KB"
 done
+# controls of icon_ok: a 1024x512 PNG header, a 1024x1024 one over 200 KB, and a non-PNG are each False (not a break: built here)
+printf '\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x04\0\0\0\x02\0' > "$TMP/wide.png"
+{ printf '\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x04\0\0\0\x04\0'; head -c 204800 /dev/zero; } > "$TMP/big.png"
+printf 'not a png, twenty-four+ bytes long\n' > "$TMP/text.png"
+for f in wide big text; do eq "$(icon_ok "$TMP/$f.png")" False "[L] control: icon_ok refuses $f.png"; done
 empty "$(printf '%s\n' "$GOT" | grep -E '^(kb|private-dir)/|^\.vibemaestro/sdlc\.json$')" \
   "[X] no path under the root kb/ or private-dir/, no .vibemaestro/sdlc.json"
 empty "$(grep -rlF "$PRIV" "$O1" 2>/dev/null)" "[X] no planted private content anywhere in the export"

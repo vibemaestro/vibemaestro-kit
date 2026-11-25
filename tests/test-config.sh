@@ -79,6 +79,7 @@ fam_defaults() {
   rm -f "$PT/.vibemaestro/sdlc.json"
   J0=$(prd --closes 7 2>/dev/null); eq "$(pj "$J0" body | head -1)" "Closes #7" "[D2] …--closes writes the word Closes"
   eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; print(C.defaults()["kb"]["spec_warn_bytes"])' "$PLX/scripts")" 40000 "[D3] the default spec size warning is 40000 bytes"
+  eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; k = C.defaults()["kb"]; print(k["intent_max_bytes"], k["spec_max_bytes"], k["plan_max_bytes"])' "$PLX/scripts")" "16384 32768 32768" "[D3] the default byte limits are the story's 16384 and the spec's and the plan's 32768"
   eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; print(C.defaults()["ci"]["runner_default"])' "$PLX/scripts")" "ubuntu-latest" "[D3] the default runner label is still ubuntu-latest (the self-hosted-only form is opt-in)"
   eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; print(C.defaults()["commits"]["round_pattern"])' "$PLX/scripts")" '\bround\s*(\d+)\b' "[D3] the default round pattern is the English 'round N' (group 1 = the number)"
   eq "$(python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import sdlc_config as C; print(C.defaults()["current_state"]["limits"]["lines"], C.defaults()["current_state"]["limits"]["bytes"], C.defaults()["current_state"]["limits"]["line_chars"])' "$PLX/scripts")" "120 12000 200" "[D3] the effective current-state limits are today's (120, 12000, 200)"
@@ -115,10 +116,24 @@ fam_validate() {
   vcase "bad regex" '{"pr": {"title": {"pattern": "("}}}' pr.title.pattern
   vcase "bad branch pattern" '{"branch": {"pattern": "[a"}}' branch.pattern
   vcase "bad enum" '{"hooks": "sometimes"}' hooks
+  vcase "infra.label: a label name" '{"infra": {"label": "needs infra"}}' ok
+  vcase "infra.label: null (off)" '{"infra": {"label": null}}' ok
+  vcase "infra.label: a comma (gh --label splits on it)" '{"infra": {"label": "infra,ops"}}' infra.label
+  vcase "infra.label: empty" '{"infra": {"label": ""}}' infra.label
+  vcase "infra.label: a leading space" '{"infra": {"label": " infra"}}' infra.label
+  vcase "infra.label: 51 characters" '{"infra": {"label": "'"$(printf 'x%.0s' $(seq 51))"'"}}' infra.label
+  vcase "infra.label: not a string" '{"infra": {"label": true}}' infra.label
+  vcase "infra: an unknown key warns" '{"infra": {"label": "infra", "colour": "red"}}' 'warn:infra.colour: unknown key'
   vcase "evidence.trusted_app: an App slug" '{"evidence": {"trusted_app": "acme-ai"}}' ok
   vcase "evidence.trusted_app: github-actions (a PR's own workflow posts as it)" '{"evidence": {"trusted_app": "github-actions"}}' evidence.trusted_app
   vcase "evidence.trusted_app: not a slug" '{"evidence": {"trusted_app": "Bad Slug"}}' evidence.trusted_app
   vcase "evidence.trusted_app: the bot login, not the slug" '{"evidence": {"trusted_app": "acme-ai[bot]"}}' evidence.trusted_app
+  vcase "evidence.exempt: an App and its paths" '{"evidence": {"exempt": {"app": "acme-gate", "paths": ["clusters/*/dev/kustomization.yaml"]}}}' ok
+  vcase "evidence.exempt: empty (exempts nothing)" '{"evidence": {"exempt": {}}}' ok
+  vcase "evidence.exempt: github-actions" '{"evidence": {"exempt": {"app": "github-actions", "paths": ["a/**"]}}}' evidence.exempt.app
+  vcase "evidence.exempt: the bot login, not the slug" '{"evidence": {"exempt": {"app": "acme-gate[bot]", "paths": ["a/**"]}}}' evidence.exempt.app
+  vcase "evidence.exempt: paths not a list" '{"evidence": {"exempt": {"app": "acme-gate", "paths": "a/**"}}}' evidence.exempt.paths
+  vcase "evidence.exempt: not an object" '{"evidence": {"exempt": "acme-gate"}}' evidence.exempt
   vcase "wrong type" '{"pr": {"title": {"max_len": "long"}}}' pr.title.max_len
   vcase "a round pattern that does not compile" '{"commits": {"round_pattern": "("}}' commits.round_pattern
   vcase "a round pattern without a capture group" '{"commits": {"round_pattern": "round"}}' commits.round_pattern
@@ -182,8 +197,12 @@ fam_validate() {
   vcase "kb.spec_warn_bytes zero" '{"kb": {"spec_warn_bytes": 0}}' kb.spec_warn_bytes
   vcase "kb.spec_warn_bytes as a string" '{"kb": {"spec_warn_bytes": "40k"}}' kb.spec_warn_bytes
   vcase "an unknown key under kb" '{"kb": {"spec_warn_kb": 40}}' 'warn:kb.spec_warn_kb: unknown key'
-  vcase "kb.spec_warn_bytes set" '{"kb": {"spec_warn_bytes": 25000}}' ok
-  vcase "kb.spec_warn_bytes null (guard off)" '{"kb": {"spec_warn_bytes": null}}' ok
+  vcase "kb.spec_warn_bytes set (deprecated): valid, and a warning names the key that replaces it" '{"kb": {"spec_warn_bytes": 25000}}' 'warn:deprecated since 2026-11-17, it does nothing now: remove it: a spec is judged by kb.spec_max_bytes'
+  vcase "kb.spec_warn_bytes null (deprecated): still valid" '{"kb": {"spec_warn_bytes": null}}' 'warn:kb.spec_warn_bytes: deprecated since'
+  vcase "kb.intent_max_bytes zero" '{"kb": {"intent_max_bytes": 0}}' kb.intent_max_bytes
+  vcase "kb.spec_max_bytes as a string" '{"kb": {"spec_max_bytes": "32k"}}' kb.spec_max_bytes
+  vcase "kb.plan_max_bytes as a float" '{"kb": {"plan_max_bytes": 1.5}}' kb.plan_max_bytes
+  vcase "the three byte limits set" '{"kb": {"intent_max_bytes": 8192, "spec_max_bytes": 20000, "plan_max_bytes": 40000}}' quiet:unknown key
   vcase "the keys of the spec's worked example" "$(cat "$SHAPED/.vibemaestro/sdlc.json")" ok
   vcase "a nested intent prefix" '{"branch": {"intent_prefix": "team/feat/"}}' ok
   vcase "a valid external gate" '{"current_state": {"gate": "external:scripts/check.py"}}' ok

@@ -224,11 +224,28 @@ def release_at(fx, status):
     fx["api"][R + "compare/%s...%s" % (H, RT)] = {"status": status, "ahead_by": 1 if status == "ahead" else 0, "behind_by": 0, "files": []}
 
 
+P_ON, P_OFF, M1 = "f1" * 20, "f2" * 20, "f3" * 20     # a commit on main, one on no branch, a merge above the release tip
+ABOVE = {"merge": [RT, P_ON], "merge-rev": [P_ON, RT], "merge2": [M1, P_ON], "merge-off": [RT, P_OFF], "plain": [RT],
+         "octopus": [RT, P_ON, P_OFF]}
+
+
+def above(fx, a):
+    """the head is above release (the comparison says behind), its parents ABOVE[a]; P_ON is on main, P_OFF is not."""
+    release_at(fx, "behind")
+    fx["api"][R + "git/commits/" + H] = {"sha": H, "parents": [{"sha": p} for p in ABOVE[a]]}
+    fx["api"][R + "compare/%s...%s" % (P_ON, B)] = {"status": "ahead", "ahead_by": 3, "behind_by": 0, "files": []}
+    fx["api"][R + "compare/%s...%s" % (P_OFF, B)] = {"status": "diverged", "ahead_by": 3, "behind_by": 1, "files": []}
+
+
 def fx_backmerge(fx, a):
     """the head ref is backmerge/<sha12>; `a`: on (the head is on release), identical (it is the release tip), off (it is not
-    on release), none (there is no branch release)."""
+    on release), none (there is no branch release), or a head above the release tip (`above`): merge (the release tip and a
+    main commit, a conflict resolved), merge-rev (the same, its parents the other way round), merge2 (a merge above such a
+    merge), merge-off (the release tip and a commit not on main), plain (a plain commit), octopus (three parents)."""
     fx["pr"]["headRefName"] = "backmerge/" + H[:12]
-    if a != "none":
+    if a in ABOVE:
+        above(fx, a)
+    elif a != "none":
         release_at(fx, {"on": "ahead", "identical": "identical", "off": "diverged"}[a])
 
 
@@ -239,8 +256,25 @@ def fx_release_flaky(fx, a):
 
 
 def fx_on_release(fx, a):
-    """the head ref is not backmerge/*, and the head is on release (`a`: on) or not (off)."""
-    release_at(fx, "ahead" if a == "on" else "diverged")
+    """the head ref is not backmerge/*, and the head is on release (`a`: on), not (off), or above it as a merge of the release
+    tip and a main commit: held (main already holds the release tip, as after its back-merge) or above (main does not: the
+    parked branch backmerge-resolved/<sha12> of a resolution); above-fail (that comparison fails with HTTP 500 every time),
+    above-odd (it answers no status)."""
+    if a in ("held", "above", "above-fail", "above-odd"):
+        above(fx, "merge")
+        fx["api"][R + "compare/%s...%s" % (RT, B)] = {"held": {"status": "ahead", "files": []}, "above": {"status": "diverged", "files": []},
+                                                     "above-fail": {"__die__": "gh: Server Error (HTTP 500)"}, "above-odd": {"files": []}}[a]
+        if a != "held":
+            fx["pr"]["headRefName"] = "backmerge-resolved/" + RT[:12]
+    else:
+        release_at(fx, "ahead" if a == "on" else "diverged")
+
+
+def fx_shape_fail(fx, a):
+    """after backmerge=merge: reading the head's parents (`a`: parents) or comparing its other parent with the base (compare)
+    fails with HTTP 500 every time."""
+    key = R + ("git/commits/" + H if a == "parents" else "compare/%s...%s" % (P_ON, B))
+    fx["api"][key] = {"__die__": "gh: Server Error (HTTP 500)"}
 
 
 def fx_input_symlink(fx, a):

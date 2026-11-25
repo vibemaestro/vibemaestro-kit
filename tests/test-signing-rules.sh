@@ -56,6 +56,12 @@ GRANT_STEPS_MAX = GRANT_RUNS_MAX = GRANT_ENUM_MAX = 20
 APPROVAL_LIFE_MAX = 30 * 24 * 3600
 CHARTER_LIFE_MAX = 90 * 24 * 3600
 CHARTER_KINDS = ("baton", "workflow", "script", "test")
+WINDOW_NEVER = ("secrets", "cluster-lane", "irreversible-delete", "history-rewrite", "money-org")
+WINDOW_NEVER_BATONS = ("kit:bootstrap", "kind:settings-merge")
+WINDOW_LIFE_MAX = 24 * 3600
+WINDOW_FLOOR_PATHS = ("plugins/vibemaestro-sdlc/scripts/baton.py",)
+WINDOW_FLOOR_PREFIXES = (".vibemaestro/",)
+WINDOW_FLOOR_BATON_DIRS = ("batons", "templates/baton-kinds")
 SIGN_AGAIN_STOPS = ${2:-("security-boundary", "irreversible-delete", "no-way-back", "history-rewrite")}
 PLAN_SECRETS_KITS = ("vault-put-text", "script-run")
 PLUGIN_ROOT = "plugins/vibemaestro-sdlc"
@@ -95,7 +101,7 @@ echo "== [B] the seeded base: green, every default name found =="
 br b-readme; put README.md 'seed, edited\n'; commit readme
 O=$(gate base HEAD); rc=$?
 eq "$rc" 0 "[B] a README edit: rc 0"
-eq "$O" "signing-rules: green (20 names, 0 baton files changed)" "[B] …the green line names 20 names"
+eq "$O" "signing-rules: green (26 names, 0 baton files changed)" "[B] …the green line names 26 names"
 
 echo "== [S] Stops as stops_of parses them =="
 br s-none; put "$SD/batons/merge.sh" "$(baton 'merge one PR' none)\n"; commit s
@@ -117,7 +123,7 @@ has "$O" "Stops 'secrets' → 'Secrets'" "[S] …both spellings named"
 br s-order; put "$SD/batons/pub.sh" "$(baton 'post a note' 'secrets,publish')\n"; commit s
 O=$(gate base HEAD); rc=$?
 eq "$rc" 0 "[S] Stops reordered and respaced (publish, secrets → secrets,publish): rc 0"
-eq "$O" "signing-rules: green (20 names, 1 baton file changed)" "[S] …the baton file counted"
+eq "$O" "signing-rules: green (26 names, 1 baton file changed)" "[S] …the baton file counted"
 
 br s-purpose; put "$SD/batons/merge.sh" "$(baton 'merge one PR after its checks' secrets 'merged')\n"; commit s
 O=$(gate base HEAD); rc=$?
@@ -238,6 +244,21 @@ O=$(capped gate base HEAD); rc=$?
 eq "$rc" 1 "[L] CHARTER_KINDS widened to config after its line: rc 1"
 has "$O" "RED $BP: CHARTER_KINDS changed" "[L] …named"
 
+br l-window; put "$BP" "$(baton_py '\nWINDOW_NEVER = tuple(w for w in WINDOW_NEVER if w != "money-org")\n')\n"; commit l
+O=$(capped gate base HEAD); rc=$?
+eq "$rc" 1 "[L] WINDOW_NEVER narrowed after its line (a window could lower money-org): rc 1"
+has "$O" "RED $BP: WINDOW_NEVER changed" "[L] …named"
+
+br l-floor; put "$BP" "$(baton_py '\nWINDOW_FLOOR_PATHS = ()\n')\n"; commit l
+O=$(capped gate base HEAD); rc=$?
+eq "$rc" 1 "[L] WINDOW_FLOOR_PATHS emptied after its line (a window could owner-merge the runner): rc 1"
+has "$O" "RED $BP: WINDOW_FLOOR_PATHS changed" "[L] …named"
+
+br l-prefix; put "$BP" "$(baton_py '\nWINDOW_FLOOR_PREFIXES = ()\n')\n"; commit l
+O=$(capped gate base HEAD); rc=$?
+eq "$rc" 1 "[L] WINDOW_FLOOR_PREFIXES emptied after its line (a window could owner-merge a .vibemaestro/ change): rc 1"
+has "$O" "RED $BP: WINDOW_FLOOR_PREFIXES changed" "[L] …named"
+
 br l-string; put "$BP" "$(baton_py '\nglobals()["SIGN_AGAIN_STOPS"] = ()\n')\n"; commit l
 O=$(capped gate base HEAD); rc=$?
 eq "$rc" 1 "[L] globals()[\"SIGN_AGAIN_STOPS\"] = (): rc 1"
@@ -328,7 +349,7 @@ echo "== [E] what the gate cannot judge =="
 br e-parse; put "$BP" "$(baton_py)\ndef broken(:\n"; commit e
 O=$(capped gate base HEAD); rc=$?
 eq "$rc" 1 "[E] baton.py does not parse in the merged tree: rc 1"
-eq "$O" "RED $BP: does not parse at the merged tree (29)
+eq "$O" "RED $BP: does not parse at the merged tree (35)
 signing-rules: red, an owner merge (1 cause)" "[E] …named, with the line"
 
 br e-parse-base; put "lib/r.py" 'GRANT_NEVER = (\n'; commit e; g tag -f base-parse >/dev/null; put "lib/r.py" 'GRANT_NEVER = ()\n'; commit e2
@@ -428,6 +449,6 @@ eq "$rc/$([ -e "$TF" ] && echo written || echo none)" "2/none" "[T] a run that c
 echo "== [K] the kit's own tree =="
 O=$(python3 "$GATE" HEAD HEAD --cwd "$SRC_ROOT"); rc=$?
 eq "$rc" 0 "[K] the kit at HEAD: rc 0"
-eq "$O" "signing-rules: green (20 names, 0 baton files changed)" "[K] …all 20 default names found in the kit"
+eq "$O" "signing-rules: green (26 names, 0 baton files changed)" "[K] …all 26 default names found in the kit"
 
 echo; summary

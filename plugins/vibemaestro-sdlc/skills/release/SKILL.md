@@ -104,7 +104,18 @@ the version tags live in the published repository only.
 
 The back-merge PR merges through `kit:merge-pr` like any PR: the guard sees the head ref `backmerge/*` and a head on `release`,
 and merges with a merge commit instead of a squash, so `release` stays an ancestor of main (the next release's check needs it).
-Never squash it, never update its branch from main.
+Never squash it, never update its branch from main: a back-merge behind main passes the guard's `behind` on GitHub's fresh,
+mergeable test merge.
+
+**A back-merge that conflicts with main** (main changed what the hotfix changed): resolve it once, as one merge commit whose
+parents are the `release` tip and main's tip, made from the `release` tip (`git checkout --detach origin/release`, then
+`git merge origin/main`, resolve, commit), and push that commit to the `backmerge/<sha12>` branch through a baton. It is the only
+commit allowed above the tip: `release.py check` judges it as a back-merge, the guard's lane accepts it and merges it with a merge
+commit. Any other commit above the tip is refused (a plain commit, a merge with a parent not on main, three parents, a second merge
+on top of the first): when main moves and it conflicts again, make the merge again from the `release` tip and push it to a new
+`backmerge/*` branch (such as `backmerge/<sha12>-2`) with its own PR, closing the first (moving the first branch to it would be a force push). When the back-merge
+also changes a path the guard refuses by design (a deny glob, such as a workflow the hotfix changed), `kit:owner-merge` merges it,
+with a merge commit too (its plan line says `by merge-commit`).
 
 ## Then publish it your own way
 

@@ -40,21 +40,30 @@ Condition: the repo already has `kb/` — if not, do `vibemaestro-sdlc:init-kb` 
    and `P<n>`, the open focus of the brain it serves (`brain show P<n>`; ask the person when it is not clear which one). The command writes
    both into the frontmatter and the card of the type. A story's card is the story the owner approves, in the repository's
    `language` (`sdlc_config.py get language`), and it is the request itself: the As / I want / so that line, context, numbered AC
-   that say what the owner sees, each as when … then (no command, file name or code), out of scope, appetite, the words of the
+   that say what the owner sees, each as when … then (no command, file name or code), out of scope, estimation, the words of the
    person who asked mapped to the AC (`Lời người hỏi → AC` / `Words of the person who asked → AC`: the template's table, each quote | its AC ids), at
    most 3 open questions, each with four labelled parts, each label opening a line: why this question (with one example), what
-   each option means, impact, recommendation (and why); it fits a phone screen. With a coordinator, the coordinator writes it after brainstorming with the owner
+   each option means, impact, recommendation (and why); it fits a phone screen. A story's context and AC say what the person asked for and what they will see, in plain words: exact values, parameter names, status codes, matching rules and protocols belong in the spec, and the answer to a technical question goes into the spec, never back into the story's AC. With a coordinator, the coordinator writes it after brainstorming with the owner
    and hands it over verbatim; in a solo session, write it with the person (`vibemaestro-sdlc:brainstorm`). A task gets `## What`,
    `## Why` and `## Check`; a bug `## Reproduce`, `## Expected` and `## Test`. `kb.py check intent <date>-<slug>` judges the card:
    red for a missing part or more than 3 open questions; for a story new or whose body changed, also red for a question part
    missing or empty, a quote mapping to no AC, an AC the story lacks or an AC in no row (on a story on the merge base with its
    body unchanged these only warn); a warning for code, a path, a long story, an AC not written as when … then or a short code
-   word (D24) never explained. An older intent with the first
+   word (D24) never explained. An intent file is at most 16384 bytes (`kb.intent_max_bytes`; the whole file, UTF-8, so Vietnamese
+   letters count 2 or 3): a warning from 80 percent, red over it on a file the change touches. Over: the story keeps the request,
+   the ACs and the questions, and code-reading notes move to the spec. An older intent with the first
    story card (`## Story`, `## Acceptance criteria`, `## Not doing`, `## Measure`) is still read.
    The command prints the file path and a line `slug for intent-branch.sh: <date>-<slug>`. The slug is lower case, no accents,
    digits, hyphens. Delete every blank marked `<FILL: …>` (in a repo with the default `vi` language the blank carries the Vietnamese placeholder word that `tokens.spec.placeholder` holds); the `description:` line in the frontmatter becomes the description of the issue.
+   **A story is never written by hand or from memory:** it starts from the card this command wrote, and the person's text goes into
+   that card's parts, replacing the blanks in place. Keep every label the card carries exactly as written (the card is in the
+   repository's `language`): `kb.py check intent` finds a part by its label, so a label you rename, translate or replace with a
+   synonym is a missing part. The labels live only in the template in `scripts/kb.py`; this skill lists none, and the card is
+   where you read them.
    When the brief names a plan row (a plan file and a row id), add `plan: kb/plans/<file>.md#<row id>` to the frontmatter: it is how
    `kb.py plan status` finds this intent and its PR (`vibemaestro-sdlc:plan`).
+   When a story answers a brain request (`R<n>`, named by the brief or the person), add `request: R<n>` to its frontmatter: where a
+   brain answers, `create-intent` links the story's new issue as that request's `closes`, so the request closes when the story does.
    If the handover package already carries a "Brainstorm result" section (the person clarified it in an earlier step), copy it verbatim to the
    end of the intent file under the heading `## Brainstorm result`, and **do not brainstorm again**.
 
@@ -82,11 +91,20 @@ Condition: the repo already has `kb/` — if not, do `vibemaestro-sdlc:init-kb` 
    **When `.vibemaestro/sdlc.json` sets `issue.code`** (the repository's 3-letter code, like `KIT`), the branch is named after the
    issue: `create-intent` opens the issue first (or takes the `issue: N` the intent already names), writes the key
    `<CODE>-<issue number>` as the intent's `key:` and creates `intent/<KEY>-<slug>` (the slug without its date); the file keeps
-   `kb/intent/<date>-<slug>.md`, and the command prints the branch name: use it in step 4. If the issue cannot be opened, no branch is
-   created (rc 1): fix the cause, then run `create-intent` again. A Jira issue key the person gives goes in as `jira: <KEY>`
+   `kb/intent/<date>-<slug>.md`, and the command prints the branch name: use it in step 5. If the issue cannot be opened, no branch is
+   created (rc 1): fix the cause, then run `create-intent` again.
+   **When the work needs infrastructure help** (runners, CI variables, a runner group, secrets, a cluster, Cloudflare, Vault), add
+   `--infra-blocked "<what is blocked>" --infra-tried "<what was tried>"` to `create-intent` (or `retry-issue`). Under `infra.label`
+   in `.vibemaestro/sdlc.json` the issue gets that label when the repository has it, else its title starts with `[<label>] `, and
+   its body the line `Infra: blocked: <what> · tried: <what>`; the label is never created, and with the key unset nothing is added.
+   The issue asks for help and grants nothing. A Jira issue key the person gives goes in as `jira: <KEY>`
    (`kb.py new intent … --jira <KEY>`): stored and shown, never synced.
 
-4. **Commit and push** (one commit, `git add` by pathspec):
+4. **Check the intent before anyone is asked:** run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" check intent <date>-<slug>`
+   and fix every FAIL (a part missing or empty, a label that is not the card's) before you commit, ask for an approval or tell
+   the user the intake is done. A WARNING is read and weighed, not ignored. Rerun it until it passes.
+
+5. **Commit and push** (one commit, `git add` by pathspec):
 
    ```bash
    git add kb/intent/<date>-<slug>.md
@@ -108,7 +126,7 @@ A repo can start with no remote (`git remote` prints nothing): there is no `orig
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/intent-branch.sh" create-intent --slug <date>-<slug> --base chore/kb-init --no-issue
    ```
 
-4. Commit the intent file as in step 4, without the push.
+4. Check the intent as in step 4 above, then commit it as in step 5 above, without the push.
 5. Once the repo has a GitHub remote and the branches are pushed, open the tracking issue and record it:
 
    ```bash

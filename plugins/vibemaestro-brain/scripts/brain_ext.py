@@ -2,14 +2,17 @@
 
 An extension is an enabled plugin that depends on vibemaestro-brain and ships `brain-extension.json` at its root
 (brain_store.extension_roots finds it). Its manifest declares one script, the `brain op` writes the script checks (and the
-options it adds to them), the owner verbs it adds (each one of brain's own two owner writes, through brain's dialog: `pin` a
-decision, `archive` an item to a pointer), and the calls it answers: `start` (lines at SessionStart and on the review card),
-`record` (a section of `brain ledger --record`) and `read` (`brain ext NAME`).
+options it adds to them), the owner verbs it adds (each one of brain's own owner writes, through brain's dialog: `pin` a
+decision, `archive` an item to a pointer, `op` the extension's own op), and the calls it answers: `start` (lines at SessionStart and on the review card),
+`record` (a section of `brain ledger --record`), `read` (`brain ext NAME`) and `sweep` (rows `[item id, reason, evidence]` for
+a sweep's candidates, which sweep_rows gives a plugin that runs a sweep).
 
 Brain runs the script in its own process (`python -I -B`, the plugin root as its directory), one JSON object in on stdin and
 one out on stdout, under a time cap and a budget for the whole event, with no session id and an empty XDG_STATE_HOME. The
 extension never writes: brain checks what comes back (characters, lengths, the sensitive-value filter) and writes it, under
-`ext.<name>` of an item or an op, through its own write paths. Every call runs under the store lock, and whatever it changed
+`ext.<name>` of an item or an op, through its own write paths. Its own op (`{"op": "ext", "ext": NAME, "what": W, "data": {…}}`,
+which brain folds unread) brain writes for it: for the extension's own command, in a session, through write_op; for an owner
+verb of effect `op`, through brain's dialog, which names the SOUL codes the op's `soul` makes live. Every call runs under the store lock, and whatever it changed
 in the log, its head, the caches, the owner records or the session's SessionStart hand-over files is undone (the caches it
 changed are dropped). A missing, broken or slow
 extension is skipped with one line. A brain with no extension never imports this module. Standard library only.
@@ -37,30 +40,32 @@ HOOK_SECONDS, CLI_SECONDS = 1.0, 3.0                # an answer's time cap in a 
 HOOK_BUDGET, CLI_BUDGET = 2.0, 6.0                  # what every extension of one event may take together, in a hook, in the CLI
 MIN_CALL = 0.2                                      # seconds a call needs at least: with less left, it is skipped
 EXT_MAX = 4                                         # extensions read, by plugin id
-NAME_RE = re.compile(r"[a-z][a-z0-9-]{1,23}")
+NAME_RE = s.EXT_NAME
 OPTION_RE = re.compile(r"--[a-z][a-z0-9-]{1,23}")
 VERB_RE = re.compile(r"[a-z][a-z-]{1,15}")
 CHECK_VERBS = ("add", "supersede", "close", "held", "broke", "hit", "progress")
 KIND_VERBS = ("add", "supersede", "close")
 RIGHT_KINDS = ("now", "next", "trap", "session", "queue", "fact", "focus", "request")
 CORE_OWNER = ("add", "unpin", "supersede", "promote", "import", "backup", "batch")
-EFFECTS = ("pin", "archive")
+EFFECTS = ("pin", "archive", "op")
 ARCHIVE_LETTERS = ("G", "D", "W", "T", "F")
-CALLS = ("start", "record", "read")
+CALLS = ("start", "record", "read", "sweep")
 KEYS = ("schema", "name", "script", "checks", "owner", "calls")
 OPTIONS_MAX, ARGS_MAX = 4, 2
 # brain's own options of each verb an extension may check: it adds none of them, but may take one of CLAIMABLE for the kinds
-# brain does not use it on (a focus's --goal, a Next item's --focus, a request's --due)
+# brain does not use it on (a focus's --goal, a Next item's or a running session's --focus, a request's --due)
 BRAIN_OPTIONS = {"add": ("--kind", "--text", "--expires", "--link", "--anchor", "--closes", "--owner-quote", "--where", "--goal",
                          "--focus", "--due", "--done-when", "--not-doing", "--jira", "--blocks"),
                  "supersede": ("--text", "--reason", "--drop-anchor", "--anchor", "--closes", "--focus", "--due", "--shorter",
-                               "--bulk", "--done-when", "--not-doing", "--blocks"),
+                               "--bulk", "--done-when", "--not-doing", "--blocks", "--owner-quote", "--where"),
                  "close": ("--reason", "--pointer", "--bulk"), "held": ("--pointer", "--session"),
                  "broke": ("--pointer", "--differed", "--session"), "hit": ("--pointer", "--session"),
                  "progress": ("--measure", "--pointer")}
-CLAIMABLE = {("add", "--goal"): ("focus",), ("add", "--focus"): ("next",), ("add", "--due"): ("request",),
-             ("supersede", "--focus"): ("next",), ("supersede", "--due"): ("request",)}
+CLAIMABLE = {("add", "--goal"): ("focus",), ("add", "--focus"): ("next", "session"), ("add", "--due"): ("request",),
+             ("supersede", "--focus"): ("next", "session"), ("supersede", "--due"): ("request",)}
 LINES = {"start": (5, 200), "record": (60, 300), "read": (200, 400)}   # lines of an answer, UTF-16 units of each
+SWEEP_ROWS, SWEEP_WHY = 20, 120                     # rows of a `sweep` answer, UTF-16 units of a row's evidence
+SWEEP_REASON = re.compile(r"(?=.{2,24}\Z)[a-z]+(?: [a-z]+)*")   # words, one space between: never brain's own with a space added
 NOTE_LINES, NOTE_LINE = 12, 300
 DETAIL_MAX, MESSAGE_MAX = 120, 300
 OPTION_MAX, ARG_MAX, READ_ARGS, READ_ARG = 300, 80, 8, 200
@@ -126,19 +131,19 @@ def _owner(o):
     if not isinstance(verb, str) or not VERB_RE.fullmatch(verb) or verb in CORE_OWNER:
         raise Broken("an owner verb is not [a-z][a-z-]{1,15}, or is brain's own (%s)" % ", ".join(CORE_OWNER))
     if effect not in EFFECTS:
-        raise Broken("owner verb %s: the effect is not pin or archive" % verb)
+        raise Broken("owner verb %s: the effect is not pin, archive or op" % verb)
     args, letters = o.get("args", []), o.get("letters")
-    if effect == "pin":
+    if effect != "archive":
         if (letters is not None or not isinstance(args, list) or not all(isinstance(a, str) and NAME_RE.fullmatch(a) for a in args)
                 or len(args) > ARGS_MAX or len(set(args)) != len(args)):
-            raise Broken("owner verb %s (pin) takes up to %d named args and no letters" % (verb, ARGS_MAX))
+            raise Broken("owner verb %s (%s) takes up to %d named args and no letters" % (verb, effect, ARGS_MAX))
     elif ("args" in o or not isinstance(letters, list) or not letters or not all(l in ARCHIVE_LETTERS for l in letters)
           or len(set(letters)) != len(letters)):
         raise Broken("owner verb %s (archive) takes letters from %s and no args" % (verb, " ".join(ARCHIVE_LETTERS)))
     unknown = sorted(set(o) - {"verb", "effect", "args", "letters"})
     if unknown:
         raise Broken("owner verb %s has the unknown key %s" % (verb, label(unknown[0], 30)))
-    return verb, {"effect": effect, "args": tuple(args) if effect == "pin" else (), "letters": tuple(letters or ())}
+    return verb, {"effect": effect, "args": tuple(args) if effect != "archive" else (), "letters": tuple(letters or ())}
 
 
 def manifest(pid, root):
@@ -685,6 +690,8 @@ def owner_texts(ns, spec):
     """The texts of an owner verb the session wrote: they pass the sensitive-value filter before the extension sees them."""
     if spec["effect"] == "archive":
         return [ns.pointer]
+    if spec["effect"] == "op":
+        return [getattr(ns, "ext_arg_" + a) for a in spec["args"]]
     return ([ns.text, ns.owner_quote, ns.where] + [getattr(ns, "ext_arg_" + a) for a in spec["args"]] + list(ns.link)
             + list(ns.anchor))
 
@@ -693,6 +700,8 @@ def owner_fields(ns, spec):
     """The owner verb's own input fields, from its parsed arguments."""
     if spec["effect"] == "archive":
         return {"id": ns.id, "pointer": ns.pointer}
+    if spec["effect"] == "op":
+        return {"args": {a: getattr(ns, "ext_arg_" + a) for a in spec["args"]}}
     return {"args": {a: getattr(ns, "ext_arg_" + a) for a in spec["args"]}, "text": ns.text, "quote": ns.owner_quote,
             "where": ns.where, "anchors": ns.anchor, "links": ns.link}
 
@@ -708,17 +717,28 @@ def owner_call(e, spec, phase, ns, d, st, ops, seconds, locked=False, session=No
         return "refuse", ref[1]
     if phase == "ask":
         detail = out.get("detail")
-        if detail is None:
-            return "ok", None
-        detail = text_of(detail, DETAIL_MAX, "detail")
-        if '"' in detail or "(" in detail or ")" in detail or s.quote_like(detail):
-            raise Broken("its detail holds a quote, a parenthesis or a character that passes for a quote: the dialog shows it "
-                         "in parentheses inside brain's own line")
-        if s.DECISION_KIND in " ".join(s.skeleton(detail).casefold().split()):
-            raise Broken("its detail holds brain's kind phrase (%s): only brain names an item's kind in the dialog"
-                         % s.DECISION_KIND)
-        return "ok", detail or None
-    return "ok", data_of(out)
+        if detail is not None:
+            detail = text_of(detail, DETAIL_MAX, "detail")
+            if '"' in detail or "(" in detail or ")" in detail or s.quote_like(detail):
+                raise Broken("its detail holds a quote, a parenthesis or a character that passes for a quote: the dialog shows "
+                             "it in parentheses inside brain's own line")
+            if s.DECISION_KIND in " ".join(s.skeleton(detail).casefold().split()):
+                raise Broken("its detail holds brain's kind phrase (%s): only brain names an item's kind in the dialog"
+                             % s.DECISION_KIND)
+        return "ok", ((detail or None, op_data(out)) if spec["effect"] == "op" else detail or None)
+    return "ok", op_data(out) if spec["effect"] == "op" else data_of(out)
+
+
+def op_data(out):
+    """The `data` of an op verb's answer, which brain writes as the op: an object (data_of), whose `soul`, when present, is a
+    list of SOUL codes; Broken otherwise."""
+    data = data_of(out)
+    if not isinstance(data, dict):
+        raise Broken("an op verb's answer has no data object")
+    soul = data.get("soul")
+    if "soul" in data and not (isinstance(soul, list) and all(isinstance(c, str) and s.SOUL_CODE.fullmatch(c) for c in soul)):
+        raise Broken("its data's soul is not a list of SOUL codes")
+    return data
 
 
 def dialog(ns, d, st, ops, session=None):
@@ -728,7 +748,7 @@ def dialog(ns, d, st, ops, session=None):
     e, spec = owner_verb(ns.verb)
     if spec["effect"] == "pin":
         s.check_cap(st, "D")                       # brain's own refusals first: the extension is not asked for those
-    else:
+    elif spec["effect"] == "archive":
         it = s.get_live(st, ns.id, spec["letters"])
     s.ensure_dir(d)
     try:
@@ -739,12 +759,20 @@ def dialog(ns, d, st, ops, session=None):
                         % (e["name"], b, ns.verb))
     if how == "refuse":
         raise s.Refused(1, "%s: %s" % (e["name"], detail))
+    detail, data = detail if spec["effect"] == "op" else (detail, None)
     if detail and withheld(d, [detail]):
         raise s.Refused(1, "extension %s: its detail holds a sensitive value" % e["name"])
     more = " (%s)" % detail if detail else ""
+    args = "".join(' "%s"' % getattr(ns, "ext_arg_" + a) for a in spec["args"])
+    if spec["effect"] == "op":                      # the write binds this op: the dialog says what approving it does
+        if withheld(d, strings(data)):
+            raise s.Refused(1, "extension %s: its op holds a sensitive value" % e["name"])
+        ns._plan = s.ext_digest(e["name"], ns.verb, data)
+        codes = ", ".join("[%s]" % c for c in data.get("soul") or [])
+        return '%s %s%s: Write an op of extension %s%s; it makes %s' % (
+            e["name"], ns.verb, args, e["name"], more, "SOUL codes live: " + codes if codes else "no SOUL code live")
     soul = s.soul_suffix(s.soul_line_for(ns))
     if spec["effect"] == "pin":
-        args = "".join(' "%s"' % getattr(ns, "ext_arg_" + a) for a in spec["args"])
         return '%s %s%s: Pin owner decision %s (%s)%s, from "%s": "%s"%s' % (e["name"], ns.verb, args, s.next_id(st, "D"),
                                                                             s.DECISION_KIND, more, ns.where, ns.text, soul)
     noun = {"G": "owner goal", "D": "owner decision", "W": "owner window", "T": "lesson", "F": "fact"}[ns.id[0]]
@@ -767,6 +795,27 @@ def owner_write(ns, d, st, ops):
     return e, spec, data
 
 
+def write_op(name, what, data):
+    """The extension `name`'s own op `{"op": "ext", "ext": name, "what": what, "data": data}`, for a command of that extension,
+    written through brain's write: the callers `brain op` takes (a session, not a worker, not an extension's call), the lock,
+    the hash chain and the sensitive-value filter. Refused (1) for a name no extension of this project has, a `what` that is
+    not a name, or data that is not an object within DATA_MAX bytes and DATA_DEPTH levels. Its `soul` makes no code live: only
+    an op the owner approved does (an owner verb of effect `op`). Returns brain's line."""
+    s.check_caller()
+    if not isinstance(name, str) or named(name) is None:
+        raise s.Refused(1, "%s is not an extension of this project" % label(name, 30))
+    if not isinstance(what, str) or not NAME_RE.fullmatch(what):
+        raise s.Refused(1, "%s's op: its what is not a name (%s)" % (name, NAME_RE.pattern))
+    try:
+        if not isinstance(data_of({"data": data}), dict):
+            raise Broken("its data is not an object")
+        texts = strings(data)
+    except Broken as b:
+        raise s.Refused(1, "%s's op %s: %s" % (name, what, b))
+    op = {"op": "ext", "ext": name, "what": what, "data": data}
+    return s.write(lambda d, st: (op, texts, "wrote %s's op %s" % (name, what), None))
+
+
 def start_lines(d, st, ops, source, card, session=None, project=None, cli=False):
     """String 1's lines from every extension that answers `start` (`- ` not yet added): `<name>: <line>`, or one line when it
     was skipped or its lines hold a sensitive value. `card`: after a compaction and in doctor, when `ops` go with the state.
@@ -787,6 +836,54 @@ def start_lines(d, st, ops, source, card, session=None, project=None, cli=False)
             lines = ["skipped (%s): brain doctor" % b]
         out += ["%s: %s" % (e["name"], l) for l in lines]
     return out
+
+
+def sweep_of(obj, d, st):
+    """(rows [(reason, item id, evidence)], rows dropped) of a `sweep` answer: at most SWEEP_ROWS, each `[id, reason, evidence]`,
+    the reason a few lower-case words that are not one of brain's own, the evidence kept to brain's characters and cut; a row
+    whose id is not a live right-brain item, or whose texts the sensitive-value filter refuses, is dropped. Broken for an
+    answer of any other shape."""
+    import brain_stale
+    rows = obj.get("rows", [])
+    if not isinstance(rows, list):
+        raise Broken("its rows are not a list")
+    out, dropped = [], 0
+    for r in rows[:SWEEP_ROWS]:
+        if not (isinstance(r, list) and len(r) == 3 and all(isinstance(x, str) for x in r)):
+            raise Broken("a row is not [item id, reason, evidence]")
+        iid, reason, why = r
+        if not SWEEP_REASON.fullmatch(reason) or reason in brain_stale.REASONS:
+            raise Broken("a row's reason is not a few lower-case words of its own (%s)" % label(reason, 30))
+        why = text_of(why, SWEEP_WHY, "evidence")
+        it = st["items"].get(iid)
+        if it is None or it["status"] != "live" or s.half_of(iid[0]) != "right" or withheld(d, [reason, why]):
+            dropped += 1
+            continue
+        out.append((reason, iid, why))
+    return out, dropped
+
+
+def sweep_rows(d, st, budget=None, cli=False, session=None, project=None):
+    """(rows [(reason, item id, evidence)], lines) from every extension that answers `sweep`, each in what `budget` has left
+    (none given: the CLI's or the hook's own): a line for one skipped (broken, slow, a wrong answer, no time left: never
+    waited for) and one for the rows it had dropped."""
+    budget = budget or Budget(CLI_BUDGET if cli else HOOK_BUDGET)
+    rows, lines = [], []
+    for e in found(project):
+        if "sweep" not in e["calls"]:
+            continue
+        try:
+            mine, dropped = sweep_of(run(e, payload(e, "sweep", st, None), budget.take(CLI_SECONDS if cli else HOOK_SECONDS), d,
+                                         session=session), d, st)
+        except Broken as b:
+            skipped(d, e, "sweep", b, session)
+            lines.append("%s: sweep skipped (%s): brain doctor" % (e["name"], b))
+            continue
+        rows += mine
+        if dropped:
+            lines.append("%s: %d sweep row%s dropped (not a live right-brain item, or a sensitive value)"
+                         % (e["name"], dropped, "" if dropped == 1 else "s"))
+    return rows, lines
 
 
 def record_lines(d, st, ops, days, t0, t1):

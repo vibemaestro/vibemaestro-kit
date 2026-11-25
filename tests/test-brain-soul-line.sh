@@ -140,6 +140,10 @@ case_ext() {
   owner_g vouch S14 --text "check the base, by hand" --owner-quote q --where chat --soul-line "[S14] check the base before a rebase"
   c_rc 0 "[e] a pin that demotes S14: written"
   c_has "$OUT" "the SOUL line [S14] removed from" "[e] …and the line removed"
+  c_eq "$(printf '%s\n' "$OUT" | tail -n 4)" "id: D1
+kind: decision
+text: check the base, by hand
+quote: q" "[e] …and the item as stored comes last: no line it had moves"
   c_eq "$(cat "$P/SOUL.md")" "$(printf '# Shared rules\n- [S07] one review round')" "[e] …the file as before the archive"
 }
 

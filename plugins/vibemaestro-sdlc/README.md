@@ -50,6 +50,8 @@ Known limits of the quiet save:
 
 **The notebook.** Asked to start the notebook, the skill `init-kb` sets up `kb/` in place: when the folder has no history yet it has the kit save it once, then it runs `kb.py init --everyday`, which makes only `kb/current-state.md` and `kb/preferences.md` (no config, rules or other folders), for Claude to write in the person's language; `kb/preferences.md` holds only what the person said. No worktree, branch, commit of its own, push, gates, or question about merge or CI; the next quiet save keeps the notebook. A folder with no file of the person's yet gets one plain line: the notebook comes with the first file.
 
+At the end of each task the session overwrites `kb/current-state.md` with where the work stands now (the present state only, short, no diary). When a turn changed files and the map did not change, a second `Stop` hook (`notebook_nudge.py`) asks the session once to do it; it never repeats, and developer mode and coordinated sessions get nothing.
+
 **Moving to developer.** When the work should go to GitHub:
 
 1. Create an empty repository on GitHub.
@@ -104,6 +106,8 @@ Then open a new session. The installed copy is cached, and `claude plugin update
 ## Quick start
 
 Open a session in your application repository and ask Claude to run the skill `init-kb`. It writes `kb/` (`intent/`, `specs/`, `plans/`, `decisions/`, a `README.md`, `current-state.md`), `.vibemaestro/sdlc.json` and a rules directory with one example rule, commits them on the branch `chore/kb-init` and pushes it. It overwrites nothing and is safe to run again. Merge that branch first for a clean start; until it is merged, `intake` cuts the first intent branch from `chore/kb-init`, and that pull request carries the scaffold commit. Then describe a change; the session-start reminder points Claude to `vibemaestro-sdlc:intake`.
+
+Typing the built-in `/init` in a git repository that has no `kb/`, or whose project has no brain (when `vibemaestro-brain` is installed), also makes Claude run `init-kb` and open the brain with `brain claim` once it has written `CLAUDE.md`; a repository that has both, and any other prompt, is left alone.
 
 The scripts behind the skills also run by hand. The commands use `$SDLC` for the plugin directory: the installed copy, `~/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/<version>/`, or `plugins/vibemaestro-sdlc` of a checkout. Inside a session the skills use `${CLAUDE_PLUGIN_ROOT}` for the same directory.
 
@@ -160,6 +164,8 @@ When they run:
 - A skipped run tested nothing: the merge guard keeps the verdict of the last real run on the head, and a required check with no real run is red.
 
 `install_gates.py` never overwrites a file: an existing file is kept, and `kept (differs)` marks one that is not what the plugin would write. With `--update` it replaces the plugin's own copies under `.vibemaestro/gates/` (a workflow, the allowlist and the signing-rules list are the repository's and stay kept), and `--only` also installs the opt-in `signing-rules` gate or the gate a dependent plugin declares in its `gates/install.json`. It does not write `.vibemaestro/sdlc.json`; it prints which keys each gate reads. With `gh` it then checks, read-only, that the repository variable named by `ci.runner_var` is set, and prints one warning when it is not.
+
+`kb-check` is opt-in: `install_gates.py --only kb-check` writes `.github/workflows/kb-check.yml` and copies `kb.py`, the modules it imports and `kb-check.pin` to `.vibemaestro/gates/`. The workflow runs on every ready PR, from the base branch's copy and on the PR's tree: `kb.py check`, then `kb.py check links`. Run both: a bare `check` judges only the life of the documents, and a story plan row with no `Title`, an empty one, one over 80 characters or one with a backtick is red only in `check links`. The pin file holds the kit commit when the plugin is a git checkout (`-` for an installed copy, which has no `.git`) and the sha256 of the copied set (over `<name>\0<bytes>\0` of the files in name order). The copies are never overwritten (`--update` replaces them), and a base with no `kb.py` yet, the PR that adopts the gate, gets a warning and a pass. A repository onboarded earlier gets the gate the same way: a session runs `install_gates.py --only kb-check` and opens a PR, and a person merges it, because `.github/**` is a trust layer.
 
 Two more checks run inside the scripts you already call, not as workflows:
 
@@ -294,6 +300,7 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | `public.private` | `null` | Globs that stay private when the repository publishes its tree: it publishes every file outside `kb/` and these. `null` means it does not publish; `[]` is a valid answer. Write a directory as `dir/**`. Turns on the `public-tree` rule. |
 | `evidence.ui_paths` | `null` | Globs of the repository's UI paths for the `pr-evidence` gate: a PR that changes one needs E2E evidence pinned to its head. `null` means no UI, no E2E asked. Set it only once every plugin that reads the config knows the key (rule `config-compat`). |
 | `evidence.trusted_app` | `null` | The slug of the repository's own GitHub App, for the `pr-evidence` gate: a round comment that App's bot account posts (login `<slug>[bot]`, type Bot, posted through that App) counts like a member's. `null` means no App counts. `github-actions` is refused: every workflow of the repository posts as it, including one that echoes text a PR controls. Read at the base; set the repository variable `PR_EVIDENCE_APP` to the same slug so the App's comment also re-runs a red check. Set it only once every plugin that reads the config knows the key (rule `config-compat`). |
+| `evidence.exempt` | `null` | `{"app": "<slug>", "paths": [globs]}`, for the `pr-evidence` gate: a PR that App's bot account opened (login `<slug>[bot]`, type Bot; if GitHub records an App on the PR, it must be that one) passes with no review or E2E comment when every changed file is changed in place under a glob of `paths` and each file's whole diff is one line that sets an image: `newTag: <tag>` or `digest: sha256:<64 hex>` (kustomize `images`), or `image: <reference>` naming the same image with another tag or digest; the same key and indent on both sides, nothing after the value. Anything else is refused: `newName`, any other key, a comment, two lines, an added, removed or renamed file. The gate judges who opened the PR, not who pushes to its branch later; the exemption is limited to one tag or digest line of the same image under the named paths. A PR that is not exempt gets a `not exempt:` line naming the failed condition, then the usual checks. No `app` or empty `paths` exempts nothing. Read at the base, so a PR that adds the key to itself is never exempt. Set it only once every plugin that reads the config knows the key (rule `config-compat`). |
 | `sensitive.allowlist` | `".pr-sensitive-allow"` | File of sha256 hashes of values the `pr-sensitive` gate may let through, one per line with a `# reason`. Read from the base branch in CI. |
 | `sensitive.scan` | `["pr_body", "pr_comments", "commit_messages"]` | What `pr-sensitive` scans. |
 | `dead_branches.max_merged_on_remote` | `0` | Most merged-but-alive remote branches before `dead-branches` goes red. |
@@ -316,10 +323,14 @@ All keys of schema 1, with the plugin default. Where the default depends on `lan
 | `upstream_issues` | `true` | Accepted and validated; nothing in this plugin reads it. |
 | `intake.focus` | `"warn"` | An intent's `type:` (story, task, bug) and `focus:` (an open focus of the brain) at `intent-branch.sh create-intent` and in `kb.py check intent`: `"required"` refuses an intent without them (rc 9), `"warn"` prints one WARNING line and goes on, `"off"` reads neither. The next release makes `"required"` the default. |
 | `issue.code` | `null` | The repository's 3-letter code (3 capital letters, like `KIT`). Set: `intent-branch.sh create-intent` opens the issue first, writes the key `<code>-<issue number>` as the intent's `key:` and names the branch `intent/<key>-<slug>`; the intent file keeps its dated name, and `kb.py plan status` links a PR by either branch name. `null`: branches stay `intent/<date>-<slug>`, with no key. |
+| `infra.label` | `null` | The label an issue the kit opens for work that needs infrastructure help (runners, CI variables, a runner group, secrets, a cluster, Cloudflare, Vault) carries: `intent-branch.sh create-intent` or `retry-issue` with `--infra-blocked <what> --infra-tried <what>`, or a `kit:gh-write` `issue-create` with `"infra": true`. The issue gets the label when the repository has it; when it does not, its title starts with `[<label>] `. The label is never created. The body carries one line `Infra: blocked: <what> · tried: <what>`. `null`: nothing is added. |
 | `agents.review_model` | `"opus"` | Model of the fresh-context review before ready (`ship`, `before-ready`). |
 | `agents.search_model` | `"haiku"` | Model of a read-only search (`brainstorm`). |
 | `agents.worker_model` | `"sonnet"` | Model of a worker that builds one task (`plan`, `batonrun`, `workflow-core`). |
-| `kb.spec_warn_bytes` | `40000` | `kb.py check` lists a spec over this size. `null` turns it off. |
+| `kb.intent_max_bytes` | `16384` | Most bytes of a story (`kb/intent/*.md`): the whole file, UTF-8. `kb.py check` warns from 80 percent and is red over it, on a file the change touches (new, or its body changed; a frontmatter-only edit does not count). An over-limit file the change does not touch only warns. Over: a story keeps the request, the ACs and the questions and moves code-reading notes to the spec. |
+| `kb.spec_max_bytes` | `32768` | The same for a spec (`kb/specs/*.md`). Over: split it by service or module. |
+| `kb.plan_max_bytes` | `32768` | The same for a plan (`kb/plans/*.md`). Over: split it into waves. |
+| `kb.spec_warn_bytes` | `40000` | Deprecated: read without error and does nothing; a warning names `kb.spec_max_bytes`. |
 | `tokens.summary_heading` | `"Tóm tắt"` (`"Summary"`) | Heading of the PR-body summary. |
 | `tokens.criteria_heading` | `"Tiêu chí chấp nhận"` (`"Acceptance criteria"`) | Heading of the criteria checklist. |
 | `tokens.evidence_heading` | `"Bằng chứng chạy"` (`"Run evidence"`) | Heading of the evidence. |
@@ -391,7 +402,7 @@ Run these in the repository that has the problem. `$SDLC` is the plugin director
 | The manifest looks broken | `claude plugin validate "$SDLC"` | `Validation passed`, or what is wrong. |
 | No reminders appear | `python3 "$SDLC/scripts/sdlc_config.py" get hooks` | `off` means the repository silenced the hooks. |
 | A warning about the config at session start, or a script exits 65 | `python3 "$SDLC/scripts/kb.py" config check` | The invalid key and the reason, plus warnings, such as a key this plugin does not know (a newer plugin may: `claude plugin update vibemaestro-sdlc@vibemaestro`). |
-| A document in `kb/` is rejected | `python3 "$SDLC/scripts/kb.py" check` | Lifecycle problems in front matter and specs over `kb.spec_warn_bytes`. |
+| A document in `kb/` is rejected | `python3 "$SDLC/scripts/kb.py" check` | Lifecycle problems in front matter, and a story, spec or plan this change touches that is over its byte limit (`kb.intent_max_bytes`, `kb.spec_max_bytes`, `kb.plan_max_bytes`). |
 | A spec is rejected | `python3 "$SDLC/scripts/kb.py" check spec <date>-<slug>` | The missing, empty or misplaced section; a blank left; a criterion with no command. Exit 65. |
 | `kb/current-state.md` is rejected | `python3 "$SDLC/scripts/kb.py" check current-state` | Each offending line, or the size over a cap. Exit 65. |
 | A link between intent, spec and plan is broken | `python3 "$SDLC/scripts/kb.py" check links --base origin/main` | Links that fail in the files your change touches. |

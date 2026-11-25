@@ -19,13 +19,22 @@ whitespace counted). Any change of the PR's own after the evidence is a new head
 E2E is asked only when a changed path (a renamed file's old path included) matches a glob of `evidence.ui_paths`, read at the BASE
 (`--config-ref`); null means the repo has no UI. A file list at the API's cap (3000 files) counts as touching UI.
 
+`evidence.exempt` (read at the BASE; null, or {app, paths}) passes a PR with no evidence at all only when: its author is the bot of
+that App (login `<slug>[bot]`, type Bot; when GitHub records an App on the PR, it is that App: it records none for a PR an
+installation token opens); every changed file is changed in place (no add, remove or rename) under a glob of `paths`; and each
+file's whole patch is one `-` line and one `+` line that set an image (IMAGE_LINE: `newTag: <tag>`, `digest: sha256:<64 hex>`, or
+`image: <ref>` naming the same image with another tag or digest), the same key and indent on both lines, nothing after the
+value. It judges who opened the PR, not who pushes to its branch. A missing app or empty paths exempts nothing and prints nothing;
+otherwise a PR that is not exempt gets one `not exempt:` line naming the condition that failed, then today's checks.
+
 This checks a declaration pinned to the head, not who wrote the review: a member can still post a comment without having reviewed.
 
     pr_evidence.py --pr N --repo OWNER/NAME --head SHA --base REF --base-ref NAME --config-ref REF [--cwd DIR]
         the head and the base name come from the run's event (a re-run replays it); the base ref is what the PR's own changes
         are measured against (origin/<base>)
     pr_evidence.py --facts FILE [--config-ref REF] [--cwd DIR]      the same decision on recorded facts (tests): JSON {head, files,
-                                                                     capped, comments, base, carry: {sha: [patch-id, why]}}
+                                                                     capped, comments, base, carry: {sha: [patch-id, why]},
+                                                                     author, author_type, author_app}
 Exit codes: 0 pass, 1 red, 2 could not conclude, 64 bad usage, 65 invalid config. Standard library only, Python 3.8+.
 """
 import json
@@ -46,6 +55,13 @@ MIN_REASON = 15
 E2E_PASS = re.compile(r"^ {0,3}E2E pass(?![\w/?-])", re.M | re.I)
 E2E_SKIP = re.compile(r"^ {0,3}E2E (?:kh\u00f4ng ch\u1ea1y|not run):[ \t]*(.*)$", re.M | re.I)
 NAME = "pr-evidence"
+TAG = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}"
+DIGEST = r"sha256:[0-9a-f]{64}"
+COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+HOST = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::[0-9]+)?"
+IMAGE_LINE = re.compile(r"""(?P<pre>[ \t]*(?:-[ \t]+)?)(?P<key>newTag|digest|image):[ \t]+(?P<q>["']?)(?P<val>[^"'\s#]+)(?P=q)[ \t]*""")
+IMAGE_VALUE = {"newTag": re.compile(TAG), "digest": re.compile(DIGEST),
+               "image": re.compile(r"(?P<name>(?:%s/)?%s(?:/%s)*)(?P<tag>:%s)?(?P<digest>@%s)?" % (HOST, COMPONENT, COMPONENT, TAG, DIGEST))}
 
 
 def say(text):
@@ -109,6 +125,62 @@ def app_posted(c, app):
             and (c.get("author") or "").lower() == app + "[bot]")
 
 
+def image_change(patch):
+    """(key, None) when a file's whole patch is one changed image line, else (None, why)."""
+    if patch is None:
+        return None, "no patch (binary or too large), so a one-line image change cannot be proved"
+    body = [ln for ln in patch.split("\n") if not ln.startswith("\\")]      # `\ No newline at end of file` is no line
+    minus = [i for i, ln in enumerate(body) if ln.startswith("-")]
+    plus = [i for i, ln in enumerate(body) if ln.startswith("+")]
+    if len(minus) != 1 or len(plus) != 1:
+        return None, "removes %d line(s) and adds %d, not one changed line" % (len(minus), len(plus))
+    # newTag and digest name no image: only the place of the line ties it to one, so the new line replaces the old in place
+    if plus[0] != minus[0] + 1 or sum(1 for ln in body if ln.startswith("@@")) != 1:
+        return None, "the added line does not replace the removed one in place (one hunk, '+' right after '-')"
+    added = body[plus[0]][1:]
+    old, new = IMAGE_LINE.fullmatch(body[minus[0]][1:]), IMAGE_LINE.fullmatch(added)
+    if not old or not new or old.group("pre", "key") != new.group("pre", "key"):
+        return None, "the changed line is not the same newTag, digest or image key on both sides: %s" % added.strip()[:80]
+    key = new.group("key")
+    vo, vn = IMAGE_VALUE[key].fullmatch(old.group("val")), IMAGE_VALUE[key].fullmatch(new.group("val"))
+    bare_null = not new.group("q") and new.group("val") in ("~", "null", "Null", "NULL")    # YAML reads it as no tag at all
+    if not vo or not vn or bare_null or old.group("val") == new.group("val"):
+        return None, "the %s value is not a new %s: %s" % (key, "image reference" if key == "image" else key, added.strip()[:80])
+    if key == "image" and (vo.group("name") != vn.group("name") or not (vn.group("tag") or vn.group("digest"))):
+        return None, "the image line names another image or no tag or digest: %s" % added.strip()[:80]
+    return key, None
+
+
+def exempt(facts, cfg):
+    """None when evidence.exempt names no App or no path; else (True, what passed it) or (False, the condition that failed)."""
+    ex = cfg["evidence"].get("exempt") or {}
+    app, globs = ex.get("app"), ex.get("paths") or []
+    if not app or not globs:
+        return None
+    bot, author, via = app + "[bot]", facts.get("author") or "", facts.get("author_app")
+    if facts.get("author_type") != "Bot" or author.lower() != bot:
+        return False, "the PR's author is %s (%s), not the Bot %s of evidence.exempt.app" % (
+            author or "unknown", facts.get("author_type") or "type unknown", bot)
+    if via and via.lower() != app:
+        return False, "the PR was opened through the App %s, not %s" % (via, app)
+    files = facts.get("files") or []
+    if facts.get("capped") or not files:
+        return False, "the PR's file list is %s" % ("cut at the API's cap" if files else "empty")
+    keys = []
+    for f in files:
+        p = f.get("filename") or ""
+        if f.get("status") != "modified" or f.get("previous_filename"):
+            return False, "%s is %s: only a file changed in place counts" % (p, f.get("status") or "of unknown status")
+        if not any(gc.sdlc_config.glob_match(g, p) for g in globs):
+            return False, "%s is outside evidence.exempt.paths" % p
+        key, why = image_change(f.get("patch"))
+        if why:
+            return False, "%s: %s" % (p, why)
+        keys.append(key)
+    return True, "opened by %s; %d file(s) under evidence.exempt.paths, each one changed image line (%s); no evidence asked" % (
+        bot, len(files), ", ".join(sorted(set(keys))))
+
+
 def ui_hits(files, capped, globs):
     if globs is None:
         return None
@@ -135,6 +207,11 @@ def decide(facts, cfg):
     trusted, ignored = [], []
     if facts.get("base_moved"):
         return gc.RED, ["✗ base: %s" % facts["base_moved"]]
+    ex = exempt(facts, cfg)
+    if ex and ex[0]:
+        return gc.OK, ["exempt: " + ex[1]]
+    if ex:
+        lines.append("not exempt: " + ex[1])
     for c in sorted(facts.get("comments") or [], key=lambda c: (c.get("created_at") or "", c.get("id") or 0)):
         sha, short = pinned(c, prefix)
         if sha is None and short is None:
@@ -288,7 +365,7 @@ def carry_fn(cwd, base, head):
     return carry
 
 
-def live_facts(pr, repo, base, cwd, head, base_name):
+def live_facts(pr, repo, base, cwd, head, base_name, exempt_set=False):
     """The facts of the PR, for the head and base the run's event names (a re-run replays its event: it must not judge another
     head, or read the config of a base the PR has left)."""
     data = gh_json(["api", "repos/%s/pulls/%s" % (repo, pr)])
@@ -299,7 +376,11 @@ def live_facts(pr, repo, base, cwd, head, base_name):
                  % (base_name, live_base or "unknown"))
     files = pages("repos/%s/pulls/%s/files?per_page=100" % (repo, pr))
     comments = pages("repos/%s/issues/%s/comments?per_page=100" % (repo, pr))
-    return {"head": head, "files": files, "capped": len(files) >= FILES_CAP, "carry": carry_fn(cwd, base, head),
+    user = (data.get("user") or {}) if isinstance(data, dict) else {}
+    issue = gh_json(["api", "repos/%s/issues/%s" % (repo, pr)]) if exempt_set else {}
+    via = (issue.get("performed_via_github_app") or {}).get("slug") if isinstance(issue, dict) else None
+    return {"author": user.get("login"), "author_type": user.get("type"), "author_app": via,
+            "head": head, "files": files, "capped": len(files) >= FILES_CAP, "carry": carry_fn(cwd, base, head),
             "base": base_name or base, "base_moved": moved,
             "comments": [{"url": c.get("html_url"), "author": (c.get("user") or {}).get("login"), "id": c.get("id"),
                           "author_type": (c.get("user") or {}).get("type"),
@@ -326,7 +407,9 @@ def main(argv=None):
     cwd = opts.get("--cwd", ".")
     cfg = gc.load_config(cwd, opts.get("--config-ref"))
     if live:
-        facts = live_facts(opts["--pr"], opts["--repo"], opts["--base"], cwd, opts["--head"].lower(), opts.get("--base-ref"))
+        ex = cfg["evidence"].get("exempt") or {}
+        facts = live_facts(opts["--pr"], opts["--repo"], opts["--base"], cwd, opts["--head"].lower(), opts.get("--base-ref"),
+                           bool(ex.get("app") and ex.get("paths")))
     else:
         try:
             with open(opts["--facts"], encoding="utf-8") as f:

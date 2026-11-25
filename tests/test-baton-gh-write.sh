@@ -28,6 +28,9 @@
 #   [labels-*] issue-labels: one PATCH of the issue's or PR's labels to the after set; a label the repository lacks, a no-op and a
 #       spec of the wrong shape refused; undo puts the before set back, and leaves labels someone changed since (rc 5)
 #   [I] injection: a title, a label and a body holding shell text arrive verbatim, and nothing runs
+#   [infra-*] an issue-create with "infra": true under infra.label of the config where the run stands: the label when the
+#       repository has it, the `[<label>] ` title prefix when it does not (no label created), nothing with the key unset; a body
+#       without exactly one well-formed `Infra: blocked: … · tried: …` line, and a bad label name in the config, refused
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -1036,6 +1039,41 @@ W["faults"]["fail_write"] = 6'); fpr "$d"; spec "$d" "[$FPR, $NEW]"; full "$PL" 
   eq "$RC" 0 "[Y] …and the recovery holds (rc 0)"
 }
 
+fam_infra() {
+  PL=$1; local d line op
+  line='Infra: blocked: the runner group of acme/app · tried: re-ran the job twice'
+  op='{"op": "issue-create", "repo": "acme/app", "title": "intent: 2026-11-18-x", "labels": ["kit"], "body": "Needs help.\n'"$line"'\n<!-- m-i -->", "marker": "<!-- m-i -->", "infra": true}'
+  infra_cfg() { mkdir -p "$1/.vibemaestro"; printf '{"schema": 1, "infra": {"label": "%s"}}\n' "$2" > "$1/.vibemaestro/sdlc.json"; }
+  d=$(mkw 'W["repos"]["acme/app"]["labels"] += ["infra"]'); infra_cfg "$d" infra; spec "$d" "[$op]"; eng "$PL" "$d" --spec spec.json
+  has "$OUT" 'issue-create acme/app title "intent: 2026-11-18-x" labels ["kit", "infra"]' "[infra-label] the plan line names the label and the title unchanged"
+  full "$PL" "$d"
+  eq "$RC" 0 "[infra-label] the repository has the label: rc 0"
+  eq "$(wq "$d" 'R["issues"]["100"]["title"], R["issues"]["100"]["labels"]')" "('intent: 2026-11-18-x', ['kit', 'infra'])" "[infra-label] …labelled, title unchanged"
+  eq "$(writes "$d" | tr '\n' ';')" "POST repos/acme/app/issues;" "[infra-label] …one write call, the issue"
+  d=$(mkw); infra_cfg "$d" infra; spec "$d" "[$op]"; full "$PL" "$d"
+  eq "$RC" 0 "[infra-absent] the repository lacks the label: rc 0"
+  eq "$(wq "$d" 'R["issues"]["100"]["title"], R["issues"]["100"]["labels"], R["labels"]')" "('[infra] intent: 2026-11-18-x', ['kit'], ['kit', 'a\`b;c'])" \
+     "[infra-absent] …the title is prefixed, no infra label on the issue or in the repository"
+  eq "$(writes "$d" | tr '\n' ';')" "POST repos/acme/app/issues;" "[infra-absent] …one write call, no label call"
+  eq "$(wq "$d" 'R["issues"]["100"]["body"]')" "Needs help.
+$line
+<!-- m-i -->" "[infra-absent] …the body carries the Infra line as written"
+  d=$(mkw 'W["repos"]["acme/app"]["labels"] += ["infra"]'); spec "$d" "[$op]"; full "$PL" "$d"
+  eq "$RC:$(wq "$d" 'R["issues"]["100"]["title"], R["issues"]["100"]["labels"]')" "0:('intent: 2026-11-18-x', ['kit'])" "[infra-unset] no infra.label: nothing added"
+  refuse "[infra-line] infra without an Infra line" refuse-spec '[{"op": "issue-create", "repo": "acme/app", "title": "t", "body": "x <!-- m -->", "marker": "<!-- m -->", "infra": true}]'
+  refuse "[infra-line] a line with no tried part" refuse-spec '[{"op": "issue-create", "repo": "acme/app", "title": "t", "body": "Infra: blocked: runners\n<!-- m -->", "marker": "<!-- m -->", "infra": true}]'
+  refuse "[infra-line] an empty blocked part" refuse-spec '[{"op": "issue-create", "repo": "acme/app", "title": "t", "body": "Infra: blocked:  · tried: x\n<!-- m -->", "marker": "<!-- m -->", "infra": true}]'
+  refuse "[infra-line] two Infra lines" refuse-spec '[{"op": "issue-create", "repo": "acme/app", "title": "t", "body": "Infra: blocked: a · tried: b\nInfra: blocked: c · tried: d\n<!-- m -->", "marker": "<!-- m -->", "infra": true}]'
+  refuse "[infra-line] infra is not a bool" refuse-spec '[{"op": "issue-create", "repo": "acme/app", "title": "t", "body": "x <!-- m -->", "marker": "<!-- m -->", "infra": "yes"}]'
+  d=$(mkw); infra_cfg "$d" 'a,b'; spec "$d" "[$op]"; eng "$PL" "$d" --spec spec.json
+  eq "$RC:$(nwrites "$d")" "64:0" "[infra-config] infra.label with a comma: refused (rc 64), no write"
+  has "$OUT" "infra.label: must be null or a label name" "[infra-config] …naming the key"
+  d=$(mkw); infra_cfg "$d" infra; spec "$d" '[{"op": "issue-create", "repo": "acme/app", "title": "'"$(printf 'x%.0s' $(seq 250))"'", "body": "'"$line"' <!-- m -->", "marker": "<!-- m -->", "infra": true}]'
+  eng "$PL" "$d" --spec spec.json
+  eq "$RC:$(nfail)" "1:1" "[infra-title] a 250-character title the prefix takes past 256: one failed condition (rc 1)"
+  has "$OUT" "FAIL  title:" "[infra-title] …named title"
+}
+
 fam_cost() {
   PL=$1; local d cmd
   d=$(mkw)
@@ -1060,7 +1098,7 @@ fam_cost() {
   eq "$RC" 0 "[C2] the separate commands do not look at the spec's age (rehearse: rc 0)"
 }
 
-FAMILIES="fam_journal fam_spec fam_conditions fam_closed_ok fam_rehearse fam_run fam_closec fam_prclose fam_labels fam_prs fam_lag fam_newline fam_fence fam_trap4 fam_ref fam_undo fam_seal fam_inject fam_cost"
+FAMILIES="fam_journal fam_spec fam_conditions fam_closed_ok fam_rehearse fam_run fam_closec fam_prclose fam_labels fam_prs fam_lag fam_newline fam_fence fam_trap4 fam_ref fam_undo fam_seal fam_inject fam_infra fam_cost"
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done
 

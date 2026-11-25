@@ -14,9 +14,23 @@
 #       that refuses writes: the same lines, rc 0; --drift with a RULE or --record: usage (64)
 #   [s] a SOUL code promoted 31 days ago with no event since is dormant in `brain ledger`, the card and the record; one with an
 #       event 29 days ago or promoted today is not; a demoted code is not; `brain ledger` lists a promoted code with no evidence
+#   [r] a rule promoted to a SOUL code (owner-promote D3 soul S14): its earlier events are read under [S14] (--drift, `ledger
+#       [S14]`, the table, the record), merged in log order with events written for the code; `ledger D3` says it was promoted
+#       and where to read it (rc 0); a code named only in a pointer or by an extension is followed; a drift put to
+#       the owner stays handled; a code demoted and given to another item does not take the first one's events back; a goal
+#       keeps its progress; the log is not rewritten; after a demotion, or for a rule never promoted, the events stay
+#       under the item as before
 #   [f] soul_file: a code promoted with no line and a line with no promotion are named on the card; a file that agrees, or no
 #       key, adds no line; a file that cannot be read, a FIFO (never waited on) or one over 1 MiB says so; a wrong value
 #       refuses writes
+#   [p] a parent SOUL (soul_file ../CLAUDE.md, a CLAUDE.md above the project): its codes are live here, read-only: held, broke
+#       on one accepted, a code not in the file refused (by hand too), --soul-line refused, the file
+#       never changed; a line removed ends its code at the next check, its evidence kept; drift asks the owner; the card lists
+#       no parent code as not promoted; a code this brain demoted stays demoted; a sibling directory or another file name:
+#       as today; the file or its directory through a link, a FIFO, over 1 MiB or missing: no code, the card says so; an
+#       empty file: no code; a file not UTF-8, a code in a fence, a look-alike: read as the card reads them; lnk/../CLAUDE.md
+#       (lnk the project) and the project's CLAUDE.md a link to the parent's: a parent SOUL read as a link; the parent's file
+#       named in another case: a parent SOUL; a directory the file system cannot encode: not a parent, as today
 # =============================================================================
 set -uo pipefail
 if [ -z "${BRAIN_SUITE_REEXEC:-}" ]; then
@@ -177,6 +191,57 @@ case_soul_dormant() {
   br ledger; c_eq "$(printf '%s\n' "$OUT" | grep -c dormant)" 0 "[s] a demoted code is not dormant"
 }
 
+# plain <text> — a ledger text with the clock out: each event's time and a line's last-event day
+plain() { printf '%s\n' "$1" | sed -e 's/^[0-9-]* [0-9:]*Z //' -e 's/ last [0-9-]* / last DAY /'; }
+
+case_follow_promotion() {
+  np; seed D3@40 D1@40
+  ops broke:D3:3:S1 broke:D3:2:S2 broke:D3:1:S1 broke:D1:3:S1 '{"op": "owner-promote", "id": "D3", "soul": "S14", "pointer": "CLAUDE.md [S14]", "t": 0}'
+  c_eq "$(bpy 'import brain_ledger as L; print(sorted(L.read(L.snapshot(s.state_dir())[1])))')" "['D1', 'D3']" "[r] instrument: the log itself still keys the three events under D3"
+  drift; c_eq "$RC|$OUT" "8|[S14] · drift: broke 3 of 3 checks in 30 d, 2 sessions · to do: an owner-queue item naming [S14], with the evidence and one proposal (fix, narrow or drop)" \
+    "[r] --drift names [S14] with the three broke of D3 (rc 8)"
+  br ledger '[S14]'; c_rc 0 "[r] ledger [S14]: rc 0"
+  c_eq "$(plain "$OUT")" "[S14] · SOUL · held 0 from 0 sessions · broke 3 · last DAY kb/evidence.md · drift
+broke S1 kb/evidence.md: it went another way
+broke S2 kb/evidence.md: it went another way
+broke S1 kb/evidence.md: it went another way" "[r] ledger [S14] lists the three events of D3"
+  br ledger; c_hasnt "$OUT" "D3 ·" "[r] the table has no D3 line for them"
+  c_has "$OUT" "[S14] · SOUL · held 0 from 0 sessions · broke 3" "[r] and counts them under [S14]"
+  br ledger D3; c_eq "$RC|$OUT" '0|D3 promoted to [S14]; its evidence is read under `brain ledger [S14]`' "[r] ledger D3 says where its evidence is read, rc 0"
+  br ledger --record; c_has "$OUT" "- [S14] · SOUL · held 0 / 0 from 0 sessions · broke 3 / 3 · drift" "[r] the record counts them under [S14]"
+  c_has "$OUT" "- drift: D3 on " "[r] …and a crossing keeps the id it happened under, as the promotion line says"
+  ops held:[S14]:0:S3
+  br ledger '[S14]'; c_eq "$(plain "$OUT" | head -n 1)" "[S14] · SOUL · held 1 from 1 session · broke 3 · last DAY kb/evidence.md · drift" "[r] an event written for the code joins the item's"
+  c_eq "$(plain "$OUT" | tail -n 1)" "held S3 kb/evidence.md" "[r] …after them, in log order"
+  br ledger D1; c_eq "$(plain "$OUT")" "D1 · decision · held 0 from 0 sessions · broke 1 · last DAY kb/evidence.md
+broke S1 kb/evidence.md: it went another way" "[r] a rule never promoted: its line as before"
+  np; seed D2@60 D4@10; ops broke:D2:3:S1 broke:D2:2:S2 broke:D2:1:S1 '{"op": "owner-promote", "id": "D2", "soul": "S08", "pointer": "CLAUDE.md [S08]", "t": 0}'
+  drift; c_rc 8 "[r] instrument: promoted, the code is in drift"
+  ops '{"op": "owner-demote", "soul": "S08", "item": {"id": "D5", "kind": "decision", "pinned": true, "text": "item D5", "source": {"type": "owner", "quote": "q", "where": "chat"}, "expires": null, "links": [], "anchors": [], "supersedes": null, "demoted_from": "S08"}, "t": 0}'
+  drift; c_eq "$RC|$OUT" "0|no drift left to handle" "[r] after the demotion nothing is read under the dead code"
+  br ledger D2; c_eq "$RC|$(plain "$OUT" | head -n 1)" "0|D2 · decision · held 0 from 0 sessions · broke 3 · last DAY kb/evidence.md · archived" "[r] …the events stay under D2, as before"
+  br ledger; c_hasnt "$OUT" "[S08] · SOUL · held" "[r] …and the code has none"
+  # the owner's step as the CLI writes it (the code only in the pointer's brackets), and as an extension names it
+  np; seed D3@40; ops broke:D3:3:S1 broke:D3:2:S2; promote D3 S14 0
+  drift; c_rc 8 "[r] a code named only in the pointer's brackets: followed"; c_has "$OUT" "[S14] · drift: broke 2 of 2 checks" "[r] …under the code"
+  np; seed D3@40; ops broke:D3:3:S1 broke:D3:2:S2 '{"op": "owner-promote", "id": "D3", "pointer": "CLAUDE.md", "ext": {"coordinator": {"soul": "S21"}}, "t": 0}'
+  drift; c_rc 8 "[r] a code only an extension names: followed"; c_has "$OUT" "[S21] · drift: broke 2 of 2 checks" "[r] …under the code"
+  # a drift already put to the owner stays handled when the item is promoted
+  np; seed D3@40; ops broke:D3:3:S1 broke:D3:2:S2; seed "Q1@1;text=drift D3: the owner decides"
+  drift; c_eq "$RC|$OUT" "0|no drift left to handle" "[r] instrument: a queue item naming D3 handles its drift"
+  promote D3 S14 0
+  drift; c_eq "$RC|$OUT" "0|no drift left to handle" "[r] …and still does once D3 became [S14]"
+  # a code demoted, then given to another item: the first item's events do not come back under it
+  np; seed D3@60 D9@60; ops broke:D3:5:S1 broke:D3:4:S2; promote D3 S14 3
+  ops '{"op": "owner-demote", "soul": "S14", "item": {"id": "D5", "kind": "decision", "pinned": true, "text": "item D5", "source": {"type": "owner", "quote": "q", "where": "chat"}, "expires": null, "links": [], "anchors": [], "supersedes": null, "demoted_from": "S14"}, "t": 2}'
+  promote D9 S14 1
+  br ledger D3; c_eq "$RC|$(plain "$OUT" | head -n 1)" "0|D3 · decision · held 0 from 0 sessions · broke 2 · last DAY kb/evidence.md · archived" "[r] D3's events stay under D3 when its code went to D9"
+  br ledger '[S14]'; c_eq "$RC|$(plain "$OUT")" "0|[S14] · SOUL · no evidence yet" "[r] …and the code carries none of them"
+  # only a decision, trap or fact follows: a goal keeps its progress
+  np; seed D1@40 G1@40; ops '{"op": "progress", "id": "G1", "measure": "2 of 4", "pointer": "kb/p.md", "t": 3}' '{"op": "owner-promote", "id": "G1", "pointer": "CLAUDE.md [S14]", "t": 0}'
+  br ledger; c_has "$OUT" 'G1 · goal · progress "2 of 4"' "[r] a goal promoted keeps its progress under G1"
+}
+
 case_soul_file() {
   np; seed D2@60 D3@60; promote D2 S07 1; promote D3 S09 1
   c_hasnt "$(card)" "SOUL file" "[f] no soul_file key: no line"
@@ -217,8 +282,113 @@ case_soul_file() {
   conf '{"soul_file": ""}'; br op add --kind trap --text "a trap"; c_rc 1 "[f] an empty path refuses writes"
 }
 
+# npp [soul_file] — a parent directory PAR whose CLAUDE.md holds [S07] and [S08], and a child project P below it (its own git
+# work tree) with soul_file ../CLAUDE.md, or the value given; a brain with the decision D1
+npp() {
+  np; PAR=$P; P="$PAR/child"; mkdir -p "$P"; git_ -C "$P" init -q -b main; cd "$P" || return 1
+  printf '# Shared rules\n\n- [S07] one review round\n- [S08] no self-merge\n' > "$PAR/CLAUDE.md"
+  conf "{\"soul_file\": \"${1:-../CLAUDE.md}\"}"; seed D1@1
+}
+sha() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
+NOTLIVE="is not a SOUL code an owner step promoted (or it was demoted), nor a code of the parent SOUL file ../CLAUDE.md"
+
+case_parent_soul() {
+  npp; local before; before=$(sha "$PAR/CLAUDE.md")
+  c_hasnt "$(card)" "SOUL file" "[p] the card: no 'not promoted' for the parent's codes, no line at all"
+  br op held '[S07]' --pointer kb/a.md; c_eq "$RC|$OUT" "0|held [S07]: held 1 from 1 session, broke 0" "[p] held on a parent code: accepted"
+  br op broke '[S08]' --pointer kb/b.md --differed "it went another way"; c_rc 0 "[p] broke on a parent code: accepted"
+  br op held '[S10]' --pointer kb/a.md; c_eq "$RC|$OUT" "1|brain: [S10] $NOTLIVE" "[p] held by hand on a code not in the file: refused, naming the parent file"
+  owner_ok promote D1 "CLAUDE.md [S14]" --soul-line "[S14] one owner"
+  c_eq "$RC|$OUT" "1|brain: soul_file ../CLAUDE.md is a parent SOUL, read-only here: only the brain of its directory changes its lines" \
+    "[p] --soul-line on the parent file: refused"
+  c_eq "$(sha "$PAR/CLAUDE.md")" "$before" "[p] the parent file: not one byte changed"
+  # the child's own promotion with no line still shows; a line removed ends its code at the next check, its evidence stays
+  ops '{"op": "owner-promote", "id": "D1", "pointer": "CLAUDE.md [S09]"}'
+  c_has "$(card)" "SOUL file ../CLAUDE.md differs: [S09] no line" "[p] a code the child promoted with no line: named"
+  c_hasnt "$(card)" "not promoted" "[p] …and still no parent code as not promoted"
+  br op held '[S09]' --pointer kb/c.md; c_rc 0 "[p] the child's own promoted code: accepted"
+  printf '# Shared rules\n\n- [S07] one review round\n' > "$PAR/CLAUDE.md"
+  br op held '[S08]' --pointer kb/d.md; c_eq "$RC|$OUT" "1|brain: [S08] $NOTLIVE" "[p] a line removed from the file: its code refused at the next check"
+  br ledger; c_has "$OUT" "[S08] · SOUL · held 0 from 0 sessions · broke 1" "[p] …its broke stays in the ledger"
+  # drift on a parent code: the owner's question, nothing changed
+  ops "broke:[S07]:3:S1" "broke:[S07]:2:S2"
+  drift; c_rc 8 "[p] a parent code in drift: rc 8"
+  c_has "$OUT" "[S07] · drift: broke 2 of 3 checks in 30 d, 2 sessions · to do: an owner-queue item naming [S07]" "[p] the child raises a question for the owner"
+  # a code the child demoted stays demoted here
+  ops '{"op": "owner-promote", "id": "D1", "pointer": "CLAUDE.md [S07]"}'; seed "D2@0;demoted_from=S07"
+  br op held '[S07]' --pointer kb/e.md; c_rc 1 "[p] a parent code this brain demoted: refused"
+}
+
+case_parent_guards() {
+  # not a parent SOUL: a sibling directory, another file name: as today (by hand any code, the card lists the lines)
+  npp ../other/CLAUDE.md; mkdir -p "$PAR/other"; cp "$PAR/CLAUDE.md" "$PAR/other/CLAUDE.md"
+  br op held '[S10]' --pointer kb/a.md; c_rc 0 "[p] a sibling directory's CLAUDE.md: by hand any code, as today"
+  c_eq "$(bpy 'import brain_ledger as L; print(sorted(L.soul_codes(s.verify(s.state_dir())[1])))')" "[]" "[p] …and its codes are not live"
+  c_has "$(card)" "differs: [S07] not promoted · [S08] not promoted" "[p] …the card as today"
+  npp ../SOUL.md; cp "$PAR/CLAUDE.md" "$PAR/SOUL.md"
+  br op held '[S10]' --pointer kb/a.md; c_rc 0 "[p] a parent file not named CLAUDE.md: as today"
+  c_has "$(card)" "differs: [S07] not promoted · [S08] not promoted" "[p] …the card as today"
+  # the guards of the read: a link, a FIFO, over 1 MiB, missing
+  npp
+  if can_link; then
+    mv "$PAR/CLAUDE.md" "$PAR/real.md"; ln -s real.md "$PAR/CLAUDE.md"
+    br op held '[S07]' --pointer kb/a.md; c_eq "$RC|$OUT" "1|brain: [S07] $NOTLIVE" "[p] the parent file through a link: no code"
+    c_has "$(card)" "SOUL file ../CLAUDE.md cannot be read (a link)" "[p] …the card says so"
+    rm -f "$PAR/CLAUDE.md"
+    ln -s . "$PAR/self"; conf '{"soul_file": "../self/CLAUDE.md"}'
+    br op held '[S07]' --pointer kb/a.md
+    c_eq "$RC|$OUT" "1|brain: [S07] is not a SOUL code an owner step promoted (or it was demoted), nor a code of the parent SOUL file ../self/CLAUDE.md" \
+      "[p] the parent directory reached through a link: still a parent SOUL, no code"
+    c_has "$(card)" "SOUL file ../self/CLAUDE.md cannot be read (a link)" "[p] …the card says so"
+    owner_ok promote D1 "CLAUDE.md [S14]" --soul-line "[S14] one owner"
+    c_eq "$RC|$OUT" "1|brain: soul_file ../self/CLAUDE.md is a parent SOUL, read-only here: only the brain of its directory changes its lines" \
+      "[p] …and --soul-line through it: refused"
+    rm -f "$PAR/self"
+    ln -s . "$P/lnk"; conf '{"soul_file": "lnk/../CLAUDE.md"}'
+    br op held '[S10]' --pointer kb/a.md; c_rc 1 "[p] lnk/../CLAUDE.md, the system resolving lnk to the project: still the parent's file, a code refused"
+    owner_ok promote D1 "CLAUDE.md [S14]" --soul-line "[S14] one owner"; c_rc 1 "[p] …and --soul-line through it: refused"
+    c_has "$(card)" "SOUL file lnk/../CLAUDE.md cannot be read (a link)" "[p] …the card says so"
+    rm -f "$P/lnk"; ln -s ../CLAUDE.md "$P/CLAUDE.md"; conf '{"soul_file": "CLAUDE.md"}'
+    br op held '[S10]' --pointer kb/a.md; c_rc 1 "[p] the project's CLAUDE.md a link to the parent's: a parent SOUL, a code refused"
+    owner_ok promote D1 "CLAUDE.md [S14]" --soul-line "[S14] one owner"; c_rc 1 "[p] …and --soul-line through it: refused"
+    c_has "$(card)" "SOUL file CLAUDE.md cannot be read (a link)" "[p] …the card says so"
+    rm -f "$P/CLAUDE.md"; conf '{"soul_file": "../CLAUDE.md"}'
+  else
+    c_skip "[p] the parent file through a link" "this system makes no symbolic link"
+  fi
+  printf -- '- [S07] one review round\n' > "$PAR/claude.md"; conf '{"soul_file": "../claude.md"}'
+  br op held '[S07]' --pointer kb/a.md; c_rc 0 "[p] the parent's file named in another case: a parent SOUL, its code live"
+  br op held '[S10]' --pointer kb/a.md; c_rc 1 "[p] …a code not in it refused"
+  rm -f "$PAR/claude.md"; conf '{"soul_file": "../CLAUDE.md"}'
+  : > "$PAR/CLAUDE.md"
+  br op held '[S07]' --pointer kb/a.md; c_rc 1 "[p] an empty parent file: no code"
+  c_hasnt "$(card)" "SOUL file" "[p] …and nothing on the card"
+  printf '\377\376 bytes\n- [S07] one review round\n```\n- [S11] an example in a fence\n```\n- ［S12］ - [S014]\n' > "$PAR/CLAUDE.md"
+  br op held '[S07]' --pointer kb/a.md; c_rc 0 "[p] a file that is not UTF-8: its codes read as the card reads them"
+  br op held '[S11]' --pointer kb/a.md; c_rc 0 "[p] a code in a fence counts, as the card counts it"
+  br op held '[S12]' --pointer kb/a.md; c_rc 1 "[p] a look-alike bracket: no code"
+  br op held '[S01]' --pointer kb/a.md; c_rc 1 "[p] S014 gives no S01"
+  if [ "${OS:-}" != Windows_NT ]; then
+    rm -f "$PAR/CLAUDE.md"; mkfifo "$PAR/CLAUDE.md"
+    OUT=$(CLAUDE_CODE_SESSION_ID="$SID" PLANT_CAP_SECS=20 capped "$BROOT/bin/brain" op held '[S07]' --pointer kb/a.md 2>&1); RC=$?
+    c_eq "$RC|$OUT" "1|brain: [S07] $NOTLIVE" "[p] a FIFO as the parent file: never waited on, no code"
+    OUT=$(PLANT_CAP_SECS=20 capped card 2>&1); c_has "$OUT" "SOUL file ../CLAUDE.md cannot be read (not a regular file)" "[p] …the card says so"
+    rm -f "$PAR/CLAUDE.md"
+  else
+    c_skip "[p] a FIFO as the parent file" "Windows has no FIFO in the file system"
+  fi
+  python3 -c 'import sys; open(sys.argv[1], "w", newline="").write("- [S07] " + "x" * (1024 * 1024))' "$PAR/CLAUDE.md"
+  br op held '[S07]' --pointer kb/a.md; c_rc 1 "[p] a parent file over 1 MiB: no code"
+  c_has "$(card)" "SOUL file ../CLAUDE.md cannot be read (over 1 MiB)" "[p] …the card says so"
+  rm -f "$PAR/CLAUDE.md"
+  br op held '[S07]' --pointer kb/a.md; c_rc 1 "[p] no parent file: no code"
+  np; seed D1@1; conf '{"soul_file": "\ud800/SOUL.md"}'
+  br op held '[S07]' --pointer kb/a.md; c_rc 0 "[p] a directory the file system cannot encode: not a parent, held by hand as today"
+  c_has "$(card)" "cannot be read (UnicodeEncodeError)" "[p] …the card says so, as today"
+}
+
 echo "== cases =="
-for c in case_drift case_soul_dormant case_soul_file; do run_case $c; done
+for c in case_drift case_soul_dormant case_follow_promotion case_soul_file case_parent_soul case_parent_guards; do run_case $c; done
 cd "$TMP" || exit 1
 
 summary

@@ -36,6 +36,9 @@
 #   [V] a second owner-shaped call voids the earlier record: a direct brain.py call is asked again, and a call the hook
 #       cannot read literally leaves no record a denied dialog could have left
 #   [L] the dialog lines of add (decision, window), unpin, supersede and promote; Vietnamese byte for byte; ≤ 283
+#   [W] a window's scope (--lower, --exclude): the dialog shows it, the item keeps it with the session, `brain windows` and the
+#       render show it, a window with none lowers no signing; a scope the runner never honours, or over 24 hours, refused before
+#       the dialog; a supersede drops it, `op close` ends a window at once; a broken chain stops `brain windows`
 #   [J] guard-owner run with the shell in B for a session whose project is A writes its record in A, and `brain owner`
 #       typed in B then writes A's hot memory; B gets no state
 #   [T] arguments read literally, the command alone, or denied: substitution, glob, redirect, two owner commands, an open
@@ -181,6 +184,70 @@ case_verbs() {
   R=$(items); c_has "$R" "W1:closed" "[K] the unpinned window is closed"
   br op add --kind now --text "n"; owner_ok unpin N1; c_rc 1 "[K] owner unpin of a Now item: refused"
   owner_ok unpin D9; c_rc 1 "[K] owner unpin of an unknown id: refused"
+}
+
+case_result_text() {  # the result of an owner write carries the item as stored, so the model sees it in the turn it was signed
+  newp
+  owner_ok "${ADD[@]}"
+  c_eq "$RC|$OUT" "0|pinned D1
+id: D1
+kind: decision
+text: Owner merges every PR that touches clusters/
+quote: PR chạm clusters/ thì anh merge" "[X] add: the line it had, then id, kind, text and the owner's words"
+  owner_ok supersede D1 --text "The owner merges clusters/ PRs"
+  c_eq "$RC|$OUT" "0|superseded D1 with D2
+id: D2
+kind: decision
+text: The owner merges clusters/ PRs" "[X] supersede with a text: the new text, no quote line (the new item holds none)"
+  owner_ok supersede D2 --scope global
+  c_eq "$RC|$OUT" "0|superseded D2 with D3
+id: D3
+kind: decision
+text: The owner merges clusters/ PRs" "[X] supersede with no text: the text it carries over"
+  newp
+  owner_ok "${ADD[@]}"; owner_ok supersede D1 --scope global
+  c_eq "$RC|$OUT" "0|superseded D1 with D2
+id: D2
+kind: decision
+text: Owner merges every PR that touches clusters/
+quote: PR chạm clusters/ thì anh merge" "[X] supersede of a decision that holds the owner's words, no text given: text and quote carried over"
+  newp
+  local h='#'                                    # the number is joined here: a literal one reads as a reference to the public-tree scan
+  owner_ok add --kind decision --text "d" --owner-quote q --where w --anchor "${h}7"
+  c_eq "$RC|$OUT" "0|pinned D1
+warning: ${h}7 is not checked for staleness (the item names no single repository to resolve it against); write owner/name${h}7 (a GitHub issue or PR URL also works)
+id: D1
+kind: decision
+text: d
+quote: q" "[X] a warning line of the old result stays before the new lines"
+  owner_ok add --kind goal --text "ship it" --owner-quote q --where w --done "shipped" --not-doing "more" --review "$(python3 -c 'import datetime as d; print(d.date.today() + d.timedelta(days=365))')" --scope global
+  c_eq "$RC|$OUT" "0|pinned G1
+id: G1
+kind: goal
+text: ship it
+quote: q" "[X] a goal: its text and the owner's words"
+  owner_ok add --kind window --text "May merge docs-only PRs" --owner-quote "docs PR thì cứ merge" --where "prompt 1" --expires 2099-01-01T00:00:00Z
+  c_eq "$RC|$OUT" "0|pinned W1
+id: W1
+kind: window
+text: May merge docs-only PRs
+quote: docs PR thì cứ merge
+expires: 2099-01-01T00:00:00Z" "[X] a window: its text, the owner's words and its expiry"
+  owner_ok unpin W1
+  c_eq "$RC|$OUT" "0|unpinned W1" "[X] unpin prints what it did before: nothing new to show"
+  newp
+  bfile b.json '[["add", "--kind", "decision", "--text", "first pin", "--owner-quote", "anh nói", "--where", "chat 31/10"],
+                 ["add", "--kind", "decision", "--text", "second pin", "--owner-quote", "q2", "--where", "chat 31/10"]]'
+  gown default batch b.json; br owner batch b.json
+  c_eq "$RC|$OUT" "0|pinned D1; pinned D2
+id: D1
+kind: decision
+text: first pin
+quote: anh nói
+id: D2
+kind: decision
+text: second pin
+quote: q2" "[X] a batch: its line as before, then each item's lines"
 }
 
 case_owner_budget() {
@@ -738,7 +805,7 @@ case_hook_line() {
   c_eq "$(hfield permissionDecisionReason)" "Pin owner decision D1 (a lasting direction, never done), from \"lời anh, 10-18\": \"$vi\"" "[L] decision line: the kind in words, Vietnamese text and source byte for byte"
   br owner add --kind decision --text "$vi" --owner-quote "PR chạm clusters/ thì anh merge" --where "lời anh, 10-18"; c_rc 0 "[L] written"
   gown default add --kind window --text "$t150" --owner-quote q --where "$w60" --expires 2099-01-02T22:00:00Z
-  c_eq "$(hfield permissionDecisionReason)" "Grant window W1 until 01-02 22:00Z, from \"$w60\": \"$t150\"" "[L] window line, the text never cut"
+  c_eq "$(hfield permissionDecisionReason)" "Grant window W1 until 01-02 22:00Z, from \"$w60\", lowers no signing: \"$t150\"" "[L] window line, the text never cut; a window with no --lower says it lowers no signing"
   R=$(nchars "$(hfield permissionDecisionReason)"); c_eq "$([ "$R" -le 283 ] && echo within)" within "[L] the longest window line is $R ≤ 283 characters"
   gown default add --kind decision --text "next one" --owner-quote q --where w
   c_has "$(hfield permissionDecisionReason)" "decision D2 (a lasting direction, never done), from" "[L] the id of an add follows the folded state"
@@ -1136,7 +1203,80 @@ case_batch_fresh() {  # round 2: a fresh brain's claim goes in the batch's one w
   c_eq "$(head -n 1 "$(sdir)/hot.jsonl" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["op"])')" claim "[B] round 2: the claim line opens the log"
 }
 
-for c in case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_hosts case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_win_walk case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_owner_budget case_chars case_answerer case_worker; do
+case_window() {  # [W] a window's scope: what the baton runner may sign for the session that pinned it
+  newp
+  local exp until w9 R
+  exp=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600)))')
+  until=$(python3 -c 'import sys; v = sys.argv[1]; print(v[5:10] + " " + v[11:16] + "Z")' "$exp")
+  local scope=(--expires "$exp" --lower owner-acts --lower security-boundary --exclude kit:plugin-export)
+  gown default add --kind window --text "Cửa sổ cho việc trong ngày" --owner-quote "việc trong ngày khỏi ký" --where "chat" "${scope[@]}"
+  c_eq "$(hfield permissionDecisionReason)" "Grant window W1 until $until, from \"chat\", lowers signing for this session only: owner-acts, security-boundary; never: secrets, cluster-lane, irreversible-delete, history-rewrite, money-org, a change to the machine's permissions or to who signs; excluded: kit:plugin-export: \"Cửa sổ cho việc trong ngày\"" \
+    "[W] the dialog shows what the window lowers, for this session only, what it never lowers and what the owner excludes"
+  br owner add --kind window --text "Cửa sổ cho việc trong ngày" --owner-quote "việc trong ngày khỏi ký" --where "chat" "${scope[@]}"
+  c_rc 0 "[W] the owner's click writes W1"
+  c_eq "$(bpy 'it = s.load(s.state_dir())[1]["items"]["W1"]; print(it["lowers"], it["excludes"], it["session"])')" \
+    "['owner-acts', 'security-boundary'] ['kit:plugin-export'] sA" "[W] W1 keeps its scope and the session that pinned it"
+  owner_ok add --kind window --text "docs only" --owner-quote q --where w --expires "$exp"; c_rc 0 "[W] a window with no --lower: written as before"
+  c_eq "$(bpy 'it = s.load(s.state_dir())[1]["items"]["W2"]; print(sorted(k for k in ("lowers", "excludes", "session") if k in it))')" "[]" \
+    "[W] …with no scope and no session"
+  br windows --json; c_rc 0 "[W] brain windows --json: rc 0"
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys
+d = json.loads(sys.stdin.read())
+print([(w["id"], w.get("lowers"), w.get("session")) for w in d["windows"]], d["last_t"] is not None)')" \
+    "[('W1', ['owner-acts', 'security-boundary'], 'sA'), ('W2', None, None)] True" "[W] …the live windows with their scope, and the time of the log's last op"
+  br render; c_rc 0 "[W] instrument: render"
+  R=$(cat "$(sdir)/hot.md")
+  c_has "$R" "- W1 Cửa sổ cho việc trong ngày · lowers owner-acts, security-boundary; excludes kit:plugin-export · until $until (" "[W] the left brain shows W1's scope"
+  c_has "$R" "- W2 docs only · lowers no signing · until $until (" "[W] …and that W2 lowers no signing"
+  br doctor; c_has "$OUT" "hot.md matches a fresh render" "[W] doctor: the render matches"
+  # what the runner would never honour: refused before the dialog, nothing written
+  for r in "1|a window never lowers|--lower secrets" "1|a window never lowers|--lower money-org" "1|a window never lowers|--lower kit:bootstrap" "1|a window never lowers|--lower kit:coordinator-bootstrap" \
+           "1|a window never lowers|--lower kind:settings-merge" "1|a window names a stop category|--lower fun" \
+           "1|a window names a stop category|--lower kit:a/b" "1|a window names a stop category|--lower Owner-acts" \
+           "1|a window names a stop category|--lower kit:" "1|names a word twice|--lower publish --lower publish" \
+           "64|a window with no --lower lowers nothing|--exclude publish" "1|a window names a stop category|--lower publish --exclude fun"; do
+    IFS='|' read -r rc why words <<<"$r"
+    # shellcheck disable=SC2086  # the words are the case's options, split on purpose
+    br owner add --kind window --text t --owner-quote q --where w --expires "$exp" $words; c_rc "$rc" "[W] $words: rc $rc"
+    c_has "$OUT" "$why" "[W] …$why"
+  done
+  w9=(); for k in a b c d e f g h i; do w9+=(--lower "kit:k$k"); done
+  br owner add --kind window --text t --owner-quote q --where w --expires "$exp" "${w9[@]}"; c_rc 1 "[W] nine --lower words: rc 1"
+  br owner add --kind decision --text t --owner-quote q --where w --lower owner-acts; c_rc 64 "[W] --lower on a decision: rc 64"
+  br owner add --kind window --text t --owner-quote q --where w --lower owner-acts \
+     --expires "$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 25 * 3600)))')"
+  c_rc 1 "[W] a scoped window over 24 hours: rc 1"; c_has "$OUT" "lasts at most 24 hours" "[W] …named"
+  gown default add --kind window --text t --owner-quote q --where w --expires "$exp" --lower secrets
+  c_eq "$(hfield permissionDecision)" deny "[W] guard-owner denies the same, before any dialog"
+  c_eq "$(bpy 'print(sorted(i for i in s.load(s.state_dir())[1]["items"] if i[0] == "W"))')" "['W1', 'W2']" "[W] …nothing else was written"
+  # a supersede shows only the new text, so the scope does not go over; a close ends the window at once
+  owner_ok supersede W1 --text "Cửa sổ cho việc trong ngày, trừ hạ tầng"; c_rc 0 "[W] the owner supersedes W1"
+  c_eq "$(bpy 'it = s.load(s.state_dir())[1]["items"]["W3"]; print(it.get("lowers"), it.get("session"))')" "None None" "[W] …W3 has no scope: it lowers nothing"
+  for k in 1 2 3 4 5; do br op add --kind now --text "done $k"; br op close "N$k" --reason "done $k"; done
+  br op add --kind now --text "one more"; br op close N6 --reason x
+  c_has "$OUT" "retirement budget" "[W] instrument: the session's retirement budget is spent"
+  br op close W2 --reason "the owner said stop"; c_rc 0 "[W] op close W2: ends it at once, no dialog, with the budget spent"
+  c_eq "$(bpy 'st = s.load(s.state_dir())[1]; print(len([r for r in st["retirements"] if r["session"] == "sA"]))')" 5 \
+    "[W] …and spends none of it"
+  br windows --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print([w["id"] for w in json.loads(sys.stdin.read())["windows"]])')" "['W3']" \
+    "[W] …brain windows lists W3 only"
+  local later
+  later=$(bpy 'import time
+t = s.now_iso(time.time() + 7200)
+with s.locked(s.state_dir()):
+    s.append(s.state_dir(), s.verify(s.state_dir())[0], {"op": "claim", "t": t, "by": s.by(), "takeover": False})
+print(t)')   # an op from a clock two hours ahead, chained as a write chains it: the test's input, not a break
+  br op add --kind now --text "at the clock behind"; c_rc 0 "[W] instrument: a later op at the clock behind"
+  br windows --json
+  c_eq "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["last_t"])')" "$later" \
+    "[W] brain windows: last_t is the newest op time, not the last op's"
+  printf '{"seq": 99}\n' >> "$(sdir)/hot.jsonl"   # a line appended by hand: the test's input, not a break
+  OUT=$(CLAUDE_CODE_SESSION_ID="$SID" capped "$BROOT/bin/brain" windows --json 2>&1); RC=$?
+  c_rc 5 "[W] a broken chain: brain windows refuses, rc 5"
+}
+
+for c in case_window case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_hosts case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_win_walk case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_result_text case_owner_budget case_chars case_answerer case_worker; do
   run_case $c; done
 cd "$TMP" || exit 1
 

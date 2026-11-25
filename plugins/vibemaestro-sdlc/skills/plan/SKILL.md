@@ -36,10 +36,13 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kb.py" new plan <slug>
 Fill every `<FILL: …>` (`<ĐIỀN: …>` in a Vietnamese repo). The file has:
 
 - **Frontmatter** `description`, `issue` (the topic's issue) and `focus` (its focus, `P<n>`), and a line naming the topic's intent, spec and issue when they exist.
-- **`## Rows`**, one row per PR, in a table with the header `| Row | How | Delivers | Depends on | Trust touches | Link |`, and a
+- **`## Rows`**, one row per PR, in a table with the header `| Row | Title | How | Delivers | Depends on | Trust touches | Link |`, and a
   `Version` column when a release row needs one. A plan of the earlier columns (Must be true, Current state @SHA, Shared files,
   Acceptance, Model) is still read and checked as before; a story's plan new, or whose row cells change (a Link cell and the Decisions do not count), takes the lean columns (`kb.py check plan`).
   - **Row:** a short id (`A`, `B1.2`, `13a`), never reused.
+  - **Title:** the outcome of this PR in a few words, about 60 characters, in the repository's `language`, for people to read (it is the
+    title of the row's ticket): no path, no code. `kb.py check plan` is red for a Title that is empty, over 80 characters, on more than
+    one line or has a backtick, in a story's plan new or whose row cells changed.
   - **How:** the approach of this PR in a few lines: what it builds on (the recon's facts), what it changes, what it touches.
   - **Delivers:** the AC of the story this PR delivers, `AC1, AC2`, with the spec's criteria numbers when they help
     (`AC4 (criteria 7–9)`), or `enabling: <reason>` for a row that delivers no AC itself. Every AC is delivered by a row that is not dropped.
@@ -74,6 +77,10 @@ A row must give a fresh session everything it needs when its brief is only the p
 delivers (their criteria and risks are in the spec), the dependencies, the touches, and on a release row the version. A brief built
 from a row starts with one quick step: check that what the row's How builds on still holds at the current `origin/main`, and stop
 and ask (`session-ask` in a sandbox) when it no longer does. When the row's spec is already approved (as that section defines it), the session does not run the `spec` skill: at its first code step it sends the `code` stage as the section "An intent whose spec is already approved" of that skill says. A plan may hold several row tables (one per level); any table with `Row` and `Link` columns is a row table.
+
+A plan is at most 32768 bytes (`kb.plan_max_bytes`; the whole file, UTF-8): a warning from 80 percent, red over it on a plan the
+change touches (`kb.py check plan <file>` says its size). Over: split it into waves, one plan for each, the later ones linked
+from the first.
 
 Commit the plan in a PR of its own topic (the first PR, or a docs-only PR), then check its links (below).
 

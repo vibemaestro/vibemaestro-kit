@@ -512,7 +512,11 @@ def vet_item(it):
         raise s.Refused(1, "its source is not %s" % ("the owner's" if owner else "the session's"))
     if set(src) - SOURCE_KEYS:
         raise s.Refused(1, "its source holds a key a store never writes")
-    for field, req in (("quote", letter in ("G", "P", "R")), ("where", owner or letter in ("P", "R"))):
+    if letter == "P" and (src.get("quote") is None) != (src.get("where") is None):
+        raise s.Refused(1, "its owner's words and where they were said do not go together")
+    if letter == "P" and src.get("quote") is None and it.get("done") is None:    # one the session opened, as `brain op` refuses it
+        raise s.Refused(1, "a focus the session opened without its done when")
+    for field, req in (("quote", letter in ("G", "R")), ("where", owner or letter == "R")):
         v = src.get(field)
         if v is None and not req:
             continue
@@ -1070,8 +1074,8 @@ def only_letters(only):
 
 def plan_right(ctx, st, ops, raw, letters, now):
     """(batch, report) of `brain import`: the right brain's live then queued items as `brain op add` writes them, references
-    remapped (an item whose goal or focus has not landed waits; a Next item whose focus is not live at the source lands untied,
-    as the source shows it), then the ledger's events of what is here."""
+    remapped (an item whose goal or focus has not landed waits; a Next item or a running session whose focus is not live at
+    the source lands untied, as the source shows it), then the ledger's events of what is here."""
     src = ctx["st"]
     lines_here, same, items = here_index(raw, ops, st)
     batch, mapped = Batch(raw, st), {}
@@ -1093,7 +1097,7 @@ def plan_right(ctx, st, ops, raw, letters, now):
                 continue
             why = blocked(ctx, st, items, it)
             goal = s.goal_of(src, it) if letter == "P" else s.last_of(src, it["goal"]) if letter == "S" and it.get("goal") else None
-            focus = s.last_of(src, it["focus"]) if letter == "X" and isinstance(it.get("focus"), str) else None
+            focus = s.last_of(src, it["focus"]) if letter in s.FOCUSED and isinstance(it.get("focus"), str) else None
             for key_, ref in (("goal", goal), ("focus", focus)):
                 if ref is None or why or wait:
                     continue
@@ -1114,7 +1118,7 @@ def plan_right(ctx, st, ops, raw, letters, now):
             name, up = batch.placement(letter)
             item = {"id": nid, "kind": it["kind"], "pinned": False, "text": it["text"],
                     "source": (dict(s.SESSION_SOURCE, quote=it["source"]["quote"], where=it["source"]["where"])
-                               if letter in ("P", "R") else dict(s.SESSION_SOURCE)),
+                               if letter in ("P", "R") and it["source"].get("quote") is not None else dict(s.SESSION_SOURCE)),
                     "expires": it.get("expires"), "links": list(it.get("links") or []),
                     "anchors": list(it.get("anchors") or []), "supersedes": None}
             if it.get("closes"):

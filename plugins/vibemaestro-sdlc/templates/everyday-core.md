@@ -24,8 +24,10 @@ does not drift over days and sessions.
   - A short spec or plan only when a piece of work takes longer than one sitting.
   Make a folder of `kb/` only when you first write in it. When `kb/` is missing, offer it once, at the first piece of work worth
   keeping (something the person will come back to, a plan, something they ask you to remember), in one short sentence in their
-  language (skill `init-kb`). Once they agree, or when `kb/` exists, keep `kb/current-state.md` and `kb/preferences.md` up to date
-  as you go: the next session reads them there, so do not keep these only in your own memory.
+  language (skill `init-kb`). Once they agree, or when `kb/` exists, update the notebook **at the end of each task**, before you say
+  it is done: overwrite `kb/current-state.md` with where the work stands now (the present state only, a few lines, no diary), and
+  add to `kb/preferences.md` only what the person said they like. Add a `kb/decisions/` file only when a choice was made. The next session
+  reads these, so do not keep them only in your own memory; the kit reminds you once when files changed and the state did not.
 - **No branches, issues or pull requests.** Everything stays in this folder; do not push anything anywhere, unless the person
   asks to move the work to GitHub: then review the whole history for secrets with them first, set `"profile": "developer"` in
   `.vibemaestro/sdlc.json`, connect the folder to the GitHub repository they made, and push.

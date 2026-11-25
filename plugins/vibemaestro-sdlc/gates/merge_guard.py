@@ -54,15 +54,22 @@ Conditions:
   backmerge          only for a PR into the repository's default branch (n/a otherwise, and when there is no branch `release`
                      and the head ref is not backmerge/*): a head ref `backmerge/*` merges with a merge commit, not a squash,
                      so `release` stays an ancestor of the default branch, and needs its head on `release` (the compare API:
-                     `release` ahead of or identical to the head; no `release` is a FAIL); any other PR whose head is already on
-                     `release` is refused, since a squash of it would cut `release` off the default branch's history
+                     `release` ahead of or identical to the head; no `release` is a FAIL), or one merge commit of exactly two
+                     parents, the `release` tip and a commit on the base (a conflict resolved above the release tip; any other
+                     commit above the tip is a FAIL naming why); any other PR whose head is already on `release`, or holds a
+                     `release` tip the base does not hold yet, is refused, since a squash of it would cut `release` off the
+                     default branch's history. In this lane `behind` is not
+                     the rule below: a back-merge behind the base passes on GitHub's fresh test merge (parents base tip and head)
+                     with `mergeable` true, is FAIL on a conflict and ?? while it is stale, and is never asked to merge the base
+                     into its branch (a conflict is resolved as the release skill says)
   files              every changed file was read (a rename counts its source too)
   deny               no changed path matches merge.deny_globs, whatever the case, nor has a `.claude-plugin` segment at any
                      depth and in any case, whatever the globs (normal lane; in bootstrap it is never a scaffold path)
   brief              every changed path matches an allowed glob, case-sensitively
   links              no changed path is a symlink or a submodule at the head
   own-inputs         no changed path is the config file or an `external:` adapter the config names (whatever the deny globs)
-  behind             not behind the base; or behind only by base files that --behind-ok lists and the PR does not touch (the
+  behind             (the back-merge lane judges it as `backmerge` says) not behind the base; or behind only by base files that
+                     --behind-ok lists and the PR does not touch (the
                      base files are always printed); --behind-ok-clean <docs globs> also accepts a base file the PR changed too
                      when it matches, both sides modified it in place (no add, remove or rename), it is a regular file at the
                      base, `git merge-file` of (base tip, merge base, head) is clean, GitHub's test merge (parents base tip and
@@ -1007,6 +1014,38 @@ def behind(a, base_sha, files, paths, cfg, V):
 
 
 MERGE_BASE = "; merge the base into the branch"
+# a back-merge is never updated from the base: a conflict is resolved once, above the release tip (skill release)
+BACKMERGE_RESOLVE = ("a back-merge: resolve it as one merge commit of the release tip and the base, made from the release tip "
+                     "and pushed to the back-merge branch (skill release)")
+
+
+def behind_backmerge(a, base_sha, V):
+    """`behind` in the back-merge lane (the condition in the docstring): commits the head is behind the base. A back-merge
+    behind the base passes on GitHub's fresh test merge (parents base tip and head) with `mergeable` true; a conflict asks for the release skill's resolution, never for the base merged into the branch."""
+    try:
+        ahead = (B.api_retry("repos/%s/compare/%s...%s" % (a.repo, a.head, base_sha)) or {}).get("ahead_by")
+    except G.Infra as e:
+        V.unknown("behind", "the comparison with the base cannot be read: %s" % e)
+        return 0
+    if not isinstance(ahead, int):
+        V.unknown("behind", "the comparison with the base has no ahead_by")
+        return 0
+    if ahead == 0:
+        V.cond("behind", True, "not behind the base %s" % base_sha[:12])
+        return 0
+    head = "a back-merge behind the base by %d commit(s)" % ahead
+    try:
+        tm, why = fresh_test_merge(a, base_sha)
+    except G.Infra as e:
+        tm, why = None, ("??", "GitHub's test merge cannot be read: %s" % e)
+    if tm:
+        V.cond("behind", True, "%s: GitHub's test merge %s is fresh (parents base tip and head) and mergeable; the branch is "
+               "never updated from the base" % (head, tm[:12]))
+    elif why[0] == "FAIL":
+        V.cond("behind", False, "%s: %s; %s" % (head, why[1], BACKMERGE_RESOLVE))
+    else:
+        V.unknown("behind", "%s: %s" % (head, why[1]))
+    return ahead
 
 
 def behind_auto(a, base_sha, cmp_, files, paths, base_files, cfg, ahead, notes, V):
@@ -1806,11 +1845,12 @@ class Run(object):
              "the PR targets %s; the guard merges into %s (%s)" % (pr.get("baseRefName"), base,
                                                                   "--base" if a.base else "the repository's default branch"))
         if not mergeable(a, pr, V):
-            say("REFUSED early: mergeable: GitHub reports CONFLICTING; checks, files and behind were not read: merge the base into "
-                "the branch and resolve; nothing merged")
+            say("REFUSED early: mergeable: GitHub reports CONFLICTING; checks, files and behind were not read: %s; nothing merged"
+                % (BACKMERGE_RESOLVE if (pr.get("headRefName") or "").startswith(BACKMERGE_PREFIX) else
+                   "merge the base into the branch and resolve"))
             self.log("refused")
             return RED
-        self.merge_commit = backmerge(a, pr, base, V)
+        self.merge_commit = backmerge(a, pr, base, V, base_sha)
         checks(a, mcfg, ci, V, self.touch)
         files, paths = changed(a, pr, V)
         lane_tag = None
@@ -1855,7 +1895,10 @@ class Run(object):
             V.na("touches", "merge.touch_checks applies to the normal lane of a base config, not to %s" % (
                 "bootstrap" if self.boot else "the image-bump lane"))
         a.boot = bool(self.boot)                        # --behind auto: in bootstrap the config, and so merge.planner, is the PR's
-        ahead, self.clean = behind(a, base_sha, files, paths, self.cfg, V)
+        if self.merge_commit:
+            ahead = behind_backmerge(a, base_sha, V)
+        else:
+            ahead, self.clean = behind(a, base_sha, files, paths, self.cfg, V)
         tags = ([req[1]] if req else []) + ([lane_tag] if lane_tag else [])
         if reg is not None:
             image(a, reg, registry, tags, V)
@@ -1985,8 +2028,23 @@ class Run(object):
         return OK if self.log("merged") else INFRA
 
 
-def backmerge(a, pr, base, V):
-    """The back-merge lane: True when this PR merges with a merge commit (the condition `backmerge` in the docstring)."""
+def above_release(a, rel, base, base_ref):
+    """Why the head, above the release tip `rel`, is no back-merge; None when it is one merge commit of exactly two parents, `rel`
+    and a commit on the base (`base_ref`: its tip SHA, or the branch). A read that fails raises Infra."""
+    parents = merge_parents(a, a.head)
+    if len(parents) != 2:
+        return "it is not a merge (one parent)" if len(parents) == 1 else "it merges %d parents, not 2" % len(parents)
+    if rel.lower() not in parents:
+        return "neither of its parents is the release tip (a merge above another merge?)"
+    other = parents[1 - parents.index(rel.lower())]
+    status = (B.api_retry("repos/%s/compare/%s...%s" % (a.repo, other, urllib.parse.quote(base_ref, safe="/"))) or {}).get("status")
+    return None if status in ("ahead", "identical") else "its other parent %s is not on %s (%s)" % (other[:12], base, status)
+
+
+def backmerge(a, pr, base, V, base_ref=None):
+    """The back-merge lane: True when this PR merges with a merge commit (the condition `backmerge` in the docstring); `base_ref`
+    pins the base for a head above the release tip (the tip SHA the guard read; the branch name when None)."""
+    base_ref = base_ref or base
     named = (pr.get("headRefName") or "").startswith(BACKMERGE_PREFIX)
     try:
         default = (B.api("repos/%s" % a.repo) or {}).get("default_branch")
@@ -2023,11 +2081,38 @@ def backmerge(a, pr, base, V):
         V.unknown("backmerge", "the comparison of the head with %s has status %r" % (RELEASE_BRANCH, status))
         return False
     on = status in ("ahead", "identical")
+    if named and status == "behind":                    # above the release tip: a conflict resolved by one merge commit
+        try:
+            no = above_release(a, rel, base, base_ref)
+        except G.Infra as e:
+            V.unknown("backmerge", "the head's merge shape cannot be read: %s" % e)
+            return False
+        V.cond("backmerge", no is None, "the head ref %s; the head is above %s %s and %s" % (
+            pr.get("headRefName"), RELEASE_BRANCH, rel[:12],
+            "is one merge of it with a commit of %s: a merge commit keeps %s an ancestor of %s" % (base, RELEASE_BRANCH, base)
+            if no is None else "is not one merge of it with a commit of %s: %s; only the release tip, or that one merge, is "
+            "back-merged" % (base, no)))
+        return no is None
     if named:
         V.cond("backmerge", on, "the head ref %s; the head is %son %s %s: %s" % (
             pr.get("headRefName"), "" if on else "not ", RELEASE_BRANCH, rel[:12],
-            "a merge commit keeps %s an ancestor of %s" % (RELEASE_BRANCH, base) if on else "only the release tip is back-merged"))
+            "a merge commit keeps %s an ancestor of %s" % (RELEASE_BRANCH, base) if on else
+            "only the release tip, or one merge of it with a commit of %s, is back-merged" % base))
         return on
+    if status == "behind":                              # the head holds the release tip: a squash is safe once the base holds it
+        try:
+            held = (B.api_retry("repos/%s/compare/%s...%s" % (a.repo, rel, urllib.parse.quote(base_ref, safe="/"))) or {}).get("status")
+        except G.Infra as e:
+            V.unknown("backmerge", "%s %s cannot be compared with %s: %s" % (RELEASE_BRANCH, rel[:12], base, e))
+            return False
+        if held not in ("ahead", "identical", "behind", "diverged"):
+            V.unknown("backmerge", "the comparison of %s %s with %s has status %r" % (RELEASE_BRANCH, rel[:12], base, held))
+            return False
+        held = held in ("ahead", "identical")
+        V.cond("backmerge", held, "the head holds %s %s, which %s %s" % (RELEASE_BRANCH, rel[:12], base, "holds too: squash" if held
+               else "does not hold yet: a squash of it would cut %s off %s; merge the pending back-merge into %s first, or, for a "
+               "back-merge, open it from a %s* branch" % (RELEASE_BRANCH, base, base, BACKMERGE_PREFIX)))
+        return False
     V.cond("backmerge", not on, "the head is %son %s %s%s" % ("" if on else "not ", RELEASE_BRANCH, rel[:12],
            ": a squash of it would cut %s off %s; open it from a %s* branch" % (RELEASE_BRANCH, base, BACKMERGE_PREFIX) if on else ": squash"))
     return False

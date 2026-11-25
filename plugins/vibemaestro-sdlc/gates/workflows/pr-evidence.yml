@@ -2,7 +2,8 @@
 # Gate: an AI review pinned to the PR's current head, and E2E evidence for a PR that changes UI paths (.vibemaestro/gates/pr_evidence.py)
 # =============================================================================
 # Rule behind it: `pr-body-shape` (round comments: first line `SHA: <full head SHA>`). Config: evidence.ui_paths (null: no UI, no E2E
-# asked), evidence.trusted_app (null: no App's comment counts), tokens.round_comment_prefix, commits.round_pattern in
+# asked), evidence.trusted_app (null: no App's comment counts), evidence.exempt (null: no PR passes without evidence; else the
+# one-line image bumps an App's bot opens under named paths), tokens.round_comment_prefix, commits.round_pattern in
 # .vibemaestro/sdlc.json, read at the BASE.
 #
 # Job `evidence` checks the base branch out and runs the script and the config found there; the PR's commits are fetched as data

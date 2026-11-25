@@ -5,6 +5,7 @@
 
 One line per check: `ok\t<label>` or `FAIL\t<label>`. Families:
   decide    synthetic facts: what counts as review and E2E evidence, pinned to the head, stale, carried over, ignored
+  exempt    synthetic facts: evidence.exempt, the App's one-line image bump under named paths, and each condition that refuses it
   carry     real git repositories: a pure merge of the base keeps the patch-id, a PR-side change after the evidence does not
   workflow  the template: the jobs' `if` evaluated per event (tests/fixtures/gh_expr.py), the re-run job's fences
 """
@@ -145,6 +146,128 @@ def fam_decide(plugin, scratch):
     prefixed = cfg_of(E, {"tokens": {"round_comment_prefix": "Vòng:"}})
     case("the prefix comes from the config", 0, "review ok", prefixed, [c("Vòng: %s — review round 1" % H)])
     case("…and the default prefix no longer counts", 1, "no AI-review comment", prefixed, [c(rev % H)])
+
+
+# the pair a gatekeeper App's promotion PR changes: kustomize images[].digest, 4-space indent (public image digests)
+D_OLD = "sha256:dca30c0eaf8f0ba4f76b5c5e67c5ce55274c9118e6a07cf72d65c4c1fdea671f"
+D_NEW = "sha256:b37c8dd5fc3b4d5d53fd996448d618755e010abd8d49409cae8ce55b5334051c"
+DEV = "clusters/x/products/p/dev/kustomization.yaml"
+
+
+def patch(old, new, context=True):
+    """A GitHub file patch that changes the line `old` into `new` (either None: that side has no line)."""
+    body = ["@@ -10,3 +10,3 @@ images:"] + (["   - name: ghcr.io/acme/p"] if context else [])
+    body += (["-" + old] if old is not None else []) + (["+" + new] if new is not None else [])
+    return "\n".join(body + (["     newName: ghcr.io/acme/p"] if context else []))
+
+
+def bump(path=DEV, old="    digest: " + D_OLD, new="    digest: " + D_NEW, status="modified", **kw):
+    return dict({"filename": path, "status": status, "patch": patch(old, new)}, **kw)
+
+
+def exempt_facts(files, author="acme-gate[bot]", author_type="Bot", author_app=None, comments=(), capped=False):
+    return {"head": H, "files": list(files), "capped": capped, "comments": list(comments), "base": "main", "base_moved": None,
+            "carry": lambda s: (None, "not carried"), "author": author, "author_type": author_type, "author_app": author_app}
+
+
+def fam_exempt(plugin, scratch):
+    """evidence.exempt: who, which paths, what one image line is; today's behaviour when it is unset, empty or a condition fails."""
+    E = gate(plugin)
+    ex = {"app": "acme-gate", "paths": ["clusters/*/products/*/dev/kustomization.yaml",
+                                        "clusters/*/products/*/uat/kustomization.yaml"]}
+    on = cfg_of(E, {"evidence": {"exempt": ex}})
+    uat = DEV.replace("/dev/", "/uat/")
+
+    def case(label, want_rc, needle, cfg, facts, absent=None):
+        rc, lines = E.decide(facts, cfg)
+        out = "\n".join(lines)
+        say(rc == want_rc and needle in out and (absent is None or absent not in out),
+            "[X] %s: rc %d, says %r (%s)" % (label, want_rc, needle, out.replace("\n", " | ")[:240]))
+
+    case("the App's one-line digest bump under a named path", 0,
+         "exempt: opened by acme-gate[bot]; 1 file(s) under evidence.exempt.paths, each one changed image line (digest)", on,
+         exempt_facts([bump()]))
+    case("…dev and uat in one PR", 0, "2 file(s)", on, exempt_facts([bump(), bump(uat)]))
+    case("…a newTag bump", 0, "(newTag)", on, exempt_facts([bump(old="    newTag: 1.4.2", new="    newTag: 1.4.3")]))
+    case("…a quoted newTag in a list item", 0, "(newTag)", on,
+         exempt_facts([bump(old="  - newTag: \"1.4.2\"", new="  - newTag: \"1.4.3\"")]))
+    case("…an image reference, same image, a new tag and digest", 0, "(image)", on,
+         exempt_facts([bump(old="        image: ghcr.io/acme/p:1.4.2", new="        image: ghcr.io/acme/p:1.4.3@" + D_NEW)]))
+    case("…a registry with a port", 0, "(image)", on,
+         exempt_facts([bump(old="  image: localhost:5000/p:v1", new="  image: localhost:5000/p:v2")]))
+    case("…the bot login in another case", 0, "exempt: ", on, exempt_facts([bump()], author="Acme-Gate[bot]"))
+    case("…GitHub records the same App on the PR", 0, "exempt: ", on, exempt_facts([bump()], author_app="acme-gate"))
+    # unset or empty: today's output exactly
+    for label, data in (("unset", {}), ("null", {"exempt": None}), ("{}", {"exempt": {}}),
+                        ("no app", {"exempt": {"paths": ex["paths"]}}), ("empty paths", {"exempt": {"app": "acme-gate", "paths": []}})):
+        cfg = cfg_of(E, {"evidence": data})
+        rc, lines = E.decide(exempt_facts([bump()]), cfg)
+        rc0, lines0 = E.decide(exempt_facts([bump()]), cfg_of(E, {}))
+        say(rc == 1 and lines == lines0 and not any("exempt" in ln for ln in lines),
+            "[X] evidence.exempt %s: today's verdict and lines, no exempt line (%s)" % (label, " | ".join(lines)[:160]))
+    nx = "not exempt: "
+    case("another author", 1, nx + "the PR's author is alice (User), not the Bot acme-gate[bot]", on,
+         exempt_facts([bump()], author="alice", author_type="User"))
+    case("a user account whose login reads <slug>[bot]", 1, nx + "the PR's author is acme-gate[bot] (User)", on,
+         exempt_facts([bump()], author_type="User"))
+    case("another App's bot", 1, nx + "the PR's author is other-gate[bot] (Bot)", on, exempt_facts([bump()], author="other-gate[bot]"))
+    case("the bot, but GitHub records another App on the PR", 1, nx + "the PR was opened through the App other-gate, not acme-gate", on,
+         exempt_facts([bump()], author_app="other-gate"))
+    case("a path outside the patterns", 1, nx + "clusters/x/products/p/prod/kustomization.yaml is outside evidence.exempt.paths", on,
+         exempt_facts([bump(), bump(DEV.replace("/dev/", "/prod/"))]))
+    case("two changed lines", 1, nx + DEV + ": removes 2 line(s) and adds 2", on,
+         exempt_facts([dict(bump(), patch=patch("    digest: " + D_OLD, "    digest: " + D_NEW) + "\n-    newTag: a\n+    newTag: b")]))
+    case("the added line elsewhere in the hunk (another image's newTag)", 1, nx + DEV + ": the added line does not replace the removed one",
+         on, exempt_facts([dict(bump(), patch="@@ -1,6 +1,6 @@\n images:\n - name: ghcr.io/acme/api\n-  newTag: 1.4.2\n"
+                                            " - name: ghcr.io/acme/worker\n+  newTag: 9.9.9\n   newName: ghcr.io/acme/worker")]))
+    case("the two lines in two hunks", 1, "does not replace the removed one in place", on,
+         exempt_facts([dict(bump(), patch="@@ -3,1 +3,0 @@\n-  newTag: v1\n@@ -40,0 +40,1 @@\n+  newTag: v2")]))
+    case("…a 'no newline at end of file' mark between them still counts as in place", 0, "exempt: ", on,
+         exempt_facts([dict(bump(), patch="@@ -3,1 +3,1 @@\n-  newTag: v1\n\\ No newline at end of file\n+  newTag: v2\n"
+                                            "\\ No newline at end of file")]))
+    case("a bare null tag (YAML reads no tag)", 1, "the newTag value is not a new newTag", on,
+         exempt_facts([bump(old="    newTag: 1.4.2", new="    newTag: null")]))
+    case("…a bare ~", 1, "the newTag value is not a new newTag", on, exempt_facts([bump(old="    newTag: 1.4.2", new="    newTag: ~")]))
+    case("…a quoted \"null\" is a string tag", 0, "(newTag)", on,
+         exempt_facts([bump(old="    newTag: \"1.4.2\"", new="    newTag: \"null\"")]))
+    case("an added line alone", 1, "removes 0 line(s) and adds 1", on, exempt_facts([bump(old=None, new="    newTag: 1.4.3")]))
+    case("a non-image line", 1, nx + DEV + ": the changed line is not the same newTag, digest or image key", on,
+         exempt_facts([bump(old="    replicas: 1", new="    replicas: 9")]))
+    case("newName (another image, not a version)", 1, "not the same newTag, digest or image key", on,
+         exempt_facts([bump(old="    newName: ghcr.io/acme/p", new="    newName: evil.example/p")]))
+    case("the key changes between the lines", 1, "not the same newTag, digest or image key", on,
+         exempt_facts([bump(old="    newTag: 1.4.2", new="    digest: " + D_NEW)]))
+    case("the indent changes", 1, "not the same newTag, digest or image key", on,
+         exempt_facts([bump(new="  digest: " + D_NEW)]))
+    case("a comment after the value", 1, "not the same newTag, digest or image key", on,
+         exempt_facts([bump(new="    digest: " + D_NEW + "  # pinned")]))
+    case("quotes that do not pair", 1, "not the same newTag, digest or image key", on,
+         exempt_facts([bump(new="    newTag: \"1.4.3'", old="    newTag: \"1.4.2'")]))
+    case("a digest in upper case", 1, "the digest value is not a new digest", on, exempt_facts([bump(new="    digest: " + D_NEW.upper().replace("SHA256", "sha256"))]))
+    case("a short digest", 1, "the digest value is not a new digest", on, exempt_facts([bump(new="    digest: " + D_NEW[:-1])]))
+    case("the same digest", 1, "the digest value is not a new digest", on, exempt_facts([bump(new="    digest: " + D_OLD)]))
+    case("a tag with a slash", 1, "the newTag value is not a new newTag", on,
+         exempt_facts([bump(old="    newTag: 1.4.2", new="    newTag: a/b")]))
+    case("a tag over 128 characters", 1, "the newTag value is not a new newTag", on,
+         exempt_facts([bump(old="    newTag: 1.4.2", new="    newTag: " + "a" * 129)]))
+    case("an image line that names another registry", 1, "names another image", on,
+         exempt_facts([bump(old="  image: ghcr.io/acme/p:1", new="  image: evil.example/acme/p:1")]))
+    case("an image line that drops its tag", 1, "names another image or no tag or digest", on,
+         exempt_facts([bump(old="  image: ghcr.io/acme/p:1", new="  image: ghcr.io/acme/p")]))
+    case("an added file", 1, nx + DEV + " is added", on, exempt_facts([bump(status="added")]))
+    case("a removed file", 1, " is removed", on, exempt_facts([bump(status="removed")]))
+    case("a rename into a named path", 1, " is renamed", on,
+         exempt_facts([bump(status="renamed", previous_filename="apps/p/kustomization.yaml")]))
+    case("a file with no patch", 1, "no patch (binary or too large)", on, exempt_facts([dict(bump(), patch=None)]))
+    case("a file list at the API cap", 1, nx + "the PR's file list is cut", on, exempt_facts([bump()], capped=True))
+    case("no file", 1, nx + "the PR's file list is empty", on, exempt_facts([]))
+    case("…a failed condition keeps today's checks", 1, "no AI-review comment pins the head", on,
+         exempt_facts([bump()], author="alice", author_type="User"))
+    case("…and evidence still passes it", 0, "review ok", on,
+         exempt_facts([bump(old="    replicas: 1", new="    replicas: 9")],
+                      comments=[c("SHA: %s — review round 1 (fresh-context Opus)" % H)]))
+    case("the base moved: red before any exemption", 1, "✗ base:", on, dict(exempt_facts([bump()]), base_moved="the base is now dev"),
+         absent="exempt: opened")
 
 
 def git(cwd, *a):

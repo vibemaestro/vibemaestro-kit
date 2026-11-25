@@ -23,6 +23,11 @@
 #                         goes on, run ok, no revert advice); merged at another head stops it, the state unknown (rc 5); still open
 #                         at the signed head is tried once more (merged then, or refused); a GraphQL refusal is not tried again;
 #                         another base, a PR that stays unreadable, or a retry's exit 0 on a PR another hand merged: rc 5
+#   [backmerge]           the guard's back-merge lane: a backmerge/* PR into main whose head is the release tip, or one merge of it
+#                         with a main commit (either parent order), plans `by merge-commit` and merges with --merge; a merge above
+#                         that merge, one with a parent not on main, a plain commit above the tip, an octopus, another head
+#                         ref on release, another head ref holding a release tip main lacks, and a shape that cannot be read are
+#                         refused, nothing merged; another head ref holding a release tip main holds squashes
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -91,7 +96,7 @@ bc() { capped b "$@"; }
 merges() { cat "$M/merges.log"; }
 # runlog — the full output of the last quiet `run` (its last line names the file)
 runlog() { cat "$(sed -n 's/^run: .* — \(\/.*\.log\)$/\1/p' "$OUT")"; }
-plan_of() { printf 'squash-merge %s head %s into main (1 files sha b1e4fcd28055c712; checks %s, accepted red %s, no-checks no; image none none; admin %s; GitHub pins the head)' "$@"; }
+plan_of() { printf 'merge %s head %s into main by squash (1 files sha b1e4fcd28055c712; checks %s, accepted red %s, no-checks no; image none none; admin %s; GitHub pins the head)' "$@"; }
 
 fam_one_pr() {
   machine "o/r#1=$H1"
@@ -110,9 +115,9 @@ fam_three() {
   machine "o/r#1=$H1" "o/r#2=$H2" "o/q#7=$H3"
   wset 'w["prs"]["o/r#1"]["on_merge"] = {"o/r#2": {"unknown_reads": 1}}'
   eq "$(b rehearse "$K" "${args[@]}")" 0 "[three-prs-one-plan] rehearse: rc 0"
-  eq "$(grep -c '^ *PLAN squash-merge ' "$OUT")" 3 "[three-prs-one-plan] …three plan lines"
+  eq "$(grep -c '^ *PLAN merge ' "$OUT")" 3 "[three-prs-one-plan] …three plan lines"
   hasline "$(sed 's/^ *//' "$OUT")" "PLAN-COUNT 3" "[three-prs-one-plan] …PLAN-COUNT 3"
-  eq "$(grep -c '^ *ok  *squash-merge .*  ~  squash-merge \*$' "$OUT")" 3 "[three-prs-one-plan] …each plan line matches Each squash-merge *"
+  eq "$(grep -c '^ *ok  *merge .*  ~  merge \*$' "$OUT")" 3 "[three-prs-one-plan] …each plan line matches Each merge *"
   hasline "$(sed 's/^ *//' "$OUT")" "PLAN $(plan_of o/r#2 "$H2" "2/2 green" none yes)" "[three-prs-one-plan] …the second line carries its own admin yes"
   eq "$(b go "$K" "${args[@]}")" 8 "[three-prs-one-plan] go: exit 8, one card"
   empty "$(merges)" "[three-prs-one-plan] …nothing merged before the signature"
@@ -216,7 +221,7 @@ fam_checks_read() {
   machine "o/r#1=$H1"
   wset 'w["prs"]["o/r#1"]["base"] = "rel|x"'
   eq "$(b rehearse "$K" o/r 1 "$H1")" 0 "[checks-read] a base branch whose name holds |: rc 0"
-  has "$(cat "$OUT")" "PLAN squash-merge o/r#1 head $H1 into rel|x (1 files" "[checks-read] …the base read whole"
+  has "$(cat "$OUT")" "PLAN merge o/r#1 head $H1 into rel|x by squash (1 files" "[checks-read] …the base read whole"
   machine "o/r#1=$H1"
   wset 'w["checks"]["o/r@'"$H1"'"][1][3] = "startup_failure"'
   eq "$(b rehearse "$K" o/r 1 "$H1" --accept-red internal-term%20scan)" 0 "[checks-read] a startup_failure, accepted: rc 0"
@@ -403,6 +408,75 @@ usage_case() {
   has "$(cat "$OUT")" "the rehearse phase exited 64" "[usage] …$label: the kit's exit is 64"
   has "$(cat "$OUT")" "$needle" "[usage] …$label: names why"
 }
+# the back-merge lane's commit graph: main at MT2 (on MT, on B0); the release tip RT, a hotfix on B0, not on main; X on no branch
+B0=b000000000000000000000000000000000000000
+MT=b100000000000000000000000000000000000000
+MT2=b200000000000000000000000000000000000000
+RT=d000000000000000000000000000000000000000
+X=c100000000000000000000000000000000000000
+HM=e100000000000000000000000000000000000000      # one merge: the release tip and a main commit (a conflict resolved)
+HR=e200000000000000000000000000000000000000      # the same, its parents the other way round
+HMM=e300000000000000000000000000000000000000     # a second merge, above HM
+HXP=e400000000000000000000000000000000000000     # the release tip merged with X, a commit not on main
+HP=e500000000000000000000000000000000000000      # a plain commit above the release tip
+HO=e600000000000000000000000000000000000000      # an octopus: the release tip, a main commit and X
+MAIN3=b300000000000000000000000000000000000000   # main once HM merged (release on main)
+HF=e700000000000000000000000000000000000000      # a feature commit on MAIN3
+# bm_machine <head> [head ref] — a machine whose one PR o/r#1 into main has this head and head ref (default backmerge/d00000000000)
+bm_machine() {
+  machine "o/r#1=$1"
+  wset "w['prs']['o/r#1']['headRef'] = '${2:-backmerge/d00000000000}'; w['git'] = {'o/r': {'refs': {'main': '$MT2', 'release': '$RT'},
+    'commits': {'$MT': ['$B0'], '$MT2': ['$MT'], '$RT': ['$B0'], '$X': ['$B0'], '$HM': ['$RT', '$MT'], '$HR': ['$MT', '$RT'],
+                '$HMM': ['$HM', '$MT2'], '$HXP': ['$RT', '$X'], '$HP': ['$RT'], '$HO': ['$RT', '$MT', '$X']}}}"
+}
+bm_plan() { printf 'merge o/r#1 head %s into main by %s (1 files sha b1e4fcd28055c712; checks 2/2 green, accepted red none, no-checks no; image none none; admin no; GitHub pins the head)' "$@"; }
+# bm_refused <label> <head> <head ref> <the lane's words> — rehearse is refused naming the lane, nothing merged
+bm_refused() {
+  bm_machine "$2" "$3"
+  eq "$(bc rehearse "$K" o/r 1 "$2")" 1 "[backmerge] $1: rehearse rc 1"
+  has "$(cat "$OUT")" "REFUSE o/r#1: backmerge FAIL: $4" "[backmerge] …the refusal is the guard's lane, with why"
+  empty "$(merges)" "[backmerge] …nothing merged"
+}
+
+fam_backmerge() {
+  bm_machine "$RT"
+  eq "$(b rehearse "$K" o/r 1 "$RT")" 0 "[backmerge] a backmerge/* PR whose head is the release tip: rehearse rc 0"
+  hasline "$(sed 's/^ *//' "$OUT")" "PLAN $(bm_plan "$RT" merge-commit)" "[backmerge] …the plan line says by merge-commit"
+  bm_machine "$HM"
+  eq "$(b rehearse "$K" o/r 1 "$HM")" 0 "[backmerge] a backmerge/* PR whose head merges the release tip and a main commit: rehearse rc 0"
+  has "$(cat "$OUT")" "backmerge ok: the head ref backmerge/d00000000000; the head is above release d00000000000 and is one merge of it with a commit of main" \
+      "[backmerge] …the rehearse shows the lane's reading"
+  eq "$(b go "$K" o/r 1 "$HM")" 8 "[backmerge] …go exit 8"
+  hasline "$(sed 's/^ *//' "$OUT")" "1. $(bm_plan "$HM" merge-commit)" "[backmerge] …the card's plan line says by merge-commit"
+  eq "$(signed o/r 1 "$HM")" 0 "[backmerge] …the owner signs"
+  eq "$(b run "$K" o/r 1 "$HM")" 0 "[backmerge] …run: rc 0"
+  eq "$(merges)" "merge-commit o/r#1 match $HM admin no" "[backmerge] …one merge commit (--merge), pinned to the head, never a squash"
+  bm_machine "$HR"
+  eq "$(b rehearse "$K" o/r 1 "$HR")" 0 "[backmerge] the same merge with its parents the other way round: rehearse rc 0"
+  hasline "$(sed 's/^ *//' "$OUT")" "PLAN $(bm_plan "$HR" merge-commit)" "[backmerge] …by merge-commit"
+  local above="the head ref backmerge/d00000000000; the head is above release d00000000000 and is not one merge of it with a commit of main"
+  bm_refused "a merge above the merge" "$HMM" "" "$above: neither of its parents is the release tip (a merge above another merge?)"
+  bm_refused "a merge with a parent not on main" "$HXP" "" "$above: its other parent c10000000000 is not on main (diverged)"
+  bm_refused "a plain commit above the release tip" "$HP" "" "$above: it is not a merge (one parent)"
+  bm_refused "an octopus merge of the release tip" "$HO" "" "$above: it merges 3 parents, not 2"
+  bm_refused "a PR from feat/x whose head is the release tip" "$RT" feat/x \
+      "the head is on release d00000000000: a squash of it would cut release off main; open it from a backmerge/* branch"
+  bm_refused "a PR from backmerge-resolved/* whose head merges a release tip main lacks" "$HM" backmerge-resolved/d00000000000 \
+      "the head holds release d00000000000, which main does not hold yet: a squash of it would cut release off main; merge the pending back-merge into main first, or, for a back-merge, open it from a backmerge/* branch"
+  bm_machine "$HM"
+  wset "w['git']['o/r']['fail'] = True"
+  eq "$(bc rehearse "$K" o/r 1 "$HM")" 1 "[backmerge] the head's parents cannot be read (HTTP 500): rehearse rc 1"
+  has "$(cat "$OUT")" "REFUSE o/r#1: backmerge ??: the head's merge shape cannot be read: gh api repos/o/r/git/commits/$HM failed" \
+      "[backmerge] …refused, the lane could not conclude"
+  empty "$(merges)" "[backmerge] …nothing merged"
+  # after the back-merge merged: main (MAIN3) holds the release tip, and a feature branch from it holds it too
+  bm_machine "$HF" feat/x
+  wset "w['git']['o/r']['refs']['main'] = '$MAIN3'; w['git']['o/r']['commits'].update({'$MAIN3': ['$HM'], '$HF': ['$MAIN3']})"
+  eq "$(b rehearse "$K" o/r 1 "$HF")" 0 "[backmerge] a PR from feat/x whose head holds a release tip main already holds: rc 0"
+  has "$(cat "$OUT")" "backmerge ok: the head holds release d00000000000, which main holds too: squash" "[backmerge] …the lane says why"
+  hasline "$(sed 's/^ *//' "$OUT")" "PLAN $(bm_plan "$HF" squash)" "[backmerge] …squashed, as before"
+}
+
 fam_usage() {
   local nine=() i
   machine "o/r#1=$H1"
@@ -434,6 +508,7 @@ fam_usage
 fam_checks_read
 fam_queued
 fam_5xx
+fam_backmerge
 
 echo "== nothing written outside the scratch tree =="
 eq "$(tree_hash "$SRC_ROOT")" "$H0" "the repository tree is unchanged by the suite"

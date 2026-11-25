@@ -12,6 +12,7 @@
 #
 # gh modes (GH_MODE): ok (an issue URL ending in a number) · 403 (issue create refused) · nonum (a URL with no number).
 # GH_LABEL=exists makes `label create` fail, as on a repository that already has the label.
+# GH_INFRA=exists makes `api repos/{owner}/{repo}/labels/<name>` answer, as on a repository that has the infra label.
 # =============================================================================
 set -uo pipefail
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -34,6 +35,7 @@ cat > "$GHB/gh" <<'GH'
 printf '%s\n' "$*" >> "${GH_LOG:-/dev/null}"
 case "$1 $2" in
   "label create") [ "${GH_LABEL:-}" = exists ] && { echo "label already exists" >&2; exit 1; }; exit 0;;
+  "api repos/{owner}/{repo}/labels/"*) [ "${GH_INFRA:-}" = exists ] && { echo '{"name": "infra"}'; exit 0; }; echo "HTTP 404: Not Found" >&2; exit 1;;
   "issue create")
     case "${GH_MODE:-ok}" in
       ok)    echo "https://github.com/acme/app-demo/issues/42";;
@@ -185,7 +187,45 @@ fam_retry() {  # retry-issue: creates, is idempotent, fails with rc 1, needs a r
   eq "$(grep -cx 'issue: 42' "$W/kb/intent/$S.md")" 1 "[I5] …the record has issue: 42"
 }
 
-FAMILIES="fam_ok fam_refused fam_default_off fam_nofrontmatter fam_retry"
+fam_infra() {  # infra.label: the label when the repository has it, else the title prefix; never a label creation; the Infra line
+  PLX=$1; local W S out rc ERR
+  local LINE='Infra: blocked: the runner group · tried: re-ran the job twice'
+  W=$(mk_origin); mkdir -p "$W/.vibemaestro"; printf '{"schema": 1, "infra": {"label": "infra"}}\n' > "$W/.vibemaestro/sdlc.json"
+  GHL=$(fresh)/gh.log; : > "$GHL"; S=2026-02-06-infra-has; rec "$W" "$S"
+  out=$(cenv PATH="$GHB:$PATH" GH_LOG="$GHL" GH_MODE=ok GH_INFRA=exists python3 "$PLX/scripts/intent_branch.py" --cwd "$W" create-intent \
+        --slug "$S" --issue --infra-blocked "the runner group" --infra-tried "re-ran the job twice" 2>/dev/null); rc=$?
+  eq "$rc" 0 "[I6] the repository has the label: rc 0"
+  eq "$(grep -c "^issue create --title intent: $S --body" "$GHL")" 1 "[I6] …the title is unchanged"
+  eq "$(grep -A1 -xF "$LINE" "$GHL" | tail -1)" " --label intent --label infra" "[I6] …the body ends with the Infra line, the issue carries the label after intent"
+  eq "$(grep -c '^label create infra' "$GHL")" 0 "[I6] …and no label is created for it"
+  git_ -C "$W" checkout -q main
+  : > "$GHL"; S=2026-02-06-infra-absent; rec "$W" "$S"
+  out=$(gh_core "$W" ok create-intent --slug "$S" --issue --infra-blocked "the runner group" --infra-tried "re-ran the job twice" 2>/dev/null); rc=$?
+  eq "$rc" 0 "[I6] the repository lacks the label: rc 0"
+  eq "$(grep -c "^issue create --title \\[infra\\] intent: $S --body" "$GHL")" 1 "[I6] …the title starts with [infra]"
+  eq "$(grep -A1 -xF "$LINE" "$GHL" | tail -1)" " --label intent" "[I6] …the body ends with the Infra line, the labels are intent alone"
+  eq "$(grep -c '^label create infra' "$GHL")" 0 "[I6] …and no label is created"
+  git_ -C "$W" checkout -q main
+  : > "$GHL"; S=2026-02-06-infra-retry; rec "$W" "$S"
+  gh_core "$W" ok retry-issue --slug "$S" --infra-blocked "the runner group" --infra-tried "re-ran the job twice" >/dev/null 2>&1
+  eq "$?:$(grep -c "^issue create --title \\[infra\\] intent: $S --body" "$GHL")" "0:1" "[I6] retry-issue marks the issue the same way"
+  : > "$GHL"; S=2026-02-06-infra-half; rec "$W" "$S"
+  gh_core "$W" ok create-intent --slug "$S" --issue --infra-blocked "the runner group" >/dev/null 2>&1; rc=$?
+  eq "$rc:$(gh_calls)" "64:0" "[I6] --infra-blocked without --infra-tried: refused (rc 64), gh never called"
+  ref_exists "$W" "intent/$S" && bad "[I6] …a branch was created" || ok "[I6] …no branch was created"
+  gh_core "$W" ok create-intent --slug "$S" --issue --infra-blocked "a · b" --infra-tried "c" >/dev/null 2>&1
+  eq "$?:$(gh_calls)" "64:0" "[I6] a blocked part holding the separator: refused (rc 64), gh never called"
+  gh_core "$W" ok create-intent --slug "$S" --issue --infra-blocked "runners" --infra-tried "$(printf 'y\nz')" >/dev/null 2>&1
+  eq "$?:$(gh_calls)" "64:0" "[I6] a tried part over two lines: refused (rc 64), gh never called"
+  W=$(mk_origin); : > "$GHL"; S=2026-02-06-infra-unset; rec "$W" "$S"
+  out=$(cenv PATH="$GHB:$PATH" GH_LOG="$GHL" GH_MODE=ok GH_INFRA=exists python3 "$PLX/scripts/intent_branch.py" --cwd "$W" create-intent \
+        --slug "$S" --issue --infra-blocked "the runner group" --infra-tried "re-ran the job twice" 2>/dev/null); rc=$?
+  eq "$rc" 0 "[I6] infra.label unset: rc 0"
+  eq "$(grep -cx "issue create --title intent: $S --body example record" "$GHL"):$(grep -c 'Infra:\\|--label infra\\|^api' "$GHL")" "1:0" \
+     "[I6] …nothing added: title unchanged, no Infra line, no label, no label read"
+}
+
+FAMILIES="fam_ok fam_refused fam_default_off fam_nofrontmatter fam_retry fam_infra"
 
 echo "== the real core =="
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"

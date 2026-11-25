@@ -10,15 +10,17 @@
 # plugin.json is installed as .claude-plugin/plugin.json (assemble): it is kept at the fixture's root so that the suites that read
 # every plugin manifest of the tree never take it for one of the kit's plugins.
 #   [a] discovery: found only when installed for this project, enabled, inside the plugins directory, depending on the brain,
-#       with the marker a regular file; at most 4; a manifest that breaks a rule, or two that clash, skipped with one doctor
-#       line naming why
+#       with the marker a regular file; at most 4; a manifest that breaks a rule (brain's --focus on a session, its
+#       --owner-quote on a supersede included), or two that clash, skipped with one doctor line naming why
 #   [b] check: the extension's option on a session add (refused without it, 64 or 1 as it answers), its data under
 #       `ext.example` of the item, its note printed; a supersede carries `ext` and the extension replaces its own entry; the
-#       option on another kind is a usage error; a manifest that takes brain's --goal for a session gets it, a focus keeps it;
-#       a broke's note; a sensitive value in the data or the note refuses the write
+#       option on another kind is a usage error; a manifest that takes brain's --goal for a session gets it, a focus keeps it,
+#       a session's --focus stays brain's; a broke's note; a sensitive value in the data or the note refuses the write
 #   [c] owner verbs: a pin and an archive through guard-owner's ask, brain's own line with the extension's detail inside; no
 #       record, rc 6; the left cap and the letters before asking; a subagent, a mode with no dialog, and a plugin that can
 #       answer the dialog refused as for any owner write; the extension's refusal at the ask and at the write
+#   [p] in a child of a parent SOUL (soul_file ../CLAUDE.md), a pin whose data demotes a code of that file: refused, nothing
+#       written; one that demotes another code: written as today
 #   [d] start lines: string 1's extension block (its framing line, each line `- example: …`), the card after a compaction, doctor;
 #       an instruction-shaped line stays a data line after the left brain's title; a bad character or a sensitive value never
 #       reaches string 1
@@ -44,7 +46,23 @@
 #       or holds a goal tag the log never held; an input that cannot be written
 #   [k] a bundle: an extension's data travels in the exported log; `brain import` lands the items without it, and the
 #       extension reads the replayed evidence as imported
-# No planted break: each case is red on the brain before extensions, green after. A misbehaving extension is a bad input this
+#   [l] the sweep call: brain_ext.sweep_rows, which a plugin that runs a sweep calls, gives its rows [id, reason, evidence]; a pin,
+#       a goal, a closed or a missing item dropped with one line; the evidence cut to 120 units; a sensitive value dropped; a
+#       reason that is not its own few lower-case words (brain's own `untouched` included), a row of another shape, rows not a
+#       list: skipped with one line; a manifest that declares the call is found
+#   [m] its own ops: brain_ext.write_op writes `{"op": "ext", …}` through brain's write (the log folds it unread, the caches say
+#       format 11, an export says 11, doctor finds no problem); a worker, no session id, an unknown
+#       extension, a `what` that is not a name, data that is not an object, over its cap or holding a sensitive value: refused,
+#       nothing written; a malformed `ext` line is refused (5) and never reaches the log; a `soul` in an op written without the
+#       dialog makes no code live. An owner verb of effect `op`: the dialog names the extension and the SOUL codes the op makes
+#       live (or none); the approved op is written with the dialog's confirmation and its codes are live; an op other than the
+#       one the dialog showed, or a record no dialog bound, is refused (6) with the record unspent; the extension's refusal, an
+#       answer with no data or a `soul` that is not a list of codes: denied; its refusal or silence at the write: refused, the
+#       record unspent; an ext line with no name or a bad what (5); write_op inside an extension call (4), data past 4 levels
+#   [n] what moved out to a plugin that extends the brain: no function it probes by name is there (the sweep call is), no Stop
+#       hook, no recall snapshot at a compaction; an owner verb soul-codes and --caught-by on a broke, brain's own before, are
+#       now an extension's; the coordinator plugin's manifest of today loads
+# No planted break: each case is red on the brain before extensions, green after ([m]: red on the brain before its own ops). A misbehaving extension is a bad input this
 # suite builds (variant, forge: not a break) and runs through `capped`.
 # =============================================================================
 set -uo pipefail
@@ -203,7 +221,9 @@ case_discovery() {
     '{"schema": 1, "name": "x1", "script": "brain/extension.py", "owner": [{"verb": "batch", "effect": "archive", "letters": ["T"]}]}|or is brain'"'"'s own (add'
     '{"schema": 1, "name": "x1", "script": "brain/extension.py", "checks": [{"verb": "touch"}]}|a check'"'"'s verb is not one of'
     '{"schema": 1, "name": "x1", "script": "brain/extension.py", "checks": [{"verb": "add", "kinds": ["focus"], "options": ["--goal"]}]}|takes brain'"'"'s own option --goal for a kind brain uses it on'
-    '{"schema": 1, "name": "x1", "script": "brain/extension.py", "checks": [{"verb": "add", "options": ["--text"]}]}|takes brain'"'"'s own option --text')
+    '{"schema": 1, "name": "x1", "script": "brain/extension.py", "checks": [{"verb": "add", "options": ["--text"]}]}|takes brain'"'"'s own option --text'
+    '{"schema": 1, "name": "x1", "script": "brain/extension.py", "checks": [{"verb": "add", "kinds": ["session"], "options": ["--focus"]}]}|takes brain'"'"'s own option --focus for a kind brain uses it on'
+    '{"schema": 1, "name": "x1", "script": "brain/extension.py", "checks": [{"verb": "supersede", "options": ["--owner-quote"]}]}|takes brain'"'"'s own option --owner-quote')
   local b
   for b in "${bad[@]}"; do
     manifest "$CLAUDE_CONFIG_DIR/plugins/cache/m/x1/1.0.0" "${b%%|*}"; br doctor
@@ -265,6 +285,8 @@ case_check() {
   c_eq "$(bpy 'print("goal" in s.load(s.state_dir())[1]["items"]["S1"])')" False "[b] not as brain's own field"
   br op add --kind focus --text "the gate first" --owner-quote q --where chat --goal G1; c_rc 0 "[b] a focus still takes --goal as brain's"
   c_has "$(lastop)" '"goal":"G1"' "[b] brain's own field"
+  br op add --kind session --text "w-b" --goal G1 --focus P1; c_rc 0 "[b] a session's --goal to the extension and its --focus to brain, together"
+  c_has "$(lastop)" '"focus":"P1"' "[b] the focus as brain's own field"; c_has "$(lastop)" '"ext":{"example":{"goal":"G1"}}' "[b] the goal as the extension's data"
 }
 
 # --- [c] -----------------------------------------------------------------------------------------------------------------------
@@ -278,7 +300,11 @@ case_owner() {
        "[c] brain's own line for the write, the kind in words, then the extension's detail"
   c_eq "$(records)" 1 "[c] one asked record"
   owner_ok vouch tag-1 --text "ship after the gate" --owner-quote "the owner's words" --where chat; c_rc 0 "[c] with the record: written"
-  c_has "$OUT" "pinned D1 (example vouch)" "[c] it says what it pinned"
+  c_eq "$OUT" "pinned D1 (example vouch)
+id: D1
+kind: decision
+text: ship after the gate
+quote: the owner's words" "[c] it says what it pinned, then the item as stored"
   c_has "$(lastop)" '"op":"owner-add"' "[c] brain's own owner write"
   c_has "$(lastop)" '"ext":{"example":{"tag":"tag-1"}}' "[c] the extension's data on the decision"
   c_has "$(lastop)" '"confirm":{"asked":true' "[c] with the dialog's confirmation"
@@ -850,7 +876,201 @@ print([json.loads(e["line"])["item"].get("ext") for e in b["log"] if "\"add\"" i
 }
 
 echo "== cases =="
+sweeper() {  # sweeper <name> <python body of answer(q) for the sweep call> — a variant of the example that also answers `sweep`
+             # (an input built for brain, not a break), installed with `sweep` among its calls
+  variant "$1" "def answer(q):
+    if q[\"call\"] == \"sweep\":
+$2"
+  install "$EID" "$VAR"
+  manifest "$EXT" '{"schema": 1, "name": "example", "script": "brain/extension.py", "calls": ["start", "sweep"]}'
+}
+sw() {  # sw — brain_ext.sweep_rows as a plugin that runs a sweep calls it: OUT its rows, then its lines
+  OUT=$(bpy 'import brain_ext as E
+d = s.state_dir()
+rows, lines = E.sweep_rows(d, s.load(d)[1], cli=True)
+print("\n".join(["%s %s: %s" % r for r in rows] + lines))')
+}
+case_probes() {
+  R=$(python3 -c 'import importlib, sys
+sys.path.insert(0, sys.argv[1])
+names = [("brain_store", n) for n in ("recall_snapshot", "recall_redone", "closes_hint", "dropped_facts_warning", "soul_baton",
+                                     "op_keep")] + [("brain_hook", "stop"), ("brain_stale", "named_work"), ("brain_transfer", "signal_here")]
+print(" ".join("%s.%s" % mn for mn in names if hasattr(importlib.import_module(mn[0]), mn[1])) or "none")
+print(hasattr(importlib.import_module("brain_ext"), "sweep_rows"))' "$BROOT/scripts")
+  c_eq "$R" "none
+True" "[n] no moved feature answers a probe by its function's name; the sweep call does"
+  c_eq "$(python3 -c 'import json, sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["hooks"])))' "$BROOT/hooks/hooks.json")" \
+    "CwdChanged PostCompact PreCompact PreToolUse SessionEnd SessionStart UserPromptSubmit" "[n] the hooks: no Stop (the sweep step's hold moved out)"
+  np; br op add --kind trap --text "a trap"
+  hk post-compact "$(hin session_id="$SID" cwd="$P" hook_event_name=PostCompact trigger=auto compact_summary=S)"
+  c_eq "$RC|$([ -e "$(sdir)/recall" ] && echo snapshot || echo none)" "0|none" "[n] a compaction keeps no recall snapshot (it moved out)"
+  install "$EID" "$FIX"
+  install x2@m "$FIX"; manifest "$EXT" '{"schema": 1, "name": "x2", "script": "brain/extension.py", "owner": [{"verb": "soul-codes", "effect": "op", "args": ["file"]}], "calls": ["start"]}'
+  install x3@m "$FIX"; manifest "$EXT" '{"schema": 1, "name": "x3", "script": "brain/extension.py", "checks": [{"verb": "broke", "options": ["--caught-by"]}], "calls": ["start"]}'
+  install x4@m "$FIX"; manifest "$EXT" '{"schema": 1, "name": "coordinator", "script": "brain/extension.py",
+  "checks": [{"verb": "add", "kinds": ["session"], "options": ["--goal", "--no-goal", "--sandbox", "--request"]},
+    {"verb": "supersede", "kinds": ["session"], "options": ["--goal"]},
+    {"verb": "add", "kinds": ["now"], "options": ["--focus", "--done-check", "--after", "--urgent"]},
+    {"verb": "supersede", "kinds": ["now"], "options": ["--focus", "--done-check", "--after", "--urgent"]},
+    {"verb": "add", "kinds": ["next"], "options": ["--done-check", "--after", "--not-today"]},
+    {"verb": "supersede", "kinds": ["next"], "options": ["--done-check", "--after", "--not-today"]},
+    {"verb": "add", "kinds": ["queue"], "options": ["--act", "--card", "--at"]},
+    {"verb": "supersede", "kinds": ["queue"], "options": ["--act", "--card", "--at"]}, {"verb": "held"}, {"verb": "broke"}],
+  "owner": [{"verb": "soul", "effect": "archive", "letters": ["G", "D", "W", "T", "F"]}, {"verb": "demote", "effect": "pin", "args": ["code"]}],
+  "calls": ["start", "record", "read", "sweep"]}'
+  br doctor
+  c_has "$OUT" "info     extension x2 of x2@m: owner soul-codes" "[n] an owner verb soul-codes, brain's own before the split: now an extension's"
+  c_has "$OUT" "info     extension example of $EID:" "[n] …the others load: the example"
+  c_has "$OUT" "info     extension x3 of x3@m: checks broke" "[n] …one that takes --caught-by on a broke, now its own option"
+  c_has "$OUT" "info     extension coordinator of x4@m: checks" "[n] …and the coordinator plugin's manifest of today"
+}
+
+case_sweep() {
+  local ev bad
+  np; owner_ok add --kind decision --text "ship after the gate" --owner-quote q --where chat
+  br op add --kind session --text "w-a"; br op add --kind session --text "w-b"
+  sweeper rows '        return {"rows": [["S1", "session ended", "stopped at 10:00"], ["D1", "session ended", "x"],
+                         ["S9", "session ended", "x"], ["G1", "session ended", "x"]]}'
+  br doctor; c_has "$OUT" "calls start sweep" "[l] a manifest that declares the sweep call is found"
+  sw; c_eq "$OUT" "session ended S1: stopped at 10:00
+example: 3 sweep rows dropped (not a live right-brain item, or a sensitive value)" "[l] its row, and a pin, a missing item and a goal dropped with one line"
+  br op close S2 --reason done; c_rc 0 "[l] instrument: S2 closed"
+  sweeper closed '        return {"rows": [["S2", "session ended", "x"]]}'
+  sw; c_eq "$OUT" "example: 1 sweep row dropped (not a live right-brain item, or a sensitive value)" "[l] a closed item is no row"
+  ev=$(python3 -c 'print("e" * 300)')
+  sweeper long "        return {\"rows\": [[\"S1\", \"session ended\", \"$ev\"]]}"
+  sw; c_eq "$OUT" "session ended S1: $(python3 -c 'print("e" * 120)')" "[l] its evidence cut to 120 units"
+  sweeper secret '        return {"rows": [["S1", "session ended", "key " + "g" + "hp_" + "a1B2c3D4e5" * 3 + "a1B2c3"]]}'
+  sw; c_eq "$OUT" "example: 1 sweep row dropped (not a live right-brain item, or a sensitive value)" "[l] a sensitive value: the row dropped, one line"
+  for bad in '"Session Ended!"' '"untouched"' '"untouched "' '"session  ended"' '"x"'; do
+    sweeper reason "        return {\"rows\": [[\"S1\", $bad, \"x\"]]}"
+    sw; c_has "$OUT" "example: sweep skipped (a row's reason is not a few lower-case words of its own" "[l] reason $bad: the answer skipped, one line"
+    c_hasnt "$OUT" " S1:" "[l] reason $bad: no row"
+  done
+  sweeper shape '        return {"rows": [["S1", "session ended"]]}'
+  sw; c_has "$OUT" "example: sweep skipped (a row is not [item id, reason, evidence])" "[l] a row of two: skipped"
+  sweeper notlist '        return {"rows": "S1"}'
+  sw; c_has "$OUT" "example: sweep skipped (its rows are not a list)" "[l] rows not a list: skipped"
+}
+
+case_parent_demote() {
+  np; local par=$P; P="$par/child"; mkdir -p "$P/.vibemaestro"; git_ -C "$P" init -q -b main; cd "$P" || return 1
+  br op add --kind now --text "the task at hand"
+  printf '# Shared rules\n\n- [S07] one review round\n' > "$par/CLAUDE.md"; printf '{"soul_file": "../CLAUDE.md"}\n' > "$P/.vibemaestro/brain.json"
+  variant demote 'def answer(q):
+    if q["call"] == "owner" and q["phase"] != "ask":
+        return {"data": {"tag": q["args"]["tag"], "demoted_from": "S20" if q["args"]["tag"] == "tag-S20" else "S07"}}'
+  install "$EID" "$VAR"
+  owner_ok vouch tag-1 --text "reviews stay light" --owner-quote q --where chat
+  c_eq "$RC|$OUT" "1|brain: [S07] is a code of the parent SOUL file ../CLAUDE.md, read-only here: only the brain of its directory demotes it" \
+    "[p] an extension's pin that demotes a code of the parent SOUL file: refused"
+  c_hasnt "$(lastop)" '"owner-add"' "[p] …nothing written"
+  owner_ok vouch tag-S20 --text "reviews stay light" --owner-quote q --where chat; c_rc 0 "[p] a code the parent file does not hold: written as today"
+}
+
+case_extops() {
+  local n big
+  np; install "$EID" "$FIX"
+  wop() {  # wop <name> <what> <data JSON> [VAR=value…] — brain_ext.write_op as session SID (WOP_SID= for none); R its line or "<rc> <msg>"
+    local a=$1 b=$2 j=$3; shift 3
+    R=$(env "$@" CLAUDE_CODE_SESSION_ID="${WOP_SID-$SID}" python3 -c 'import json, sys
+sys.path.insert(0, sys.argv[1])
+import brain_store as s, brain_ext as E
+try:
+    print(E.write_op(sys.argv[2], sys.argv[3], json.loads(sys.argv[4])))
+except s.Refused as e:
+    print(e.rc, e.msg)' "$BROOT/scripts" "$a" "$b" "$j" 2>&1)
+  }
+  nlines() { wc -l < "$(sdir)/hot.jsonl" | tr -d ' '; }
+  codes() { bpy 'import brain_ledger as L
+print(" ".join(sorted(L.soul_codes(s.verify(s.state_dir())[1]))) or "none")'; }
+  fmt() { bpy 'import json, os
+print(json.load(open(os.path.join(s.state_dir(), "hot.json")))["folded_from"].get("format"))'; }
+  br export --out "$TMP/plain$NP.json"; c_eq "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["format"])' "$TMP/plain$NP.json")" 11 \
+    "[m] a brain with no extension op exports format 11 too: brain 0.5.3 refuses it, saying to update, never tries it"
+  wop example mark '{"n": 1, "soul": ["S30"]}'; c_eq "$R" "wrote example's op mark" "[m] write_op writes the extension's op"
+  c_has "$(lastop)" '"data":{"n":1,"soul":["S30"]},"ext":"example"' "[m] …its data and its name"
+  c_has "$(lastop)" '"op":"ext"' "[m] …as an op of kind ext"; c_has "$(lastop)" '"what":"mark"' "[m] …and its what"
+  c_eq "$(codes)" none "[m] a soul in an op written without the owner's dialog makes no code live"
+  c_eq "$(fmt)" 11 "[m] the caches say the log needs format 11"
+  br doctor; c_hasnt "$OUT" "problem" "[m] doctor finds no problem"
+  br op add --kind next --text "the next step"; c_rc 0 "[m] the brain writes on"
+  br show N1; c_rc 0 "[m] and reads"
+  br export --out "$TMP/ext$NP.json"; c_eq "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["format"])' "$TMP/ext$NP.json")" 11 \
+    "[m] an export says format 11: an older brain refuses the bundle, saying to update"
+  n=$(nlines)
+  wop example mark '{}' VIBEMAESTRO_ROLE=worker; c_eq "$R" "4 a worker session keeps no hot memory (VIBEMAESTRO_ROLE=worker, or INTENT_SLUG and SEAT are set)" "[m] a worker: refused (4)"
+  WOP_SID= wop example mark '{}'; c_eq "$R" "7 no CLAUDE_CODE_SESSION_ID: only a Claude Code session writes hot memory" "[m] no session id: refused (7)"
+  wop nosuch mark '{}'; c_eq "$R" "1 nosuch is not an extension of this project" "[m] a name no extension of this project has: refused"
+  wop example 'Mark It' '{}'; c_eq "$R" "1 example's op: its what is not a name ([a-z][a-z0-9-]{1,23})" "[m] a what that is not a name: refused"
+  wop example mark '[1]'; c_eq "$R" "1 example's op mark: its data is not an object" "[m] data that is not an object: refused"
+  big=$(python3 -c 'print("x" * 2100)')
+  wop example mark "{\"k\": \"$big\"}"; c_eq "$R" "1 example's op mark: its data is over 2048 bytes" "[m] data over its cap: refused"
+  wop example mark "{\"k\": \"$(tok)\"}"; c_has "$R" "1 a sensitive value; nothing was written" "[m] a sensitive value in the data: refused"
+  R=$(bpy 'try:
+    s.write(lambda d, st: ({"op": "ext", "ext": "example", "what": "mark", "data": [1]}, [], "x", None))
+except s.Refused as e:
+    print(e.rc, e.msg)')
+  c_has "$R" "a malformed extension op" "[m] a malformed ext line through the write path: refused (5)…"
+  R=$(bpy 'for o in ({"op": "ext", "what": "mark", "data": {}}, {"op": "ext", "ext": "example", "what": "Mark It", "data": {}}):
+    try:
+        s.write(lambda d, st: (o, [], "x", None))
+    except s.Refused as e:
+        print(e.rc, e.msg.split(": ")[-1])')
+  c_eq "$R" "5 a malformed extension op
+5 a malformed extension op" "[m] an ext line with no extension name, or a what that is not a name: refused (5)"
+  wop example mark '{}' BRAIN_EXTENSION=1; c_eq "$R" "4 a brain extension's call never writes the brain: it answers, and brain writes" \
+    "[m] write_op from inside an extension's call: refused (4)"
+  wop example mark '{"a": {"b": {"c": {"d": {"e": 1}}}}}'; c_eq "$R" "1 example's op mark: its data is more than 4 levels deep" \
+    "[m] data deeper than 4 levels: refused"
+  c_eq "$(nlines)" "$n" "[m] …and nothing of the refused writes reached the log"
+  variant opverb 'def answer(q):
+    if q["call"] != "owner" or q["verb"] != "stamp":
+        return None
+    f = q["args"]["file"]
+    if f == "no":
+        return {"refuse": {"message": "the file no is refused"}}
+    if f == "bare":
+        return {"detail": "nothing to write"}
+    data = {"file": f} if f == "plain" else {"file": f, "soul": ["S20", "S21"]}
+    if f == "drift" and q["phase"] == "write":
+        data["soul"] = ["S22"]
+    if f == "badsoul":
+        data["soul"] = ["X1"]
+    if f == "late" and q["phase"] == "write":
+        return {"refuse": {"message": "the file late is refused at the write"}}
+    if f == "slow" and q["phase"] == "write":
+        time.sleep(30)
+    return {"detail": "2 rows", "data": data} if q["phase"] == "ask" else {"data": data}'
+  manifest "$VAR" '{"schema": 1, "name": "example", "script": "brain/extension.py", "checks": [{"verb": "broke"}],
+  "owner": [{"verb": "vouch", "effect": "pin", "args": ["tag"]}, {"verb": "stamp", "effect": "op", "args": ["file"]}], "calls": ["start"]}'
+  install "$EID" "$VAR"
+  br owner stamp steps.json; c_rc 6 "[m] an op verb with no approved dialog: refused (6)"
+  gown stamp steps.json; c_eq "$(hfield permissionDecision)" ask "[m] guard-owner asks for the extension's op"
+  c_eq "$(hfield permissionDecisionReason)" 'example stamp "steps.json": Write an op of extension example (2 rows); it makes SOUL codes live: [S20], [S21]' \
+       "[m] the dialog names the extension and the SOUL codes the op makes live"
+  br owner stamp steps.json; c_rc 0 "[m] approved: written"; c_eq "$OUT" "wrote example's op stamp" "[m] …saying so"
+  c_has "$(lastop)" '"confirm":{"asked":true' "[m] …with the dialog's confirmation"
+  c_has "$(lastop)" '"data":{"file":"steps.json","soul":["S20","S21"]},"ext":"example"' "[m] …the op the dialog showed"
+  c_eq "$(codes)" "S20 S21" "[m] the codes of an approved op are live"
+  gown stamp plain; c_eq "$(hfield permissionDecisionReason)" 'example stamp "plain": Write an op of extension example (2 rows); it makes no SOUL code live' \
+       "[m] an op with no soul: the dialog says it makes none live"
+  gown stamp drift; c_eq "$(hfield permissionDecision)" ask "[m] an op the extension changes after the dialog: asked…"
+  br owner stamp drift; c_rc 6 "[m] …and refused at the write (6)"; c_has "$OUT" "example's op is not the one the dialog showed" "[m] …saying so"
+  c_eq "$(records)" 1 "[m] …the record left unspent"; c_eq "$(codes)" "S20 S21" "[m] …nothing written"
+  owner_ok stamp steps.json; c_rc 6 "[m] a record no dialog bound to the op: refused (6)"
+  gown stamp no; c_eq "$(hfield permissionDecision)" deny "[m] the extension refuses at the ask: denied"
+  c_has "$(hfield permissionDecisionReason)" "example: the file no is refused" "[m] …with its message"
+  gown stamp bare; c_has "$(hfield permissionDecisionReason)" "an op verb's answer has no data object" "[m] an answer with no data: denied"
+  gown stamp badsoul; c_has "$(hfield permissionDecisionReason)" "its data's soul is not a list of SOUL codes" "[m] a soul that is not a list of codes: denied"
+  n=$(nlines)
+  gown stamp late; br owner stamp late; c_rc 1 "[m] the extension refuses at the write: refused (1)"
+  c_has "$OUT" "example: the file late is refused at the write" "[m] …with its message"; c_eq "$(records)" 1 "[m] …the record unspent"
+  gown stamp slow; brc owner stamp slow; c_rc 1 "[m] the extension does not answer at the write: refused (1)"
+  c_has "$OUT" "did not answer" "[m] …saying so"; c_eq "$(records)" 1 "[m] …the record unspent"; c_eq "$(nlines)" "$n" "[m] …nothing written"
+}
+
 for c in case_discovery case_check case_owner case_start case_record_read case_broken case_reach case_hookpath case_rules case_watch \
-         case_bundle; do run_case $c; done
+         case_bundle case_sweep case_probes case_parent_demote case_extops; do run_case $c; done
 cd "$TMP" || exit 1
 summary

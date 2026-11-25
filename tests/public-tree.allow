@@ -29,6 +29,8 @@ tests/test-baton-grant.sh	ref	PRs: 3
 tests/test-baton-params.sh	ref	o/r#1
 tests/test-baton-params.sh	ref	o/r#7
 tests/test-baton-plan-run.sh	ref	acme/app#9
+tests/test-baton-window.sh	ref	o/q#2
+tests/test-baton-window.sh	ref	o/r#1
 tests/test-brain-hooks.sh	ref	#12
 tests/test-brain-hooks.sh	ref	#123
 tests/test-brain-hooks.sh	ref	PR #123
@@ -74,6 +76,7 @@ tests/test-gate-current-state.sh	diary	2026-10-12
 tests/test-gate-current-state.sh	ref	#123
 tests/test-gate-current-state.sh	ref	#45
 tests/test-gate-current-state.sh	ref	PR 123
+tests/test-gates-kb-check.sh	ref	/pull/1
 tests/test-gates-sensitive.sh	ref	#10
 tests/test-gates-sensitive.sh	ref	PR #10
 tests/test-gates-sensitive.sh	ref	PR #7
@@ -132,6 +135,9 @@ tests/test-kb-story.sh	ref	issue #7
 tests/test-kit-owner-merge.sh	ref	o/q#7
 tests/test-kit-owner-merge.sh	ref	o/r#1
 tests/test-kit-owner-merge.sh	ref	o/r#2
+tests/test-kit-pr-update-branch.sh	ref	PR 0
+tests/test-kit-pr-update-branch.sh	ref	PR 7
+tests/test-kit-pr-update-branch.sh	ref	pull request 7
 tests/test-language.sh	ref	#98
 tests/test-merge-guard.sh	ref	PRs: 1
 tests/test-merge-guard.sh	ref	PRs: 2

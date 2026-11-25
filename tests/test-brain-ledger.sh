@@ -17,8 +17,8 @@
 #       value refuses writes, an unknown key warns
 #   [e] a goal's progress: `brain op progress G1` writes ledger data, the goal's item stays the owner's byte for byte; the card's
 #       goal line carries the measure
-#   [g] the review card: the ledger lines in order (one line per goal, dormant, the record due), ≤ 1,000 units, and no drift,
-#       promotion, SOUL or gate line (those are an extension's); `brain ledger` still marks drift and promote?; doctor prints them
+#   [g] the review card: the ledger lines in order (one line per goal, dormant, the record due, the live work with no focus),
+#       ≤ 1,000 units, and no drift, promotion, SOUL or gate line (those are an extension's); `brain ledger` still marks drift and promote?; doctor prints them
 #   [h] the monthly record: `brain ledger --record` counts the rules, the crossings, progress, dormant items, capacity and
 #       compactions of the period, and logs it; the card's due line 30 days after the last one
 #   [i] an existing brain of log format 5 (every op kind, goals, focus, requests) folds to the same bytes, keeps its ids and cache,
@@ -411,12 +411,13 @@ case_card() {
   ops broke:T1:3:S1 broke:T1:2:S2 held:D1:20:S1 held:D1:15:S2 held:D1:12:S3 held:D1:10:S1 held:D1:5:S2 \
       'broke:[S07]:60:S1' 'held:[S07]:5:S2'
   startall compact; card=$(card_of)
-  c_eq "$(printf '%s\n' "$card" | sed -n '2,6p' | sed -E 's/^- (G[0-9]|dormant|ledger) .*/\1/')" \
+  c_eq "$(printf '%s\n' "$card" | sed -n '2,7p' | sed -E 's/^- (G[0-9]|dormant|ledger) .*/\1/')" \
        "G1
 G2
 dormant
 ledger
-- P1: not counted yet" "[g] the ledger lines in order: one line per goal, dormant, the record due, then the focus counts, and nothing else"
+- work with no focus: X1, S1
+- P1: not counted yet" "[g] the ledger lines in order: one line per goal, dormant, the record due, the live work with no focus, then the focus counts, and nothing else"
   c_has "$card" "- G1 review in 12 d · focus P1 · progress \"2 of 4 rows merged\" (" "[g] a goal's line: its review, focus and progress"
   c_has "$card" "- G2 review in 40 d · no focus · no progress yet" "[g] a goal with none of them"
   c_hasnt "$card" "sessions" "[g] no sessions part: counting a goal's sessions is an extension's"
@@ -628,9 +629,10 @@ print(i["T1"]["status"], i["T1"]["soul"], i["T3"]["status"], i["D2"]["status"], 
   c_has "$(card_of)" "- G1 review in 30 d · no focus · progress \"2 of 4\" (" "[j] the card reads the goal's progress"
   c_hasnt "$(card_of)" "SOUL" "[j] the card names no SOUL code"
   br ledger; c_rc 0 "[j] brain ledger: rc 0"
-  c_has "$OUT" "T1 · lesson · held 3 from 3 sessions · broke 0 · last " "[j] the promoted lesson keeps its own events (the hit counts for the writing session)"
-  c_has "$OUT" " · archived" "[j] and says it is archived"
-  c_has "$OUT" "[S14] · SOUL · held 1 from 1 session · broke 0" "[j] a code counts the events written for it, no more"
+  c_hasnt "$OUT" "T1 ·" "[j] the promoted lesson's events are read under its code, not under T1"
+  c_has "$OUT" "[S14] · SOUL · held 4 from 3 sessions · broke 0" "[j] a code counts the events written for it and its lesson's (the hit counts for the writing session)"
+  br ledger T1; c_eq "$RC|$OUT" '0|T1 promoted to [S14]; its evidence is read under `brain ledger [S14]`' "[j] brain ledger T1 says where its evidence is read"
+  br ledger
   c_has "$OUT" "[S07] · SOUL · held 1 from 1 session" "[j] a code an older brain demoted still reads"
   br ledger S14; c_rc 0 "[j] brain ledger S14: rc 0"; c_has "$OUT" "kb/evidence.md" "[j] with its event"
   br show T1; c_has "$OUT" "soul: S14" "[j] brain show prints the code an older brain stored"

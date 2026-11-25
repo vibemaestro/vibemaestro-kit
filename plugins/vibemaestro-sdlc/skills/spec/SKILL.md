@@ -38,6 +38,8 @@ If not, do `intake` first.
 2. **Fill in** — only from the intent: the story, its decisions and, for a task or a bug, a `## Brainstorm result` section.
    **Add no idea of your own** and do not widen the scope beyond the story. A missing piece of information becomes an open point
    in `## To clarify`; do not guess.
+   - The technical detail the story must not carry lives here: exact values, parameter names, status codes, matching rules, protocols. When
+     you answer a technical question, write the answer into this spec and never into the story's AC.
    - `## Goal`: what must be true when done, said as a result a person sees, each line pointing to the AC it serves (`→ AC<n>`).
    - `## Constraints`: hard limits only: security, cost, compatibility. Not how it is built: a "constraint" that names a file, a
      function, a library or an order of steps is the plan's.
@@ -50,7 +52,9 @@ If not, do `intake` first.
      test looks: rule `test-quality` of the plugin (`rules/test-quality.instructions.md`).
    - `## To clarify`: the open points, each with a recommendation and why; `none` when there are none. A point that would change
      an AC of the story goes to the owner.
-   - About two pages for a usual story. Delete every `<FILL: …>`; the `description:` line in the frontmatter is one line.
+   - About two pages for a usual story, and at most 32768 bytes (`kb.spec_max_bytes`; the whole file, UTF-8): a warning from 80
+     percent, red over it on a spec the change touches. Over: split it by service or module, one spec for each, each with its own
+     intent. Delete every `<FILL: …>`; the `description:` line in the frontmatter is one line.
 
 3. **Check the shape by machine** and fix until rc `0`:
 

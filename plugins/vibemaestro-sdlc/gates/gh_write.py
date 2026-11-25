@@ -15,7 +15,7 @@ carries the sha256 of the spec file, so a signature over the plan binds the spec
 
 Spec (JSON): {"gh-write": 1, "ops": [op, ...]}, 1 to 20 ops. Each op has `op` and `repo` (owner/name) and only the keys of its
 kind:
-  issue-create   title, body, marker [labels, id]
+  issue-create   title, body, marker [labels, id, infra]
   issue-comment  issue (a number, or "@<id>" of an earlier issue-create in the same repo), body, marker [closed_ok]
   comment-edit   comment (its id), body
   issue-edit     issue, title and/or body
@@ -58,6 +58,11 @@ An issue-close with a `comment` (read like a body, pinned the same way) and its 
 in one op: the plan line carries the comment's digest, the post-check reads both, and the undo retracts the comment (an edit, as
 for issue-comment, never a deletion) and reopens the issue, only while the comment holds the posted body (or its retraction) and
 the issue is closed as the run closed it (or already open); if either changed since the run, both are left alone (rc 5).
+
+An issue-create with `"infra": true` asks for infrastructure help (runners, CI variables, secrets, a cluster…): its body holds
+exactly one line `Infra: blocked: <what> · tried: <what>` (refused otherwise), and under `infra.label` of the config of the
+repository the run stands in, the issue gets that label when op.repo has it, else its title starts with `[<label>] `; the
+label is never created. The plan line names the title and labels the issue gets. infra.label unset: nothing is added.
 
 issue-labels sets the labels of an existing issue or pull request to the live set less `remove` plus `add`, in one PATCH of
 `labels` alone (the issues-labels endpoints would be a POST and a DELETE per name: two writes, and the engine has no DELETE).
@@ -117,7 +122,7 @@ MAX_BODY = 65536
 MAX_FILE = 1 << 20
 ARCHIVED_KEPT = 100
 KINDS = {
-    "issue-create": ({"title", "marker"}, {"labels", "id"}, True),
+    "issue-create": ({"title", "marker"}, {"labels", "id", "infra"}, True),
     "issue-comment": ({"issue", "marker"}, {"closed_ok"}, True),
     "comment-edit": ({"comment"}, set(), True),
     "issue-edit": ({"issue"}, {"title"}, None),
@@ -484,6 +489,12 @@ class Op:
         if kind == "issue-edit" and self.title is None and self.template is None:
             raise Refuse("refuse-spec", "op %d (issue-edit) changes nothing: give a title or a body" % i)
         self.fence_open = self.template is not None and fence_open_at_end(self.template)
+        self.infra, self.marked = d.get("infra", False), (self.title, self.labels)
+        if not isinstance(self.infra, bool):
+            raise Refuse("refuse-spec", "op %d: infra is true or false" % i)
+        why = self.infra and G.sdlc_config.infra_problem(self.template)
+        if why:
+            raise Refuse("refuse-spec", "op %d (infra): %s" % (i, why))
 
     def read_pinned(self, refusal, key, pin_key, rel, pin, spec_dir, cap=None):
         """The bytes of a file a spec names beside it (body_file, content_file): a relative path without '..' that stays inside
@@ -589,6 +600,12 @@ class Spec:
                     raise Refuse("refuse-spec", "op %d's marker is in the body of op %d: a marker belongs to one op" % (op.i, other.i))
         self.n = len(self.ops)
         self.by_id = creates
+        self.infra_label = None                         # `infra.label` of the repository the run stands in, read only when used
+        if any(op.infra for op in self.ops):
+            try:
+                self.infra_label = G.load_config(os.getcwd())["infra"]["label"]
+            except G.ConfigError as e:
+                raise Refuse("refuse-spec", "an infra op reads infra.label, and the config is invalid:\n%s" % e)
 
 
 def spec_sha_now(path):
@@ -985,11 +1002,16 @@ class Plan:
             for lab in op.labels:
                 self.cond("labels", w.read("repos/%s/labels/%s" % (op.repo, q(lab))) is not None,
                           "%s: label %s in %s" % (tag, json.dumps(lab), op.repo))
+            title, labels = op.marked = op.title, op.labels
+            if op.infra and sp.infra_label:                 # the label when the repository has it, else the title prefix
+                has = w.read("repos/%s/labels/%s" % (op.repo, q(sp.infra_label))) is not None
+                title, labels = op.marked = G.sdlc_config.infra_mark(sp.infra_label, has, op.title, op.labels)
+                self.cond("title", len(title) <= 256, "%s: the marked title is %d characters (at most 256)" % (tag, len(title)))
             mine = w.read("repos/%s/issues?state=all&creator=%s&per_page=100" % (op.repo, q(viewer)), pages=True)
             hit = [x.get("number") for x in (mine or []) if op.marker in body_of(x)]
             self.cond("marker-absent", not hit, "%s: %s" % (tag, "no issue of %s holds the marker" % viewer if not hit
                                                             else "issue #%s already holds the marker" % hit[0]))
-            return "%s %s title %s labels %s %s%s" % (head, op.repo, json.dumps(op.title), json.dumps(op.labels), digest,
+            return "%s %s title %s labels %s %s%s" % (head, op.repo, json.dumps(title), json.dumps(labels), digest,
                                                      " as @%s" % op.id if op.id else "")
         if op.kind == "comment-edit":
             c = w.read("repos/%s/issues/comments/%d" % (op.repo, op.number))
@@ -1191,10 +1213,11 @@ def mode_do(spec, i, plan_file):
     e = {"op": i, "kind": op.kind, "repo": op.repo, "id": op.id, "marker": op.marker, "reason": op.reason, "status": "sent"}
     w = p.w
     if op.kind == "issue-create":
-        e.update(posted=text, title=op.title, labels=op.labels)
-        payload, path, method = {"title": op.title, "body": text}, "repos/%s/issues" % op.repo, "POST"
-        if op.labels:
-            payload["labels"] = list(op.labels)
+        title, labels = op.marked                       # set by the plan above: the infra mark, when there is one
+        e.update(posted=text, title=title, labels=labels)
+        payload, path, method = {"title": title, "body": text}, "repos/%s/issues" % op.repo, "POST"
+        if labels:
+            payload["labels"] = list(labels)
     elif op.kind == "issue-comment":
         num = op.number or p.created(op.ref)
         e.update(number=num, posted=text)

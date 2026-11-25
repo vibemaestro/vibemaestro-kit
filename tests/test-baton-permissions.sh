@@ -399,8 +399,21 @@ session_cases() {
   out=$(ss "$P" loi)
   v="\`Bash(python3 /x/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)\` (user $H/.claude/settings.json) names version 1.9.0"
   eq "$(bctx "$out")" "baton permissions (mode manual): 1 stale (first: $v). No kit fixes $v: $HAND" \
-     "$g manual, a rule naming another version (no kit removes it): the owner changes it by hand, no kit offered"
+     "$g manual, a rule naming another version, this copy in no version directory (installed version unknown): no kit removes it, no kit offered"
   eq "$(sysm "$out")" "" "$g manual, a rule naming another version: the person's message holds nothing"
+  # the session running from a version directory (the installed one): kit:bootstrap removes the rule of the user settings, so it is offered
+  G="$H/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/4dc7de6c9e01"; mkdir -p "$(dirname "$G")"; cp -R "$P" "$G"
+  out=$(ss "$G" loi)
+  v="\`Bash(python3 /x/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)\` (user $H/.claude/settings.json) names version 1.9.0: kit:bootstrap removes it"
+  eq "$(bctx "$out")" "baton permissions (mode manual): 1 stale (first: $v). Offer the fix, skill vibemaestro-sdlc:bootstrap (kit:bootstrap), $TELL" \
+     "$g manual, a rule naming another version, the session from a version directory: kit:bootstrap is offered"
+  hasnt "$(ctx "$out")" "No kit fixes" "$g …and no \"No kit fixes\""
+  # the same rule in the project settings only: kit:bootstrap writes the user settings, so the owner changes it by hand
+  cp "$PJ/good.json" "$H/.claude/settings.json"; mkdir -p "$PJ/.claude"
+  echo '{"permissions": {"allow": ["Bash(python3 /x/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)"]}}' > "$PJ/.claude/settings.json"
+  has "$(bctx "$(ss "$G" loi)")" ". No kit fixes " "$g …the same rule in the project settings: no kit removes it, the owner changes it by hand"
+  rm "$PJ/.claude/settings.json"
+  jedit "$PJ/good.json" "$H/.claude/settings.json" 'p["allow"].append("Bash(python3 /x/.claude/plugins/cache/vibemaestro/vibemaestro-sdlc/1.9.0/scripts/baton.py run:*)")'
   # an old ask in the project settings: kit:permissions-upgrade changes only the user settings, so neither the finding nor the
   # line names it as the fix
   cp "$PJ/good.json" "$H/.claude/settings.json"; mkdir -p "$PJ/.claude"

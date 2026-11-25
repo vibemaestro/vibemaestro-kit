@@ -734,7 +734,7 @@ args = json.loads(sys.argv[8]) if len(sys.argv) > 8 else []
 q = os.path.join(st, "vibemaestro", "baton", "queue"); os.makedirs(os.path.join(q, "used"), exist_ok=True)
 it = {"v": 1, "id": qid, "created": created, "expires": "2020-01-01T00:00:00Z" if state == "expired" else "2099-01-01T00:00:00Z",
       "name": name, "word": "kit:" + name, "call": [], "script_path": script, "script_sha256": "ab" * 32, "args": args, "cwd": cwd,
-      "env": {}, "plan": [], "stops": "secrets", "mode": "auto", "card": []}
+      "env": {}, "plan": [], "stops": "secrets", "mode": "auto", "card": [], "session": "s-queuer"}
 it["body_sha256"] = hashlib.sha256(json.dumps(it, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 if state == "signed":
     it["signature"] = {"by": "owner", "dialog": "d" * 16, "time": created, "body_sha256": it["body_sha256"]}
@@ -759,6 +759,8 @@ fam_pending() {
   eq "$(bt "$P" rehearse $K $NEW)/$(calls)" "1/0" "[W] a signature of another kit baton of sdlc that has not run: rehearse rc 1, no claude call"
   has "$(cat "$BT_OUT")" "PENDING signature vault-put-text.sh signed 2026-11-06T09:25:12Z in $D/other" "[W] …named: the baton, its time and its directory"
   has "$(cat "$BT_OUT")" "REFUSE a signed run or queued item of a plugin this update moves has not run yet; the move would void it" "[W] …refused by name"
+  has "$(cat "$BT_OUT")" " in $D/other; the owner voids it: " "[W] …with the way out"
+  has "$(cat "$BT_OUT")" " sign --by owner --void $(basename "$s" .json)" "[W] …the owner's --void of that binding"
   eq "$(bt "$P" go $K $NEW)/$(calls)" "1/0" "[W] …go refuses too, nothing moved"
   eq "$(same "$D/reg.before" "$(REG)")" same "[W] …the registry is as it was"
   # not pending: no record, or one whose run has started
@@ -776,10 +778,18 @@ fam_pending() {
   put_item 0123456789abcdef pending "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"
   eq "$(bt "$P" rehearse $K $NEW)/$(calls)" "1/0" "[W] a pending queued item of sdlc: rehearse rc 1, no claude call"
   has "$(cat "$BT_OUT")" "PENDING queued-item 0123456789abcdef vault-put-text.sh queued 2026-11-06T10:00:00Z in $D/queuer" "[W] …named: the id, the baton, its time and its directory"
-  rm "$ST/vibemaestro/baton/queue/0123456789abcdef.json"
+  has "$(cat "$BT_OUT")" "; the session that queued it withdraws it: " "[W] …with the way out"
+  has "$(cat "$BT_OUT")" " queue withdraw 0123456789abcdef --reason dead, or the owner: " "[W] …the session's withdraw"
+  has "$(cat "$BT_OUT")" " sign --by owner --void 0123456789abcdef" "[W] …and the owner's --void"
+  eq "$( (cd "$D" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-queuer python3 "$P/scripts/baton.py" queue withdraw 0123456789abcdef --reason dead) >/dev/null 2>&1; echo $?)" 0 \
+     "[W] the session that queued it withdraws it: rc 0"
+  eq "$(bt "$P" rehearse $K $NEW)" 0 "[W] …a withdrawn item is not pending: rehearse rc 0"
+  mv "$ST/vibemaestro/baton/queue/withdrawn/0123456789abcdef.json" "$TMP/withdrawn.keep"
   put_item 0123456789abcdef signed "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"
   eq "$(bt "$P" rehearse $K $NEW)" 1 "[W] a signed queued item: refused too"
   has "$(cat "$BT_OUT")" "PENDING queued-item 0123456789abcdef vault-put-text.sh" "[W] …named"
+  has "$(cat "$BT_OUT")" "; the owner withdraws it: " "[W] …only the owner's way out"
+  has "$(cat "$BT_OUT")" " sign --by owner --void 0123456789abcdef" "[W] …its --void"
   rm "$ST/vibemaestro/baton/queue/0123456789abcdef.json"
   put_item 0123456789abcdef used "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"
   put_item fedcba9876543210 expired "$sdlc" vault-put-text.sh 2026-11-06T10:00:00Z "$D/queuer"

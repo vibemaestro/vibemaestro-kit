@@ -53,7 +53,8 @@ DEFAULT = {
     "baton_dirs": ["batons", "templates/baton-kinds"],
     "lists": {
         BATON: ["STOP_WORDS", "SIGN_AGAIN_STOPS", "PLAN_SECRETS_KITS", "parse_header", "stops_of", "KIT_ROOT", "KINDS_DIR", "KINDS_REAL",
-                "APPROVAL_LIFE_MAX", "CHARTER_LIFE_MAX", "CHARTER_KINDS"],
+                "APPROVAL_LIFE_MAX", "CHARTER_LIFE_MAX", "CHARTER_KINDS", "WINDOW_NEVER", "WINDOW_NEVER_BATONS", "WINDOW_LIFE_MAX",
+                "WINDOW_FLOOR_PATHS", "WINDOW_FLOOR_PREFIXES", "WINDOW_FLOOR_BATON_DIRS"],
         "plugins/vibemaestro-sdlc/scripts/sdlc_config.py": ["MERGE_DENY_DEFAULT"],
         "plugins/vibemaestro-sdlc/scripts/kb_plan.py": ["TOUCH_KINDS", "TOUCH_OBJECT_KINDS", "TOUCH_JUDGES", "TOUCH_JUDGE_DIRS",
                                                        "parse_touches", "touch_kind", "judges", "is_judge"],

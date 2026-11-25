@@ -29,7 +29,12 @@
 #       its files, so does the floor of a first PR; .vibemaestro/batons still merges
 #   [L] the back-merge lane: a backmerge/* PR into the default branch (whatever its name) with its head on release merges with
 #       a merge commit; one whose head is not on release, or with no release, is refused; another PR whose head is on release is
-#       refused; every other PR squashes; its comparison with release is asked again after a 5xx (4 attempts)
+#       refused; every other PR squashes; its comparison with release is asked again after a 5xx (4 attempts). A head above
+#       the release tip is a back-merge only as one merge of the tip with a main commit (either parent order): a merge above it,
+#       a parent not on main, a plain commit and an octopus are refused, naming why, and a failed read of its shape could not
+#       conclude; another head ref holding a release tip main lacks is refused (a squash would cut release off main); in the
+#       lane, behind passes on a fresh mergeable test merge, is refused on a conflict and could not conclude while stale, and
+#       never asks to merge the base in
 #   [A] --behind auto: a fresh test merge (re-asked when stale, a conflict at once), disjoint files or a shared docs file merged
 #       clean (not code, a planner's map, a dot-directory or CLAUDE.md), and disjoint suites by the base's planner (the kit's
 #       tests/plan.py --suites: the base's files --woken, with the merge base's map as --old; the PR's as CI plans them), read and
@@ -573,6 +578,12 @@ bt() {
   OUT=$(cd "$d" && cenv XDG_STATE_HOME="$d/state" FAKE_GH_FX="$d/fx.json" FAKE_GH_LOG="$d/gh.log" FAKE_GH_STATE="$d/merged.json" \
         ${BT_SWAP[@]+"${BT_SWAP[@]}"} python3 -B "$pl/scripts/baton.py" "$@" 2>&1); RC=$?
 }
+# btc <plugin> <case dir> <baton args...> — bt for a call that must be refused: through capped (tests/fixtures/capped.sh); OUT, RC
+btc() {
+  local pl=$1 d=$2; shift 2
+  OUT=$(cd "$d" && capped cenv XDG_STATE_HOME="$d/state" FAKE_GH_FX="$d/fx.json" FAKE_GH_LOG="$d/gh.log" FAKE_GH_STATE="$d/merged.json" \
+        python3 -B "$pl/scripts/baton.py" "$@" 2>&1); RC=$?
+}
 seal_of() { printf '%s\n' "$OUT" | sed -n 's/^seal \([^ ]*\) .*/\1/p'; }
 nsig() { find "$1/state/vibemaestro/baton/signatures" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
 
@@ -679,6 +690,64 @@ fam_backmerge() {
   d=$(mkfx default-branch=trunk backmerge=on); guard "$PL" "$d" "${STD[@]}" --merge
   eq "$RC" 0 "[L8] a back-merge into a default branch named trunk, not main: rc 0"
   has "$(mlog "$d")" '"--merge"' "[L8] …a merge commit: the default branch, whatever its name"
+  # a conflicting back-merge resolved above the release tip: one merge of the tip with a main commit, and nothing else
+  d=$(mkfx backmerge=merge); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC" 0 "[L10] a backmerge/* head that merges the release tip and a main commit: rc 0"
+  has "$OUT" "ok    backmerge: the head ref backmerge/a1b2c3d4e5f6; the head is above release d0d0d0d0d0d0 and is one merge of it with a commit of main: a merge commit keeps release an ancestor of main" \
+      "[L10] …the lane names the shape"
+  has "$(mlog "$d")" '"--merge"' "[L10] …merged with a merge commit"
+  hasnt "$(mlog "$d")" '"--squash"' "[L10] …never squashed"
+  has "$OUT" "into main@b0b0b0b0b0b0 merge-commit lane normal" "[L10] …and the plan line says merge-commit"
+  d=$(mkfx backmerge=merge-rev); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(mlog "$d" | grep -c '"--merge"')" "0:1" "[L10b] the same merge, its parents the other way round: rc 0, a merge commit"
+  local above="FAIL  backmerge: the head ref backmerge/a1b2c3d4e5f6; the head is above release d0d0d0d0d0d0 and is not one merge of it with a commit of main"
+  alone "[L11] a backmerge/* head that is a merge above such a merge" backmerge backmerge=merge2
+  has "$OUT" "$above: neither of its parents is the release tip (a merge above another merge?)" "[L11] …naming why"
+  alone "[L11b] a backmerge/* head that merges the release tip and a commit not on main" backmerge backmerge=merge-off
+  has "$OUT" "$above: its other parent f2f2f2f2f2f2 is not on main (diverged)" "[L11b] …naming the parent"
+  alone "[L11c] a backmerge/* head that is a plain commit above the release tip" backmerge backmerge=plain
+  has "$OUT" "$above: it is not a merge (one parent)" "[L11c] …naming why"
+  alone "[L11d] a backmerge/* head that is an octopus merge of the release tip" backmerge backmerge=octopus
+  has "$OUT" "$above: it merges 3 parents, not 2" "[L11d] …naming why"
+  d=$(mkfx on-release=held); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC" 0 "[L5b] a PR from feat/x whose head holds a release tip main already holds: rc 0"
+  has "$OUT" "ok    backmerge: the head holds release d0d0d0d0d0d0, which main holds too: squash" "[L5b] …the lane says why"
+  has "$(mlog "$d")" '"--squash"' "[L5b] …squashed: the shape alone never picks the lane"
+  alone "[L4b] a PR from backmerge-resolved/* (not backmerge/*) whose head merges a release tip main lacks" backmerge on-release=above
+  has "$OUT" "FAIL  backmerge: the head holds release d0d0d0d0d0d0, which main does not hold yet: a squash of it would cut release off main; merge the pending back-merge into main first, or, for a back-merge, open it from a backmerge/* branch" \
+      "[L4b] …a squash would cut release off main: refused, naming why"
+  d=$(mkfx on-release=above-fail); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:0" "[L4c] whether main holds the release tip cannot be read (HTTP 500 on all 4 attempts): rc 2, nothing merged"
+  has "$OUT" "??    backmerge: release d0d0d0d0d0d0 cannot be compared with main: gh api repos/acme/app/compare/" "[L4c] …backmerge says so"
+  d=$(mkfx on-release=above-odd); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:0" "[L4d] that comparison answers no status: could not conclude (rc 2), nothing merged"
+  has "$OUT" "??    backmerge: the comparison of release d0d0d0d0d0d0 with main has status None" "[L4d] …backmerge says so"
+  d=$(mkfx backmerge=merge shape-fail=parents); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:0" "[L16] the head's parents cannot be read (HTTP 500): could not conclude (rc 2), nothing merged"
+  has "$OUT" "??    backmerge: the head's merge shape cannot be read: gh api repos/acme/app/git/commits/$H failed" "[L16] …backmerge says so"
+  d=$(mkfx backmerge=merge shape-fail=compare); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:0" "[L16b] the other parent cannot be compared with the base (HTTP 500 on all 4 attempts): rc 2, nothing merged"
+  has "$OUT" "??    backmerge: the head's merge shape cannot be read: gh api repos/acme/app/compare/" "[L16b] …backmerge says so"
+  # behind, in the lane: the branch is never updated from main; GitHub's fresh test merge decides
+  d=$(mkfx backmerge=merge behind=src/app.py auto); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC" 0 "[L12] a back-merge behind main, a file changed on both sides, a fresh mergeable test merge: rc 0"
+  has "$OUT" "ok    behind: a back-merge behind the base by 2 commit(s): GitHub's test merge e0e0e0e0e0e0 is fresh (parents base tip and head) and mergeable; the branch is never updated from the base" \
+      "[L12] …behind ok, on the test merge"
+  has "$(mlog "$d")" '"--merge"' "[L12] …merged with a merge commit"
+  has "$OUT" "merge-commit lane normal admin no accept 0 image none behind 2 brief" "[L12] …the plan line says behind 2"
+  d=$(mkfx backmerge=on behind=src/app.py auto); guard "$PL" "$d" "${STD[@]}" "${AU[@]}"
+  eq "$RC" 0 "[L12b] a back-merge of the release tip behind main, with --behind auto: rc 0, the same rule"
+  alone "[L13] a back-merge whose fresh test merge reports a conflict" behind backmerge=merge behind=src/app.py auto=conflict
+  has "$OUT" "FAIL  behind: a back-merge behind the base by 2 commit(s): GitHub reports this PR does not merge with its base (mergeable false); a back-merge: resolve it as one merge commit of the release tip and the base, made from the release tip and pushed to the back-merge branch (skill release)" \
+      "[L13] …points to the release skill's resolution"
+  hasnt "$OUT" "merge the base into the branch" "[L13] …never asks to merge the base into the back-merge branch"
+  d=$(mkfx backmerge=merge behind=src/app.py auto=stale); guard "$PL" "$d" "${STD[@]}" --merge
+  eq "$RC:$(merges "$d")" "2:0" "[L14] a back-merge whose test merge stays stale: could not conclude (rc 2), nothing merged"
+  has "$OUT" "??    behind: a back-merge behind the base by 2 commit(s): GitHub's test merge is still stale after 4 read(s)" "[L14] …behind is the condition it could not judge"
+  d=$(mkfx backmerge=on conflict); guard "$PL" "$d" "${STD[@]}"
+  has "$OUT" "REFUSED early: mergeable: GitHub reports CONFLICTING; checks, files and behind were not read: a back-merge: resolve it as one merge commit of the release tip and the base, made from the release tip and pushed to the back-merge branch (skill release); nothing merged" \
+      "[L15] a conflicting back-merge stops early, pointing to the release skill"
+  hasnt "$OUT" "merge the base into the branch" "[L15] …never asking to merge the base into it"
 }
 
 # ── [A] --behind auto: (a) a fresh test merge, (b) disjoint files or a shared docs file merged clean, (c) disjoint suites ──
@@ -795,6 +864,27 @@ fam_auto() {
   d=$(mkfx planner auto behind=lib/y.py); bt "$PL" "$d" rehearse kit:merge-pr --repo acme/app --pr 7 --head "$H" --brief brief.txt "${AU[@]}"
   eq "$RC" 0 "[A] kit:merge-pr rehearse with --behind auto: rc 0"
   has "$OUT" " behind 2 auto " "[A] …the baton passes --behind auto to the guard (its PLAN line)"
+  # a PR the guard refuses for behind under --behind auto: the refusal names the update baton, with this run's values
+  local nx="NEXT baton go kit:pr-update-branch --repo acme/app --pr 7 --head $H"
+  d=$(mkfx auto=stale behind=docs/other.md,lib/y.py); btc "$PL" "$d" rehearse kit:merge-pr --repo acme/app --pr 7 --head "$H" --brief brief.txt "${AU[@]}"
+  eq "$RC" 1 "[A] kit:merge-pr rehearse, --behind auto refused for behind: rc 1"
+  has "$OUT" "  FAIL  behind:" "[A] …the guard's line names behind"
+  has "$OUT" "$nx" "[A] …the refusal names the update baton with the exact command"
+  eq "$(printf '%s\n' "$OUT" | grep -c '^ *NEXT ')" 1 "[A] …one NEXT line"
+  d=$(mkfx auto=stale behind=docs/other.md,lib/y.py); btc "$PL" "$d" rehearse kit:merge-pr --repo acme/app --pr 7 --head "$H" --brief brief.txt --behind=auto
+  has "$OUT" "$nx" "[A] …the same for --behind=auto"
+  d=$(mkfx behind=lib/y.py); btc "$PL" "$d" rehearse kit:merge-pr --repo acme/app --pr 7 --head "$H" --brief brief.txt
+  eq "$RC" 1 "[A] kit:merge-pr rehearse without --behind auto, behind: rc 1"
+  has "$OUT" "  FAIL  behind:" "[A] …refused for behind"
+  hasnt "$OUT" "NEXT " "[A] …no NEXT line: the baton is the next step only after --behind auto refused"
+  d=$(mkfx draft); btc "$PL" "$d" rehearse kit:merge-pr --repo acme/app --pr 7 --head "$H" --brief brief.txt "${AU[@]}"
+  eq "$RC" 1 "[A] kit:merge-pr rehearse with --behind auto, refused for a draft: rc 1"
+  has "$OUT" "  FAIL  not-draft:" "[A] …refused for the draft"
+  hasnt "$OUT" "NEXT " "[A] …no NEXT line: the PR is not refused for behind"
+  d=$(mkfx backmerge=merge behind=src/app.py auto=conflict); btc "$PL" "$d" rehearse kit:merge-pr --repo acme/app --pr 7 --head "$H" --brief brief.txt "${AU[@]}"
+  eq "$RC" 1 "[A] kit:merge-pr rehearse with --behind auto, a back-merge refused for behind: rc 1"
+  has "$OUT" "FAIL  behind: a back-merge behind the base by 2 commit(s)" "[A] …refused for behind, in the back-merge lane"
+  hasnt "$OUT" "NEXT " "[A] …no NEXT line: a back-merge is never updated from the base"
 }
 
 # the stale test merge: GitHub does not always rebuild it after main moves, so the compare API decides and a stale one alone

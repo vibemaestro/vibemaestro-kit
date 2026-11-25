@@ -15,7 +15,8 @@ What it reuses instead of a second copy: baton.py of this plugin, imported (the 
 the settings sources and the findings of `permissions --check`, the mode), and the bytes of the kind settings-merge
 (templates/baton-kinds/settings-merge.sh), run as baton runs a kind (its __NAME__ read as `coordinator-bootstrap`, so its
 backup and run record are this run's) in the phase this gate is in. The kind adds rules and absent attribution keys and removes
-nothing; its record names the signed plan, so its undo acts only on this run's merge, and only while the file has the merged
+only what the rules file's `remove` names: the allow Bash rules of the user settings that name baton and an sdlc version other
+than the installed one (baton.py `stale_allows`, the rule of the STALE finding), each named in the plan line; its record names the signed plan, so its undo acts only on this run's merge, and only while the file has the merged
 sha256. Its writes stay out of the kit baton's own write list (BATON_WRITES is the null device for it): the kit baton's plan line
 carries the kind's merge line, rules named, so the signature binds every rule.
 
@@ -242,8 +243,13 @@ def is_launcher_finding(f):
     return f[1].startswith("the launcher ")
 
 
+def is_stale_allow(f):
+    """A stale allow rule of the user settings (baton.py STALE_ALLOW_KIT): the merge's `remove` takes exactly these out."""
+    return f[1].endswith(B.STALE_ALLOW_KIT)
+
+
 def is_old_ask(f):
-    """An old broad ask rule (baton.py OLD_ASKS): kit:permissions-upgrade removes it; this run only adds, so it sets it aside."""
+    """An old broad ask rule (baton.py OLD_ASKS): kit:permissions-upgrade removes it; this run adds, and removes only stale allow rules, so it sets it aside."""
     return f[1].startswith(B.OLD_ASK_FINDING)
 
 
@@ -355,11 +361,14 @@ def compute(work):
     if os.path.islink(user):
         p.refusal = "%s is a symbolic link: the merge names the file itself" % named(user)
         return p
-    rest = [f for f in found if not (is_launcher_finding(f) or is_old_ask(f))]
+    rest = [f for f in found if not (is_launcher_finding(f) or is_old_ask(f) or is_stale_allow(f))]
     old = [f for f in found if is_old_ask(f)]
     snip = B.snippet()
     rules = dict(snip["permissions"]) if rest else {}
     rules["attribution"] = snip["attribution"]
+    stale = B.stale_allows(B.read_rules([("user", user)])[0]) if any(is_stale_allow(f) for f in found) else []
+    if stale:
+        rules["remove"] = {"allow": stale}
     p.rules = os.path.join(work, "rules.json")
     with open(p.rules, "w", encoding="utf-8") as f:
         f.write(json.dumps(rules, indent=2) + "\n")
@@ -381,7 +390,7 @@ def compute(work):
     after = [f for f in B.perm_findings([(lab, copy if lab == "user" else path) for lab, path in sources])
              if not (is_launcher_finding(f) or is_old_ask(f))]
     if after:
-        p.refusal = ("adding rules cannot reach permissions --check rc 0 (the run removes no rule); the owner removes or "
+        p.refusal = ("adding rules cannot reach permissions --check rc 0 (it removes only the stale allow rules of the user settings); the owner removes or "
                      "changes these by hand first: %s" % named("; ".join("%s %s" % f for f in after).replace(copy, user)))
         return p
     if not launcher_ok:

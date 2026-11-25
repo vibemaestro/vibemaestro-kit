@@ -1,6 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# BatonRun: the owner's queue (baton.py go --queue, log --queue, sign --by owner --queued, run --queued, log --wait-queued)
+# BatonRun: the owner's queue (baton.py go --queue, log --queue, sign --by owner --queued, run --queued, log --wait-queued,
+# queue withdraw, sign --by owner --void <id>)
 # =============================================================================
 # Run: bash tests/test-baton-queue.sh
 #
@@ -108,7 +109,7 @@ if len(sys.argv) > 3:
 open(p, "w").write(json.dumps(it))
 PY
 }
-# write_asked_record <plugin> <session> [claude JSON] — an asked record for the owner's command as if a guard had written it
+# write_asked_record <plugin> <session> [claude JSON] [item file] — an asked record for the owner's command as if a guard had written it
 # (the guard refuses to, for an item it would not show): proves the sign's own check, not only the guard's
 write_asked_record() {
   ( cd "$OWD" && cenv XDG_STATE_HOME="$ST" python3 -c 'import json, os, sys
@@ -116,7 +117,7 @@ sys.path.insert(0, sys.argv[1] + "/scripts")
 import baton
 it = json.load(open(sys.argv[3]))
 baton.record_asked(sys.argv[2], "default", ["--by", "owner", "--queued", it["id"]], os.path.realpath(os.getcwd()),
-                   json.loads(sys.argv[4]), None, queued=[it["id"], it["body_sha256"]])' "$1" "$2" "$(item)" "${3:-null}" )
+                   json.loads(sys.argv[4]), None, queued=[it["id"], it["body_sha256"]])' "$1" "$2" "${4:-$(item)}" "${3:-null}" )
 }
 
 fam_queue_flow() {  # [Q] queue, list, the owner's dialog and sign in their own session, wait, run once
@@ -273,6 +274,10 @@ print(",".join(sorted(str((o.get("claude") or [None])[0]) for o in out if o.get(
 echo "standin=$$"
 echo "ask=$(ask)"
 echo "asked=$(ls "$XDG_STATE_HOME/vibemaestro/baton/asked" 2>/dev/null | grep -c .)"
+id2() { grep -l '/d2"' "$XDG_STATE_HOME"/vibemaestro/baton/queue/*.json | sed -n 's|.*/\([0-9a-f]*\)\.json$|\1|p' | head -1; }   # the setsid one
+wd() { CLAUDE_PID=$1 CLAUDE_CODE_SESSION_ID=$2 python3 "$L/scripts/baton.py" queue withdraw "$(id2)" --reason dead >/dev/null 2>&1; echo "rc=$?"; }
+echo "withdraw-other=$(wd '' s-C)"
+echo "withdraw-clear=$(wd $$ s-B)"
 sign
 echo "signed=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("signature", {}).get("session"))' "$XDG_STATE_HOME/vibemaestro/baton/queue/$(id).json")"
 SH
@@ -285,6 +290,8 @@ SH
   has "$out" "asked=1" "[C] /clear: …and writes one record"
   has "$out" "rc=0" "[C] /clear: the click in the same Claude Code process: sign rc 0"
   has "$out" "signed=s-B" "[C] /clear: …the item is signed, from session s-B"
+  has "$out" "withdraw-other=rc=3" "[C] /clear: queue withdraw from another session and another Claude Code process: rc 3"
+  has "$out" "withdraw-clear=rc=0" "[C] /clear: queue withdraw as s-B in the Claude Code process that queued (as s-A): rc 0"
   rm -rf "$L"
 }
 
@@ -342,7 +349,98 @@ fam_queue_scope() {  # [S] who may queue, and the owner's command shape
   eq "$(BT_ENV=(INTENT_SLUG=s SEAT=1); osign "$P")" 3 "[S] …the sign in a sandbox: rc 3"
 }
 
-FAMILIES="fam_queue_flow fam_queue_refusals fam_queue_coordinator fam_queue_forgery fam_queue_scope"
+fam_queue_withdraw() {  # [X] a dead item withdrawn: by the session that queued it (unsigned only) or by the owner's --void; kept, never run
+  local P=$1 WD keep
+  setup; OWD=$(fresh); queue "$P"; WD="$(QDIR)/withdrawn/$ID.json"
+  eq "$(bt "$P" "$W" s-other queue withdraw "$ID" --reason dead)/$(items_n)" "3/1" "[X] another session withdraws: rc 3, the item stays"
+  has "$(cat "$BT_OUT")" "queued by another session" "[X] …it says another session queued it"
+  eq "$(bt "$P" "$W" "" queue withdraw "$ID" --reason dead)/$(items_n)" "3/1" "[X] no session id: rc 3, the item stays"
+  for r in "" Dead "two words" "$(printf 'x%.0s' $(seq 33))" "dé"; do
+    eq "$(bt "$P" "$W" s-coord queue withdraw "$ID" --reason "$r")/$(items_n)" "64/1" "[X] reason '$r': rc 64, nothing withdrawn"
+  done
+  eq "$(bt "$P" "$W" s-coord queue withdraw "$ID")" 64 "[X] no --reason: rc 64"
+  eq "$(bt "$P" "$W" s-coord queue withdraw "$ID" --reason dead --reason x)" 64 "[X] --reason twice: rc 64"
+  eq "$(bt "$P" "$W" s-coord queue withdraw ../x --reason dead)" 64 "[X] a path for an id: rc 64"
+  eq "$(bt "$P" "$W" s-coord queue withdraw "$ID" --reason dead)/$(items_n)" "0/0" "[X] the session that queued it withdraws it: rc 0, gone from the queue"
+  has "$(cat "$BT_OUT")" "withdrew queued $ID" "[X] …one line names it"
+  eq "$(python3 -c 'import json, sys; w = json.load(open(sys.argv[1]))["withdrawn"]; print(w["by"], w["session"], w["reason"], bool(w["time"]))' "$WD" 2>/dev/null)" \
+     "session s-coord dead True" "[X] …kept in queue/withdrawn/, marked who, which session, why and when"
+  eq "$(grep -F "	queue	" "$ST/vibemaestro/baton/log.tsv" | grep -cF "	withdrawn	")" 1 "[X] …one queue withdrawn line in log.tsv"
+  bt "$P" "$W" s-coord log --queue >/dev/null
+  has "$(cat "$BT_OUT")" "$ID  withdrawn" "[X] log --queue: withdrawn"
+  has "$(cat "$BT_OUT")" "withdrawn by session at " "[X] …by whom and when"
+  eq "$(ask "$P")/$(asked_n)" "deny/0" "[X] the owner asks to sign it: the guard denies"
+  write_asked_record "$P" s-owner null "$WD"
+  eq "$(osign "$P")" 3 "[X] a dialog record anyway: sign rc 3"
+  has "$(cat "$BT_OUT")" "was withdrawn" "[X] …it says withdrawn"
+  eq "$(qrun "$P")/$([ -e "$W/out.txt" ] && echo ran || echo none)" "3/none" "[X] run --queued: rc 3, nothing ran"
+  eq "$(bt "$P" "$W" s-coord queue withdraw "$ID" --reason dead)" 3 "[X] withdrawn twice: rc 3"
+  eq "$(bt "$P" "$W" s-coord log --wait-queued "$ID" --timeout 1)" 3 "[X] log --wait-queued: rc 3, never signable"
+  # a sign that wrote the item back while it was withdrawn (the race): the withdrawn copy still wins
+  keep=$(cat "$WD"); python3 -c 'import json, sys
+it = json.load(open(sys.argv[1])); del it["withdrawn"]
+it["signature"] = {"by": "owner", "dialog": "d" * 16, "time": it["created"], "body_sha256": it["body_sha256"]}
+open(sys.argv[2], "w").write(json.dumps(it))' "$WD" "$(item)"   # not a break: the state a racing sign leaves
+  eq "$(qrun "$P")/$([ -e "$W/out.txt" ] && echo ran || echo none)" "3/none" "[X] a signed copy written back after the withdraw: run --queued rc 3"
+  has "$(cat "$BT_OUT")" "was withdrawn" "[X] …the withdrawn one is read first"
+  # signed, used, expired, damaged: the session cannot
+  setup; OWD=$(fresh); queue "$P"; ask "$P" >/dev/null; osign "$P" >/dev/null
+  eq "$(bt "$P" "$W" s-coord queue withdraw "$ID" --reason dead)/$(items_n)" "3/1" "[X] a signed item: the session's withdraw rc 3"
+  has "$(cat "$BT_OUT")" "only the owner withdraws it now" "[X] …it names the owner's way"
+  has "$(cat "$BT_OUT")" "sign --by owner --void $ID" "[X] …with the command"
+  qrun "$P" >/dev/null
+  eq "$(bt "$P" "$W" s-coord queue withdraw "$ID" --reason dead)" 3 "[X] a used item: rc 3"
+  has "$(cat "$BT_OUT")" "was used already" "[X] …it says used"
+  setup; OWD=$(fresh); queue "$P"; age "$(item)" 86401
+  eq "$(bt "$P" "$W" s-coord queue withdraw "$ID" --reason dead)" 3 "[X] an expired item: rc 3"
+  setup; OWD=$(fresh); queue "$P"; poke "$(item)" 'it["plan"] = []'
+  eq "$(bt "$P" "$W" s-coord queue withdraw "$ID" --reason dead)/$([ -e "$(QDIR)/withdrawn/$ID.json" ] && echo moved || echo kept)" \
+     "3/kept" "[X] a damaged item: rc 3, not moved"
+  # the owner: --void <id>, unsigned or signed, through the dialog
+  setup; OWD=$(fresh); queue "$P"
+  eq "$(ASKCMD="python3 $P/scripts/baton.py sign --by owner --void $ID" ask "$P")" ask "[X] the owner's --void on a queued item: the guard asks"
+  has "$(cat "$TMP/guard.reason")" "withdraws queued item $ID" "[X] …the dialog names the item"
+  has "$(cat "$TMP/guard.reason")" "Args:     $W/out.txt hello" "[X] …and shows its words"
+  eq "$(bt "$P" "$OWD" s-owner sign --by owner --void "$ID")/$(items_n)" "0/0" "[X] the owner clicked: rc 0, the item withdrawn"
+  eq "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["withdrawn"]["by"])' "$(QDIR)/withdrawn/$ID.json" 2>/dev/null)" owner \
+     "[X] …marked by the owner"
+  setup; OWD=$(fresh); queue "$P"; ask "$P" >/dev/null; osign "$P" >/dev/null
+  ASKCMD="python3 $P/scripts/baton.py sign --by owner --void $ID" ask "$P" >/dev/null
+  eq "$(bt "$P" "$OWD" s-owner sign --by owner --void "$ID")/$(qrun "$P")/$([ -e "$W/out.txt" ] && echo ran || echo none)" "0/3/none" \
+     "[X] a signed item the owner withdraws: rc 0, then run --queued rc 3, nothing ran"
+  setup; OWD=$(fresh); queue "$P"
+  eq "$(bt "$P" "$OWD" s-owner sign --by owner --void "$ID")/$(items_n)" "3/1" "[X] the owner's --void with no dialog record: rc 3, the item stays"
+  # in use: a signed item whose run has started (its rehearse is slow) is refused
+  setup; OWD=$(fresh)
+  mutate "$W/act.sh" $'act() {\n  if holds_text' $'act() {\n  if [ -e "$PWD/slow" ]; then sleep 4; fi\n  if holds_text' || return
+  queue "$P"; ask "$P" >/dev/null; osign "$P" >/dev/null
+  : > "$W/slow"
+  ( cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-coord python3 "$P/scripts/baton.py" run --queued "$ID" ) > "$TMP/bg.out" 2>&1 &
+  for _ in $(seq 50); do grep -qF "	run-start	" "$ST/vibemaestro/baton/log.tsv" 2>/dev/null && break; sleep 0.1; done
+  eq "$(ASKCMD="python3 $P/scripts/baton.py sign --by owner --void $ID" ask "$P")" deny "[X] the owner's --void while its run is in progress: the guard denies"
+  has "$(cat "$TMP/guard.reason")" "in use" "[X] …it says in use"
+  wait
+  eq "$(cat "$W/out.txt" 2>/dev/null)" hello "[X] …and the run went on"
+}
+
+fam_queue_secrets() {  # [Q] a baton that declares Stops: secrets is refused at queue time: a secret is given only to run or go --row
+  local P=$1 stops want
+  want="go --queue: secrets.sh declares Stops: secrets, and a secret is given only to a run or go --row phase, so a queued run can never hold one; run it with go (the owner's dialog) or go --row"
+  for stops in secrets "secrets, publish" "publish, secrets"; do
+    setup
+    cat "$W/act.sh" | sed "s/^# Stops: none\$/# Stops: $stops/" > "$W/secrets.sh"   # not a break: builds a baton that declares secrets
+    eq "$(bt "$P" "$W" s-coord go --queue secrets.sh "$W/out.txt" hello)/$(items_n)/$([ -e "$W/out.txt" ] && echo ran || echo none)" "64/0/none" \
+       "[Q] go --queue on Stops: $stops: rc 64, nothing queued, nothing ran"
+    has "$(cat "$BT_OUT")" "go: stopped at check (exit 64): $want" "[Q] …the refusal says why and what to run instead"
+    eq "$(find "$ST/vibemaestro/baton/signatures" "$ST/vibemaestro/baton/runs" -type f 2>/dev/null | grep -c .)/$(asked_n)" "0/0" \
+       "[Q] …no signature, no record of the run, nothing asked for"
+  done
+  setup
+  queue "$P"
+  eq "$QRC/$(items_n)" "0/1" "[Q] go --queue on Stops: none still queues"
+}
+
+FAMILIES="fam_queue_flow fam_queue_refusals fam_queue_coordinator fam_queue_forgery fam_queue_scope fam_queue_withdraw fam_queue_secrets"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done

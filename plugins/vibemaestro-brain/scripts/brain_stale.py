@@ -957,8 +957,14 @@ LABELS = {"Rules applied:": "held", "Traps met:": "hit"}
 CODES_MAX, LABEL_LINE = 12, 300         # codes on one line, characters of one line: past either, the line is not read
 END = "--end--"                         # the answer's last line: an answer cut short (a pipe read stops at 4096 bytes) lacks it
 PR_KEY = re.compile(r"[a-z0-9_.-]+/[a-z0-9_.-]+#[1-9][0-9]{0,8}")
+ANSWERS = "Rule answers:"                # a body with this line answers each rule: held only as the post-check said
 BODY_JQ = ('(.body // "" | split("\\n") | .[] | sub("\\r$"; "") | select(test("^ {0,3}(```|~~~)") or startswith("Rules applied:") '
-           'or startswith("Traps met:")) | .[0:400]), "%s"' % END)
+           'or startswith("Traps met:") or startswith("%s")) | .[0:400]), "%s"' % (ANSWERS, END))
+
+
+def answers_header(ln):
+    """Whether a body line opens the `Rule answers:` block (a plugin that runs the post-check reads it the same way)."""
+    return ln.rstrip() == ANSWERS
 
 
 def merge_log():
@@ -1069,16 +1075,16 @@ def read_mem(path):
 
 
 def rule_skip(st, ops, led, code, pr, via, done):
-    """(why `code` of the PR `pr` is not written whatever the moment, its ledger key): not a live rule, a SOUL code no owner step
-    promoted, a held from that PR already (in the log, or `done` in this run); why None when it may be written: a refusal after
-    this check is the moment's (a take-over, the filter)."""
+    """(why `code` of the PR `pr` is not written whatever the moment, its ledger key): not a live rule, a SOUL code not live
+    (no owner step promoted it, and no parent SOUL file holds it), a held from that PR already (in the log, or `done` in this
+    run); why None when it may be written: a refusal after this check is the moment's (a take-over, the filter)."""
     import brain_ledger as L
     try:
         kind, value = L.rule_arg(code, hit=via == "hit")
         if kind == "id":
             L.check_rule_item(st, value, hit=via == "hit")
-        elif value not in L.soul_live(ops):
-            return "[%s] is not a SOUL code an owner step promoted (or it was demoted)" % value, None
+        elif value not in L.soul_codes(ops):
+            return L.not_live("[%s]" % value), None
     except s.Refused as e:
         return e.msg.split("\n")[0], None
     key = "[%s]" % value if kind == "soul" else value
@@ -1087,13 +1093,27 @@ def rule_skip(st, ops, led, code, pr, via, done):
     return None, key
 
 
-def write_codes(d, k, codes, session, pr, lines):
-    """Write the hits, then the helds, of the PR `k`; a code a rule check refuses is skipped and named. False when a write is
-    refused for another reason (the others are still tried): the PR is read again at the next run, and what it wrote already is
-    not written twice."""
+def accepted(ops, k):
+    """The rules whose last `signal applicability` for the PR `k` is `applied`: the answers the post-check accepted (a plugin
+    that runs it writes the signal)."""
+    last = {}
+    for op in ops:
+        if op.get("op") == "signal" and op.get("what") == "applicability" and op.get("pr") == k:
+            last[op.get("rule")] = op.get("state")
+    return [r for r, v in last.items() if v == "applied" and isinstance(r, str)]
+
+
+def write_codes(d, k, codes, session, pr, lines, answers=False):
+    """Write the hits, then the helds, of the PR `k`; a code a rule check refuses is skipped and named. With `answers` (the body
+    holds a `Rule answers:` line) the helds are the rules the post-check accepted, each marked proof, not the `Rules applied:`
+    line: none when no post-check said so. False when a write is refused for another reason (the others are still tried): the
+    PR is read again at the next run, and what it wrote already is not written twice."""
     import brain_ledger as L
     st, ops, led = L.snapshot(d)
     done, ok = set(), True
+    if answers:
+        codes = dict(codes, held=accepted(ops, k))
+        lines.append("%s: answers, held only for what the post-check accepted (%s)" % (k, ", ".join(codes["held"]) or "none"))
     for via, cs in (("hit", codes["hit"]), (None, codes["held"])):    # a trap met and applied: its hit is the PR's held
         for c in cs:
             why, key = rule_skip(st, ops, led, c, k, via, done)
@@ -1101,7 +1121,8 @@ def write_codes(d, k, codes, session, pr, lines):
                 lines.append("skipped %s %s: %s" % (s.printable(c)[:20], k, why))
                 continue
             try:
-                msg = s.op_evidence(c, "held", k, session=session, via=via, as_pr=pr, machine=True)
+                msg = s.op_evidence(c, "held", k, session=session, via=via, as_pr=pr, machine=True,
+                                    proof=answers and (not via or c in codes["held"]))   # a trap met and accepted: its hit
             except s.Refused as e:
                 lines.append("waiting %s: %s %s was refused (%s)" % (k, s.printable(c)[:20], "hit" if via else "held",
                                                                     e.msg.split("\n")[0]))
@@ -1159,7 +1180,7 @@ def merge_evidence():
         codes, notes = label_codes(body[:-len(END) - 1])
         lines += ["%s: %s" % (k, n) for n in notes]
         session, pr = pr_session(st, k)
-        if not write_codes(d, k, codes, session, pr, lines):
+        if not write_codes(d, k, codes, session, pr, lines, any(answers_header(x) for x in body[:-len(END) - 1].split("\n"))):
             wait[k] += 1                            # the moment refused (a take-over, the filter): read again next run
             if wait[k] >= MERGE_TRIES:
                 del wait[k]

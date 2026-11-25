@@ -37,8 +37,8 @@ After a plugin upgrade:
 
 SessionStart puts one line into the session's context when the check fails, never into the message the person sees, and it
 holds no command for the person. It names the fix the session offers through the owner's dialog: `kit:permissions-upgrade` when
-the only findings are old broad ask rules in the user settings, else the skill `bootstrap` (`kit:bootstrap`). When a rule needs a
-change no kit makes, it names that rule for the owner to change by hand. Either way the session tells the person in one plain
+the only findings are old broad ask rules in the user settings, else the skill `bootstrap` (`kit:bootstrap`, which also removes
+a stale allow rule of another sdlc version from the user settings). When a rule needs a change no kit makes, it names that rule for the owner to change by hand. Either way the session tells the person in one plain
 line, in their language. In mode `manual` with no baton rule at all it stays silent, because there a dialog on every baton
 command is the intended behaviour.
 

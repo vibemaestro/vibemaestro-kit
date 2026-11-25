@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Purpose: squash-merge 1 to 8 pull requests kit:merge-pr refuses by design, under one owner signature, each pinned to its head; per PR its accepted red checks, a required image and the admin bypass are bound by the signature
+# Purpose: merge 1 to 8 pull requests kit:merge-pr refuses by design (a squash; a back-merge with a merge commit, as kit:merge-pr's back-merge lane says), under one owner signature, each pinned to its head; per PR its accepted red checks, a required image and the admin bypass are bound by the signature
 # Targets: the pull requests named by the arguments (repository, number), and their base branches; a record under <state-dir>/records of a merge the run could not confirm, kept only for its undo
-# Blast: one squash merge per PR, into its base branch, in the given order; nothing else
+# Blast: one merge per PR (a squash, or a merge commit for a back-merge), into its base branch, in the given order; nothing else
 # Undo: none: a merge is not reversible. A run that stops half way keeps the merges before the stop; the run and its undo name each of them, and the way back is a revert PR for each, opened at once and told to the owner
-# Pre: for every PR: it is open, not draft, its head is the given SHA, GitHub reports it MERGEABLE, every check run and status on that head (the latest per workflow and name) is green except the checks named by --accept-red (which must exist and be red), or with --no-checks the head has none, the --require-image tag exists, and the changed files hash to the value in its plan line; read again before each merge, the plan line equal to the signed one
+# Pre: for every PR: it is open, not draft, its head is the given SHA, GitHub reports it MERGEABLE, kit:merge-pr's back-merge lane does not refuse it, every check run and status on that head (the latest per workflow and name) is green except the checks named by --accept-red (which must exist and be red), or with --no-checks the head has none, the --require-image tag exists, and the changed files hash to the value in its plan line; read again before each merge, the plan line equal to the signed one
 # Stops: security-boundary, owner-acts
 #   Why: an owner merge is a PR kit:merge-pr refuses by design, so the owner decides it from the card and signs; --admin
 #   bypasses branch protection.
 # Usage: <owner/repo> <pr> <sha40> [--accept-red <check>]... [--require-image <ref>] [--no-checks] [--admin], again per PR (1 to 8)
-# Each: squash-merge *
+# Each: merge *
 #
 # The kit baton kit:owner-merge: one card and one owner dialog for a sitting of owner merges. The session's three steps:
 #   <launcher> go kit:owner-merge <groups>          (exit 8: the card; the owner signs `sign --by owner --seal <seal> …`)
@@ -129,18 +129,18 @@ for ((i = 0; i < N; i++)); do
 done
 
 # ── reads: what one PR is now ──
-# view <i> [wait] — state, draft, head, mergeable, base, merge commit and auto-merge request of PR i, split on the unit separator
-# (no branch name holds a control character); with `wait`, read again
+# view <i> [wait] — state, draft, head, mergeable, base, merge commit, auto-merge request and head ref of PR i, split on the unit
+# separator (no branch name holds a control character); with `wait`, read again
 # while GitHub answers UNKNOWN for an open PR (it recomputes mergeability after its base moves), up to 6 times 5 s apart
 view() {
   local info try
   for try in 1 2 3 4 5 6; do
-    info=$(gh pr view "${G_PR[$1]}" -R "${G_REPO[$1]}" --json state,isDraft,headRefOid,mergeable,baseRefName,mergeCommit,autoMergeRequest \
-      -q '[.state, .isDraft, .headRefOid, .mergeable, .baseRefName, (.mergeCommit.oid // ""), (.autoMergeRequest != null)] | map(tostring) | join("\u001f")') \
+    info=$(gh pr view "${G_PR[$1]}" -R "${G_REPO[$1]}" --json state,isDraft,headRefOid,mergeable,baseRefName,mergeCommit,autoMergeRequest,headRefName \
+      -q '[.state, .isDraft, .headRefOid, .mergeable, .baseRefName, (.mergeCommit.oid // ""), (.autoMergeRequest != null), .headRefName] | map(tostring) | join("\u001f")') \
       || return 1
     case "${2:-}/$info" in "wait/OPEN"$'\x1f'*$'\x1f'UNKNOWN$'\x1f'*) [ "$try" = 6 ] || sleep 5 ;; *) break ;; esac
   done
-  IFS=$'\x1f' read -r ST DRAFT R_HEAD MERGEABLE BASE MC QUEUED <<EOF
+  IFS=$'\x1f' read -r ST DRAFT R_HEAD MERGEABLE BASE MC QUEUED HEAD_REF <<EOF
 $info
 EOF
   [ -n "$ST" ]
@@ -194,11 +194,41 @@ for r in runs:
 ' "$BATON_PLUGIN_ROOT/gates" "$@"
 }
 
-# check <i> — every read of PR i and its preconditions; sets PLAN_LINE, or prints `REFUSE <repo>#<pr> …` and returns 3
+# lane <repo> <head> <base> <head ref> — the guarded merge's back-merge lane (merge_guard.backmerge), read now: one line
+# `backmerge <ok|n/a|FAIL|??>: <why>`, then `LANE merge-commit` (a backmerge/* head that is the release tip, or one merge of it with
+# a commit of the base, into the default branch) or `LANE squash`; fails, after the first line, when the lane refuses (another
+# backmerge/* head, or another head already on release or holding a release tip the base lacks) or cannot be read
+lane() {
+  python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+class V(object):
+    said = []
+    def cond(self, _n, good, detail, notes=()): self.said.append(("ok" if good else "FAIL", detail))
+    def na(self, _n, detail): self.said.append(("n/a", detail))
+    def unknown(self, _n, detail, notes=()): self.said.append(("??", detail))
+try:
+    import merge_guard
+    a = type("A", (), {"repo": sys.argv[2], "head": sys.argv[3]})
+    mc = merge_guard.backmerge(a, {"headRefName": sys.argv[5]}, sys.argv[4], V())
+except Exception as e:
+    V.said, mc = [("??", "it cannot be read: %s" % e)], False
+verdict, why = V.said[-1] if V.said else ("??", "it said nothing")
+print("backmerge %s: %s" % (verdict, why))
+if verdict in ("FAIL", "??"):
+    sys.exit(1)
+print("LANE " + ("merge-commit" if mc else "squash"))
+' "$BATON_PLUGIN_ROOT/gates" "$@"
+}
+
+# check <i> — every read of PR i and its preconditions; sets PLAN_LINE and METHOD, or prints `REFUSE <repo>#<pr> …` and returns 3
 check() {
   local i=$1 id="${G_REPO[$1]}#${G_PR[$1]}" head=${G_HEAD[$1]} img=${G_IMG[$1]} checks files files_sha n_files n_all n_green
-  local n_acc n_real acc_list="" c names=() img_state=none
+  local n_acc n_real acc_list="" c names=() img_state=none lanes
   view "$i" wait || { echo "REFUSE $id: cannot read the pull request" >&2; return 3; }
+  lanes=$(lane "${G_REPO[$i]}" "$head" "$BASE" "$HEAD_REF") || { echo "REFUSE $id: $lanes" >&2; return 3; }
+  METHOD=$(printf '%s\n' "$lanes" | sed -n 's/^LANE //p')
+  [ -n "$METHOD" ] || { echo "REFUSE $id: the back-merge lane printed no verdict: $lanes" >&2; return 3; }
   for c in ${G_ACC[$i]}; do
     names+=("$(decode "$c")")
   done
@@ -215,8 +245,9 @@ EOF
   files=$(gh pr diff "${G_PR[$i]}" -R "${G_REPO[$i]}" --name-only | sort) || { echo "REFUSE $id: cannot read the changed files" >&2; return 3; }
   files_sha=$(printf '%s\n' "$files" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:16])')
   n_files=$(printf '%s\n' "$files" | awk 'NF' | wc -l | tr -d ' ')
-  echo "READ $id: state $ST draft $DRAFT head $R_HEAD mergeable $MERGEABLE base $BASE; checks $n_green/$n_all green, accepted red: ${acc_list:-none}; image ${img:-none} $img_state; $n_files files (sha $files_sha)"
+  echo "READ $id: state $ST draft $DRAFT head $R_HEAD ($HEAD_REF) mergeable $MERGEABLE base $BASE; checks $n_green/$n_all green, accepted red: ${acc_list:-none}; image ${img:-none} $img_state; $n_files files (sha $files_sha)"
   printf '%s\n' "$checks" | grep '^  check ' || true
+  printf '%s\n' "$lanes" | sed -n 's/^backmerge /  backmerge /p'
   [ "$ST" != MERGED ] || { echo "REFUSE $id is already merged (merge commit $MC)" >&2; return 3; }
   [ "$ST" = OPEN ] || { echo "REFUSE $id is $ST" >&2; return 3; }
   [ "$DRAFT" = false ] || { echo "REFUSE $id is a draft" >&2; return 3; }
@@ -231,7 +262,7 @@ EOF
     [ "$n_real" -gt 0 ] || { echo "REFUSE $id: no check run passed on the head (only skipped runs or statuses)" >&2; return 3; }
   fi
   [ "$img_state" != absent ] || { echo "REFUSE $id: the required image $img does not exist" >&2; return 3; }
-  PLAN_LINE="squash-merge $id head $head into $BASE ($n_files files sha $files_sha; checks $n_green/$n_all green, accepted red ${acc_list:-none}, no-checks ${G_NOCHK[$i]}; image ${img:-none} $img_state; admin ${G_ADMIN[$i]}; GitHub pins the head)"
+  PLAN_LINE="merge $id head $head into $BASE by $METHOD ($n_files files sha $files_sha; checks $n_green/$n_all green, accepted red ${acc_list:-none}, no-checks ${G_NOCHK[$i]}; image ${img:-none} $img_state; admin ${G_ADMIN[$i]}; GitHub pins the head)"
 }
 
 MERGED=""                                 # the PRs this run merged, in order; only merge() adds to it
@@ -300,7 +331,7 @@ unconfirmed_ids() {
     case "$p" in */kit-owner-merge-unconfirmed-*) [ ! -f "$p" ] || cat "$p" ;; esac
   done < "$BATON_UNDO_ONLY"
 }
-# merge <i> — the squash merge of PR i, pinned to its head, only while the plan line just computed is the signed one. The first
+# merge <i> — the merge of PR i by its METHOD (a squash, or a merge commit for a back-merge), pinned to its head, only while the plan line just computed is the signed one. The first
 # call's answer is taken as before (0: merged or queued, the post-check judges; GitHub's refusal: the refused stop); any other
 # failure (a 5xx, a timeout, a dropped connection) may have landed, and from there on one place decides, on the PR read
 # back after a short wait (gh exits 0 on a PR merged already, without the head pin, so a second call's exit 0 is read back too):
@@ -310,15 +341,16 @@ unconfirmed_ids() {
 # there, and a PR the second call only queued stays in it as the run goes on; a record that cannot be written stops the run
 # before the call
 merge() {
-  local i=$1 id="${G_REPO[$1]}#${G_PR[$1]}" base=$BASE head=${G_HEAD[$1]} try out rc why said wait at admin=()
+  local i=$1 id="${G_REPO[$1]}#${G_PR[$1]}" base=$BASE head=${G_HEAD[$1]} try out rc why said wait at admin=() flag=--squash
   STOP_WHY="the merge was refused"
   [ "$PLAN_LINE" = "$(sed -n "$((i + 1))p" "${BATON_PLAN:?no signed plan}")" ] \
     || { echo "REFUSE $id: its plan line is not the signed one (the world moved)" >&2; return 3; }
   [ "${G_ADMIN[$i]}" = no ] || admin=(--admin)
+  [ "$METHOD" = squash ] || flag=--merge                # the plan line just compared names the method
   in_flight "$id" || { STOP_WHY="the undo record $UNCONFIRMED cannot be written: no merge call made"; return 1; }
   for try in 1 2; do
     rc=0
-    out=$(gh pr merge "${G_PR[$i]}" -R "${G_REPO[$i]}" --squash ${admin[@]+"${admin[@]}"} --match-head-commit "$head" 2>&1) || rc=$?
+    out=$(gh pr merge "${G_PR[$i]}" -R "${G_REPO[$i]}" "$flag" ${admin[@]+"${admin[@]}"} --match-head-commit "$head" 2>&1) || rc=$?
     why=""
     if [ "$rc" = 0 ]; then
       [ -z "$out" ] || printf '%s\n' "$out"
@@ -392,7 +424,7 @@ postcheck() {
 # ── undo: a merge cannot be undone; name each PR that merged ──
 # signed_base <i> — the base PR i's signed plan line names
 signed_base() {
-  sed -n "$(($1 + 1))p" "${BATON_PLAN:-/dev/null}" | sed -n 's/^squash-merge [^ ]* head [0-9a-f]* into \(.*\) ([0-9]* files sha .*/\1/p'
+  sed -n "$(($1 + 1))p" "${BATON_PLAN:-/dev/null}" | sed -n 's/^merge [^ ]* head [0-9a-f]* into \(.*\) by [a-z-]* ([0-9]* files sha .*/\1/p'
 }
 undo() {
   local i id rd left="" held="" mine sbase

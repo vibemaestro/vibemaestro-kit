@@ -27,6 +27,17 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/init-hint.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -34,6 +45,11 @@
             "type": "command",
             "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/quiet_save.py\" save",
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/notebook_nudge.py\"",
+            "timeout": 10
           }
         ]
       }

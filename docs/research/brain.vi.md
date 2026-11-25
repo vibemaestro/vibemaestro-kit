@@ -45,7 +45,7 @@ chúng, và một script chấm câu trả lời theo anchor chính xác, không
   vào lại không được cắt mất những dòng quan trọng.
 - `brain cost` đếm một lần gọi cho mỗi `message.id`.
 - Probe compaction sau một bước trung tính và hỏi câu hỏi ở một tiến trình thứ hai, nên compaction không bao giờ thấy chúng.
-  Mỗi phiên probe nạp sdlc với hook đã tắt tiếng (`.vibemaestro/sdlc.json` `{"hooks": "off"}`), và bước preflight kiểm các
+  Mỗi phiên probe nạp một bản sao scratch của sdlc không có hook (`hooks: off` sẽ làm brain im lặng theo), và bước preflight kiểm các
   phụ thuộc trong manifest của brain trước khi tốn gì.
 - Test sống của hộp thoại owner chọn mọi mục menu theo chữ và con trỏ, không bao giờ theo vị trí.
 

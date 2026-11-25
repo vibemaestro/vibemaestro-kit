@@ -28,7 +28,7 @@
 #       the probe loads this checkout's sdlc by --plugin-dir in every session; without it the preflight stops before anything
 #       is spent, naming the dependency; a version outside the range stops; the fake refuses a plugin whose dependency is not
 #       loaded (its hooks do not run), which the old probe met as "0 brains loaded"
-#   [S] the sdlc runs silent in the probe (`hooks: off` in the scratch project): no transcript holds its SessionStart text, and the
+#   [S] the sdlc runs silent in the probe (a scratch copy with no hooks: `hooks: off` would silence the brain too): no transcript holds its SessionStart text, and the
 #       preflight stops, saying so, when it does
 #   [T] the control at 10/10: rc 3, "not shown necessary at this size"
 #   [Z] --plan prints the protocol, the cost and the command, and starts nothing; the script parses
@@ -498,7 +498,7 @@ case_probe_plan() {
   c_has "$OUT" "2.5M tokens" "[Z] the cost of one run"
   c_has "$OUT" "--setting-sources project,local" "[Z] the hermetic sessions"
   c_has "$OUT" "--plugin-dir <this checkout's sdlc>" "[Z] the sdlc is loaded next to the brain, the brain depends on it"
-  c_has "$OUT" ".vibemaestro/sdlc.json" "[Z] and runs silent in the scratch project"
+  c_has "$OUT" "empty hooks/hooks.json" "[Z] and runs silent: a scratch copy with no hooks"
 }
 
 echo "== cases =="

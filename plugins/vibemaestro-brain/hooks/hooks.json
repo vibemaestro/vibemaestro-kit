@@ -1,5 +1,5 @@
 {
-  "description": "vibemaestro-brain: re-inject the left and the right brain (up to 14 strings of 9,500 each) after every compaction; log compactions; guard writes; remind of a newer public version",
+  "description": "vibemaestro-brain: re-inject the left and the right brain (up to 14 strings of 9,500 each) after every compaction; log compactions; put the installed brain first on PATH; guard writes; remind of a newer public version",
   "hooks": {
     "SessionStart": [{"hooks": [{"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" session-start", "timeout": 10},
                               {"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" session-start-2", "timeout": 10},
@@ -19,10 +19,12 @@
     "PreCompact": [{"hooks": [{"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" pre-compact", "timeout": 10}]}],
     "PostCompact": [{"hooks": [{"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" post-compact", "timeout": 10}]}],
     "SessionEnd": [{"hooks": [{"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" session-end"}]}],
+    "CwdChanged": [{"hooks": [{"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" cwd-changed", "timeout": 10}]}],
     "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" prompt", "timeout": 10}]}],
     "PreToolUse": [
       {"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(brain op *)", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" guard-bash", "timeout": 10},
                                     {"type": "command", "if": "Bash(brain import *)", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" guard-bash", "timeout": 10},
+                                    {"type": "command", "if": "Bash(brain *)", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" guard-path", "timeout": 10},
                                     {"type": "command", "if": "Bash(brain *)", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" note-format", "timeout": 10}]},
       {"matcher": "Bash", "hooks": [{"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" guard-owner", "timeout": 30}]},
       {"matcher": "Edit|Write|NotebookEdit", "hooks": [{"type": "command", "command": "/bin/sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pyrun.sh\" \"scripts/brain_hook.py\" guard-edit", "timeout": 10}]}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install the SDLC gates into a repo: workflows into `.github/workflows/`, the gate scripts into `.vibemaestro/gates/`, an allowlist header.
 
-    install_gates.py [--root DIR] [--only commit-discipline,pr-sensitive,pr-title,pr-body,dead-branches,signing-rules,<dependent gate>]
+    install_gates.py [--root DIR] [--only commit-discipline,pr-sensitive,pr-title,pr-body,dead-branches,signing-rules,kb-check,<dependent gate>]
                      [--runner-var NAME] [--runner-default LABEL] [--update] [--dry-run]
 
 Skills ask, scripts do: the `install-gates` skill collects the answers, this script writes the files, with no model in between.
@@ -12,6 +12,11 @@ Skills ask, scripts do: the `install-gates` skill collects the answers, this scr
   a file the repo owns (a workflow, the allowlist, the signing-rules list) is still never overwritten.
 - With no `--only` the six gates above are installed. `signing-rules` is opt-in: `--only signing-rules` writes its workflow, vendors
   the gate with `baton.py` (from which it reads Stops) and writes the repo's list `.vibemaestro/signing-rules.json` when absent.
+- `kb-check` is opt-in too: `--only kb-check` writes its workflow and copies `kb.py` and the modules it imports (`KB_CHECK_MODULES`, 12 with the
+  config loader and the message table every gate already has) to `.vibemaestro/gates/`, plus `kb-check.pin`: `kit: <commit of this plugin, `-` when
+  it is not a git checkout>` and `sha256: <hash of the set as the repo holds it: sha256 over each name, a NUL, the bytes and a NUL, in name order>`. The workflow runs `kb.py check` and `kb.py check links` from the BASE branch
+  on the PR's tree. The copies are never overwritten, `--update` replaces them and the pin. They are the kit's code, which reads documents in either
+  language, so the `language` `en` rewrite and its Vietnamese-letter refusal apply only to the config loader and the message table.
 - A gate of a dependent plugin is opt-in too. Every installed plugin that declares a dependency on vibemaestro-sdlc and ships
   `gates/install.json` (found by `gates/bootstrap.py`'s `dependents`, the one rule for a dependent plugin) declares
   `{"format": 1, "gates": {"<name>": {"keys": "<text>", "files": [{"from": "<path in the plugin>", "to": "<path in the repo>"}]}}}`;
@@ -47,6 +52,7 @@ Standard library only, Python 3.8+.
 """
 import argparse
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -74,8 +80,13 @@ GATES = {
     "pr-evidence": ("pr-evidence.yml", "pr_evidence.py"),
     "dead-branches": ("dead-branches.yml", "dead_branches.sh"),
     "signing-rules": ("signing-rules.yml", "signing_rules.py"),
+    "kb-check": ("kb-check.yml", "kb.py"),      # kb.py is in scripts/, not gates/: see KB_CHECK_MODULES
 }
-OPT_IN = {"signing-rules"}          # installed only when --only names it
+OPT_IN = {"signing-rules", "kb-check"}          # installed only when --only names it
+# kb.py and the modules it imports at the top of each file (sdlc_config and messages are copied for every gate, so a repo that has the others
+# gets 10 more files). `import intent_branch` inside kb.py's `focus` command pulls in more; check and check links never reach it.
+KB_CHECK_MODULES = ("kb", "current_state", "everyday", "hookout", "init_setup", "kb_index", "kb_plan", "rule_packs", "rules", "vsdlc")
+KB_CHECK_PIN = "kb-check.pin"
 SIGNING_LIST = ".vibemaestro/signing-rules.json"
 KEYS = {
     "commit-discipline": "commits.max_per_pr, commits.max_touches, commits.round_pattern, tokens.commit_exception",
@@ -85,6 +96,7 @@ KEYS = {
     "pr-evidence": "evidence.ui_paths, tokens.round_comment_prefix, commits.round_pattern",
     "dead-branches": "dead_branches.max_merged_on_remote, branch.protected, branch.intent_prefix",
     "signing-rules": "none; its list is %s, read at the base (add the names that decide who signs here)" % SIGNING_LIST,
+    "kb-check": "the kb.* and tokens.* keys of kb.py, read from the BASE branch's .vibemaestro/sdlc.json",
 }
 # the gate, every file it loads and its job: a PR that changes one is an owner merge (the list file itself is red too)
 # .vibemaestro/gates is a baton directory too: a new file there (one that would shadow a module the gate imports) is red
@@ -425,6 +437,29 @@ def shadows(stem):
         return True
 
 
+def kb_pin(files, mixed=False):
+    """The text of kb-check.pin for `files` ({file name: bytes} as the repo will hold them): the commit of this plugin when its directory is
+    the plugin directory of a clean git checkout (`-` otherwise: an installed copy has no .git, a changed one is no commit, and a set
+    with a kept file that differs (`mixed`) no longer comes from one), and a hash
+    of the whole set: sha256 over `<name>\\0<bytes>\\0` for the names in sorted order, which is always there."""
+    kit = "-"
+    try:
+        r = subprocess.run(["git", "-C", PLUGIN, "rev-parse", "--show-toplevel", "HEAD"], capture_output=True, text=True, timeout=20)
+        top, _nl, sha = r.stdout.strip().partition("\n")
+        dirty = subprocess.run(["git", "-C", PLUGIN, "status", "--porcelain", "--untracked-files=no", "--", "."], capture_output=True,
+                               text=True, timeout=20)
+        if not mixed and r.returncode == 0 and dirty.returncode == 0 and not dirty.stdout.strip() \
+                and os.path.realpath(os.path.join(top, "plugins", "vibemaestro-sdlc")) == os.path.realpath(PLUGIN) \
+                and re.fullmatch(r"[0-9a-f]{40}", sha):
+            kit = sha
+    except (OSError, subprocess.SubprocessError):
+        pass
+    h = hashlib.sha256()
+    for name in sorted(files):
+        h.update(name.encode("utf-8") + b"\0" + files[name] + b"\0")
+    return "kit: %s\nsha256: %s\n" % (kit, h.hexdigest())
+
+
 def dependent_gates():
     """[(plugin, version, {gate: (keys, pairs)})] of the installed dependents that ship a declaration; ValueError on a bad one."""
     spec = importlib.util.spec_from_file_location("bootstrap_for_install_gates", os.path.join(GATES_DIR, "bootstrap.py"))
@@ -462,6 +497,12 @@ def main(argv):
                     DECL, plugin, g, "a gate of this plugin" if g in GATES else "declared by plugin " + dep_gate[g][0]))
             dep_gate[g] = (plugin, version, keys, pairs)
     names = [n for n in GATES if n not in OPT_IN] if not a.only else [n.strip() for n in a.only.split(",") if n.strip()]
+    names = list(dict.fromkeys(names))
+    if a.update and "kb-check" not in names and all(os.path.lexists(os.path.join(root, *p.split("/"))) for p in
+                                                    (".vibemaestro/gates/" + KB_CHECK_PIN, ".github/workflows/kb-check.yml")):
+        # every --update replaces messages.py and sdlc_config.py, so an installed kb-check (its pin and its workflow are there) comes along:
+        # its set and pin must not fall behind them, whatever --only names
+        names.append("kb-check")
     unknown = [n for n in names if n not in GATES and n not in dep_gate]
     if unknown or not names:
         return die(64, "unknown gate %s (known: %s)" % (", ".join(unknown) or "(none given)", ", ".join(list(GATES) + list(dep_gate))))
@@ -472,7 +513,8 @@ def main(argv):
     # no declared target may be a path this plugin can write, or another declaration's (case folded: a case-insensitive checkout)
     taken = {posixpath.normpath(p).casefold(): "a path of this plugin" for p in
              [".github/workflows/" + w for w, _s in GATES.values()] + [".vibemaestro/gates/" + s for _w, s in GATES.values()]
-             + [".vibemaestro/gates/" + f for f in ("gate_common.py", "sdlc_config.py", "messages.py", "baton.py")]
+             + [".vibemaestro/gates/" + f for f in ("gate_common.py", "sdlc_config.py", "messages.py", "baton.py", KB_CHECK_PIN)]
+             + [".vibemaestro/gates/%s.py" % m for m in KB_CHECK_MODULES]
              + [cfg["sensitive"]["allowlist"], SIGNING_LIST]}
     for g, (plugin, _v, _k, pairs) in dep_gate.items():
         for _src, to in pairs:
@@ -500,13 +542,21 @@ def main(argv):
             except ValueError as e:
                 return die(65, str(e))
             plan.append((".github/workflows/" + GATES[n][0], text.encode("utf-8"), 0o644))
-    vendored = [os.path.join(GATES_DIR, fn) for fn in ["gate_common.py"] + [GATES[n][1] for n in kit_names]]
+    vendored = [os.path.join(GATES_DIR, fn) for fn in ["gate_common.py"] + [GATES[n][1] for n in kit_names if n != "kb-check"]]
     if "signing-rules" in kit_names:
         vendored.append(os.path.join(HERE, "baton.py"))     # signing_rules.py reads Stops with it, from beside itself
     for src in vendored:
         with open(src, "rb") as f:
             plan.append((".vibemaestro/gates/" + os.path.basename(src), f.read(), 0o755))
             vendored_rels.add(".vibemaestro/gates/" + os.path.basename(src))
+    kb_rels = set()      # the kb-check copies: the plugin's own like the vendored ones, but kept out of the en check (see the docstring)
+    if "kb-check" in kit_names:
+        kb_data = {}
+        for m in KB_CHECK_MODULES:
+            with open(os.path.join(HERE, m + ".py"), "rb") as f:
+                kb_data[m + ".py"] = f.read()
+            plan.append((".vibemaestro/gates/%s.py" % m, kb_data[m + ".py"], 0o755 if m == "kb" else 0o644))
+            kb_rels.add(".vibemaestro/gates/%s.py" % m)
     english = {"sdlc_config.py": english_config, "messages.py": english_messages}
     for fn in ("sdlc_config.py", "messages.py"):        # the config loader, and the message table a gate prints from
         with open(os.path.join(HERE, fn), "rb") as f:
@@ -518,6 +568,22 @@ def main(argv):
                 return die(65, "%s: the English copy could not be made: %s: %s" % (fn, e.__class__.__name__, e))
         plan.append((".vibemaestro/gates/" + fn, data, 0o644))
         vendored_rels.add(".vibemaestro/gates/" + fn)
+        if "kb-check" in kit_names:
+            kb_data[fn] = data
+    if "kb-check" in kit_names:
+        mixed = False
+        for fn in kb_data:      # the pin describes the set the repo will hold: a file that is kept (no --update) counts as it is on disk
+            path = os.path.join(root, ".vibemaestro", "gates", fn)
+            if not a.update and os.path.lexists(path):
+                try:
+                    with open(path, "rb") as f:
+                        disk = f.read()
+                except OSError:             # a directory or a dangling link in its place: it holds nothing of the kit's
+                    disk = b""
+                mixed = mixed or disk != kb_data[fn]
+                kb_data[fn] = disk
+        plan.append((".vibemaestro/gates/" + KB_CHECK_PIN, kb_pin(kb_data, mixed).encode("utf-8"), 0o644))
+        kb_rels.add(".vibemaestro/gates/" + KB_CHECK_PIN)
     if "pr-sensitive" in names:
         owned.append(("the allowlist header", ALLOWLIST_HEADER.encode("utf-8")))
         plan.append((cfg["sensitive"]["allowlist"], ALLOWLIST_HEADER.encode("utf-8"), 0o644))
@@ -564,7 +630,7 @@ def main(argv):
         if os.path.commonpath([real_root, os.path.realpath(anc)]) != real_root:
             return die(64, "%s resolves outside the repo (a symlinked directory?): nothing was written" % rel)
         # a file --update may replace, and a dependent's file, land only where their path says: no parent may be a link
-        if rel in dep_rels or a.update and rel in vendored_rels:
+        if rel in dep_rels or a.update and rel in vendored_rels | kb_rels:
             parents = rel.split("/")[:-1]
             if any(os.path.islink(os.path.join(root, *parents[:i])) for i in range(1, len(parents) + 1)):
                 return die(64, "%s: a parent directory is a link, so the file would land elsewhere in the repo: nothing was written" % rel)
@@ -573,11 +639,15 @@ def main(argv):
         if any(g in dep_names for g in gates):
             print("dependent plugin %s %s: %s" % (plugin, version, ", ".join(g for g in dep_names if g in gates)))
     counts = {}
+    kb_set = kb_rels | {".vibemaestro/gates/sdlc_config.py", ".vibemaestro/gates/messages.py"} if "kb-check" in kit_names else set()
+    kb_kept = []
     for rel, data, mode in plan:
-        write = replace if a.update and rel in vendored_rels else write_new
+        write = replace if a.update and rel in vendored_rels | kb_rels else write_new
         res = write(os.path.join(root, *rel.split("/")), data, mode, a.dry_run)
         counts[res] = counts.get(res, 0) + 1
         print("%-16s %s" % (res, rel))
+        if res == "kept (differs)" and rel in kb_set:
+            kb_kept.append(rel)
         if res == "kept (differs)" and self_hosted_only(default) and rel.startswith(".github/workflows/"):
             hosted = kept_fallbacks(os.path.join(root, *rel.split("/")))
             if hosted is None:
@@ -604,6 +674,9 @@ def main(argv):
                 print("WARNING %s has another job condition than this plugin writes (an older template, or another "
                       "exemption token than tokens.commit_exception): an edit that adds the configured token may not run "
                       "the gate. Delete the file and install again to write the current one." % rel)
+    if kb_kept:
+        print("WARNING kb-check: %d file(s) of its set are kept and differ from this plugin's (%s): the set mixes versions and the pin describes "
+              "what is on disk. Run again with --update to replace the plugin's own copies." % (len(kb_kept), ", ".join(os.path.basename(r) for r in kb_kept)))
     print("install-gates: %s" % ", ".join("%s %d" % (k, v) for k, v in sorted(counts.items())))
     print("runs-on in the workflows: ${{ vars.CI_GATE_RUNNER || vars.%s || %s }}  (set it in ci.runner_var / ci.runner_default of .vibemaestro/sdlc.json to keep it there)"
           % (var, "no fallback label (a run with neither variable set fails at its start)" if self_hosted_only(default) else "'%s'" % default))

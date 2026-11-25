@@ -76,7 +76,13 @@
 #   [card-quote]           a story AC with no quote is red; a Not doing line with neither a quote nor a page decision id warns,
 #                          and is red under --strict; the whole-kb kb.py check judges only intents new in the change
 #
-# The brain and gh are fakes written here (a brain answering `show <P> --json` for P1 live, P3 retired, P9 unknown; a gh that
+#   [request-link]         a story whose frontmatter says `request: R7`, where a brain answers: the issue create-intent opens (plain,
+#                          under issue.code, or by retry-issue) becomes R7's closes through `brain op link R7 --closes <its URL>`,
+#                          one line; a task, no request:, a worker, no brain: no link and no line; the brain refusing, or a
+#                          request: that is no R id: rc 0 and one line saying it is not linked
+#
+# The brain and gh are fakes written here (a brain answering `show <P> --json` for P1 live, P3 retired, P9 unknown, and logging
+# `op link`, R7 live, any other refused; a gh that
 # logs its arguments, serves the labels of GH_LABELS and the PR list of GH_PRS, and fails `issue create` under GH_ISSUE_FAIL). Real git on throw-away repositories, no network.
 # =============================================================================
 set -uo pipefail
@@ -429,9 +435,21 @@ fam_plan() {
   hasnt "$o" 'only by dropped' "[plan-trace] …and does not blame a dropped row"
 
   mk_plan "$r" 'issue: 5' "$ROW_A" "$ROW_B"
+  mkdir -p "$r/.vibemaestro"; printf '{"schema": 1, "intake": {"focus": "warn"}}\n' > "$r/.vibemaestro/sdlc.json"
+  o=$(pchk "$r" kb/plans/2026-11-08-s.md); rc=$?
+  eq "$rc" 0 "[plan-trace] intake.focus warn: a story plan with no focus: passes, rc 0"
+  has "$o" 'WARNING kb/plans/2026-11-08-s.md:1: the frontmatter has no `focus: P<n>`' "[plan-trace] …with one WARNING line"
+  eq "$(grep -c 'focus: P<n>' <<<"$o")" 1 "[plan-trace] …and only one"
+
+  printf '{"schema": 1, "intake": {"focus": "off"}}\n' > "$r/.vibemaestro/sdlc.json"
+  o=$(pchk "$r" kb/plans/2026-11-08-s.md); rc=$?
+  eq "$rc" 0 "[plan-trace] intake.focus off: the same plan with no focus: passes, rc 0"
+  hasnt "$o" 'the frontmatter has no `focus: P<n>`' "[plan-trace] …and says nothing of the focus"
+  printf '{"schema": 1, "intake": {"focus": "required"}}\n' > "$r/.vibemaestro/sdlc.json"
   o=$(pchkr "$r" kb/plans/2026-11-08-s.md); rc=$?
-  eq "$rc" 65 "[plan-trace] a story plan with no focus: in its frontmatter: rc 65"
-  has "$o" 'the frontmatter has no `focus: P<n>`' "[plan-trace] …it says so"
+  eq "$rc" 65 "[plan-trace] intake.focus required: the same plan is refused, rc 65"
+  has "$o" 'the frontmatter has no `focus: P<n>`' "[plan-trace] …with the same message"
+  rm "$r/.vibemaestro/sdlc.json"
 
   mk_plan "$r" 'focus: P1' "$ROW_A" '| B | Delivers AC3: three | later |'
   o=$(pchkr "$r" kb/plans/2026-11-08-s.md); rc=$?
@@ -466,13 +484,13 @@ fam_plan() {
   o=$(lchkr "$r"); rc=$?
   eq "$rc" 65 "[plan-trace] check links: the same story plan changed: rc 65"
   has "$o" 'FAIL kb/plans/2026-11-08-s.md:15: plan trace: row B: Must be true starts neither' "[plan-trace] …it names the row"
-  has "$o" 'FAIL kb/plans/2026-11-08-s.md:1: plan trace: the frontmatter has no `focus: P<n>`' "[plan-trace] …and the focus"
+  hasnt "$o" 'focus: P<n>' "[plan-trace] …intake.focus warn: the focus is no check links problem"
   hasnt "$o" 'takes the lean columns' "[plan-trace] …a blank line is no change to a row cell: the earlier columns stay a warning"
-  has "$o" 'links: 3 failing' "[plan-trace] …3 failing: the row, the AC and the focus"
+  has "$o" 'links: 2 failing' "[plan-trace] …2 failing: the row and the AC"
   sed -i 's/^type: story$/type: task/' "$r/kb/intent/2026-11-08-s.md"   # not a break: a task intent is the input of this case
   o=$(lchk "$r"); rc=$?
   eq "$rc" 0 "[plan-trace] check links: the same plan under a task intent: rc 0, an older plan never turns red"
-  has "$o" 'WARNING kb/plans/2026-11-08-s.md:1: plan trace: 3 finding(s), the first: the frontmatter has no `focus: P<n>`' "[plan-trace] …one WARNING for the plan"
+  has "$o" 'WARNING kb/plans/2026-11-08-s.md:15: plan trace: 2 finding(s), the first: row B: Must be true starts neither' "[plan-trace] …one WARNING for the plan"
   has "$o" 'links: 0 failing' "[plan-trace] …none failing"
   mk_plan "$r" 'focus: P1' "$ROW_A" "$ROW_B"
   o=$(lchk "$r"); rc=$?
@@ -781,7 +799,7 @@ fam_story_v2() {
   local part want
   for part in "SV_LINE|the story has no As … I want … so that … line" "SV_CTX|the story has no Context part" \
               "SV_AC|the story has no Acceptance criteria part" "SV_ND|the story has no Out of scope part" \
-              "SV_APP|the story has no Appetite part"; do
+              "SV_APP|the story has no Estimation part"; do
     want=${part#*|}; part=${part%%|*}
     o=$(env "$part=" bash -c "$(declare -f mk_story); mk_story '$r'"; ichkr "$r"); rc=$?
     eq "$rc" 65 "[story-v2] $part dropped: rc 65"
@@ -829,6 +847,15 @@ fam_story_v2() {
   SV_CTX="**Bối cảnh.** $(printf 'chữ %.0s' $(seq 1 900))" mk_story "$r"; o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] a story over 3500 characters only warns: rc 0"
   has "$o" 'over 3500 (about one phone screen)' "[story-v2] …the warning says the limit"
+  hasnt "$o" ' bytes' "[story-v2] …and under 80 percent of its byte limit, the byte message stays silent"
+  SV_CTX="**Bối cảnh.** $(printf 'chữ %.0s' $(seq 1 2200))" mk_story "$r"; o=$(ichk "$r"); rc=$?
+eq "$rc" 0 "[story-v2] a story of 14071 bytes (80 percent or more of 16384) only warns: rc 0"
+  has "$o" 'the story is 14071 bytes, 85 percent of its limit of 16384 (the whole file, UTF-8): keep the request, the ACs and the questions; move code-reading notes to the spec' "[story-v2] …the byte message says size, limit and what to do"
+  hasnt "$o" 'characters, over 3500' "[story-v2] …and replaces the characters hint: one length message"
+  SV_CTX="**Bối cảnh.** $(printf 'chữ %.0s' $(seq 1 3000))" mk_story "$r"; o=$(ichkr "$r"); rc=$?
+eq "$rc" 65 "[story-v2] a story of 18871 bytes (over 16384), new in the change: rc 65"
+  has "$o" 'the story is 18871 bytes, over its limit of 16384 (the whole file, UTF-8; kb.intent_max_bytes): keep the request, the ACs and the questions; move code-reading notes to the spec' "[story-v2] …red with the size, the limit and the key"
+  hasnt "$o" 'characters, over 3500' "[story-v2] …and no characters hint beside it"
 
   SV_CTX=$'**Bối cảnh.** Sửa `kb/specs/x.md`.' mk_story "$r"
   o=$(ichk "$r" --strict); rc=$?
@@ -850,6 +877,12 @@ fam_story_v2() {
   eq "$rc" 0 "[story-v2] the out-of-scope part labelled with the vi preset's own term: rc 0"
   SV_CTX='**Bối cảnh** — spec dài.' SV_APP='**Khẩu phần** 1 ngày' mk_story "$r"; o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] run-in labels with no . or : that open their paragraph: rc 0"
+  for lbl in '**Khẩu phần.** 1 ngày' '**Appetite.** a day' '**Estimation.** 1 ngày'; do   # the old labels and the new one all count
+    SV_APP="$lbl" mk_story "$r"; o=$(ichk "$r" --strict); rc=$?
+    eq "$rc" 0 "[story-v2] the size part labelled '${lbl%%.*}**': rc 0 under --strict"
+  done
+  SV_APP='**Cỡ việc.** 1 ngày' mk_story "$r"; o=$(ichkr "$r"); rc=$?
+  eq "$rc" 65 "[story-v2] a size part under no known label: rc 65"
   SV_AC=$'**Tiêu chí chấp nhận (AC)**\n1. một\n   **Không làm:** thêm gì, vẫn là AC1.\n2. hai\n3. ba' mk_story "$r"; o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] a bold label word on an item's indented continuation line is text: rc 0"
   has "$o" '3 AC (AC1, AC2, AC3)' "[story-v2] …the AC after it are kept"
@@ -860,7 +893,7 @@ fam_story_v2() {
   printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\nAs the owner, I want a short story, so that I approve fast.\n\n## Context\n\nc\n\n## Acceptance criteria\n\n1. One short story.\n\n## Out of scope\n\n- Old kb.\n' > "$r/kb/intent/2026-11-12-v.md"
   o=$(ichkr "$r"); rc=$?
   eq "$rc" 65 "[story-v2] an en heading story with no appetite: rc 65"
-  has "$o" '- the story has no Appetite part' "[story-v2] …named as the story's missing part, not as the first card's"
+  has "$o" '- the story has no Estimation part' "[story-v2] …named as the story's missing part, not as the first card's"
   printf -- '---\ntype: story\nfocus: P1\ndescription: "fixture"\n---\n\n# f\n\nAs the owner, I want a short story, so that I approve fast.\n\n## Context\n\nc\n\n## Acceptance criteria\n\n1. One short story.\n\n## Not doing\n\n- Old kb.\n\n## Appetite\n\nOne day.\n\n## Words of the person who asked → AC\n\n| Their words | AC |\n|---|---|\n| \"a short story\" | AC1 |\n' > "$r/kb/intent/2026-11-12-v.md"
   o=$(ichk "$r"); rc=$?
   eq "$rc" 0 "[story-v2] an en heading story whose out-of-scope heading is ## Not doing: the story the owner approves, rc 0"
@@ -983,6 +1016,15 @@ fam_spec_v2() {
   SP_RISKS="1. $(printf 'rủi ro %.0s' $(seq 1 1400))" mk_spec2 "$r" "$CRIT_V2"; o=$(schk "$r"); rc=$?
   eq "$rc" 0 "[spec-v2] a spec over 8000 characters only warns: rc 0"
   has "$o" 'over 8000 (about two pages)' "[spec-v2] …the warning says the limit"
+  hasnt "$o" ' bytes' "[spec-v2] …and under 80 percent of its byte limit, the byte message stays silent"
+  SP_RISKS="1. $(printf 'rủi ro %.0s' $(seq 1 3000))" mk_spec2 "$r" "$CRIT_V2"; o=$(schk "$r"); rc=$?
+eq "$rc" 0 "[spec-v2] a spec of 27449 bytes (80 percent or more of 32768) only warns: rc 0"
+  has "$o" 'the spec is 27449 bytes, 83 percent of its limit of 32768 (the whole file, UTF-8): split it by service or module' "[spec-v2] …the byte message says size, limit and what to do"
+  hasnt "$o" 'characters, over 8000' "[spec-v2] …and replaces the characters hint: one length message"
+  SP_RISKS="1. $(printf 'rủi ro %.0s' $(seq 1 3700))" mk_spec2 "$r" "$CRIT_V2"; o=$(schkr "$r"); rc=$?
+eq "$rc" 65 "[spec-v2] a spec of 33749 bytes (over 32768), new in the change: rc 65"
+  has "$o" 'the spec is 33749 bytes, over its limit of 32768 (the whole file, UTF-8; kb.spec_max_bytes): split it by service or module' "[spec-v2] …red with the size, the limit and the key"
+  hasnt "$o" 'characters, over 8000' "[spec-v2] …and no characters hint beside it"
 
   local t="$TMP/spv2task"
   git_ init -q -b main "$t"; mkdir -p "$t/kb/intent" "$t/kb/specs"
@@ -1054,7 +1096,7 @@ fam_k2() {
   o=$(cd "$r" && capped python3 "$KBPY" check spec 2026-11-12-t 2>&1); rc=$?
   eq "$rc" 65 "[k2-templates] the unfilled spec template: rc 65"
   hasnt "$o" 'section `##' "[k2-templates] …no section problem: the five sections are there"
-  eq "$(grep '^| Row' "$r/kb/plans/2026-11-12-t.md")" '| Row | How | Delivers | Depends on | Trust touches | Link |' "[k2-templates] the plan template has the lean columns"
+  eq "$(grep '^| Row' "$r/kb/plans/2026-11-12-t.md")" '| Row | Title | How | Delivers | Depends on | Trust touches | Link |' "[k2-templates] the plan template has the lean columns"
   git_ init -q -b main "$e"; mkdir -p "$e/.vibemaestro" "$e/kb/intent"; printf '{"schema": 1, "language": "en"}\n' > "$e/.vibemaestro/sdlc.json"
   (cd "$e" && python3 "$KBPY" new intent t --type story --focus P1 --date 2026-11-12 >/dev/null)
   has "$(cat "$e/kb/intent/2026-11-12-t.md")" '**As** <FILL: who>, **I want** <FILL: what>, **so that** <FILL: why>.' "[k2-templates] an en repository: the story's English labels"
@@ -1096,13 +1138,67 @@ fam_k2() {
   has "$o" "a story's plan new in this change, or whose row cells changed, takes the lean columns" "[k2-old-shape] …named"
   local v; v=$(mk_origin); mk_story "$v"; mk_spec2 "$v" "$CRIT_V2"; mkdir -p "$v/kb/plans"
   { printf -- '---\ndescription: "fixture"\nfocus: P1\n---\n\n# Plan\n\nIntent: kb/intent/2026-11-12-v.md · Spec: kb/specs/2026-11-12-v.md\n\n'
-    printf '| Row | How | Delivers (AC) | Depends on | Trust touches | Link |\n|---|---|---|---|---|---|\n| A | x | AC1, AC2, AC3 | — | none | — |\n'; } > "$v/kb/plans/2026-11-12-v.md"
+    printf '| Row | Title | How | Delivers (AC) | Depends on | Trust touches | Link |\n|---|---|---|---|---|---|---|\n| A | t | x | AC1, AC2, AC3 | — | none | — |\n'; } > "$v/kb/plans/2026-11-12-v.md"
   git_ -C "$v" add -A; git_ -C "$v" commit -q -m base; git_ -C "$v" push -q origin main
   { printf -- '---\ndescription: "fixture"\nfocus: P1\n---\n\n# Plan\n\nIntent: kb/intent/2026-11-12-v.md · Spec: kb/specs/2026-11-12-v.md\n\n'
-    printf '| Row | How | Delivers (AC) | Depends on | Trust touches | Link |\n|---|---|---|---|---|---|\n| A | x, reworded | AC1, AC2, AC3 | — | none | — |\n'; } > "$v/kb/plans/2026-11-12-v.md"
+    printf '| Row | Title | How | Delivers (AC) | Depends on | Trust touches | Link |\n|---|---|---|---|---|---|---|\n| A | t | x, reworded | AC1, AC2, AC3 | — | none | — |\n'; } > "$v/kb/plans/2026-11-12-v.md"
   o=$(cd "$v" && python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
   eq "$rc" 0 "[k2-old-shape] a lean plan whose header is Delivers (AC), a row reworded: rc 0 (the lean columns)"
   hasnt "$o" 'lean columns' "[k2-old-shape] …not read as the earlier columns"
+  # [plan-title] a Title on a lean plan that the rule judges (new, or a row cell changed against the base); lp builds each input: not a break
+  lp() {  # lp <header cells after Row> <row cells after A> — kb/plans/2026-11-12-v.md in $v, a lean plan of one row
+    { printf -- '---\ndescription: "fixture"\nfocus: P1\n---\n\n# Plan\n\nIntent: kb/intent/2026-11-12-v.md · Spec: kb/specs/2026-11-12-v.md\n\n'
+      printf '| Row | %s |\n|---|---|\n| A | %s |\n' "$1" "$2"; } > "$v/kb/plans/2026-11-12-v.md"
+  }
+  local LH='Title | How | Delivers | Depends on | Trust touches | Link' LR=' | x | AC1, AC2, AC3 | — | none | —' t80 t81
+  t80=$(printf 'a%.0s' $(seq 80)); t81=${t80}a
+  lp "$LH" "Checks run${LR}"
+  o=$(cd "$v" && python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 0 "[plan-title] a Title, row cells changed: rc 0"
+  hasnt "$o" 'Title' "[plan-title] …nothing about Title"
+  lp "$LH" "${t80}${LR}"
+  o=$(cd "$v" && python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 0 "[plan-title] a Title of exactly 80 characters: rc 0"
+  lp "Title (short) | How | Delivers (AC) | Depends on | Trust touches | Link" "Checks run${LR}"
+  o=$(cd "$v" && python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 0 "[plan-title] a header Title (short) is the Title column, Delivers (AC) the Delivers: rc 0"
+  hasnt "$o" 'Title' "[plan-title] …nothing about Title"
+  lp "$LH" "$(printf 'ệ%.0s' $(seq 80))${LR}"
+  o=$(cd "$v" && python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 0 "[plan-title] a Title of 80 accented characters (160 bytes): rc 0"
+  lp "$LH" "a\\|b${LR}"
+  o=$(cd "$v" && python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 0 "[plan-title] a Title with an escaped pipe stays one cell: rc 0"
+  lp "$LH" "${t81}${LR}"
+  o=$(cd "$v" && capped python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 65 "[plan-title] a Title of 81 characters: rc 65"
+  has "$o" 'row A has a Title over 80 characters (a short outcome, one line, at most 80 characters, no code)' "[plan-title] …named"
+  lp "$LH" " ${LR}"
+  o=$(cd "$v" && capped python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 65 "[plan-title] an empty Title: rc 65"
+  has "$o" 'row A has an empty Title' "[plan-title] …named"
+  lp "$LH" "one<br>two${LR}"
+  o=$(cd "$v" && capped python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 65 "[plan-title] a Title on two lines: rc 65"
+  has "$o" 'row A has a Title on more than one line' "[plan-title] …named"
+  lp "$LH" 'Edit `kb.py`'"${LR}"
+  o=$(cd "$v" && capped python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 65 "[plan-title] a Title with a backtick: rc 65"
+  has "$o" 'row A has a backtick in its Title' "[plan-title] …named"
+  lp 'How | Delivers | Depends on | Trust touches | Link' 'x, reworded | AC1, AC2, AC3 | — | none | —'
+  o=$(cd "$v" && capped python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 65 "[plan-title] a lean plan without Title, a row cell changed: rc 65"
+  has "$o" 'row A has no Title column' "[plan-title] …named"
+  lp 'How | Delivers | Depends on | Trust touches | Link' 'x | AC1, AC2, AC3 | — | none | —'
+  git_ -C "$v" add -A; git_ -C "$v" commit -q -m lean-no-title; git_ -C "$v" push -q origin main
+  o=$(cd "$v" && python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 0 "[plan-title] a lean plan without Title that the rule does not judge (cells as on the base): rc 0"
+  lp 'Title | Depends on | Trust touches | Link' 'AC1, AC2, AC3 | — | none | —'
+  git_ -C "$v" add -A; git_ -C "$v" commit -q -m old-title; git_ -C "$v" push -q origin main
+  o=$(cd "$v" && python3 "$KBPY" check plan 2026-11-12-v 2>&1); rc=$?
+  eq "$rc" 0 "[plan-title] an earlier plan whose only must column is Title: still read as Delivers (AC1 to AC3 delivered), rc 0"
+  has "$o" 'plan: 3 AC (AC1 to AC3), each delivered by a row that is not dropped.' "[plan-title] …each AC delivered by its Title cell"
+  has "$o" 'WARNING' "[plan-title] …and read as the earlier columns (the warning)"
   sed -i 's/^type: story$/type: task/' "$w/kb/intent/2026-11-08-s.md"   # not a break: a task intent is the input of this case
   o=$(cd "$w" && python3 "$KBPY" check spec 2026-11-08-s 2>&1); rc=$?
   eq "$rc" 0 "[k2-old-shape] a task's spec of the earlier shape, changed: rc 0 (only a story's spec takes the new shape)"
@@ -1317,6 +1413,9 @@ fam_story_check() {
   for p in '**Why this question:**' '**What each option means:**' '**Impact:**' '**Recommendation:**' '**Words of the person who asked → AC**' '| Words of the person who asked | AC |'; do
     has "$f" "$p" "[story-template] the en card has $p"
   done
+  has "$(cat "$v/kb/intent/2026-11-12-t.md")" '**Estimation.** ' "[story-template] the vi card labels the size part Estimation"
+  has "$f" '**Estimation.** ' "[story-template] the en card labels the size part Estimation"
+  eq "$(cat "$v/kb/intent/2026-11-12-t.md" "$e/kb/intent/2026-11-12-t.md" | grep -ciE 'Khẩu phần|Appetite')" 0 "[story-template] …neither card keeps the old label"
   eq "$(cat "$v/kb/intent/2026-11-12-t.md" "$e/kb/intent/2026-11-12-t.md" | grep -ciE 'owner|coordinator|desk|chủ repo')" 0 "[story-template] …neither card names an owner, a coordinator or a desk"
 
   echo "== [story-readme] the kb README describes the four parts and the words → AC part, vi and en twins =="
@@ -1371,9 +1470,16 @@ fam_replay310
 C="$TMP/claude"; S="$C/plugins/cache/vibemaestro/vibemaestro-sdlc/1.0.0"; B="$C/plugins/cache/vibemaestro/vibemaestro-brain/1.0.0"
 mkdir -p "$(dirname "$S")" "$B/scripts"; mk_plugin_copy "$S"
 cat > "$B/scripts/brain.py" <<'PY'
-import json, sys
+import json, os, sys
 items = {"P1": {"kind": "focus", "status": "live", "text": "ship the story process"},
          "P3": {"kind": "focus", "status": "retired", "text": "an old focus"}}
+if sys.argv[1:3] == ["op", "link"]:     # every link logged beside this file; R7 live, any other id refused as a real brain does
+    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "links.log"), "a").write(" ".join(sys.argv[3:]) + "\n")
+    if sys.argv[3] != "R7":
+        sys.stderr.write("brain: %s is queued: link it once it is live\n" % sys.argv[3])
+        sys.exit(1)
+    print("linked R7: closes %s" % sys.argv[5])
+    sys.exit(0)
 if sys.argv[1:2] != ["show"] or sys.argv[3:] != ["--json"]:
     sys.exit(64)
 it = items.get(sys.argv[2])
@@ -1499,6 +1605,49 @@ has "$(cat "$TMP/err")" "a worker reading the issue's type:/focus: labels" "[int
 # code <repo> <JSON value> — .vibemaestro/sdlc.json with issue.code set to the value
 code() { mkdir -p "$1/.vibemaestro"; printf '{"schema": 1, "issue": {"code": %s}}\n' "$2" > "$1/.vibemaestro/sdlc.json"; }
 branches() { git_ -C "$1" for-each-ref --format='%(refname:short)' refs/heads/intent/ | tr '\n' ' '; }
+
+echo "-- [request-link]"
+links() { cat "$B/scripts/links.log" 2>/dev/null; }
+H="#"    # the issue number spelled after it: the public-tree scan reads a literal hash and number as a reference
+W=$(mk_origin); : > "$GHL"; rm -f "$B/scripts/links.log"
+intent "$W" 2026-11-18-rq "type: story" "focus: P1" "request: R7"
+rc=$(ib "$S" "$W" -- create-intent --slug 2026-11-18-rq --base main)
+eq "$rc" 0 "[request-link] a story with request: R7, a brain answers: rc 0"
+eq "$(links)" "R7 --closes https://github.com/acme/app/issues/42" "[request-link] …brain op link R7 --closes the issue's URL, once"
+hasline "$(cat "$TMP/err")" "intent_branch: request R7 closes with issue ${H}42 now (brain op link)" "[request-link] …one line says so"
+for fm in "1|type: task|request: R7" "2|type: story|focus: P1"; do
+  git_ -C "$W" checkout -q main; rm -f "$B/scripts/links.log"
+  IFS='|' read -r n a b <<< "$fm"; intent "$W" "2026-11-18-no$n" "$a" "focus: P1" "$b"
+  rc=$(ib "$S" "$W" -- create-intent --slug "2026-11-18-no$n" --base main)
+  eq "$rc" 0 "[request-link] '$a', '$b': rc 0"
+  eq "$(links)" "" "[request-link] …no link"
+  eq "$(grep -c 'request' "$TMP/err")" 0 "[request-link] …and no request line"
+done
+git_ -C "$W" checkout -q main; rm -f "$B/scripts/links.log"; intent "$W" 2026-11-18-wkr "type: story" "focus: P1" "request: R7"
+rc=$(ib "$S" "$W" VIBEMAESTRO_ROLE=worker -- create-intent --slug 2026-11-18-wkr --base main)
+eq "$rc $(grep -cx 'issue: 42' "$W/kb/intent/2026-11-18-wkr.md")" "0 1" "[request-link] instrument: a worker's story with no issue: rc 0, issue: 42 recorded"
+eq "$(links)" "" "[request-link] …a worker does not link (the coordinator does)"
+W2=$(mk_origin); rm -f "$B/scripts/links.log"; intent "$W2" 2026-11-18-nob "type: story" "focus: P1" "request: R7"
+rc=$(ib "$PLUGIN" "$W2" -- create-intent --slug 2026-11-18-nob --base main)
+eq "$rc $(grep -cx 'issue: 42' "$W2/kb/intent/2026-11-18-nob.md")" "0 1" "[request-link] instrument: no brain (a copy outside a plugin cache): rc 0, issue: 42 recorded"
+eq "$(links)" "" "[request-link] …no brain, no link"
+eq "$(grep -c 'request' "$TMP/err")" 0 "[request-link] …and no request line"
+git_ -C "$W" checkout -q main; rm -f "$B/scripts/links.log"; intent "$W" 2026-11-18-r8 "type: story" "focus: P1" "request: R8"
+rc=$(ib "$S" "$W" -- create-intent --slug 2026-11-18-r8 --base main)
+eq "$rc" 0 "[request-link] the brain refuses the link: rc 0 (the branch and issue stand)"
+hasline "$(cat "$TMP/err")" "intent_branch: request R8 not linked to issue ${H}42: brain: R8 is queued: link it once it is live; run brain op link R8 --closes https://github.com/acme/app/issues/42" "[request-link] …one line with the brain's reason and the command"
+git_ -C "$W" checkout -q main; rm -f "$B/scripts/links.log"; intent "$W" 2026-11-18-x3 "type: story" "focus: P1" "request: X3"
+rc=$(ib "$S" "$W" -- create-intent --slug 2026-11-18-x3 --base main)
+eq "$rc $(links)" "0 " "[request-link] request: X3: rc 0, no link"
+hasline "$(cat "$TMP/err")" "intent_branch: request: X3 in kb/intent/2026-11-18-x3.md is not a request id like R3: not linked to issue ${H}42" "[request-link] …one line says why"
+W2=$(mk_origin); code "$W2" '"ACM"'; rm -f "$B/scripts/links.log"; intent "$W2" 2026-11-18-key "type: story" "focus: P1" "request: R7"
+rc=$(ib "$S" "$W2" -- create-intent --slug 2026-11-18-key --base main)
+eq "$rc $(cat "$TMP/out")" "0 intent/ACM-42-key" "[request-link] instrument: under issue.code ACM, intent/ACM-42-key"
+eq "$(links)" "R7 --closes https://github.com/acme/app/issues/42" "[request-link] …the issue opened first is linked too"
+git_ -C "$W2" checkout -q main; rm -f "$B/scripts/links.log"; intent "$W2" 2026-11-18-retry "type: story" "focus: P1" "request: R7" "key: ACM-9"
+rc=$(ib "$S" "$W2" -- retry-issue --slug 2026-11-18-retry)
+eq "$rc $(grep -cx 'issue: 42' "$W2/kb/intent/2026-11-18-retry.md")" "0 1" "[request-link] instrument: retry-issue records issue: 42"
+eq "$(links)" "R7 --closes https://github.com/acme/app/issues/42" "[request-link] …and links it"
 # pstatus <repo> <GH_PRS> <plan> — one line per row of plan status --json: <id> <state> <pr or -> <jira or ->
 pstatus() {
   ( cd "$1" && cenv PATH="$GHB:$PATH" GH_PRS="$2" python3 "$KBPY" plan status "$3" --json ) \
@@ -1643,7 +1792,7 @@ echo "-- [card-story]"
 eq "$(kb "$K" new intent st --type story --focus P2 --date 2026-11-08)" 0 "[card-story] new intent --type story --focus P2: rc 0"
 F="$K/kb/intent/2026-11-08-st.md"
 eq "$(front "$F")" "type: story|focus: P2|" "[card-story] …frontmatter type: story, focus: P2"
-eq "$(grep -cE '^\*\*(Là|Bối cảnh\.|Tiêu chí chấp nhận \(AC\)|Không làm|Khẩu phần\.|Câu hỏi)\*\*' "$F")" 6 "[card-story] …the story the owner approves, its six labelled parts in the vi preset"
+eq "$(grep -cE '^\*\*(Là|Bối cảnh\.|Tiêu chí chấp nhận \(AC\)|Không làm|Estimation\.|Câu hỏi)\*\*' "$F")" 6 "[card-story] …the story the owner approves, its six labelled parts in the vi preset"
 eq "$(heads "$F")" "" "[card-story] …and no first-card section"
 eq "$(grep -cx 'Type: story · Focus: P2' "$F")" 1 "[card-story] …the Type · Focus line"
 eq "$(kbx "$K" check intent 2026-11-08-st)" 65 "[card-story] the unfilled card: rc 65"

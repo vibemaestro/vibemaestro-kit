@@ -40,6 +40,32 @@ cases() {  # cases <family> <plugin dir> — the checker's lines as ok/bad
 fam_decide()   { cases decide "$1"; }
 fam_carry()    { cases carry "$1"; }
 fam_workflow() { cases workflow "$1"; }
+fam_exempt()   { cases exempt "$1"; }
+
+# evidence.exempt is read at the BASE: a PR that adds the key to its own config is not exempt
+ev_base() { (cd "$1" && cenv python3 "$2/gates/pr_evidence.py" --facts "$1/../facts.json" --config-ref base 2>&1); }
+fam_exempt_base() {
+  local P=$1 d r out rc ex; d=$(fresh); r="$d/repo"; mkdir -p "$r/.vibemaestro"
+  ex='{"evidence": {"exempt": {"app": "acme-gate", "paths": ["clusters/*/products/*/dev/kustomization.yaml"]}}}'
+  python3 -I -B - "$d/facts.json" <<'PY'
+import json, sys
+old = "    digest: sha256:dca30c0eaf8f0ba4f76b5c5e67c5ce55274c9118e6a07cf72d65c4c1fdea671f"
+new = "    digest: sha256:b37c8dd5fc3b4d5d53fd996448d618755e010abd8d49409cae8ce55b5334051c"
+json.dump({"head": "a" * 40, "comments": [], "capped": False, "author": "acme-gate[bot]", "author_type": "Bot",
+           "files": [{"filename": "clusters/x/products/p/dev/kustomization.yaml", "status": "modified",
+                      "patch": "@@ -4,3 +4,3 @@\n   - name: ghcr.io/acme/p\n-%s\n+%s" % (old, new)}]}, open(sys.argv[1], "w"))
+PY
+  git -C "$r" init -q -b main && echo '{}' > "$r/.vibemaestro/sdlc.json" && git -C "$r" add -A \
+    && git -C "$r" -c user.name=t -c user.email=t@t commit -qm base && git -C "$r" branch base
+  printf '%s' "$ex" > "$r/.vibemaestro/sdlc.json"; git -C "$r" -c user.name=t -c user.email=t@t commit -qam "the PR adds the key"
+  out=$(capped ev_base "$r" "$P"); rc=$?
+  cap_red "$rc" "[XB] a PR that adds evidence.exempt to its own config" \
+    || { eq "$rc" 1 "[XB] a PR that adds evidence.exempt to its own config is not exempt: the base has no key (rc 1)"
+         case "$out" in *exempt*) bad "[XB] …and no exempt line: $out";; *) ok "[XB] …and no exempt line";; esac; }
+  git -C "$r" branch -f base HEAD
+  out=$(ev_base "$r" "$P"); rc=$?
+  eq "$rc" 0 "[XB] the same PR once the base holds the key: exempt (rc 0)"; has "$out" "pr-evidence: exempt: opened by acme-gate[bot]" "[XB] …its line"
+}
 
 # the command line: --facts, the exit codes, the messages on stdout
 fam_cli() {
@@ -53,7 +79,7 @@ fam_cli() {
   (cd "$d" && cenv python3 "$P/gates/pr_evidence.py" --pr 1 >/dev/null 2>&1); eq "$?" 64 "[L] --pr without --repo and --base: rc 64"
 }
 
-FAMILIES="fam_decide fam_carry fam_workflow fam_cli"
+FAMILIES="fam_decide fam_carry fam_workflow fam_cli fam_exempt fam_exempt_base"
 echo "== the real plugin =="
 PL0="$TMP/plugin-real"; mk_plugin_copy "$PL0"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PL0"; done

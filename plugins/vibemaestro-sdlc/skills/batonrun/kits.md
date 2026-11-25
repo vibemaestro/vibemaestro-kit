@@ -22,12 +22,19 @@ from there is logged pending, so the undo advises no revert for a merge at the s
 (`--require-image <tag>`) and the image-bump lane (`--image-bump`) are arguments, so the signature binds them.
 `--behind-ok-clean <docs globs>` (each ends in `.md`, starts with a literal folder) also accepts a docs file main and the PR both changed, when git's 3-way merge and GitHub's test merge agree it is clean and a merged current-state still passes its check.
 
-**A PR behind main: merge main only when the guard refuses.** Run `kit:merge-pr` with `--behind auto` (never beside
+**A PR behind main: update it only when the guard refuses.** Run `kit:merge-pr` with `--behind auto` (never beside
 `--behind-ok` or `--behind-ok-clean`): the guard decides by itself. It accepts a behind PR when GitHub's test merge of the
 base tip and the head is fresh and mergeable, every file main and the PR both changed is a docs file that merges clean, and
 the suites main's files wake do not meet the suites CI ran for the PR (the repo's `merge.planner`, run from the base; with no
-planner, main's files must all be docs). On `FAIL  behind` main is merged into the PR's branch and CI runs again; on
-`??  behind` (a test merge still stale) rehearse again a minute later. Do not merge main into a queued PR before the guard has refused it: that
+planner, main's files must all be docs). The order, with nobody asked to merge main:
+
+1. rehearse `kit:merge-pr` at the PR's head with `--behind auto`;
+2. on `FAIL  behind` the refusal ends with a line `NEXT baton go kit:pr-update-branch --repo <owner/name> --pr <n> --head <sha>`,
+   with this run's values: run that baton (`kit:pr-update-branch`, below); it merges the base into the PR's branch and prints the new head;
+3. wait for CI green on that new head (a green check of the old head does not count);
+4. rehearse, sign and run `kit:merge-pr` again at the new head (the head is in the plan, so the old signature does not carry over).
+
+On `??  behind` (a test merge still stale) rehearse again a minute later. Do not update a queued PR before the guard has refused it: that
 costs a full CI cycle for nothing.
 
 `kit:gh-write` is for the small GitHub writes: open an issue, comment, edit your comment, an issue's title or body, the labels of an issue or a PR (`issue-labels`: `add` and `remove`, labels the
@@ -48,6 +55,11 @@ To close an issue with a closing comment, one op (not an `issue-comment` and an 
      "comment": "…\n<!-- my-marker -->", "marker": "<!-- my-marker -->"}]}
 
 The comment is posted before the close. Its undo retracts the comment and reopens the issue, only while both are as the run left them.
+
+An issue for work that needs infrastructure help (runners, CI variables, a runner group, secrets, a cluster, Cloudflare, Vault) is an
+`issue-create` with `"infra": true` and one body line `Infra: blocked: <what> · tried: <what>` (a body without exactly one such line
+is refused). Under `infra.label` of the repository you stand in, the issue gets the label when the target repository has it, else its
+title starts with `[<label>] `; the plan line shows which. The label is never created; with the key unset nothing is added.
 
 How it behaves:
 
@@ -138,10 +150,26 @@ At the push, its plan line must be in the signed plan. The push sends the pinned
 exists, even one that appeared since the check. A branch cannot be deleted here, so an undo after a landed push names the
 branch, and the run ends with exit 5.
 
-`kit:branch-delete` deletes one branch of a private GitHub repository at a pinned head that is merged into the default
-branch, with no owner signature. Run it from a clone of the repository (its `origin` gives the transport, as `kit:branch-push`):
+`kit:branch-delete` deletes 1 to 50 branches of one private GitHub repository, each at a pinned head that is merged into the
+default branch, with no owner signature. Run it from a clone of the repository (its `origin` gives the transport, as
+`kit:branch-push`), or from any directory with `clone=<absolute path>` of a clone whose `origin` names the repository (a session
+that never changes into a clone; the same parameter and origin check as `kit:branch-delete-recoverable`; nothing is read from the
+clone but its config file, as a file, and no git runs in it; a `.git` that is not a directory reads as no origin):
 
     <launcher> go kit:branch-delete repo='<owner/name>' branch='<name>' head='<full sha>'
+    <launcher> go kit:branch-delete repo='<owner/name>' clone='<absolute path>' branch='<name>' head='<full sha>'
+
+A batch repeats `branch=` and `head=` (the head right after its branch, each branch once, at most 50 pairs; more is another run):
+
+    <launcher> go kit:branch-delete repo='<owner/name>' clone='<absolute path>' branch='<a>' head='<sha a>' branch='<b>' head='<sha b>' …
+
+Each branch is proven exactly as one run proves it below, and the plan holds one line per branch in the order given, so one
+signature binds them all. Every branch is read and proven, and every line built, before any line is written: one branch that
+fails refuses the whole run at rehearse (and the run proves them all again before its first delete), with nothing written.
+A default branch that moves while the branches are read is refused too (the plan holds one SHA for it). The post-check and the
+undo take each branch in turn, each with its own run record, and the records go only when every branch holds, so a batch whose
+post-check fails anywhere has every branch this run deleted put back; a delete refused half way stops the run there, and undo puts back the branches
+this run deleted before it.
 
 `head` pins the branch: a branch whose tip is another SHA is refused, at rehearse and again when the run reads it. The base
 is always the repository's default branch. Rehearse reads everything from GitHub (`--hostname github.com`), never from the
@@ -163,7 +191,9 @@ so the signature binds what was proven. Refused at rehearse:
   letters, digits and `._/-`;
 - an open pull request from the branch or into it (deleting a base closes its pull requests), or a list that cannot be read;
 - a branch or default branch the remote does not have; a repository that is public or internal; an `origin` that names
-  another repository.
+  another repository, or that is not set (`remote origin is not set`, or `the origin of clone <path> is …`);
+- a call that is not the shape: a branch given twice, a `branch=` without its `head=`, a word that is not `repo=`, `clone=`,
+  `branch=` or `head=`, a relative `clone=`, none or more than 50 branches.
 
 The run reads it all again, so a branch that moved since signing is refused and a default branch that moved gives another
 plan line: nothing is deleted. The delete is the plugin's gate `gates/branch_delete.py`, run inside `write()` as
@@ -212,7 +242,11 @@ started, or a queued item (pending or signed), of a plugin this update moves wou
 So at rehearse and again in run, before any write, the kit refuses while one is waiting and names it (the baton or the queued item's
 id, its time and its directory, as the log records them). `--wait <seconds>` (1 to 300, for each of the two checks) checks again every
 second until none is waiting, then goes on, and refuses when the seconds pass first; a run that has begun is not waited for, nor is this
-run's own signature. What a signature binds is the owner's design choice and is not changed by this kit.
+run's own signature. Each named line ends with the command that clears it when it will never run: for a pending queued item, `queue
+withdraw <id> --reason dead` from the session that queued it, or the owner's `sign --by owner --void <id>`; for a signed queued item,
+the owner's `sign --by owner --void <id>`; for a signature, the owner's `sign --by owner --void <binding>` (the owner's queue in
+`help modes`). A withdrawn item and a voided signature no longer wait. What a signature binds is the owner's design choice and is not
+changed by this kit.
 
 The claude directory is `CLAUDE_CONFIG_DIR` when set (a relative one is refused), else `~/.claude`. The kit reads the
 marketplace layout from the `vibemaestro` clone instead of assuming one, and knows two:
@@ -347,6 +381,20 @@ already a label of the repository, its case ignored as GitHub compares them; run
 and stops at the first that exists by then or that GitHub refuses: the labels before it stay, the run and its undo name them, and
 the result says the state is unknown. Undo deletes nothing: deleting a label removes it from every issue that carries it, so it
 names each label of the call the repository holds, for the owner to delete.
+
+`kit:pr-update-branch` brings one PR's branch up to date with its base, with no one resuming the PR's session: GitHub's update-branch API (it only merges the base into the branch,
+there is no rebase), `expected_head_sha` pinned to `--head`, the head the PR had when `kit:merge-pr` was rehearsed. In mode auto it runs with no dialog
+(`Stops: none`):
+
+    <launcher> go kit:pr-update-branch --repo <owner/name> --pr <n> --head <full sha>
+
+Rehearse only reads (the PR and how far it is behind) and plans one write, `pr-update-branch <owner/name> <n> <head>`. A PR that is closed,
+a draft, from a fork, a back-merge (head ref `backmerge/*`: the release process resolves it, the base is never merged into it), whose head is no longer `--head`, that conflicts with its base (GitHub reads it `dirty`, or the call answers 422), or
+that is not behind is refused with one `REFUSE` line (exit 3), and nothing is written. `kit:merge-pr` prints no `NEXT` line for a back-merge in the guard's back-merge lane; a `backmerge/*` head the guard judges as an ordinary PR gets the line, and the baton then refuses it at rehearse. GitHub answers the call at once and makes the merge
+commit a moment later, so the post-check reads the PR again (after 1, 2, 4 and 8 s) and prints `new head <sha>` (in the run log that `go` names): the
+new head must be a merge commit with `--head` as its first parent (an ordinary commit pushed on `--head` fails the post-check). That head is the one to wait for CI on, and to run `kit:merge-pr` at. If the head still has not
+moved, the run fails and its undo reports that GitHub may still add the merge commit after it accepted the call (exit 5, the state unknown: read the head again, then go on from the new head or tell the owner). A call GitHub refuses outright (a conflict, a moved head) fails the run with exit 4 and nothing written. Undo never removes a merge commit: it cannot be taken back cleanly
+(dropping it is a force-push, a revert adds a second commit), so it names the head the branch holds and leaves the decision to the owner.
 
 ## A kit from a dependent plugin
 

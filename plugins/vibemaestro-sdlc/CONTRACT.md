@@ -53,7 +53,7 @@ Deprecated: these parts still work in the release that says so and leave vibemae
 - the baton kinds `kubectl-exec` and `remote-exec` of `templates/baton-kinds/`: a user keeps the script `baton new --from` wrote as
   their own baton.
 
-Frozen at: 0.7.0
+Frozen at: 0.8.0
 
 <!-- surface:begin -->
 ## Items
@@ -160,7 +160,7 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | `scripts/baton.py` | 0 | done |
 | `scripts/baton.py` | 1 | the script fails `check` (its Params, its parameter checks, a kept baton's Targets), or its rehearse fails (a plan line outside Expect, or outside the declared Targets of a baton with Params); `go` refuses an `input` value older than 120 s; `pack`'s source fails `check` as a kept baton of the target place |
 | `scripts/baton.py` | 2 | environment: no `bash`, or the state directory cannot be written; `pack` finds a place's lock still held after 30 s |
-| `scripts/baton.py` | 3 | refused, nothing ran: no signature matches, a seal differs from the one shown, the mode does not allow the signer, `sign --by owner` has no record of the owner's dialog for that call (for a `project:` or `user:` baton, of the file it resolves to), or it stopped before the run phase; a queued item (`sign --by owner --queued`, `run --queued`) that is absent, not signed, expired, used, damaged (its bytes changed after the dialog opened or after signing), signed from the session or Claude Code process that queued it, run from another directory, or whose rehearse no longer gives the sealed plan; `log --wait-queued`: the item can no longer be signed; `sign --by owner --approve`: the approval (the spec, a plan's rows, the project directory) changed since the dialog showed it; a `project:` or `user:` baton whose bytes no keep record pins on this machine, or that were retired, unless a `project:` baton's bytes are the blob at its path on `refs/remotes/origin/HEAD` (a branch of origin) and origin's canonical URL is on the owner's remote list (`mode remotes`); a project root or its `.vibemaestro/batons` that another user owns or others can write; an input copy that no longer holds its bytes (made again: the next call works); `pack` finds no `ok` run of these bytes in this machine's `log.tsv` (in a sandbox, a `project:` keep of a baton whose Stops is not none also takes a `go` that stopped for the owner on these bytes), the same bytes kept under another name in that place, or the name kept with another `Stops`, or is asked to move a source that is not pinned |
+| `scripts/baton.py` | 3 | refused, nothing ran: no signature matches, a seal differs from the one shown, the mode does not allow the signer, `sign --by owner` has no record of the owner's dialog for that call (for a `project:` or `user:` baton, of the file it resolves to), or it stopped before the run phase; a queued item (`sign --by owner --queued`, `run --queued`) that is absent, not signed, expired, used, damaged (its bytes changed after the dialog opened or after signing), run from another directory, withdrawn, or whose rehearse no longer gives the sealed plan; `queue withdraw`: the item not pending, or queued by another session; `sign --by owner --void`: the signature or item used, in a run, absent, or changed since the dialog showed it; `log --wait-queued`: the item can no longer be signed; `sign --by owner --approve`: the approval (the spec, a plan's rows, the project directory) changed since the dialog showed it; a `project:` or `user:` baton whose bytes no keep record pins on this machine, or that were retired, unless a `project:` baton's bytes are the blob at its path on `refs/remotes/origin/HEAD` (a branch of origin) and origin's canonical URL is on the owner's remote list (`mode remotes`); a project root or its `.vibemaestro/batons` that another user owns or others can write; an input copy that no longer holds its bytes (made again: the next call works); `pack` finds no `ok` run of these bytes in this machine's `log.tsv` (in a sandbox, a `project:` keep of a baton whose Stops is not none also takes a `go` that stopped for the owner on these bytes), the same bytes kept under another name in that place, or the name kept with another `Stops`, or is asked to move a source that is not pinned |
 | `scripts/baton.py` | 4 | the run or its post-check failed, and undo put the state back |
 | `scripts/baton.py` | 5 | the state is unknown: undo failed too, or the run was interrupted; `pack` was interrupted (the same command finishes it) |
 | `scripts/baton.py` | 6 | `new`: the file already exists |
@@ -168,7 +168,7 @@ Paths are relative to the plugin directory. An entry point is called by its path
 | `scripts/baton.py` | 8 | `go`: the baton needs the owner's signature (a Stops item, or mode manual); nothing was signed, nothing ran. A value that needs quoting gets no owner command (the owner's dialog shows only a literal command): its text goes through an input file |
 | `scripts/baton.py` | 9 | `log --wait-names`: at the deadline a named script's latest run line since `--since` is not ok, or it has none; `log --wait-queued`: at the deadline the item is not signed |
 | `scripts/baton.py` | 10 | `permissions --check`, or `permissions --install-launcher` without `--force`: this `baton.py` is an installed copy that no `vibemaestro-sdlc@vibemaestro` entry of the registry lists any more, and the entry the launcher would run is another version directory (the session started before a plugin update); one line names both versions and says restart Claude Code; nothing written |
-| `scripts/baton.py` | 64 | bad usage: a call that does not fit the baton's Params (a key missing, unknown or given twice, a word with no `=`, a value that fails its type), a prefix other than `kit:`, `kind:`, `project:` or `user:`, a bare name, a kept baton or place reached through a link, a relative HOME for `under:~`, a state directory whose path is not a plain path for a file value; a `pack` target with no place outside a sandbox (in a sandbox a bare name is `project:<name>`), `user:` in a sandbox, or a place other than `project:` or `user:`; `mode trust` or `mode untrust` with a remote that is not a network remote; a name a kit or callable kind ships, a copy name (`-v<digits>`, `-<7 or more hex>`), a move inside one place; `go --queue` in a sandbox, with no session id, with `--by`, or on a baton the session may sign itself; `--queued` with a malformed id, with a signer other than the owner, or with a word after the id; `--approve` with a signer other than the owner, a relative path or a word after it, or an approval spec that breaks its rules (each named); `grant revoke` with a malformed id; `go --grant` and `sign --grant` in any spelling (there are no plan grants) |
+| `scripts/baton.py` | 64 | bad usage: a call that does not fit the baton's Params (a key missing, unknown or given twice, a word with no `=`, a value that fails its type), a prefix other than `kit:`, `kind:`, `project:` or `user:`, a bare name, a kept baton or place reached through a link, a relative HOME for `under:~`, a state directory whose path is not a plain path for a file value; a `pack` target with no place outside a sandbox (in a sandbox a bare name is `project:<name>`), `user:` in a sandbox, or a place other than `project:` or `user:`; `mode trust` or `mode untrust` with a remote that is not a network remote; a name a kit or callable kind ships, a copy name (`-v<digits>`, `-<7 or more hex>`), a move inside one place; `go --queue` in a sandbox, with no session id, with `--by`, on a baton the session may sign itself, or on a baton whose `Stops` names `secrets`; `--queued` with a malformed id, with a signer other than the owner, or with a word after the id; `--void` the same with a malformed id or binding; `queue withdraw` with a malformed id or reason; `--approve` with a signer other than the owner, a relative path or a word after it, or an approval spec that breaks its rules (each named); `grant revoke` with a malformed id; `go --grant` and `sign --grant` in any spelling (there are no plan grants) |
 | `scripts/baton.py` | 65 | `sign --by owner --charter`: the charter spec breaks a rule (each named): not exactly its five keys, the repositories, a kind outside `baton`, `workflow`, `script`, `test`, `owner-acts` or a `SIGN_AGAIN_STOPS` word in `max_stops`, an expiry past or more than 90 days ahead; the focus is malformed, closed, unknown or has no `done when`, or no brain answers; or a charter for that focus is in force from this project (named) |
 | `scripts/baton.py` | 66 | the script cannot be read: no such name in the place named, no project root, a kept baton over 256 KiB; `pack`'s source cannot be read (absent, not a regular file, over 256 KiB); `pack --retire` of a sha no keep record of that name names; `grant revoke` of no such approval |
 | `gates/commit_discipline.py` | 0 | pass |
@@ -212,6 +212,7 @@ Paths are relative to the plugin directory. An entry point is called by its path
 A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py get <key>` reads it.
 `intake.focus` is `required`, `warn` or `off`; `warn` is the default in this release, and the next release makes `required` the default.
 `issue.code` is `null` (the default) or 3 capital letters A-Z; set, `create-intent` names the branch `intent/<code>-<issue number>-<slug>` and writes the intent's `key:`.
+`infra.label` is `null` (the default: off) or a label name (1 to 50 characters, no comma or control character, no leading or trailing space); set, an issue opened for work that needs infrastructure help gets that label when the repository has it, else the title prefix `[<label>] `, and one body line `Infra: blocked: <what> · tried: <what>`; the label is never created.
 
 | key |
 |---|
@@ -268,6 +269,7 @@ A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py ge
 | `public.private` |
 | `evidence.ui_paths` |
 | `evidence.trusted_app` |
+| `evidence.exempt` |
 | `sensitive.allowlist` |
 | `sensitive.scan` |
 | `dead_branches.max_merged_on_remote` |
@@ -290,10 +292,14 @@ A key is a dotted path into `.vibemaestro/sdlc.json`; `scripts/sdlc_config.py ge
 | `upstream_issues` |
 | `intake.focus` |
 | `issue.code` |
+| `infra.label` |
 | `agents.review_model` |
 | `agents.search_model` |
 | `agents.worker_model` |
 | `kb.spec_warn_bytes` |
+| `kb.intent_max_bytes` |
+| `kb.spec_max_bytes` |
+| `kb.plan_max_bytes` |
 | `tokens.summary_heading` |
 | `tokens.criteria_heading` |
 | `tokens.evidence_heading` |

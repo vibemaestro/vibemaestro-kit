@@ -247,7 +247,7 @@ def render_outline(rel, data):
 
 
 # ── lifecycle check ────────────────────────────────────────────────────────────────────────────────
-def lifecycle(root, docs, strict=False, spec_warn=None):
+def lifecycle(root, docs, strict=False):
     """(problems, warnings): [(path, reason)] each. Problems fail `kb.py check`; warnings (size) do not."""
     probs, warns = [], []
 
@@ -285,9 +285,6 @@ def lifecycle(root, docs, strict=False, spec_warn=None):
                 probs.append((p, "no description (--strict)"))
             if not d["has_status"]:
                 probs.append((p, "no status (--strict)"))
-        if spec_warn and d["type"] == "spec" and d["bytes"] > spec_warn:
-            warns.append((p, "%dB, over kb.spec_warn_bytes (%d): read it by section (kb.py outline), or split it"
-                          % (d["bytes"], spec_warn)))
     return probs, warns
 
 
@@ -386,7 +383,7 @@ def main(root, cmd, args, cfg):
             if pos:
                 raise ValueError("check takes no target here (check spec <x> and check current-state are separate)")
             docs = index(root, exclude)
-            probs, warns = lifecycle(root, docs, o.get("--strict", False), cfg["kb"]["spec_warn_bytes"])
+            probs, warns = lifecycle(root, docs, o.get("--strict", False))
             for p, why in warns:
                 sys.stdout.write("WARNING %s: %s\n" % (p, why))
             if probs:

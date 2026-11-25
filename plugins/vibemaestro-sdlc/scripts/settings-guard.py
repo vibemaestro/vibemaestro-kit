@@ -752,8 +752,10 @@ def reason(tool, path, what, rules=None, cwd=None):
                "\"deny\": [...]} with rule strings only, to a fresh path outside `.claude/`, then run %s" % (pre, go))
     return ("vibemaestro-sdlc settings guard: this %s call %s in %s. Widening what a session may do through a Claude Code "
             "settings file is a stop-list act (security-boundary): a session never makes it with a plain tool, on the owner's "
-            "laptop as in a pod. %s; it adds the rules and stops for the owner to sign (exit 8). A change the kind does not "
-            "make (defaultMode, an added directory, removing an ask or deny rule, another key) waits for the owner: tell them "
+            "laptop as in a pod. %s; it adds the rules, takes out the ones a `remove` object you put in the rules file names (the rules "
+            "above are only those added; to take one out, add {\"remove\": {\"deny\": [\"<rule>\"]}}), and stops "
+            "for the owner to sign (exit 8). A change the kind does not make (defaultMode, an added directory, another key) "
+            "waits for the owner: tell them "
             "what and why. Never do it another way (another tool, command or file). A narrowing (removing an allow rule, adding "
             "an ask or deny rule) and the keys %s pass through Edit, which this guard checks exactly.%s%s"
             % (tool, "; ".join(what), path, how, ", ".join(HARMLESS), BASH_NOTE if tool == "Bash" else "",

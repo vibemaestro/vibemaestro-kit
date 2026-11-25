@@ -54,7 +54,7 @@ empty "$UNPINNED" "every 'uses:' under gates/ is local or pinned by a full 40-ch
 mkdir -p "$TMP/ctl"; sed 's/@[0-9a-f]\{40\} # v4.2.2/@v4/' "$TPL/commit-discipline.yml" > "$TMP/ctl/c.yml"
 CTL=$(grep -n 'uses:' "$TMP/ctl/c.yml" | grep -v -E -e 'uses: \./' -e '@[0-9a-f]{40}' || true)
 nonempty "$CTL" "control: the same grep flags a template whose pin was replaced by a tag"
-[ "$(grep -c -E 'uses: actions/checkout@[0-9a-f]{40} # v' "$TPL"/*.yml | awk -F: '{s+=$2} END{print s}')" = 7 ] && ok "each of the seven templates has one pinned checkout with its tag in a comment" || bad "checkout pins are not one per template"
+[ "$(grep -c -E 'uses: actions/checkout@[0-9a-f]{40} # v' "$TPL"/*.yml | awk -F: '{s+=$2} END{print s}')" = 8 ] && ok "each of the eight templates has one pinned checkout with its tag in a comment" || bad "checkout pins are not one per template"
 
 echo "== rendering (install_gates.py) =="
 R="$TMP/repo"; mkdir -p "$R"; git_ -C "$R" init -q -b main

@@ -8,7 +8,8 @@ its content; otherwise the log is folded again.
 
 Owner items (`G` goals, `D` decisions, `W` windows) are written only by `brain owner …` with a fresh, matching, unused "asked"
 record (`record_asked`, called by B1.2's guard-owner hook). Like BatonRun, this guards against slips, not same-user forgery.
-`brain op` writes the rest; a focus (`P`) and a request (`R`) carry the owner's words, stored whole and never rewritten.
+`brain op` writes the rest; a request (`R`) and a focus (`P`) in the owner's words carry them, stored whole and never rewritten;
+a focus the session opens carries none, and names its goal and when it is done.
 
 The render has two halves: the left brain (the owner's: G with its quote, done and not-doing lines, D with its quote lines,
 W) and the right brain (P and R with their quote lines, N, S, Q, X, T, Done, F). Each half is packed into strings of
@@ -56,16 +57,19 @@ OWNER_LETTERS = ("G", "D", "W")
 OP_LETTERS = ("P", "R", "N", "X", "T", "S", "Q", "F")   # the kinds `brain op` closes, supersedes and touches
 LEFT_LETTERS = ("G", "D", "W")                      # the left brain: the owner's, through the dialog, no overflow
 QUOTED = ("G", "D", "P", "R")                       # the kinds that store the owner's words (a quote line under the item)
+FOCUSED = ("X", "S")                                # the kinds `--focus` ties to a live focus: Next, a running session
 SECTIONS = (("G", "Goals (owner)"), ("D", "Pinned (owner)"), ("W", "Windows"), ("P", "Focus"), ("R", "Requests"), ("N", "Now"),
             ("S", "Sessions"), ("Q", "Owner queue"), ("X", "Next"), ("T", "Traps"), ("F", "Facts"))
 HALVES = (("left", ("G", "D", "W")), ("right", ("P", "R", "N", "S", "Q", "X", "T", "F")))   # Done sits between Traps and Facts
 # the caps' defaults; `.vibemaestro/brain.json` changes them per project
 DEFAULT_CAPS = {"G": 5, "D": 20, "W": 10, "P": 5, "R": 20, "N": 5, "X": 30, "S": 20, "Q": 15, "T": 20, "F": 25}
 CAPS = {k: v for k, v in DEFAULT_CAPS.items() if k in KINDS.values()}     # the letters this store writes, at their defaults
-# the line after the head line of string 1, the owner's wording: which layer wins when two disagree
-PRECEDENCE = ("Precedence: the owner's newer word (in chat, pinned in the left brain G D W, or quoted in P R) > SOUL (CLAUDE.md) > "
-              "what the session writes in the right brain (N S Q X T F, and its own text of P and R) > auto-memory (cold, "
-              "lowest; the brain never edits it: report a contradiction to the owner).")
+# the line after the head line of string 1: which source wins goes by the kind of question; the five chains are in the skill's
+# key rules and the rulebook's chapter 7, too long for string 1's reserve (FIRST_RESERVE)
+PRECEDENCE = ("Precedence, only when two sources disagree, goes by the kind of question: 1 rules and decisions, 2 order of work, "
+              "3 one work's contract, 4 the present state, 5 history and evidence (each chain: skill brain, rulebook chapter 7). "
+              "The machine never overrides the owner. Auto-memory ranks last: never edit it, report a contradiction to the "
+              "owner.")
 CONFIG_LEFT = ("G", "D", "W")                       # a left cap off its default is the owner's decision: flagged
 STRING_MAX = 9500                                   # every SessionStart string, by its own hard cut (Claude Code replaces one
                                                     # over 10,000 by a 2,000-character preview)
@@ -108,9 +112,15 @@ CLOSES_LETTERS = ("N", "X", "S", "Q", "R")
 # `no_goal` of a session and `soul` of a promotion it folds unread). An older brain wrote those last three; this one folds
 # them as it did and writes none (a plugin that extends the brain may), and an extension's `ext` entries are fields too; 7 adds the
 # op `words` (a focus's done when and not doing, in place), which a brain of format 6 refuses to fold; 8 adds the op `link`
-# (`closes` added to a live item in place), which a brain of format 7 refuses to fold. This brain also folds the op `signal`
-# (a measurement, its kind in `what`) unread and writes none, so the later format that writes it does not stop it
-FORMAT = 8
+# (`closes` added to a live item in place), which a brain of format 7 refuses to fold; 9 writes the op `signal` (a measurement,
+# its kind in `what`, folded unread), which a brain of format 8 from before it learned to fold one refuses; 10 adds the op
+# `owner-soul-code` (the owner's step that gave a line already in the SOUL file a code; a brain of format 10 wrote it, this one
+# folds it and writes none), which a brain of format 9 refuses to fold: a log needs 10 only once it holds one; 11 adds the op
+# `ext` (an extension's own op, brain_ext.write_op or an owner verb's effect `op`, folded unread), which a brain of format 10
+# refuses to fold: a log needs 11 only once it holds one. An export says FORMAT: an older brain refuses the bundle, saying to
+# update (it could not land every item a newer brain writes, a focus with no owner's words among them)
+FORMAT = 11
+EXT_NAME = re.compile(r"[a-z][a-z0-9-]{1,23}")      # an extension's name, and the `what` of its op
 LOCK_WAIT = 1.0                                     # seconds a SessionStart waits for the lock: to read, then to close by a link
 BUDGET_N, BUDGET_WINDOW = 5, 30 * 60                # retirements per session in any 30 minutes
 SHRINK_MIN = 0.6                                    # supersede keeps ≥ 60% of the first item of its chain
@@ -892,15 +902,7 @@ def session_note():
 def record_session(sid, project, d):
     """Record `project` (state directory `d`) as session `sid`'s; returns the other project it replaced, else None. Records
     older than SESSION_MAX_AGE are swept."""
-    root = state_root()
-    sd = os.path.join(root, "sessions")
-    for q in (os.path.dirname(root), root, sd):
-        if not os.path.isdir(q):
-            os.makedirs(os.path.dirname(q), exist_ok=True)
-            with contextlib.suppress(FileExistsError):
-                os.mkdir(q, 0o700)
-        if WINDOWS and q != os.path.dirname(root):  # the root and sessions/ are the brain's own: checked before a record goes in
-            private(q)
+    sd = sessions_dir()
     p = session_file(sid)
     try:
         old = read_session(sid)
@@ -919,9 +921,38 @@ def record_session(sid, project, d):
     return old["project"] if old and not same_path(old["state"], d) else None
 
 
+def sessions_dir():
+    """`<state root>/sessions/`, created 0700 with the root above it when missing."""
+    root = state_root()
+    sd = os.path.join(root, "sessions")
+    for q in (os.path.dirname(root), root, sd):
+        if not os.path.isdir(q):
+            os.makedirs(os.path.dirname(q), exist_ok=True)
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(q, 0o700)
+        if WINDOWS and q != os.path.dirname(root):  # the root and sessions/ are the brain's own: checked before a record goes in
+            private(q)
+    return sd
+
+
 def drop_session(sid):
     with contextlib.suppress(OSError):
         os.unlink(session_file(sid))
+
+
+def mark_env(sid, bin_dir):
+    """The session's start put `bin_dir` first on PATH for its Bash commands (CLAUDE_ENV_FILE); swept with the records."""
+    sessions_dir()
+    _write_file(session_file(sid) + ".env", bin_dir + "\n")
+
+
+def env_marked(sid):
+    """The bin directory the session's start put first on PATH, None when it put none (or the mark does not read)."""
+    try:
+        with open(session_file(sid) + ".env", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except (OSError, ValueError):
+        return None
 
 
 # --- the project's configuration ----------------------------------------------------------------------------------------------
@@ -1436,7 +1467,7 @@ def apply(st, op):
     elif kind == "close":
         it = item()
         it["reason"], it["pointer"] = op.get("reason"), op.get("pointer")
-        _retire(st, op, it, "closed")
+        _retire(st, op, it, "closed", budget=it["id"][0] != "W")    # a window ended by the session narrows: no budget spent
     elif kind == "link-close":
         it = item()
         it["reason"], it["pointer"] = op.get("reason"), op.get("pointer")
@@ -1514,6 +1545,16 @@ def apply(st, op):
     elif kind == "signal":                          # a measurement: folded unread, no item changes (read ahead of a writer)
         if not isinstance(op.get("what"), str) or not 0 < len(op["what"]) <= 32:
             raise Refused(5, "hot.jsonl line %d: a malformed signal" % op["seq"])
+    elif kind == "owner-soul-code":                 # a SOUL line's code and source (log format 10): the ledger counts it, no item
+        if (not SOUL_CODE.fullmatch(str(op.get("soul"))) or not all(isinstance(op.get(k), str) for k in ("text", "file", "sha256"))
+                or not isinstance(op.get("source"), list) or not op["source"]):
+            raise Refused(5, "hot.jsonl line %d: a malformed SOUL code step" % op["seq"])
+        st["format"] = max(st.get("format", 0), 10)     # the caches say so: an older brain then folds the log, and refuses it
+    elif kind == "ext":                             # an extension's own op: folded unread, no item changes (its reader is the extension)
+        if (not isinstance(op.get("ext"), str) or not EXT_NAME.fullmatch(op["ext"]) or not isinstance(op.get("what"), str)
+                or not EXT_NAME.fullmatch(op["what"]) or not isinstance(op.get("data"), dict)):
+            raise Refused(5, "hot.jsonl line %d: a malformed extension op" % op["seq"])
+        st["format"] = 11
     else:
         raise Refused(5, "hot.jsonl line %d: unknown op %r" % (op["seq"], kind))
     if "promote" in op:
@@ -1560,8 +1601,15 @@ def archive_lines(st):
             if it["status"] not in ("live", "queued")]
 
 
+def cache_head(head, st):
+    """A cache's `folded_from`: the head, with the log format the state needs when an older brain cannot fold it (an older
+    brain compares it whole, so it folds the log itself and refuses the op it does not know, rather than read this cache)."""
+    return dict(head, format=st["format"]) if "format" in st else head
+
+
 def write_caches(d, st, head):
     body = dumps(st)
+    head = cache_head(head, st)
     _write_file(os.path.join(d, "hot.json"), dumps({"folded_from": head, "digest": digest(body), "state": st}) + "\n")
     lines = archive_lines(st)
     _write_file(os.path.join(d, "archive.jsonl"),
@@ -1682,10 +1730,13 @@ def render_key(text, st, now=None):
             base = item_line(dict(it, links=[]), now, st)
             rest = None
             if it["id"][0] == "W" and it.get("expires"):
-                stem = base[:base.rindex(" (")] + " ("
-                if line.startswith(stem) and ")" in line[len(stem):]:
-                    left, _, after = line[len(stem):].partition(")")
-                    rest = after if _left_fits(left, it, now) else None
+                # an older brain wrote a window with no scope without its `lowers no signing`: either form is this line
+                for b in [base] + ([base.replace(" · lowers no signing · ", " · ", 1)] if not it.get("lowers") else []):
+                    stem = b[:b.rindex(" (")] + " ("
+                    if line.startswith(stem) and ")" in line[len(stem):]:
+                        left, _, after = line[len(stem):].partition(")")
+                        rest = after if _left_fits(left, it, now) else None
+                        break
             elif it["id"][0] == "G" and parse_day(it.get("review")):
                 for form in review_forms(it, now):
                     b = item_line(dict(it, links=[]), now, st, review=form)
@@ -1705,7 +1756,7 @@ def cache_state(d, head):
     """The cached state when hot.json was folded from `head` and its digest matches; else None."""
     try:
         c = json.load(open(os.path.join(d, "hot.json"), encoding="utf-8"))
-        if c.get("folded_from") == head and c.get("digest") == digest(dumps(c["state"])):
+        if c.get("folded_from") == cache_head(head, c["state"]) and c.get("digest") == digest(dumps(c["state"])):
             return c["state"]
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
@@ -1717,20 +1768,26 @@ def cache_problems(d, head, st):
     out = []
     try:
         c = json.load(open(os.path.join(d, "hot.json"), encoding="utf-8"))
-        if c.get("folded_from") != head:
+        if c.get("folded_from") != cache_head(head, st):
             out.append(("warn", "hot.json is stale (folded from another head); the next read folds again"))
-        elif c.get("digest") != digest(dumps(c.get("state"))) or dumps(c.get("state")) != dumps(st):
-            out.append(("problem", "hot.json does not match its digest or the fold: it was edited; reads use it while its "
-                                   "digest matches, until the next write rewrites it"))
+        elif c.get("digest") != digest(dumps(c.get("state"))):
+            out.append(("problem", "hot.json does not match its digest: it was edited; reads fold the log until the next write "
+                                   "rewrites it"))
+        elif dumps(c.get("state")) != dumps(st):      # its own digest holds: another brain version's fold, as after an update
+            out.append(("warn", "hot.json holds a fold of this log that differs from this brain's (another brain version's, as "
+                                "after an update, or one rewritten with its digest); reads use it until the next write rewrites it"))
     except (OSError, ValueError, AttributeError):
         out.append(("warn", "hot.json is missing or unreadable; the next read folds again"))
     try:
         lines = open(os.path.join(d, "archive.jsonl"), encoding="utf-8").read().splitlines()
         h = json.loads(lines[0])
-        if h.get("folded_from") != head:
+        if h.get("folded_from") != cache_head(head, st):
             out.append(("warn", "archive.jsonl is stale; the next write folds again"))
-        elif h.get("digest") != digest("\n".join(lines[1:])) or lines[1:] != archive_lines(st):
-            out.append(("problem", "archive.jsonl does not match its digest or the fold: it was edited"))
+        elif h.get("digest") != digest("\n".join(lines[1:])):
+            out.append(("problem", "archive.jsonl does not match its digest: it was edited"))
+        elif lines[1:] != archive_lines(st):
+            out.append(("warn", "archive.jsonl holds a fold of this log that differs from this brain's (another brain version's, "
+                                "as after an update); the next write rewrites it"))
     except (OSError, ValueError, IndexError, AttributeError):
         out.append(("warn", "archive.jsonl is missing or unreadable"))
     try:
@@ -2308,6 +2365,131 @@ def answerers(project=None):
     return sorted(set(found))
 
 
+# --- the installed brain ------------------------------------------------------------------------------------------------------
+# The log is written by one code: the vibemaestro-brain the settings enable, whose hooks run. A `brain` from an older copy on
+# PATH would write with older code, so a brain that is not the installed one refuses writes and says so on reads; when the
+# installed one cannot be told, nothing is refused.
+
+BRAIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WRITES = ("op", "owner", "import")                  # the commands that change an item
+
+
+def installed_brain(project=None):
+    """Real path of the vibemaestro-brain install the settings enable for the session's project (installed_plugins.json, the
+    entry that applies to it); None when that cannot be told: no registry or one that does not read, none enabled, two
+    enabled, or a path that is not a directory."""
+    project = project or session_project()
+    if not os.path.isabs(project):                  # the shell's directory was deleted: no project's settings to read
+        return None
+    project = os.path.realpath(project)
+    reg = json_capped(os.path.join(config_dir(), "plugins", "installed_plugins.json"), EXT_FILE_MAX)
+    ids = reg.get("plugins") if isinstance(reg, dict) else None
+    enabled = enabled_ids(project) if isinstance(ids, dict) else {}
+    found = {}
+    for pid in sorted(ids) if isinstance(ids, dict) else []:
+        if pid.split("@")[0] != "vibemaestro-brain" or enabled.get(pid) is not True:
+            continue
+        e = applicable(ids[pid], project)
+        p = e.get("installPath") if isinstance(e, dict) else None
+        if isinstance(p, str) and os.path.isabs(p) and os.path.isdir(p):
+            found[os.path.normcase(os.path.realpath(p))] = os.path.realpath(p)
+    return list(found.values())[0] if len(found) == 1 else None
+
+
+def in_tree(root):
+    """A brain's real root runs from a repository's tree: a `.git` beside `plugins/`, outside Claude Code's plugins directory
+    (a marketplace clone there is an install copy). Such a brain only warns, here and in the hook."""
+    return (os.path.lexists(os.path.join(os.path.dirname(os.path.dirname(root)), ".git"))
+            and not inside(os.path.normcase(root), os.path.normcase(os.path.realpath(os.path.join(config_dir(), "plugins")))))
+
+
+def foreign_brain():
+    """(this brain's root, the installed one's, runs from a repository's tree) when this brain is not the installed one; None
+    when it is, or when the installed one cannot be told."""
+    inst = installed_brain()
+    own = os.path.realpath(BRAIN_ROOT)
+    if inst is None or same_path(own, inst):
+        return None
+    return own, inst, in_tree(own)
+
+
+def brain_bins():
+    """[(PATH entry, its brain's real root)] of the PATH entries that hold a brain (bin/brain beside scripts/brain.py, executable
+    off Windows), in PATH order, each brain once. Not shutil.which: on Windows it finds no `brain`, which has no extension."""
+    out, seen = [], set()
+    for p in os.environ.get("PATH", "").split(os.pathsep):
+        if not os.path.isabs(p):
+            continue
+        r = os.path.dirname(os.path.realpath(p))
+        b = os.path.join(p, "brain")
+        if (os.path.normcase(r) not in seen and os.path.isfile(b) and (WINDOWS or os.access(b, os.X_OK))
+                and os.path.isfile(os.path.join(r, "scripts", "brain.py"))):
+            seen.add(os.path.normcase(r))
+            out.append((p, r))
+    return out
+
+
+def path_chain():
+    """[(short command, {PATH entries it was started with})] of the processes above this one, nearest first; [] where their
+    environment cannot be read (Linux /proc only)."""
+    out, pid = [], os.getppid()
+    while pid > 1 and len(out) < 64:
+        try:
+            with open("/proc/%d/environ" % pid, "rb") as f:
+                env = f.read().split(b"\0")
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                argv = [os.fsdecode(a) for a in f.read().split(b"\0") if a]
+            with open("/proc/%d/stat" % pid) as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        path = next((os.fsdecode(kv[5:]) for kv in env if kv.startswith(b"PATH=")), "")
+        name = " ".join(os.path.basename(a) for a in argv[:2 if argv[1:2] and not argv[1].startswith("-") else 1])
+        out.append((name[:60] or "?", {os.path.normpath(x) for x in path.split(os.pathsep) if x}))
+        pid = ppid
+    return out
+
+
+def path_origin(entry, chain, marked):
+    """Where a PATH entry came from: the session start's own line, else the process that started the outermost one holding it
+    (in a session, a process that started Claude Code, or its Bash shell: the profile it snapshots, CLAUDE_ENV_FILE, the
+    command)."""
+    if marked and same_path(entry, marked):
+        return "put first by the brain's session start, CLAUDE_ENV_FILE"
+    if not chain:
+        return "its source cannot be read on this system"
+    held = [i for i, (_, dirs) in enumerate(chain) if os.path.normpath(entry) in dirs]
+    if not held:
+        return "set by %s, which started this brain" % chain[0][0]
+    i = held[-1]
+    if i + 1 < len(chain):
+        return "from %s, which started %s with it" % (chain[i + 1][0], chain[i][0])
+    return "inherited from %s, the first process read" % chain[i][0]
+
+
+def path_lines():
+    """doctor's lines on which brain runs: this one against the installed one, then each brain on PATH in order."""
+    inst = installed_brain()
+    out = []
+    other = foreign_brain() if inst else None
+    if inst is None:
+        out.append(("info", "the installed brain cannot be told (no single enabled vibemaestro-brain in installed_plugins.json "
+                            "that reads): nothing is refused"))
+    elif other:
+        out.append(("warn", "this brain %s is not the installed one %s: %s" % (other[0], inst, "it runs from a repository's tree, "
+                    "so its writes are let through" if other[2] else "its writes are refused")))
+    bins = brain_bins()
+    if not bins:
+        out.append(("info", "no brain on PATH"))
+    sid = session_id()
+    chain, marked = path_chain(), env_marked(sid) if sid else None
+    for n, (p, r) in enumerate(bins, 1):
+        tags = (["a bare `brain` runs it"] if n == 1 else []) + (["installed"] if inst and same_path(r, inst) else [])
+        level = "info" if n > 1 else "ok" if inst is None or same_path(r, inst) else "warn"
+        out.append((level, "brain on PATH %d of %d: %s (%s)" % (n, len(bins), p, "; ".join(tags + [path_origin(p, chain, marked)]))))
+    return out
+
+
 # --- extensions ---------------------------------------------------------------------------------------------------------------
 # Another plugin may add to the brain through one declared script, which brain_ext.py runs in its own process. Finding one is
 # here, so a brain with none never loads brain_ext. It reads the registry as vibemaestro-sdlc reads a rule pack.
@@ -2507,7 +2689,8 @@ def successor(st, iid):
 
 
 def focus_of(st, it):
-    """The live focus a Next item is tied to (`--focus`), None when it has none or the focus is no longer live."""
+    """The live focus a Next item or a running session is tied to (`--focus`), None when it has none or the focus is no
+    longer live."""
     return successor(st, it.get("focus")) if st is not None and it.get("focus") else None
 
 
@@ -2571,6 +2754,7 @@ def cut_symbols(text, n):
 
 
 _TAGGED = []                                        # doctor renders as an older brain did (older_tags)
+_UNFOCUSED = []                                     # doctor renders as a brain before the focus rule did (older_focus)
 
 
 @contextlib.contextmanager
@@ -2585,10 +2769,22 @@ def older_tags():
         _TAGGED.pop()
 
 
+@contextlib.contextmanager
+def older_focus():
+    """Render as a brain before the focus rule did: no `[opened by the session]` on a focus, no `[P1]` on a running session,
+    sessions by id. Only doctor renders so, to tell such a brain's hot.md from an edit."""
+    _UNFOCUSED.append(True)
+    try:
+        yield
+    finally:
+        _UNFOCUSED.pop()
+
+
 def item_line(it, now, st=None, review=None):
     """`- X5 <text> · since 10-31` and the links that fit the line cap. The stored text is never cut under TEXT_CEIL: a cap
     lowered in the configuration applies to new writes, not to what is already written. A goal shows its review day and
-    scope, a focus its goal, a request its due day; with the state `st`, a Next item tied to a live focus starts `[P1]`.
+    scope, a focus its goal, a request its due day; with the state `st`, a Next item or a running session tied to a live
+    focus starts `[P1]`, and a focus the session opened `[opened by the session]`.
     `review` replaces a goal's review part (render_key tries the forms an earlier render could have shown)."""
     letter = it["id"][0]
     text = clean_line(it["text"])[:TEXT_CEIL]
@@ -2605,6 +2801,9 @@ def item_line(it, now, st=None, review=None):
         date = " · ".join(x for x in (review_part(it, now) if review is None else review, scope, date) if x)
     elif letter == "D" and it.get("scope") == "global":   # a decision with none, or `project`, is the project's: not shown
         date = "scope global · %s" % date
+    elif letter == "W":                             # before the time left, which render_key finds by its last " ("
+        date = "%s · %s" % ("lowers %s%s" % (", ".join(it["lowers"]), "; excludes " + ", ".join(it["excludes"])
+                                              if it.get("excludes") else "") if it.get("lowers") else "lowers no signing", date)
     elif letter == "P" and isinstance(it.get("goal"), str):
         g = last_of(st, it["goal"]) if st is not None else it["goal"]    # the goal it continues as, live or retired
         retired = st is not None and (st["items"].get(g) or {}).get("status") != "live"
@@ -2616,9 +2815,11 @@ def item_line(it, now, st=None, review=None):
         date = "no goal · %s" % date
     elif letter == "R" and parse_day(it.get("due")):
         date = "due %s · %s" % (it["due"][5:10], date)
-    elif letter == "X":
+    elif letter in FOCUSED and not (letter == "S" and _UNFOCUSED):
         f = focus_of(st, it)
         tag = "[%s] " % f if f else ""
+    if session_focus(it) and not _UNFOCUSED:        # first after the id: no text of its own can read as the owner's words
+        tag = "[opened by the session] "
     line = "- %s %s%s · %s" % (clean_line(it["id"]), tag, text, clean_line(date))
     return line + links_tail(units(line), it)
 
@@ -2762,9 +2963,10 @@ def due_line(st, now):
 
 def item_groups(st, letter, now):
     """Each live item of a section, as one group: its line, the quote line of an item that holds the owner's words, and a goal's
-    done and not-doing lines. By id, except Next: the items tied to a live focus first, by the focus's id, then the rest."""
+    done and not-doing lines. By id, except Next and Sessions: the items tied to a live focus first, by the focus's id, then the
+    rest."""
     def order(it):
-        f = focus_of(st, it) if letter == "X" else None
+        f = focus_of(st, it) if letter == "X" or (letter == "S" and not _UNFOCUSED) else None
         return (0, int(f[1:]), int(it["id"][1:])) if f else (1, 0, int(it["id"][1:]))
 
     out = []
@@ -2916,7 +3118,8 @@ def card_lines(st, now, stale=(), loss=None, ops=None, d=None):
     to it and, with the log's `ops`, its last progress), the dormant items, the sections at 85 % of their caps or over, the
     live items whose anchors closed (`stale`: [(id, "owner/name#N merged")]), the overflow queue, the record due and a backup
     that fails or falls behind (both from the state directory `d`), the loss score of the last compaction logged (`loss`:
-    (score or None, its time) or None), and, last of these, one counts line per live focus
+    (score or None, its time) or None), the live Next items and sessions tied to no live focus, and, last of these, one
+    counts line per live focus
     (from the session's project, see focus_counts). Without `ops`, no ledger line. An extension's lines follow these
     (brain_ext.start_lines)."""
     out = []
@@ -2957,6 +3160,10 @@ def card_lines(st, now, stale=(), loss=None, ops=None, d=None):
         score, t = loss
         out.append("loss score of the last compaction logged: %s (%s)" % (
             "%.2f" % score if score is not None else "none (no anchor or no summary)", t[5:16].replace("T", " ")))
+    loose = [it["id"] for letter in FOCUSED for it in sorted(live(st, letter), key=lambda i: int(i["id"][1:]))
+             if not focus_of(st, it)]
+    if loose:                                       # attach each to its focus, defer it or drop it
+        out.append(fit_items("work with no focus: ", loose, ", "))
     out += focus_counts([p["id"] for p in focus])
     return out
 
@@ -3113,11 +3320,14 @@ def write(build, ops_too=False):
         op, texts, msg, after = build(d, st, ops) if ops_too else build(d, st)
         sanitize(d, texts)
         t = now_iso()
-        if st["writer"] is None:
-            claim = {"op": "claim", "t": t, "by": by(), "takeover": False}
+        claim = {"op": "claim", "t": t, "by": by(), "takeover": False} if st["writer"] is None else None
+        op = dict(op, t=t, by=by())
+        trial = json.loads(dumps(st))               # fold first, append after: an op the fold refuses never reaches the log
+        for i, o in enumerate([claim, op] if claim else [op], len(raw) + 1):
+            apply(trial, json.loads(dumps(dict(o, seq=i))))
+        if claim:
             raw = append(d, raw, claim)
             apply(st, dict(claim, seq=len(raw)))
-        op = dict(op, t=t, by=by())
         raw = append(d, raw, op)
         apply(st, json.loads(raw[-1].decode("utf-8")))
         if after:
@@ -3216,11 +3426,12 @@ def peek(iid=None, letter=None):
     return st
 
 
-def layer_args(letter, quote, where, goal, focus, due):
+def layer_args(letter, quote, where, goal, focus, due, done=None):
     """Refuse (64) an option of a focus, a request or a Next item on another kind, or one a focus or a request needs left out;
     check the owner's words (1: no rule of the dialog applies to them, only the text guards and `quote_max`, and a longer
-    quote is refused, never cut). Returns the source of the item's words."""
-    if letter in ("P", "R"):
+    quote is refused, never cut). A focus without the owner's words is one the session opens: it names its goal and when it
+    is done. Returns the source of the item's words."""
+    if letter == "R" or (letter == "P" and (quote is not None or where is not None)):
         if quote is None or where is None:
             raise Refused(64, "a %s carries the owner's words: --owner-quote Q (verbatim) and --where W"
                           % ("focus" if letter == "P" else "request"))
@@ -3228,12 +3439,33 @@ def layer_args(letter, quote, where, goal, focus, due):
         check_text("where", where)
     elif quote is not None or where is not None:
         raise Refused(64, "--owner-quote and --where are for a focus or a request (the owner's own items go through `brain owner`)")
+    elif letter == "P" and (goal is None or done is None):
+        gone = [o for o, v in (("--goal G1", goal), ("--done-when D", done)) if v is None]
+        try:
+            check_text("done when", done, required=done is not None, cap=quote_max())
+        except Refused as e:                        # a done when given but unusable is named with the missing goal
+            gone.append(e.msg)
+        raise Refused(64, "a focus the session opens names its live goal and when it is done; missing: %s (a focus in the "
+                      "owner's words takes --owner-quote Q --where W)" % ", ".join(gone))
     if (goal is not None) != (letter == "P"):
         raise Refused(64, "a focus points to one goal: --goal G1 (for a focus)")
     if goal is not None and not (goal[:1] == "G" and ID_RE.fullmatch(goal)):
         raise Refused(64, "--goal must name a goal, like G1")
     check_focus_due(letter, focus, due)
-    return dict(SESSION_SOURCE, quote=quote, where=where) if letter in ("P", "R") else dict(SESSION_SOURCE)
+    return dict(SESSION_SOURCE, quote=quote, where=where) if quote is not None else dict(SESSION_SOURCE)
+
+
+def changed(new, was):
+    """A value given that differs from the stored one by more than its spaces and its Unicode form (None: not given, so no
+    change)."""
+    same = lambda v: unicodedata.normalize("NFC", " ".join((v or "").split()))
+    return new is not None and same(new) != same(was)
+
+
+def session_focus(it):
+    """A focus the session opened: one that holds none of the owner's words (every focus an older brain wrote holds them)."""
+    src = it.get("source") if isinstance(it.get("source"), dict) else {}
+    return str(it.get("id", ""))[:1] == "P" and not (isinstance(src.get("quote"), str) and src["quote"])
 
 
 JIRA_RX = re.compile(r"[A-Z][A-Z0-9_]+-[1-9][0-9]*")   # a Jira issue key like ABC-12: the shape of an intent's `jira:` (kb.py)
@@ -3253,8 +3485,8 @@ def check_jira(jira, ok, noun):
 
 
 def check_focus_words(letter, done, not_doing):
-    """A focus's `done when` and `not doing` are the owner's words, whole like the quote (its text guards and `quote_max`); 64
-    on another kind."""
+    """A focus's `done when` and `not doing`, stored whole like the quote (its text guards and `quote_max`): the owner's words
+    on a focus in the owner's words, the session's on one it opened; 64 on another kind."""
     if letter != "P" and (done is not None or not_doing is not None):
         raise Refused(64, "--done-when and --not-doing are for a focus")
     check_text("done when", done, required=done is not None, cap=quote_max())
@@ -3262,19 +3494,19 @@ def check_focus_words(letter, done, not_doing):
 
 
 def check_focus_due(letter, focus, due):
-    """`--focus` names a focus on a Next item, `--due` a day of the calendar on a request (64 otherwise)."""
-    if focus is not None and not (letter == "X" and focus[:1] == "P" and ID_RE.fullmatch(focus)):
-        raise Refused(64, "--focus P1 ties a Next item to a focus (for next only)")
+    """`--focus` names a focus on a Next item or a running session, `--due` a day of the calendar on a request (64 otherwise)."""
+    if focus is not None and not (letter in FOCUSED and focus[:1] == "P" and ID_RE.fullmatch(focus)):
+        raise Refused(64, "--focus P1 ties a Next item or a running session to a focus (for next and session only)")
     if due is not None and not (letter == "R" and parse_day(due)):
         raise Refused(64, "--due YYYY-MM-DD (a day of the calendar) is for a request")
 
 
 def check_points(st, letter, goal=None, focus=None):
-    """A focus points to a live goal, a Next item to a live focus (1 otherwise)."""
+    """A focus points to a live goal, a Next item or a running session to a live focus (1 otherwise)."""
     for iid, want, noun in ((goal, "G", "goal"), (focus, "P", "focus")):
         if iid is not None and (st["items"].get(iid) or {}).get("status") != "live":
             raise Refused(1, "%s is not a live %s: a %s points to one that is" % (
-                iid, noun, "focus" if want == "G" else "Next item"))
+                iid, noun, "focus" if want == "G" else "running session" if letter == "S" else "Next item"))
 
 
 KIND_OF = {v: k for k, v in KINDS.items()}         # an id's letter: its kind's name
@@ -3332,7 +3564,7 @@ def op_add(kind, text, links, anchors, expires, closes=(), quote=None, where=Non
         raise Refused(1, "a %s is an owner item: only `brain owner add`, through the permission dialog, writes one" % kind)
     given, left = ext_options("add", kind, extopts, {"--goal": goal, "--focus": focus, "--due": due})
     goal, focus, due = left["--goal"], left["--focus"], left["--due"]
-    source = layer_args(letter, quote, where, goal, focus, due)
+    source = layer_args(letter, quote, where, goal, focus, due, done)
     check_blocks(letter, blocks)
     check_focus_words(letter, done, not_doing)
     check_jira(jira, letter == "P", "a focus (a goal's goes through `brain owner add`)")
@@ -3375,15 +3607,19 @@ def op_close(iid, reason, pointer, bulk, extopts=None):
     given, _ = ext_options("close", KIND_OF.get(iid[:1]), extopts, {})
 
     def build(d, st, ops):
-        it = get_item(st, iid, OP_LETTERS)
+        it = get_item(st, iid, OP_LETTERS + ("W",))    # a window too: ending it only narrows what the session may do
         if iid[0] == "R" and not pointer:
             raise Refused(1, "a request closes only with --pointer to what answered it (a PR, a SHA, a file, a message): the "
                              "owner asked for it")
-        if not bulk and budget_used(st, session_id(), time.time()) >= BUDGET_N:
+        if iid[0] == "P" and not pointer:
+            raise Refused(1, "a focus closes only with --pointer to what met its done when (a PR, a SHA, a file, a message), "
+                             "or to the owner's words that retired it")
+        if not bulk and iid[0] != "W" and budget_used(st, session_id(), time.time()) >= BUDGET_N:    # ending a window: never budgeted
             raise Refused(1, "retirement budget: %d retirements in 30 minutes already; add --bulk (logged) if this is a "
                              "deliberate sweep" % BUDGET_N)
         n = len(live(st, iid[0]))
-        up = moves_up(st, iid[0], n - 1) if it["status"] == "live" else moves_up(st, iid[0], n, (iid, None))
+        up = ([] if iid[0] in LEFT_LETTERS else moves_up(st, iid[0], n - 1) if it["status"] == "live"
+              else moves_up(st, iid[0], n, (iid, None)))
         op = {"op": "close", "id": iid, "reason": reason, "pointer": pointer, "bulk": bulk}
         if up:
             op["promote"] = up
@@ -3432,10 +3668,19 @@ def revoke_charters(focus):
 
 
 def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(), focus=None, due=None, extopts=None,
-                 done=None, not_doing=None, blocks=None):
+                 done=None, not_doing=None, blocks=None, quote=None, where=None):
     """A supersede of an S or Q item (a session's next step, a queue item's state) is status, not a decision: it spends no
     retirement budget and may shrink (spec R4 point 1); it still keeps every anchor. A focus or a request keeps the owner's
-    words byte for byte (and a focus its goal); a request may change its due day, a Next item its focus."""
+    words byte for byte (and a focus its goal), unless a focus's carries the owner's newer words (`quote` and `where`); a
+    request may change its due day, a Next item or a running session its focus. A focus's text never carries progress: a
+    supersede that changes only its text is refused."""
+    if (quote is not None or where is not None) and iid[:1] != "P":
+        raise Refused(64, "--owner-quote and --where on a supersede are for a focus the owner restated")
+    if (quote is None) != (where is None):
+        raise Refused(64, "the owner's newer words of a focus go together: --owner-quote Q (verbatim) and --where W")
+    if quote is not None:
+        check_text("quote", quote, cap=quote_max())
+        check_text("where", where)
     status = iid[:1] in STATUS_LETTERS
     given, left = ext_options("supersede", KIND_OF.get(iid[:1]), extopts, {"--focus": focus, "--due": due})
     focus, due = left["--focus"], left["--due"]
@@ -3454,6 +3699,13 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
     def build(d, st, ops):
         old = get_item(st, iid, OP_LETTERS)
         check_points(st, iid[0], focus=focus)
+        src = old.get("source") if isinstance(old.get("source"), dict) else {}
+        if iid[0] == "P" and text != old["text"] and not any(changed(new, was) for new, was in (
+                (done, old.get("done")), (not_doing, old.get("not_doing")), (quote, src.get("quote")))):
+            raise Refused(1, "a focus's text names its wave and never carries progress: progress is a Now item (brain op add "
+                             "--kind now). A supersede of a focus changes its --done-when or --not-doing, or carries the "
+                             "owner's newer words (--owner-quote Q --where W); to rename the wave, close it with --pointer and "
+                             "open a new focus")
         missing = [a for a in drop if a not in old.get("anchors", [])]
         if missing:
             raise Refused(1, "%s holds no anchor %r to drop" % (iid, missing[0]))
@@ -3475,8 +3727,10 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
             raise Refused(1, "retirement budget: %d retirements in 30 minutes already; add --bulk (logged) if this is a "
                              "deliberate sweep" % BUDGET_N)
         nid = next_id(st, iid[0])
-        # the owner's words of a focus or a request go over byte for byte: a supersede rewrites the session's line only
-        source = dict(old["source"]) if iid[0] in ("P", "R") else dict(SESSION_SOURCE)
+        # the owner's words of a focus or a request go over byte for byte: a supersede rewrites the session's line only,
+        # unless it carries the owner's newer words of a focus
+        source = (dict(SESSION_SOURCE, quote=quote, where=where) if quote is not None
+                  else dict(old["source"]) if iid[0] in ("P", "R") else dict(SESSION_SOURCE))
         item = {"id": nid, "kind": old["kind"], "pinned": False, "text": text, "source": source,
                 "expires": old.get("expires"), "links": old.get("links", []), "anchors": anchors, "supersedes": iid}
         if closes:
@@ -3493,19 +3747,19 @@ def op_supersede(iid, text, reason, drop, add_anchors, shorter, bulk, closes=(),
         op = {"op": "supersede", "id": iid, "item": item, "reason": reason, "drop": drop, "shorter": shorter, "bulk": bulk}
         n = len(live(st, iid[0]))
         up = moves_up(st, iid[0], n, (iid, nid) if old["status"] == "queued" else None)
-        where = ""
+        placed = ""
         if old["status"] == "queued" and nid not in up:
             op["queued"] = True                     # the successor keeps the old item's place in the queue
-            where = " (queued in its place)"
+            placed = " (queued in its place)"
         up = [x for x in up if x != nid]
         if up:
             op["promote"] = up
         kept = "\ncloses carried: %s" % ", ".join(carried) if carried and not new_closes else ""
-        mine = [text, reason, done, not_doing, blocks] + anchors     # every text of this op: the extension and the filter see the same
+        mine = [text, reason, done, not_doing, blocks, quote, where] + anchors   # every text of this op, for both checks
         texts, notes = ext_check("supersede", old["kind"], given, op, d, st, ops, mine)
         ended = charters_end(iid, d, mine + texts)  # a superseded focus ends too
         return op, mine + texts, "superseded %s with %s%s%s%s%s%s%s%s" % (
-            iid, nid, where, moved(up), kept, seen, anchor_warning(iid[0], anchors), notes_text(notes), ended), None
+            iid, nid, placed, moved(up), kept, seen, anchor_warning(iid[0], anchors), notes_text(notes), ended), None
     return write(build, ops_too=True)
 
 
@@ -3629,11 +3883,14 @@ def op_link(iid, closes):
     return write(build)
 
 
-def op_evidence(rule, result, pointer, differed=None, session=None, via=None, extopts=None, as_pr=None, machine=False):
+def op_evidence(rule, result, pointer, differed=None, session=None, via=None, extopts=None, as_pr=None, machine=False,
+                proof=False):
     """`brain op held|broke RULE` and a trap's `brain op hit`: one `evidence` op. RULE is a live D, T or F item or a SOUL code;
     `session` a session item, recorded as the root of its chain, or else `as_pr` (`pr:owner/name#n`, brain op merge-evidence)
     stored as it is. A `machine` write (merge-evidence, from worker text) is refused (1) when the rule already has this result
-    from this pointer (a hit is a held), and for a SOUL code no owner step promoted, or one demoted since."""
+    from this pointer (a hit is a held), and for a SOUL code not live (soul_codes), as is any write for one in a child of a
+    parent SOUL, whose live codes are its file's. `proof` (merge-evidence's held from an answer the post-check accepted) is
+    stored when given."""
     import brain_ledger as L
     kind, value = L.rule_arg(rule, hit=via == "hit")
     check_text("pointer", pointer, required=via != "hit")
@@ -3646,14 +3903,14 @@ def op_evidence(rule, result, pointer, differed=None, session=None, via=None, ex
         op = {"op": "evidence", "result": result, "soul" if kind == "soul" else "id": value}
         if kind == "id":
             L.check_rule_item(st, value, hit=via == "hit")
-        op.update({k: v for k, v in (("pointer", pointer), ("differed", differed), ("via", via)) if v})
+        op.update({k: v for k, v in (("pointer", pointer), ("differed", differed), ("via", via), ("proof", proof)) if v})
         if session is not None:
             op["session"] = L.check_session(st, session)
         elif as_pr:
             op["session"] = as_pr
         key = "[%s]" % value if kind == "soul" else value
-        if machine and kind == "soul" and value not in L.soul_live(ops):
-            raise Refused(1, "%s is not a SOUL code an owner step promoted (or it was demoted)" % key)
+        if kind == "soul" and (machine or L.parent_soul()) and value not in L.soul_codes(ops):   # a parent SOUL: its file's
+            raise Refused(1, L.not_live(key))
         if machine and any(e["result"] == result and e["pointer"] == pointer
                            for e in (L.read(ops).get(key) or {}).get("events", [])):
             raise Refused(1, "%s has a %s from %s already" % (key, result, pointer))
@@ -3706,6 +3963,50 @@ def claim(takeover):
 GOAL_FIELDS = ("done", "not_doing", "review", "scope")     # a goal's own fields, after the text, the quote and the where
 SCOPES = ("global", "project")
 FIELDS_FOR = "--done, --not-doing and --review are for a goal, --scope for a goal or a decision"
+# A window's scope: what vibemaestro-sdlc's baton runner may sign as coordinator-auto while the window is live, for the
+# session that pinned it. The runner holds the same lists (baton.py WINDOW_*) and is what enforces them; here they refuse a scope
+# the runner would never honour, before the dialog. A window with no --lower lowers nothing.
+WINDOW_LOWERS = ("security-boundary", "publish", "no-way-back", "owner-acts", "recoverable-delete")
+WINDOW_NEVER = ("secrets", "cluster-lane", "irreversible-delete", "history-rewrite", "money-org")
+WINDOW_NEVER_BATONS = ("kit:bootstrap", "kit:coordinator-bootstrap", "kit:permissions-upgrade", "kit:plugin-install",
+                       "kind:settings-merge")
+WINDOW_LIFE_MAX = 24 * 3600
+WINDOW_KIT = re.compile(r"kit:[a-z0-9][a-z0-9-]{0,63}\Z")     # baton.py KIT_RE and KEPT_NAME_MAX
+WINDOW_WORDS_MAX = 8                                # each of --lower and --exclude: the dialog stays a phone's few lines
+WINDOW_NEVER_SHOWN = "%s, a change to the machine's permissions or to who signs" % ", ".join(WINDOW_NEVER)
+WINDOW_NEVER_WHY = "%s, %s, or a call naming a Claude Code settings file" % (", ".join(WINDOW_NEVER), ", ".join(WINDOW_NEVER_BATONS))
+
+
+def window_scope_check(ns):
+    """Refuse (1 or 64) a window's --lower and --exclude words the runner would never read, and a scoped window longer than a day."""
+    lower, exclude = getattr(ns, "lower", None) or [], getattr(ns, "exclude", None) or []
+    if not lower and not exclude:
+        return
+    if ns.kind != "window":
+        raise Refused(64, "--lower and --exclude are for a window")
+    if not lower:
+        raise Refused(64, "--exclude narrows a window's --lower: a window with no --lower lowers nothing")
+    for flag, words in (("--lower", lower), ("--exclude", exclude)):
+        if len(set(words)) != len(words) or len(words) > WINDOW_WORDS_MAX:
+            raise Refused(1, "%s names a word twice, or more than %d words" % (flag, WINDOW_WORDS_MAX))
+        for w in words:
+            if flag == "--lower" and (w in WINDOW_NEVER or w in WINDOW_NEVER_BATONS):
+                raise Refused(1, "--lower %s: a window never lowers %s" % (w, WINDOW_NEVER_WHY))
+            ok = w in WINDOW_LOWERS or WINDOW_KIT.match(w) or flag == "--exclude" and w in WINDOW_NEVER
+            if not ok:
+                raise Refused(1, "%s %s: a window names a stop category it may lower (%s) or a kit baton (kit:<name>)" % (
+                    flag, printable(w), ", ".join(WINDOW_LOWERS)))
+    ts = parse_iso(ns.expires or "")
+    if ts is not None and ts > time.time() + WINDOW_LIFE_MAX:
+        raise Refused(1, "a window with --lower lasts at most %d hours: --expires %s is later" % (WINDOW_LIFE_MAX // 3600, ns.expires))
+
+
+def window_scope_line(item):
+    """What a window's line says of its signing: its scope, or that it lowers none."""
+    if not item.get("lowers"):
+        return "lowers no signing"
+    return "lowers signing for this session only: %s; never: %s%s" % (
+        ", ".join(item["lowers"]), WINDOW_NEVER_SHOWN, "; excluded: " + ", ".join(item["excludes"]) if item.get("excludes") else "")
 DECISION_KIND = "a lasting direction, never done"   # what a decision is, in the dialog after its id: from the kind, never the text
 
 
@@ -3720,7 +4021,7 @@ def owner_add_line(item):
         return 'Pin owner decision %s (%s)%s, from "%s": "%s"' % (iid, DECISION_KIND, " (scope %s)" % item["scope"]
                                                                  if item.get("scope") else "", w, item["text"])
     until = now_iso(parse_iso(item["expires"]))[5:16].replace("T", " ") + "Z"
-    return 'Grant window %s until %s, from "%s": "%s"' % (iid, until, w, item["text"])
+    return 'Grant window %s until %s, from "%s", %s: "%s"' % (iid, until, w, window_scope_line(item), item["text"])
 
 
 # --- the SOUL line of an owner step -----------------------------------------------------------------------------------------
@@ -3748,6 +4049,10 @@ def soul_line_of(value, action):
     path = conf().get("soul_file")
     if not path:
         raise Refused(1, "--soul-line needs soul_file in %s: the file that holds the SOUL lines" % CONFIG_FILE)
+    import brain_ledger as L
+    if L.parent_soul():
+        raise Refused(1, "soul_file %s is a parent SOUL, read-only here: only the brain of its directory changes its lines"
+                      % printable(path))
     full = os.path.realpath(path if os.path.isabs(path) else os.path.join(config_root(), path))
     if printable(full) != full or quote_like(full):
         raise Refused(1, "soul_file resolves to a path with a character the dialog cannot show plainly: name it in plain "
@@ -3826,7 +4131,7 @@ def owner_line(ns, st, ops=(), d=None, session=None):
         check_cap(st, letter)                       # at a left cap: refused here, so the owner never approves a refused write
         item = {"id": next_id(st, letter), "text": ns.text, "source": {"where": ns.where}, "expires": ns.expires,
                 "review": ns.review, "scope": ns.scope, "done": ns.done, "not_doing": ns.not_doing,
-                "jira": getattr(ns, "jira", None)}
+                "jira": getattr(ns, "jira", None), "lowers": getattr(ns, "lower", None), "excludes": getattr(ns, "exclude", None)}
         return owner_add_line(item)
     if ns.verb not in ("unpin", "supersede", "promote"):
         import brain_ext
@@ -3868,6 +4173,8 @@ def owner_op(st, ops, verb, ns, confirm):
                 item["jira"] = ns.jira
         elif letter == "D" and getattr(ns, "scope", None):
             item["scope"] = ns.scope
+        elif letter == "W" and getattr(ns, "lower", None):    # the session the runner lowers signing for, and only that one
+            item.update({"lowers": list(ns.lower), "excludes": list(ns.exclude or []), "session": session_id()})
         texts = [ns.text, ns.owner_quote, ns.where, getattr(ns, "done", None), getattr(ns, "not_doing", None)]
         return {"op": "owner-add", "item": item, "confirm": confirm}, texts + ns.link + ns.anchor, "pinned %s%s%s" % (
             iid, "\n" + warn if warn else "", anchor_warning(letter, ns.anchor))
@@ -3901,6 +4208,15 @@ def owner_op(st, ops, verb, ns, confirm):
     return ({"op": "owner-supersede", "id": ns.id, "item": item, "reason": "superseded by the owner", "confirm": confirm},
             texts, "superseded %s with %s%s" % (ns.id, nid, anchor_warning(ns.id[0], item["anchors"])))
 
+def stored_lines(item):
+    """The item an owner write stored, a `field: value` line each (id, kind, text, the owner's words, a window's expiry): the
+    result lands in the model's context the moment the dialog returns, the only place a mid-session pin reaches it."""
+    quote = (item.get("source") or {}).get("quote")
+    rows = [("id", item["id"]), ("kind", item["kind"]), ("text", item["text"]), ("quote", quote)]
+    rows += [("expires", item.get("expires"))] if item["kind"] == "window" else []
+    return "\n".join("%s: %s" % r for r in rows if r[1] is not None)
+
+
 def ext_verb(verb):
     """The extension that adds the owner verb `verb`, and its spec; (None, None) for brain's own verbs."""
     if verb in ("add", "unpin", "supersede", "promote", "import", "backup", "batch") or not extensions():
@@ -3927,11 +4243,14 @@ def owner(args, verb, ns):
         else:
             op, texts, msg = owner_op(st, ops, verb, ns, confirm)
             out = op, texts, msg, after
+        if out[0]["op"] == "ext" and rec.get("plan") != ext_digest(out[0]["ext"], out[0]["what"], out[0]["data"]):
+            raise Refused(6, "%s's op is not the one the dialog showed: nothing written; ask the owner again" % out[0]["ext"])
         sl = out[0].get("soul_line")
         if sl and rec.get("plan") != soul_digest(sl):
             raise Refused(6, "the SOUL line's text or file (soul_file %s) is not the one the dialog showed: nothing written; "
                              "ask the owner again" % printable(sl["file"]))
         written["soul_line"] = sl
+        written["item"] = out[0].get("item")
         return out
 
     if verb == "batch":
@@ -3945,21 +4264,39 @@ def owner(args, verb, ns):
     msg = write(build, ops_too=True)
     if written.get("soul_line"):                    # the step is in the log: the baton carries it out, outside the lock
         msg += "\n" + run_soul_line(written["soul_line"])
+    if written.get("item"):                         # last, so no line it had moves; unpin and promote store no text
+        msg += "\n" + stored_lines(written["item"])
     return msg
+
+
+def ext_digest(name, what, data):
+    """What the owner's record binds of an extension's owner op: the op the dialog showed, which the write must equal."""
+    return digest(dumps({"ext": name, "what": what, "data": data}))
 
 
 def ext_owner(ns, d, st, ops, confirm, after):
     """An extension's owner verb, once the record matched: brain's checks, then the extension's (its refusal, or its data),
     then brain's own write. `pin` pins a decision as `brain owner add --kind decision` does; `archive` moves a live item of the
-    verb's letters out to the pointer, as `brain owner promote` does, a lesson or a fact making room for its queue."""
+    verb's letters out to the pointer, as `brain owner promote` does, a lesson or a fact making room for its queue; `op` writes
+    the extension's own op (`ext`, its `what` the verb) with the data it answered, the one the dialog showed."""
     import brain_ext
+    import brain_ledger as L
     _, spec = brain_ext.owner_verb(ns.verb)
+    if spec["effect"] == "op":
+        e, spec, data = brain_ext.owner_write(ns, d, st, ops)
+        op = {"op": "ext", "ext": e["name"], "what": ns.verb, "data": data, "confirm": confirm}
+        return (op, [getattr(ns, "ext_arg_" + a) for a in spec["args"]] + brain_ext.strings(data),
+                "wrote %s's op %s" % (e["name"], ns.verb), after)
     if spec["effect"] == "pin":
         warn = check_cap(st, "D")
         iid = next_id(st, "D")
     else:
         get_live(st, ns.id, spec["letters"])
     e, spec, data = brain_ext.owner_write(ns, d, st, ops)
+    gone = data.get("demoted_from") if spec["effect"] == "pin" and isinstance(data, dict) else None
+    if isinstance(gone, str) and gone in L.parent_codes():
+        raise Refused(1, "[%s] is a code of the parent SOUL file %s, read-only here: only the brain of its directory demotes it"
+                      % (gone, clean_line(conf().get("soul_file"))))
     ext = {e["name"]: data} if isinstance(data, dict) else {}
     texts = brain_ext.strings(data) if ext else []
     sl = soul_line_of(getattr(ns, "soul_line", None), "remove" if spec["effect"] == "pin" else "add")
@@ -4031,6 +4368,7 @@ def owner_check(verb, ns):
                 raise Refused(1, "--expires %s has already passed" % ns.expires)
         elif ns.expires is not None:
             raise Refused(64, "--expires is for a window")
+        window_scope_check(ns)
     elif verb == "supersede":
         if [k for k in given if ns.id[:1] != "G" and (k != "scope" or ns.id[:1] != "D")]:
             raise Refused(64, FIELDS_FOR)
@@ -4045,6 +4383,9 @@ def owner_check(verb, ns):
         if sl and verb == "promote" and pointer_code(ns.pointer) != sl["code"]:
             raise Refused(1, "--soul-line names [%s]: the pointer names that one code, like \"CLAUDE.md [%s]\"" % (sl["code"],
                                                                                                              sl["code"]))
+    elif spec and spec["effect"] == "op":          # an extension's op: only its own values
+        for field, value in args:
+            check_text(field, value)
     elif spec:                                      # an extension's pin: a decision's fields, and its own values
         soul_line_of(get("soul_line"), "remove")
         for field, value in args:
@@ -4202,7 +4543,7 @@ def owner_batch(args, ns):
         warn = caches_after_append(d, st, raw)
         with contextlib.suppress(OSError):
             os.unlink(path)
-    return "; ".join(done) + warn
+    return "; ".join(done) + warn + "".join("\n" + stored_lines(op["item"]) for op, _, _ in built if "item" in op)
 
 
 def goal_check(ns):
@@ -4240,11 +4581,31 @@ def show(iid, as_json=False):
     lines = ["%s: %s" % (k, val(it.get(k))) for k in first]
     lines += ["%s: %s" % (k, val(src[k])) for k in ("quote", "where") if src.get(k) is not None]
     lines += ["source: %s" % ("session" if src.get("type") == SESSION_SOURCE["type"] else val(src.get("type")))]
+    if iid[0] == "P":
+        lines.append("opened: %s" % ("by the session" if session_focus(it) else "in the owner's words"))
     lines += provenance_lines(it)
     if iid[0] == "D" and it.get("scope") is None:
         lines.append("scope: project (none stored)")
     lines += ["%s: %s" % (k, val(it[k])) for k in sorted(it) if k not in first + ("source", "import")]
     return "\n".join(lines)
+
+
+def windows(as_json=False):
+    """`brain windows`: the live windows, folded under the lock from the log once its whole chain is verified (rc 5 when it is
+    broken), never from a cache (a cache's digest is no signature), with the newest time of any op (`last_t`): vibemaestro-sdlc's
+    baton refuses to lower signing on a clock behind it. One line each without --json."""
+    d = state_dir()
+    if not os.path.isdir(d):
+        raise Refused(1, "no brain state for this project yet")
+    with locked(d):
+        ops = verify(d)[1]
+    st = fold(ops)
+    ws = [dict(it, id=iid) for iid, it in sorted(st["items"].items()) if iid[0] == "W" and it["status"] == "live"]
+    newest = max((t for t in (parse_iso(o.get("t")) for o in ops) if t is not None), default=None)
+    if as_json:
+        return dumps({"windows": ws, "last_t": now_iso(newest) if newest is not None else None})
+    return "\n".join("%s until %s · %s: %s" % (w["id"], w.get("expires"), window_scope_line(w), clean_line(w["text"])) for w in ws
+                     ) or "no live window"
 
 
 def provenance_lines(it):
@@ -4426,7 +4787,8 @@ def format_lines(d, now=None):
             out.append(("warn", "session %s… last started on an older brain (log format %d, this one writes %d): restart it on "
                                 "this version (after /reload-plugins, any `brain` command in it clears this), since an older brain refuses to write to a log that holds a goal, focus, request, "
                                 "session, queue or fact item, an item closed by a link, closes added later (link), a queued item, or a held, broke, "
-                                "progress or demotion entry, and stops injecting hot memory whenever it must read the log "
+                                "progress or demotion entry, an owner's SOUL code step or an extension's own op, and stops "
+                                "injecting hot memory whenever it must read the log "
                                 "again" % (sid[:8], n, FORMAT)))
     return out
 
@@ -4490,6 +4852,17 @@ def _older_blocks(md, st, seq):
     return render_key(md, st) == [l for l in render_key(render_all(st), st) if not l.startswith("  blocks: ")]
 
 
+def _older_focus(md, st, seq):
+    """hot.md is the render of this very state, at the head's version, by a brain before the focus rule (`older_focus`), when
+    the state holds a focus the session opened or a running session tied to a focus."""
+    v = _MD_VERSION.match(md)
+    if not v or int(v.group(1)) != seq or not any(session_focus(it) or (it["id"][0] == "S" and it.get("focus"))
+                                                  for it in st["items"].values()):
+        return False
+    with older_focus():
+        return render_key(md, st) == render_key(render_all(st), st)
+
+
 def _older_rules_render(md, st, seq):
     """hot.md is the render of this very state, at the head's version, by an older brain (`older_rules`)."""
     v = _MD_VERSION.match(md)
@@ -4502,7 +4875,7 @@ def _older_rules_render(md, st, seq):
 def worst_case(now=None):
     """The strings SessionStart would need with every section of this store at its configured cap, every text at its cap with
     eight links, every quote of the owner's words at the quote cap, a goal's done and not-doing lines full, every request due
-    soon, every Next item tied to a focus, Done full: (strings, the most units in one)."""
+    soon, every Next item and running session tied to a focus, Done full: (strings, the most units in one)."""
     now = time.time() if now is None else now
     st, t = empty_state(), now_iso(now)
     soon = today(now + 86400 * 3).isoformat()
@@ -4514,7 +4887,7 @@ def worst_case(now=None):
                   "source": {"type": "owner", "quote": "q" * quote_max(), "where": "w" * 60},
                   "expires": now_iso(now + 86400 * 9) if letter == "W" else None}
             extra = {"G": {"done": "d" * 200, "not_doing": "n" * 200, "review": soon, "scope": "project"},
-                     "D": {"scope": "global"}, "P": {"goal": "G1"}, "R": {"due": soon}, "X": {"focus": "P1"},
+                     "D": {"scope": "global"}, "P": {"goal": "G1"}, "R": {"due": soon}, "X": {"focus": "P1"}, "S": {"focus": "P1"},
                      "Q": {"blocks": "b" * FIELD_MAX["blocks"]}}
             it.update(extra.get(letter, {}))
             st["items"][it["id"]] = it
@@ -4561,6 +4934,7 @@ def ext_doctor(d, st, ops):
 def doctor():
     """[(level, text)] with level ok | warn | problem | info."""
     out = config_lines()
+    out += path_lines()
     d = state_dir()
     if not os.path.isdir(d):
         out.append(("info", "no brain state for this project yet"))
@@ -4585,7 +4959,8 @@ def doctor():
                                                  or _older_layout(md, st, head["seq"], _caps_of(d))
                                                  or _older_tags(md, st, head["seq"])
                                                  or _older_rules_render(md, st, head["seq"])
-                                                 or _older_blocks(md, st, head["seq"])) else
+                                                 or _older_blocks(md, st, head["seq"])
+                                                 or _older_focus(md, st, head["seq"])) else
                            ("warn", "hot.md was rendered under other caps or lengths (%s changed); `brain render` rewrites "
                                     "it, and so does the next write" % CONFIG_FILE) if _rendered_then(md, st, _caps_of(d)) else
                            ("problem", "hot.md does not match a fresh render of the log: it was edited or is stale"))

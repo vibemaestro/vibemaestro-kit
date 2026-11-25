@@ -113,10 +113,9 @@ fam_grammar() {
   cp -r "$P" "$W/plug"; sed -i '/^# Usage:/d' "$W/plug/batons/merge-pr.sh"
   eq "$(bt "$W/plug" "$W" check kit:merge-pr)" 1 "[grammar] a kit with neither Usage nor Params: check rc 1"
   has "$(out)" "declares Usage (its flags) or Params" "[grammar] …named"
-  local k; for k in merge-pr gh-write branch-push workflow-dispatch bootstrap; do
+  local k; for k in merge-pr gh-write branch-push branch-delete workflow-dispatch bootstrap; do
     eq "$(bt "$P" "$W" check "kit:$k")" 0 "[grammar] kit:$k declares Usage and passes check"
   done
-  eq "$(bt "$P" "$W" check kit:branch-delete)/$(grep -c '^# Params: ' "$P/batons/branch-delete.sh")" "0/1" "[grammar] kit:branch-delete declares Params and passes check"
   for k in install-file settings-merge ci-rerun-failed; do eq "$(bt "$P" "$W" check "kind:$k")" 0 "[grammar] kind:$k declares Usage and passes check"; done
 }
 
@@ -633,13 +632,10 @@ PY
     bt "$P" "$W" list "$k" >/dev/null; len=$(wc -c < "$BT_OUT")
     [ "$len" -le 1537 ] && ok "[list] the entry of $k is at most 1536 bytes ($len)" || bad "[list] the entry of $k is at most 1536 bytes ($len)"
     hasnt "$(out)" "…" "[list] …uncut"
-    case "$k" in
-      kit:branch-delete) has "$(out)" "  Params:  repo=repo branch=ref head=sha40" "[list] …with its Params" ;;
-      *) has "$(out)" "  Usage:" "[list] …with its Usage" ;;
-    esac
+    has "$(out)" "  Usage:" "[list] …with its Usage"
   done
   bt "$P" "$W" list kit:branch-delete >/dev/null
-  has "$(out)" "  Params:  repo=repo branch=ref head=sha40" "[list] a keyword that is one baton's full name, among several that match: that baton's whole entry"
+  has "$(out)" "  Usage:   repo=<owner/name> [clone=<absolute path>] branch=<name> head=<sha40>" "[list] a keyword that is one baton's full name, among several that match: that baton's whole entry"
   hasnt "$(out)" "kit:branch-delete-recoverable" "[list] …not the other that matches (kit:branch-delete-recoverable)"
   bt "$P" "$W" list branch-delete >/dev/null
   has "$(out)" "kit:branch-delete-recoverable  " "[list] a keyword several match and none is named by: one line each, the recoverable kit's"

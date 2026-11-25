@@ -7,8 +7,8 @@ at SessionStart:compact only (BRAIN_TEST_SOURCES), arm C with BRAIN_OFF=1, so th
 compact the fork (method 1: a neutral turn with CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000; method 2: `/compact`); then ask the 10
 questions in a second process, brain off and no tools in both arms; grade by script. Every session is hermetic (--plugin-dir
 this checkout's brain and, next to it, this checkout's sdlc, which the brain's manifest depends on and which Claude Code does
-not load for the brain otherwise under --setting-sources project,local; the sdlc runs silent, `hooks: off` in the scratch
-project; --setting-sources project,local, --strict-mcp-config, --settings with this directory's logger hooks, scratch
+not load for the brain otherwise under --setting-sources project,local; the sdlc runs silent, a scratch copy of it with no
+hooks (`hooks: off` would silence the brain too); --setting-sources project,local, --strict-mcp-config, --settings with this directory's logger hooks, scratch
 XDG_STATE_HOME and project, auto memory off). A run whose evidence does not hold is void, never scored. The probe set is
 never tuned after seeing results.
 rc 0 PASS, 1 FAIL, 2 stopped or void, 3 the control also reached 10/10 ("not shown necessary at this size").
@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 BRAIN = os.path.join(ROOT, "plugins", "vibemaestro-brain")
 SDLC = os.path.join(ROOT, "plugins", "vibemaestro-sdlc")
-PLUGIN_DIRS = [BRAIN, SDLC]             # every session loads both, in both arms: the brain's manifest depends on the sdlc
+PLUGIN_DIRS = [BRAIN, SDLC]             # the two manifests that must satisfy each other; a session loads the brain and a silent copy of the sdlc
 sys.path.insert(0, os.path.join(BRAIN, "scripts"))
 import brain_cost  # noqa: E402
 
@@ -45,9 +45,8 @@ NEEDED = ("--print", "--output-format", "--resume", "--fork-session", "--plugin-
 PLANT_ENV = {"BRAIN_OFF": "1"}
 H_ENV = {"BRAIN_TEST": "1", "BRAIN_TEST_SOURCES": "compact"}
 # a fixed phrase from each of the sdlc's two SessionStart texts (about 11,000 characters together, the same for every
-# source); the preflight stops when either is in its own transcript, i.e. when `hooks: off` did not silence the sdlc
+# source); the preflight stops when either is in its own transcript, i.e. when the scratch copy's empty hooks did not silence the sdlc
 SDLC_PHRASES = ("The general way of working (read from the plugin at session start", "The work flow in an app repo")
-SDLC_OFF = {"hooks": "off"}             # <scratch project>/.vibemaestro/sdlc.json, the same for every session and both arms
 QMARK = "brain-probe questions"
 STEP = "(brain-probe compaction step) Reply with exactly: ready"
 PREFLIGHT_Q = ("Which commit does this project's preflight decision name? Reply with the 7-character commit only, or "
@@ -252,7 +251,7 @@ class Claude(object):
     def run(self, prompt, run, extra_env, extra_args, label, model=None):
         a = self.ctx.a
         args = [self.ctx.bin, "-p", prompt, "--output-format", "json"]
-        for d in PLUGIN_DIRS:
+        for d in self.ctx.plugin_dirs:
             args += ["--plugin-dir", d]
         args += ["--settings", run.settings, "--strict-mcp-config"]
         if not a.keep_user_settings:
@@ -303,9 +302,6 @@ class Run(object):
         os.makedirs(self.state)
         if shutil.which("git"):
             subprocess.run(["git", "init", "-q", self.project], capture_output=True)
-        os.makedirs(os.path.join(self.project, ".vibemaestro"))
-        with open(os.path.join(self.project, ".vibemaestro", "sdlc.json"), "w", encoding="utf-8") as f:
-            json.dump(SDLC_OFF, f)
         cmd = "%s %s" % (sys.executable, os.path.join(HERE, "log_hook.py"))
         hook = [{"hooks": [{"type": "command", "command": cmd, "timeout": 30}]}]
         with open(self.settings, "w", encoding="utf-8") as f:
@@ -417,7 +413,7 @@ def check_dependencies(plugin_dirs=None):
 
 def preflight(ctx):
     say("preflight")
-    check_dependencies()
+    check_dependencies(ctx.plugin_dirs)
     try:
         h = subprocess.run([ctx.bin, "--help"], capture_output=True, text=True, timeout=60).stdout
     except (OSError, subprocess.SubprocessError) as e:
@@ -440,8 +436,8 @@ def preflight(ctx):
     seen = open(tr, encoding="utf-8", errors="replace").read()
     loud = [p for p in SDLC_PHRASES if p in seen]
     if loud:
-        raise Stop("preflight: the sdlc plugin's SessionStart text is in the preflight transcript (%r): `hooks: off` in the scratch "
-                   "project's .vibemaestro/sdlc.json did not silence it, so every session would carry about 11k extra characters "
+        raise Stop("preflight: the sdlc plugin's SessionStart text is in the preflight transcript (%r): the scratch "
+                   "copy of the sdlc, whose hooks/hooks.json is empty, did not silence it, so every session would carry about 11k extra characters "
                    "and the context at the fork would move" % loud[0])
     starts = [e for e in run.episodes() if e.get("kind") == "session-start" and e.get("session") == sid]
     if len(starts) != 1:
@@ -677,7 +673,7 @@ Sessions: `claude -p --output-format json --plugin-dir <this checkout's brain> -
 XDG_STATE_HOME, the same plugin directories in every session and both arms (preflight, plant, filler, both forks, compaction,
 questions). The sdlc is there because the brain's plugin.json depends on it: under --setting-sources project,local the installed
 one is not enabled, so without it Claude Code refuses to load the brain (dependency-unsatisfied, no hook runs; measured 2.1.303).
-The scratch project holds `.vibemaestro/sdlc.json` {"hooks": "off"}, so the sdlc is loaded and silent.
+The sdlc given is a scratch copy of this checkout's with an empty hooks/hooks.json (`hooks: off` in the scratch project would silence the brain too), so it is loaded and silent.
 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1; INTENT_SLUG, SEAT, BRAIN_OFF, CLAUDECODE, DISABLE_COMPACT and DISABLE_AUTO_COMPACT are dropped.
 Preflight (once, Haiku, about a minute): before anything is spent, the brain's plugin.json dependencies are each given by a
 --plugin-dir of this checkout at a version in the range; `claude --help` lists the flags; one turn: logged in, the logger fires,
@@ -696,7 +692,7 @@ block or got one anywhere else; a fork already used; a session with no transcrip
 sdlc silenced, not left active (measured on sdlc 2.28.0 in a scratch project): its SessionStart hooks print 11,276
 characters (about 3k tokens) at every session start, `--resume` ones included, and the transcript keeps each; over the 32 sessions
 that share the history that is about 95k extra tokens at the fork and about 1.8M extra tokens per run (about 4.3M in all), and
-the history at the fork would pass 200k. No hook writes a file; `hooks: off` makes all of them print nothing, so none of this is
+the history at the fork would pass 200k. No hook writes a file; the copy's empty hooks make all of them print nothing, so none of this is
 in the estimate below.
 Cost of one run (estimate, not yet measured): about 2.5M tokens processed (about 2.25M cache read, 180k cache write, 17k output,
 up to 300k uncached input), about 0.6-0.85M base-input units at A's weights; 9-13 minutes. --runs 3: 30-45 minutes.
@@ -707,6 +703,17 @@ or a block is cut -> FAIL (rc 1); C reaches 10/10 -> rc 3, reported as is; stopp
 
 class Ctx(object):
     pass
+
+
+def silent_sdlc(work):
+    """A scratch copy of this checkout's sdlc with no hooks, in <work>/sdlc-silent: loaded, so the brain's dependency is met, and
+    silent. The sdlc's own switch (`hooks: off`) is not used: the brain follows it too."""
+    dest = os.path.join(work, "sdlc-silent")
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(SDLC, dest, ignore=shutil.ignore_patterns("__pycache__"))
+    with open(os.path.join(dest, "hooks", "hooks.json"), "w", encoding="utf-8") as f:
+        json.dump({"description": "the probe's silent copy of the sdlc: no hooks", "hooks": {}}, f)
+    return dest
 
 
 def main(argv):
@@ -743,6 +750,7 @@ def main(argv):
     ctx.runs = []
     ctx.work = os.path.abspath(a.work) if a.work else tempfile.mkdtemp(prefix="brain-probe-")
     os.makedirs(ctx.work, exist_ok=True)
+    ctx.plugin_dirs = [BRAIN, silent_sdlc(ctx.work)]
     default = a.filler_turns == FILLER_TURNS and a.filler_kb == FILLER_KB and a.runs == EXIT_RUNS
     results, rc, lines = [], 0, []
     try:

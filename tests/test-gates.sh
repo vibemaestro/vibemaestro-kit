@@ -463,7 +463,7 @@ fam_dependent() {
   want 0 "[D] --update replaces a stale copy of the dependent's gate" "replaced         .vibemaestro/gates/demo_gate.py"
   has "$OUT" "kept             .github/workflows/demo.yml" "[D] …and keeps its workflow"
   RC=0; OUT=$(ig --root "$r" --only nope 2>&1) || RC=$?
-  want 64 "[D] an unknown gate names the dependent's among the known" "commit-discipline, pr-sensitive, pr-title, pr-body, pr-evidence, dead-branches, signing-rules, demo)"
+  want 64 "[D] an unknown gate names the dependent's among the known" "commit-discipline, pr-sensitive, pr-title, pr-body, pr-evidence, dead-branches, signing-rules, kb-check, demo)"
   # refusals: each bad declaration is rc 65, before anything is written, whatever --only names
   local P d2
   decl() {  # decl <label> <needle> <install.json text> [more registry entries] — a copy of the fixture with that declaration

@@ -74,7 +74,7 @@ eq "$(cmp -s "$SDLC/scripts/pyrun.sh" "$BRAIN/scripts/pyrun.sh" && echo same)" s
 echo "== [P1] no Python: no hook fails, one line per session start =="
 OUT=$(CASE_PATH="$NOPY" everything)
 eq "$(printf '%s\n' "$OUT" | grep '^rc=' | sort -u | tr '\n' ' ')" "rc=0 " "[P1] every hook of both plugins exits 0 (main: 127)"
-eq "$(printf '%s\n' "$OUT" | grep -c '^rc=')" 34 "instrument: all 34 commands ran (session start 4 + 15, edit 2 + 1, command 3 + 4, prompt, subagent, pre- and post-compact, session end)"
+eq "$(printf '%s\n' "$OUT" | grep -c '^rc=')" 35 "instrument: all 35 commands ran (session start 4 + 15, edit 2 + 1, command 3 + 5, prompt, subagent, pre- and post-compact, session end)"
 eq "$(lines "$OUT")" 1 "[P1] the session gets exactly one line, not one per hook"
 # a compaction drops what the session was told, so the line comes again on that start, once
 eq "$(lines "$(CASE_PATH="$NOPY" hooks "$SH" "$SDLC" SessionStart "" '{"session_id":"sP1","hook_event_name":"SessionStart","source":"compact"}'; CASE_PATH="$NOPY" hooks "$BH" "$BRAIN" SessionStart "" '{"session_id":"sP1","hook_event_name":"SessionStart","source":"compact"}')")" 1 \
@@ -178,8 +178,8 @@ for f in sys.argv[1:]:
     for blocks in json.load(open(f))["hooks"].values():
         for b in blocks:
             for h in b["hooks"]: print(f + "\t" + h["command"])' "$SH" "$BH")
-eq "$(printf '%s\n' "$ALL" | cut -f2 | grep -cE "$SHAPE")" 34 "[P3] all 34 commands (sdlc 10, brain 24) have the finder's shape"
-eq "$(printf '%s\n' "$ALL" | cut -f2 | old_form | grep -c '^python3 "${CLAUDE_PLUGIN_ROOT}/scripts/')" 34 "instrument: each turns back into its python3 form"
+eq "$(printf '%s\n' "$ALL" | cut -f2 | grep -cE "$SHAPE")" 38 "[P3] all 38 commands (sdlc 12, brain 26) have the finder's shape"
+eq "$(printf '%s\n' "$ALL" | cut -f2 | old_form | grep -c '^python3 "${CLAUDE_PLUGIN_ROOT}/scripts/')" 38 "instrument: each turns back into its python3 form"
 same=0 differ=""
 for in in "$START" "$EDIT" "$BASH_IN" "$GUARD" '{"session_id":"sP2","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"brain owner pin --text x"}}' 'not json'; do
   while IFS=$'\t' read -r f c; do
@@ -190,7 +190,7 @@ for in in "$START" "$EDIT" "$BASH_IN" "$GUARD" '{"session_id":"sP2","hook_event_
     [ "${a//st-new/st}" = "${b//st-old/st}" ] && same=$((same+1)) || differ="$differ | $c on ${in:0:60}"   # a path may name the state dir
   done <<< "$ALL"
 done
-eq "$same" 204 "[P3] all 204 runs (34 commands × 6 payloads) print the same stdout and stderr, with the same exit code, as their python3 form${differ:+ (differ:$differ)}"
+eq "$same" 228 "[P3] all 228 runs (38 commands × 6 payloads) print the same stdout and stderr, with the same exit code, as their python3 form${differ:+ (differ:$differ)}"
 
 echo "== [P4] Windows: a Store shortcut is skipped, python and py -3 are found =="
 WIN=$(bindir win git ps)

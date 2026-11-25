@@ -31,6 +31,11 @@
 #   [U] undo: a delete followed by a failing post-check puts the branch back at its pinned SHA; with no run record, or another
 #       run's record, nothing is put back; with no signed plan it is left (rc 1); a branch there again at another SHA, after a
 #       delete or an unknown outcome, is named and left (the run ends rc 5)
+#   [B] clone=<path> and the batch: a directory with no origin refuses with the origin named as not set; clone= reads the origin
+#       from the named clone (another repository's origin, none, or a relative path refuses); a batch of four merged branches
+#       plans four lines in the order given and one signature deletes them; one unmerged branch refuses the whole batch at
+#       rehearse and at run, wherever it stands, with no plan line and nothing deleted; a call of the wrong shape, 51 branches,
+#       a branch twice: refused; the post-check and the undo take each branch (all put back; a failed second delete)
 #   [K] the scratch-repository and environment blocks are byte for byte kit:branch-push's (in both delete kits), and the gate's
 #       git settings and environment are the kit's
 # kit:branch-delete-recoverable (Stops recoverable-delete), the same fakes, a clone given as clone=<path>:
@@ -68,7 +73,7 @@ printf '#!/bin/sh\nexec python3 -B "%s" "$@"\n' "$HERE/fixtures/branch_delete_gh
 # <root>/<owner/name>.git; <root>/down makes it fail; before a receive-pack, <root>/race moves refs/heads/done to its parent (a
 # branch that moves just before the delete), <root>/vanish deletes it (someone else deletes it), <root>/race-base forces main
 # back to main~2 (a base that no longer holds done), <root>/race-pull moves refs/pull/7/head to main (a squash proof that no
-# longer holds), <root>/race-pr marks PR #7 unmerged in the fake gh's world, <root>/lost deletes the branch its content names (done when empty) then drops the connection (an answer lost)
+# longer holds), <root>/move-main-at (a number N) adds a commit to main at the Nth read of the remote's refs, <root>/race-pr marks PR #7 unmerged in the fake gh's world, <root>/lost deletes the branch its content names (done when empty) then drops the connection (an answer lost)
 cat > "$FB/fakessh" <<'EOF'
 #!/usr/bin/env bash
 FAKE_SSH_ROOT=$1; shift
@@ -93,6 +98,14 @@ fi
 if [ "$cmd" = git-receive-pack ] && [ -e "$FAKE_SSH_ROOT/lost" ]; then
   b=$(cat "$FAKE_SSH_ROOT/lost"); git --git-dir="$FAKE_SSH_ROOT/$repo" update-ref -d "refs/heads/${b:-done}"
   echo "fakessh: connection reset" >&2; exit 255
+fi
+if [ "$cmd" = git-upload-pack ] && [ -e "$FAKE_SSH_ROOT/move-main-at" ]; then
+  n=$(( $(cat "$FAKE_SSH_ROOT/move-main-count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_SSH_ROOT/move-main-count"
+  if [ "$n" = "$(cat "$FAKE_SSH_ROOT/move-main-at")" ]; then
+    gd="$FAKE_SSH_ROOT/$repo"
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t
+    git --git-dir="$gd" update-ref refs/heads/main "$(git --git-dir="$gd" commit-tree -p refs/heads/main -m moved 'refs/heads/main^{tree}')"
+  fi
 fi
 exec git "${cmd#git-}" "$FAKE_SSH_ROOT/$repo"
 EOF
@@ -138,13 +151,15 @@ PY
 }
 tip() { git_ -C "$1/bare.git" rev-parse --verify -q "refs/heads/$2" || true; }
 # bt <plugin> <case dir> <baton args...> — rc of baton run from the clone with the state in $ST; its output is in $BT_OUT
-bt() { local p=$1 d=$2; shift 2; [ $# -eq 2 ] && [ "$1" = mode ] && { baton_set_mode "$ST" "$2"; echo 0; return; }; ( cd "$d/clone" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$p/scripts/baton.py" "$@" ) > "$BT_OUT" 2>&1; echo $?; }
+bt() { BT_CWD="$2/clone" bt_in "$@"; }
+# bt_in <plugin> <case dir> <baton args...> — bt from the directory in $BT_CWD
+bt_in() { local p=$1 d=$2; shift 2; [ $# -eq 2 ] && [ "$1" = mode ] && { baton_set_mode "$ST" "$2"; echo 0; return; }; ( cd "$BT_CWD" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" python3 "$p/scripts/baton.py" "$@" ) > "$BT_OUT" 2>&1; echo $?; }
 # kit_phase <plugin> <case dir> <phase> <signed plan file> <repo> <branch> <head> — the kit's own phase, run directly with its
-# values as baton passes them (positional, in the declared order); rc, output in $BT_OUT
+# words as baton passes them (key=value, as typed); rc, output in $BT_OUT
 kit_phase() {
   local p=$1 d=$2 ph=$3 plan=$4; shift 4
   ( cd "$d/clone" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" BATON_PHASE="$ph" BATON_PLAN="$plan" \
-      BATON_PLUGIN_ROOT="$p" bash "$p/batons/branch-delete.sh" "$@" ) > "$BT_OUT" 2>&1; echo $?
+      BATON_PLUGIN_ROOT="$p" bash "$p/batons/branch-delete.sh" "repo=$1" "branch=$2" "head=$3" ) > "$BT_OUT" 2>&1; echo $?
 }
 # kit_two <plugin> <case dir> <run plan> <undo plan> <between> <repo> <branch> <head> — the kit's run phase, then the function
 # <between> on the case dir (`:` for none), then its undo, from one process as baton runs them (the run record is keyed by that
@@ -153,9 +168,9 @@ kit_two() {
   local p=$1 d=$2 rp=$3 up=$4 between=$5; shift 5
   ( cd "$d/clone" || exit 99
     export XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" BATON_PLUGIN_ROOT="$p"
-    BATON_PHASE=run BATON_PLAN="$rp" bash "$p/batons/branch-delete.sh" "$@" > /dev/null 2>&1; r=$?
+    BATON_PHASE=run BATON_PLAN="$rp" bash "$p/batons/branch-delete.sh" "repo=$1" "branch=$2" "head=$3" > /dev/null 2>&1; r=$?
     "$between" "$d"
-    BATON_PHASE=undo BATON_PLAN="$up" bash "$p/batons/branch-delete.sh" "$@" > "$BT_OUT" 2>&1; printf '%s/%s' "$r" "$?" )
+    BATON_PHASE=undo BATON_PLAN="$up" bash "$p/batons/branch-delete.sh" "repo=$1" "branch=$2" "head=$3" > "$BT_OUT" 2>&1; printf '%s/%s' "$r" "$?" )
 }
 regrow() { git_ -C "$1/bare.git" update-ref refs/heads/done refs/heads/main; }    # someone pushes done again, at main
 # gate <plugin> <case dir> <gate args...> — the delete gate run directly, as the kit runs it; rc, output in $BT_OUT
@@ -177,12 +192,14 @@ fam_call() {
   ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done)
   eq "$(bt "$P" "$d" check $K)" 0 "[P] check kit:branch-delete: rc 0"
   has "$(cat "$BT_OUT")" "check ok" "[P] …check ok"
-  eq "$(grep -cx '# Params: repo=repo branch=ref head=sha40' "$P/batons/branch-delete.sh")/$(grep -c '^# Usage:' "$P/batons/branch-delete.sh")" "1/0" \
-    "[P] the header declares Params repo, branch and head, and no Usage"
-  eq "$(bt "$P" "$d" rehearse $K --repo acme/app --branch done)" 64 "[P] the old flag form: rc 64 (a word that is not key=value)"
-  eq "$(bt "$P" "$d" rehearse $K repo=acme/app branch=done)" 64 "[P] no head: rc 64"
-  eq "$(bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=${s:0:12}")" 64 "[P] a short head: rc 64"
-  eq "$(bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=$(printf '%s' "$s" | tr a-f A-F)")" 64 "[P] an upper-case head: rc 64"
+  eq "$(grep -c '^# Params:' "$P/batons/branch-delete.sh")/$(grep -c '^# Usage: repo=<owner/name> \[clone=<absolute path>\] branch=<name> head=<sha40>' "$P/batons/branch-delete.sh")" "0/1" \
+    "[P] the header declares Usage (repo, optional clone, branch and head pairs) and no Params"
+  # the kit reads its own words (Usage): a refused call is the kit's rc 1 through baton (its own phase: rc 64), before any read
+  eq "$(bt "$P" "$d" rehearse $K --repo acme/app --branch done)" 1 "[P] the old flag form: rehearse rc 1 (a word that is not key=value)"
+  has "$(cat "$BT_OUT")" "usage: baton rehearse|run kit:branch-delete repo=<owner/name> [clone=<absolute path>] branch=<name> head=<full sha> [branch=<name> head=<full sha>]...  (1 to 50 branches of one repository; only through the baton runner)" "[P] …it prints the usage line"
+  eq "$(bt "$P" "$d" rehearse $K repo=acme/app branch=done)" 1 "[P] no head: rehearse rc 1"
+  eq "$(bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=${s:0:12}")" 1 "[P] a short head: rehearse rc 1"
+  eq "$(bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=$(printf '%s' "$s" | tr a-f A-F)")" 1 "[P] an upper-case head: rehearse rc 1"
   eq "$(tip "$d" done)" "$s" "[P] …nothing deleted by any of them"
 }
 
@@ -267,11 +284,11 @@ fam_refuse() {
   # each name exists on the remote as a merged branch (main~1): baton's ref type refuses it at the call, and so does the kit
   for b in HEAD FETCH_HEAD heads/done tags/v1 remotes/x refs/heads/done "$(printf 'a%.0s' $(seq 40))" 'do#ne'; do
     git_ -C "$d/bare.git" update-ref "refs/heads/$b" refs/heads/main~1
-    eq "$(bt "$P" "$d" rehearse $K repo=acme/app "branch=$b" "head=$s")" 64 "[R] a branch named $b: baton refuses the call, rc 64"
+    eq "$(bt "$P" "$d" rehearse $K repo=acme/app "branch=$b" "head=$s")" 1 "[R] a branch named $b: the kit refuses the call, rehearse rc 1"
     eq "$(kit_phase "$P" "$d" rehearse /dev/null acme/app "$b" "$s")" 64 "[R] the kit itself refuses a branch named $b: rc 64"
   done
   for b in 'a..b' '-x'; do
-    eq "$(bt "$P" "$d" rehearse $K repo=acme/app "branch=$b" "head=$s")" 64 "[R] a branch named $b: baton refuses the call, rc 64"
+    eq "$(bt "$P" "$d" rehearse $K repo=acme/app "branch=$b" "head=$s")" 1 "[R] a branch named $b: the kit refuses the call, rehearse rc 1"
     eq "$(kit_phase "$P" "$d" rehearse /dev/null acme/app "$b" "$s")" 64 "[R] the kit itself refuses a branch named $b: rc 64"
   done
   eq "$(git_ -C "$d/bare.git" for-each-ref --format=x refs/heads | grep -c x)" 12 "[R] …nothing deleted in any of them (main, done, release, topic and the eight names)"
@@ -354,8 +371,8 @@ fam_lint() {
 # failing_copy <plugin> <dir> — a copy of that plugin whose kit post-check fails, so run undoes
 # (with FAKE_MOVE_TO_MAIN set to a bare repository, it first puts the branch there at main: a ref someone else made)
 failing_copy() { cp -r "$1" "$2"; mutate "$2/batons/branch-delete.sh" '
-postcheck() {' '
-postcheck() {
+postcheck_one() {' '
+postcheck_one() {
   if [ -n "${FAKE_MOVE_TO_MAIN:-}" ]; then
     git --git-dir="$FAKE_MOVE_TO_MAIN" update-ref "refs/heads/$BR" refs/heads/main
   fi
@@ -393,6 +410,147 @@ fam_undo() {
   eq "$(kit_two "$P" "$d" "$d/plan" "$d/plan" regrow acme/app done "$s")" "3/1" "[U] an unknown outcome, the branch there again at another SHA: undo rc 1, left"
   has "$(cat "$BT_OUT")" "LEAVE branch done is at $(tip "$d" main)" "[U] …named, not called a delete that did not land"
   eq "$(tip "$d" done)" "$(tip "$d" main)" "[U] …the other ref left as it is"
+}
+
+# kit_raw <plugin> <case dir> <phase> <signed plan file> <words...> — the kit's own phase with the words as typed; rc, output in $BT_OUT
+kit_raw() {
+  local p=$1 d=$2 ph=$3 plan=$4; shift 4
+  ( cd "$d/clone" && XDG_STATE_HOME="$ST" GIT_SSH_COMMAND="$FB/fakessh $d" FAKE_LOG="$d/fake.log" FAKE_GH_WORLD="$d/gh.json" BATON_PHASE="$ph" BATON_PLAN="$plan" \
+      BATON_PLUGIN_ROOT="$p" bash "$p/batons/branch-delete.sh" "$@" ) > "$BT_OUT" 2>&1; echo $?
+}
+# plan_lines — the PLAN lines of the last baton output, without their prefix
+plan_lines() { sed -n 's/^  PLAN //p' "$BT_OUT"; }
+
+# [B] clone=<path> and the batch: branches done (main~1), release (main), m1 (main~2) and m2 (main~1) are merged, topic is not
+fam_batch() {
+  local P=$1 d s r t m1 m2 nd pl exp i args w u
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release); t=$(tip "$d" topic)
+  git_ -C "$d/bare.git" update-ref refs/heads/m1 refs/heads/main~2; git_ -C "$d/bare.git" update-ref refs/heads/m2 refs/heads/main~1
+  m1=$(tip "$d" m1); m2=$(tip "$d" m2); u="git@$GH:acme/app.git"
+  nd="$d/nowhere"; git_ init -q "$nd"; mkdir "$d/plain"
+  # a directory with no origin: the refusal says so; clone= names the clone the origin is read from
+  for w in "$nd" "$d/plain"; do
+    eq "$(BT_CWD="$w" bt_in "$P" "$d" rehearse $K repo=acme/app branch=done "head=$s")" 1 "[B1] rehearse from $(basename "$w"), a directory with no origin: rc 1"
+    has "$(cat "$BT_OUT")" "REFUSE remote origin is not set: this kit deletes only on github.com/acme/app" "[B1] …refused with the origin named as not set"
+  done
+  eq "$(BT_CWD="$nd" bt_in "$P" "$d" rehearse $K repo=acme/app "clone=$d/clone" branch=done "head=$s")" 0 "[B2] the same from there with clone=<the clone>: rehearse rc 0"
+  has "$(cat "$BT_OUT")" "PLAN delete merged branch done at $s (merged into main at $(tip "$d" main), ancestor) on $u" "[B2] …the same plan line as a run from the clone"
+  eq "$(tip "$d" done)" "$s" "[B2] …rehearse deleted nothing"
+  eq "$(BT_CWD="$nd" bt_in "$P" "$d" mode auto >/dev/null; BT_CWD="$nd" bt_in "$P" "$d" go $K repo=acme/app "clone=$d/clone" branch=done "head=$s")" 0 "[B2] go from a directory with no origin, with clone=: rc 0"
+  has "$(cat "$BT_OUT")" "go: ok — 1 write" "[B2] …one write"
+  eq "$(tip "$d" done)" "" "[B2] …the branch is gone"
+  eq "$(grep '^gh ' "$d/fake.log" | grep -vc -- '--hostname github.com')" 0 "[B2] …every gh call names --hostname github.com"
+  git_ -C "$d/bare.git" update-ref refs/heads/done "$s"
+  git_ clone -q "$d/bare.git" "$d/clone2"; git_ -C "$d/clone2" remote set-url origin "git@$GH:acme/other.git"
+  eq "$(BT_CWD="$nd" bt_in "$P" "$d" rehearse $K repo=acme/app "clone=$d/clone2" branch=done "head=$s")" 1 "[B3] clone= whose origin names another repository: rehearse rc 1"
+  has "$(cat "$BT_OUT")" "REFUSE the origin of clone $d/clone2 is git@$GH:acme/other.git: this kit deletes only on github.com/acme/app" "[B3] …refused by name"
+  eq "$(BT_CWD="$d/clone" bt_in "$P" "$d" rehearse $K repo=acme/app "clone=$nd" branch=done "head=$s")" 1 "[B3] clone= with no origin, though the current directory has one: rehearse rc 1"
+  has "$(cat "$BT_OUT")" "REFUSE the origin of clone $nd is not set: this kit deletes only on github.com/acme/app" "[B3] …refused as not set (the current directory's origin is not used)"
+  eq "$(bt "$P" "$d" rehearse $K repo=acme/app clone=clone branch=done "head=$s")" 1 "[B3] a clone= that is not an absolute path: rehearse rc 1"
+  mkdir "$d/clone3" "$d/clone4"; ln -s "$d/clone/.git" "$d/clone3/.git"; printf 'gitdir: %s/clone/.git\n' "$d" > "$d/clone4/.git"
+  for w in clone3 clone4; do
+    eq "$(BT_CWD="$nd" bt_in "$P" "$d" rehearse $K repo=acme/app "clone=$d/$w" branch=done "head=$s")" 1 "[B3] clone= whose .git is a $( [ "$w" = clone3 ] && echo symlink || echo file ): rehearse rc 1"
+    has "$(cat "$BT_OUT")" "REFUSE the origin of clone $d/$w is not set: this kit deletes only on github.com/acme/app" "[B3] …its origin reads as not set"
+  done
+  eq "$(tip "$d" done)" "$s" "[B3] …nothing deleted by any of them"
+  # a batch of four merged branches: one plan line each, in the order given, one signature
+  args=("branch=m2" "head=$m2" "branch=release" "head=$r" "branch=done" "head=$s" "branch=m1" "head=$m1")
+  eq "$(bt "$P" "$d" rehearse $K repo=acme/app "${args[@]}")" 0 "[B4] rehearse four merged branches: rc 0"
+  exp=""; for i in "m2 $m2" "release $r" "done $s" "m1 $m1"; do exp="$exp${exp:+$'\n'}delete merged branch ${i% *} at ${i#* } (merged into main at $(tip "$d" main), ancestor) on $u"; done
+  eq "$(plan_lines)" "$exp" "[B4] …exactly four plan lines, one per branch, in the order given"
+  eq "$(tip "$d" m1)$(tip "$d" m2)$(tip "$d" release)$(tip "$d" done)" "$m1$m2$r$s" "[B4] …rehearse deleted nothing"
+  ST="$(fresh)/state"
+  eq "$(bt "$P" "$d" mode auto >/dev/null; bt "$P" "$d" go $K repo=acme/app "${args[@]}")" 0 "[B4] go: rc 0"
+  has "$(cat "$BT_OUT")" "go: ok — 4 write" "[B4] …four writes"
+  eq "$(tip "$d" m1)|$(tip "$d" m2)|$(tip "$d" release)|$(tip "$d" done)|$(tip "$d" main)" "||||$(tip "$d" main)" "[B4] …the four branches are gone, main untouched"
+  eq "$(find "$ST" -name 'kit-branch-delete-*.last' | wc -l | tr -d ' ')" 0 "[B4] …and a passing post-check drops every run record"
+  # one branch that is not merged refuses the whole batch, wherever it stands: no plan line, nothing deleted
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release); t=$(tip "$d" topic)
+  for args in "branch=done head=$s branch=release head=$r branch=topic head=$t" "branch=topic head=$t branch=done head=$s" "branch=done head=$s branch=topic head=$t branch=release head=$r"; do
+    eq "$(bt "$P" "$d" rehearse $K repo=acme/app $args)" 1 "[B5] a batch with an unmerged branch ($args): rehearse rc 1"
+    has "$(cat "$BT_OUT")" "REFUSE branch topic at $t is not merged into main" "[B5] …refused, naming the branch"
+    eq "$(grep -c '^  PLAN ' "$BT_OUT")" 0 "[B5] …no plan line"
+    eq "$(tip "$d" done)|$(tip "$d" release)|$(tip "$d" topic)" "$s|$r|$t" "[B5] …nothing deleted"
+  done
+  eq "$(bt "$P" "$d" mode auto >/dev/null; bt "$P" "$d" go $K repo=acme/app branch=done "head=$s" branch=topic "head=$t")/$(tip "$d" done)" "1/$s" "[B5] go with an unmerged branch in the batch: rc 1, the merged one is not deleted"
+  # the run phase proves the whole batch again before its first delete: a signed plan of two, a call of three
+  bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=$s" branch=release "head=$r" >/dev/null; plan_lines > "$d/plan"
+  eq "$(kit_raw "$P" "$d" run "$d/plan" repo=acme/app branch=done "head=$s" branch=release "head=$r" branch=topic "head=$t")/$(tip "$d" done)" "3/$s" "[B5] the run phase with an unmerged branch last: rc 3, the merged ones are not deleted"
+  has "$(cat "$BT_OUT")" "REFUSE branch topic at $t is not merged into main" "[B5] …refused, naming the branch"
+  # a call that is not the shape: refused before any read
+  for args in "branch=done branch=release head=$r" "head=$s branch=done" "branch=done head=$s branch=done head=$s" "clone=$d/clone clone=$d/clone branch=done head=$s" \
+    "branch=done head=$s clone=$d/clone" "branch=done head=$s repo=acme/app" "foo=bar branch=done head=$s" "branch=done head=${s:0:12}"; do
+    lc=$(cat "$d/fake.log" | wc -l | tr -d ' ')
+    eq "$(bt "$P" "$d" rehearse $K repo=acme/app $args)" 1 "[B6] a call of the wrong shape ($args): rehearse rc 1"
+    has "$(cat "$BT_OUT")" "usage: baton rehearse|run kit:branch-delete" "[B6] …it prints the usage line"
+    eq "$(tip "$d" done)/$(cat "$d/fake.log" | wc -l | tr -d ' ')" "$s/$lc" "[B6] …nothing deleted, and no gh or git call made (the refusal is before any read)"
+  done
+  for args in "repo= repo=acme/app branch=done head=$s" "repo=acme/app clone= branch=done head=$s" "repo=acme/app clone= clone=$d/clone branch=done head=$s" \
+    "repo=acme/app" "repo=acme/app clone=$d/clone"; do
+    eq "$(kit_raw "$P" "$d" rehearse /dev/null $args)" 64 "[B6] the kit itself, $args: rc 64"
+  done
+  eq "$(kit_raw "$P" "$d" rehearse /dev/null repo=acme/app branch=done "head=$s" branch=done "head=$s")" 64 "[B6] the kit itself: a branch given twice is rc 64"
+  has "$(cat "$BT_OUT")" "REFUSE branch done is given twice" "[B6] …named"
+  # the bound: 50 branches are read (none exists here), 51 are refused as a shape
+  args=(); for i in $(seq 1 50); do args+=("branch=b$i" "head=$s"); done
+  eq "$(bt "$P" "$d" rehearse $K repo=acme/app "${args[@]}")" 1 "[B7] 50 branches: rehearse rc 1 (the first does not exist)"
+  has "$(cat "$BT_OUT")" "REFUSE $u has no branch b1" "[B7] …read, not refused as a shape"
+  args+=("branch=b51" "head=$s")
+  eq "$(bt "$P" "$d" rehearse $K repo=acme/app "${args[@]}")" 1 "[B7] 51 branches: rehearse rc 1"
+  has "$(cat "$BT_OUT")" "(1 to 50 branches of one repository" "[B7] …refused as a shape, with the bound in the usage line"
+}
+
+# [B] the batch's post-check and undo take each branch: a base forced back past the SHAs after the first delete fails the post-check
+# of every branch, and undo puts all of them back at their pinned SHAs; a delete that fails half way leaves the rest alone and puts
+# the earlier ones back
+fam_batch_undo() {
+  local P=$1 d s r
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release); : > "$d/race-base"
+  eq "$(bt "$P" "$d" mode auto >/dev/null; bt "$P" "$d" go $K repo=acme/app branch=done "head=$s" branch=release "head=$r")" 4 "[B8] a batch whose post-check fails (the base forced back): rc 4, undone"
+  has "$(cat "$BT_OUT")" "DO recreate branch done at $s on git@$GH:acme/app.git" "[B8] …the undo recreates the first branch"
+  has "$(cat "$BT_OUT")" "DO recreate branch release at $r on git@$GH:acme/app.git" "[B8] …and the second"
+  eq "$(tip "$d" done)|$(tip "$d" release)" "$s|$r" "[B8] …both at their pinned SHAs"
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release); : > "$d/race"
+  eq "$(bt "$P" "$d" mode auto >/dev/null; bt "$P" "$d" go $K repo=acme/app branch=release "head=$r" branch=done "head=$s")" 4 "[B9] a batch whose second delete is refused (the branch moved before the push): rc 4"
+  eq "$(tip "$d" release)|$(tip "$d" done)" "$r|$(git_ -C "$d/bare.git" rev-parse main~2)" "[B9] …the first branch is put back, the second left where it moved"
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release); : > "$d/race"
+  eq "$(bt "$P" "$d" mode auto >/dev/null; bt "$P" "$d" go $K repo=acme/app branch=done "head=$s" branch=release "head=$r")" 4 "[B9] a batch whose first delete is refused: rc 4"
+  eq "$(tip "$d" release)|$(tip "$d" done)" "$r|$(git_ -C "$d/bare.git" rev-parse main~2)" "[B9] …the run stops there: the refused branch stays where it moved, the second is not deleted"
+}
+
+# [B] a batch is proven whole before anything is written: a default branch that moves while the branches are read, a head that
+# moved after signing, and a post-check that fails at one branch of the batch
+fam_batch_moved() {
+  local P=$1 d s r m1 u
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release); u="git@$GH:acme/app.git"
+  git_ -C "$d/bare.git" update-ref refs/heads/m1 refs/heads/main~2; m1=$(tip "$d" m1)
+  echo 2 > "$d/move-main-at"
+  eq "$(bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=$s" branch=release "head=$r" branch=m1 "head=$m1")" 1 "[B10] the default branch moves while the second branch is read: rehearse rc 1"
+  has "$(cat "$BT_OUT")" "REFUSE main moved from $(git_ -C "$d/bare.git" rev-parse main~1) to $(tip "$d" main) while the branches were read (at release): nothing is written" "[B10] …refused, naming both SHAs and the branch"
+  eq "$(grep -c '^  PLAN ' "$BT_OUT")/$(tip "$d" done)|$(tip "$d" release)|$(tip "$d" m1)" "0/$s|$r|$m1" "[B10] …no plan line, nothing deleted"
+  # signed with main as it was, then main moves before the run reads anything: no line is the signed one, nothing is deleted
+  rm -f "$d/move-main-at" "$d/move-main-count"; d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release)
+  bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=$s" branch=release "head=$r" >/dev/null; plan_lines > "$d/plan"
+  echo 1 > "$d/move-main-at"
+  eq "$(kit_raw "$P" "$d" run "$d/plan" repo=acme/app branch=done "head=$s" branch=release "head=$r")/$(tip "$d" done)|$(tip "$d" release)" "3/$s|$r" "[B10] main moved after signing: the run's first delete is refused (not the signed line), nothing deleted"
+  # a line that reads another way at run (its proof) while the base is the same: refused for the whole batch, the line before it not deleted
+  d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release)
+  bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=$s" branch=release "head=$r" >/dev/null; plan_lines | sed '2s/ancestor/merged PR #9/' > "$d/plan"
+  eq "$(kit_raw "$P" "$d" run "$d/plan" repo=acme/app branch=done "head=$s" branch=release "head=$r")/$(tip "$d" done)|$(tip "$d" release)" "3/$s|$r" "[B10] the second line is not the signed one: run rc 3, the first branch is not deleted"
+  has "$(cat "$BT_OUT")" "REFUSE the plan line for release is not in the signed plan" "[B10] …refused, naming the branch"
+  eq "$(kit_raw "$P" "$d" rehearse /dev/null repo=acme/app 'branch:x=done' "head:y=$s")" 64 "[B6] a key with a colon is not branch= or head=: rc 64"
+  # a head that moved after signing, in the middle of a batch: refused by the run's proof pass before the first delete
+  d=$(setup acme/app); s=$(tip "$d" done); r=$(tip "$d" release); git_ -C "$d/bare.git" update-ref refs/heads/m1 refs/heads/main~2; m1=$(tip "$d" m1)
+  bt "$P" "$d" rehearse $K repo=acme/app branch=done "head=$s" branch=m1 "head=$m1" branch=release "head=$r" >/dev/null; plan_lines > "$d/plan"
+  git_ -C "$d/bare.git" update-ref refs/heads/m1 refs/heads/main~1
+  eq "$(kit_raw "$P" "$d" run "$d/plan" repo=acme/app branch=done "head=$s" branch=m1 "head=$m1" branch=release "head=$r")/$(tip "$d" done)|$(tip "$d" release)" "3/$s|$r" "[B11] a head moved after signing, second of three: run rc 3, the others not deleted"
+  has "$(cat "$BT_OUT")" "REFUSE branch m1 is at $(tip "$d" m1) on $u, not at the pinned head $m1" "[B11] …refused by name"
+  # a post-check that fails at one branch only (main forced back to main~2 holds m1, not done): undo puts back both
+  ST="$(fresh)/state"; d=$(setup acme/app); s=$(tip "$d" done); git_ -C "$d/bare.git" update-ref refs/heads/m1 refs/heads/main~2; m1=$(tip "$d" m1); : > "$d/race-base"
+  eq "$(bt "$P" "$d" mode auto >/dev/null; bt "$P" "$d" go $K repo=acme/app branch=m1 "head=$m1" branch=done "head=$s")" 4 "[B12] a batch whose post-check fails at one branch only: rc 4, undone"
+  has "$(cat "$BT_OUT")" "DO recreate branch done at $s on $u" "[B12] …the failing branch is put back"
+  has "$(cat "$BT_OUT")" "DO recreate branch m1 at $m1 on $u" "[B12] …and so is the one whose own check held (the batch goes back whole)"
+  eq "$(tip "$d" m1)|$(tip "$d" done)" "$m1|$s" "[B12] …both at their pinned SHAs"
 }
 
 # [K] the blocks both kits share must stay the same bytes: a hardening of one is a hardening of the other; and the delete gate
@@ -754,7 +912,7 @@ fam_rd_gate() {
   eq "$(g):$(tip "$d" topic)" "0:" "[G6] the signed line and a complete bundle of the head: rc 0, deleted"
 }
 
-FAMILIES="fam_call fam_delete fam_refuse fam_signed fam_gate fam_lint fam_undo fam_squash fam_share fam_rd_word fam_rd_sign fam_rd_refuse fam_rd_run fam_rd_gate"
+FAMILIES="fam_call fam_delete fam_refuse fam_signed fam_gate fam_lint fam_undo fam_batch fam_batch_undo fam_batch_moved fam_squash fam_share fam_rd_word fam_rd_sign fam_rd_refuse fam_rd_run fam_rd_gate"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$PLUGIN"; done
 
 echo "== nothing written outside the scratch tree =="

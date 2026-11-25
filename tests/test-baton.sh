@@ -471,7 +471,7 @@ except subprocess.TimeoutExpired:
   eq "$(ua sign kit:t-ask-none unanswered)/$(ua run kit:t-ask-none unanswered)/$(nsig)/$(logcol 10)" "0/4/0/run-failed" \
      "[unanswered] a kit baton whose Stops is none, signed by the owner: rc 4, the signature spent"
   fresh_state; OWNER_SID=s-coord
-  eq "$(bt "$P" "$W" go --queue kit:t-ask dest="$W/queued" how=unanswered)" 0 "[unanswered] instrument: go --queue kit:t-ask: rc 0"
+  eq "$(bt "$P" "$W" go --queue kit:t-ask-none dest="$W/queued" how=unanswered)" 0 "[unanswered] instrument: go --queue kit:t-ask-none (a Stops: secrets baton is never queued): rc 0"
   I=$(sed -n 's/^go: queued \([0-9a-f]\{16\}\) .*/\1/p' "$BT_OUT"); OWNER_SID=s-owner
   eq "$(bt "$P" "$W" sign --by owner --queued "$I")" 0 "[unanswered] instrument: the owner signs the queued item: rc 0"
   eq "$(bt "$P" "$W" run --queued "$I")/$(logcol 10)/$(logcol 11)" "4/run-failed/yes" "[unanswered] a queued run unanswered: rc 4, log run-failed"

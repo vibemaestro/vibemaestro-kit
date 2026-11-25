@@ -15,10 +15,10 @@ Mọi việc đều ghi/đọc `kb/` của repo ở cwd. Không đọc hay ghi r
   kb.py new <intent|plan|real-run|spec> <slug> [--date YYYY-MM-DD]
       writes kb/<kind>/<date>-<slug>.md from a template with placeholder marks (`tokens.spec.placeholder`); never overwrites a file.
       The `spec` template is the five sections of a spec derived from a story (`tokens.spec`: goal, constraints, criteria, risks,
-      clarify); the `plan` template has the columns Row, How, Delivers, Depends on, Trust touches, Link; in the prose of `language`.
+      clarify); the `plan` template has the columns Row, Title, How, Delivers, Depends on, Trust touches, Link; in the prose of `language`.
   kb.py new intent <slug> --type story|task|bug [--focus P<n>] [--jira <KEY>]
       the intent with `type:` and `focus:` in its frontmatter and the card of its type: a story's is the story the owner approves,
-      in the prose of `language` (the As / I want / so that line, context, AC, out of scope, appetite, questions), replacing the
+      in the prose of `language` (the As / I want / so that line, context, AC, out of scope, estimation, questions), replacing the
       request paragraph; a task's `## What`, `## Why`, `## Check`; a bug's `## Reproduce`, `## Expected`, `## Test`, the same
       headings in every language. `--jira` writes `jira: <KEY>` (a Jira issue key, like
       ABC-12): stored and shown (check intent, plan status), never synced.
@@ -29,8 +29,8 @@ Mọi việc đều ghi/đọc `kb/` của repo ở cwd. Không đọc hay ghi r
       already on the merge base only warns. A `key:` (`<CODE>-<n>`, create-intent writes it under `issue.code`) or a `jira:` not
       shaped as one is red; both are printed when they pass. rc 0 pass, 65 not.
       A story is the one the owner approves (STORY_PARTS) unless it has the first card's shape (a `## Story`, `## Acceptance
-      criteria`, `## Not doing` or `## Measure` section, and no appetite part): its parts named by a bold lead or a heading, vi or en labels; red only for a missing or empty part (the As / I want / so that line, context, AC, out
-      of scope, appetite), an AC number written twice or no number, more than 3 open questions; a question with no
+      criteria`, `## Not doing` or `## Measure` section, and no estimation part): its parts named by a bold lead or a heading, vi or en labels; red only for a missing or empty part (the As / I want / so that line, context, AC, out
+      of scope, estimation), an AC number written twice or no number, more than 3 open questions; a question with no
       recommendation or reason, code, a path, a file name, a command or a story over 3500 characters is a WARNING. Such a story
       already on the merge base whose AC changed, was dropped or added is red until its decisions gain an item quoting the
       owner (an AC changes only by the owner's word); `check links` runs the same on the stories changed in the change. A first
@@ -76,8 +76,9 @@ Mọi việc đều ghi/đọc `kb/` của repo ở cwd. Không đọc hay ghi r
   kb.py check [--strict]
       the lifecycle of every kb/ document: rc 65 on an unknown `status`, a `supersedes`/`superseded_by` path that does not
       exist or does not point back, `superseded` without `superseded_by` (and the reverse); `--strict` also fails on a missing
-      `description` or `status`. A spec over `kb.spec_warn_bytes` is a `WARNING` line, rc stays 0. Read-only like find. It also
-      runs `check intent` on every intent new in the change (absent from the merge base; none when there is no base).
+      `description` or `status`. Read-only like find. It also runs `check intent` on every intent new in the change (absent from
+      the merge base; none when there is no base), and holds a story, a spec and a plan the change touches to its byte limit
+      (`kb.intent_max_bytes`, `kb.spec_max_bytes`, `kb.plan_max_bytes`: a WARNING from 80 percent, rc 65 over it).
   kb.py plan status <plan file> [--json]
       the state of each row of a multi-PR plan, read from GitHub (planned, intent open, PR open with head and CI, merged with its
       commit, dropped with its reason), and the drift (version, dependency, two PRs for one row). Read-only; without `gh` or network
@@ -156,9 +157,9 @@ Check: `kb.py check [--strict]`.
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
 **Story** (intent loại story, viết bằng ngôn ngữ repo đặt): dòng "Là / tôi muốn / để", bối cảnh, AC đánh số (mỗi AC "khi … thì
-…"), phần không làm, khẩu phần, phần **Lời người hỏi → AC** (đúng bảng khuôn viết: mỗi hàng một lời trích nguyên văn | các AC
+…"), phần không làm, estimation, phần **Lời người hỏi → AC** (đúng bảng khuôn viết: mỗi hàng một lời trích nguyên văn | các AC
 nó đòi, AC1, AC2 hay AC1–AC3; mọi AC có mặt ở ít nhất một hàng), tối đa 3 câu hỏi; vừa một màn hình điện thoại, không lệnh,
-tên tệp hay code. Mỗi câu hỏi có bốn phần có nhãn, mỗi nhãn mở một dòng: **Vì sao có câu hỏi này** (kèm một ví dụ),
+tên tệp hay code; context và AC nói người hỏi muốn gì và sẽ thấy gì bằng lời thường, còn giá trị chính xác, tên tham số, mã trạng thái, luật so khớp và giao thức thuộc spec, và câu trả lời cho câu hỏi kỹ thuật vào spec, không ghi ngược vào AC. Mỗi câu hỏi có bốn phần có nhãn, mỗi nhãn mở một dòng: **Vì sao có câu hỏi này** (kèm một ví dụ),
 **Mỗi phương án nghĩa là gì**, **Tác động**, **Đề xuất** (kèm lý do). Kiểm: `kb.py check intent <ngày>-<slug>`: thiếu phần, phần rỗng,
 phần lời → AC không phải bảng ấy, lời không trỏ AC, AC không có hay AC không nằm hàng nào thì đỏ với story mới hoặc đổi thân;
 story đã có trên merge base, thân không đổi, chỉ bị cảnh báo. Mã ngắn không giải thích trong ngoặc ngay sau nó (D24 (…)) và
@@ -205,9 +206,9 @@ Check: `kb.py check [--strict]`.
 [--type T] [--status S]`, `kb.py outline <file>` (line range and size of each section, to read one with offset/limit).
 
 **Story** (an intent of type story, in the repository's language): the As / I want / so that line, context, numbered AC (each
-"when … then …"), out of scope, appetite, a **Words of the person who asked → AC** part (the table the template writes: each row
+"when … then …"), out of scope, estimation, a **Words of the person who asked → AC** part (the table the template writes: each row
 one quote, as given | the AC it asks for, AC1, AC2 or AC1–AC3; every AC is in a row), at most 3 questions; it fits a phone
-screen, with no command, file name or code. Each question has four labelled parts, each label opening a line:
+screen, with no command, file name or code; context and AC say what the person asked for and what they will see, in plain words, while exact values, parameter names, status codes, matching rules and protocols belong in the spec, and the answer to a technical question goes into the spec, never back into the AC. Each question has four labelled parts, each label opening a line:
 **Why this question** (with one example), **What each option means**, **Impact**, **Recommendation** (with its reason). Check:
 `kb.py check intent <date>-<slug>`: a missing or empty part, a words → AC part that is not that table, a quote with no AC, an
 AC the story lacks or an AC in no row is red for a story new or with its body changed; a story on the merge base with its body
@@ -291,9 +292,9 @@ một AC của story thì hỏi chủ repo. Phiên nhận một hàng ghi `plan:
 
 ## Rows
 
-| Row | How | Delivers | Depends on | Trust touches | Link |
-|---|---|---|---|---|---|
-| A | {fill}: cách làm của PR này, chạm vào đâu> | AC{fill}: số> (tiêu chí {fill}: số>) | — | {fill}: none, hoặc `<kind> [<owner/repo>:]<path> [<object>] [Stops: <words>]`, nối bằng ;> | — |
+| Row | Title | How | Delivers | Depends on | Trust touches | Link |
+|---|---|---|---|---|---|---|
+| A | {fill}: kết quả ngắn của PR, khoảng 60 ký tự, không đường dẫn, không code> | {fill}: cách làm của PR này, chạm vào đâu> | AC{fill}: số> (tiêu chí {fill}: số>) | — | {fill}: none, hoặc `<kind> [<owner/repo>:]<path> [<object>] [Stops: <words>]`, nối bằng ;> | — |
 
 ## Decisions
 
@@ -359,9 +360,9 @@ PR → `dropped: <reason>` in its Link cell. A release row adds a Version column
 
 ## Rows
 
-| Row | How | Delivers | Depends on | Trust touches | Link |
-|---|---|---|---|---|---|
-| A | {fill}: how this PR does it, what it touches> | AC{fill}: n> (criteria {fill}: n>) | — | {fill}: none, or `<kind> [<owner/repo>:]<path> [<object>] [Stops: <words>]`, `;` between them> | — |
+| Row | Title | How | Delivers | Depends on | Trust touches | Link |
+|---|---|---|---|---|---|---|
+| A | {fill}: the outcome in about 60 characters, no path, no code> | {fill}: how this PR does it, what it touches> | AC{fill}: n> (criteria {fill}: n>) | — | {fill}: none, or `<kind> [<owner/repo>:]<path> [<object>] [Stops: <words>]`, `;` between them> | — |
 
 ## Decisions
 
@@ -432,12 +433,12 @@ CARD_BODY = {
 **Bối cảnh.** {fill}: chuyện đã xảy ra, con số đo được>
 
 **Tiêu chí chấp nhận (AC)**
-1. Khi {fill}: tình huống>, thì {fill}: điều người hỏi thấy được; không lệnh, tên tệp hay code>
+1. Khi {fill}: tình huống>, thì {fill}: điều người hỏi thấy được, bằng lời thường; không lệnh, tên tệp, tham số, mã trạng thái hay code: kỹ thuật thuộc spec>
 
 **Không làm**
 - {fill}: điều không làm, hoặc "không có">
 
-**Khẩu phần.** {fill}: cỡ việc: ngày, số PR>
+**Estimation.** {fill}: cỡ việc: ngày, số PR>
 
 **Lời người hỏi → AC**
 
@@ -457,12 +458,12 @@ CARD_BODY = {
 **Context.** {fill}: what happened, what was measured>
 
 **Acceptance criteria**
-1. When {fill}: the situation>, then {fill}: what the person who asked sees; no command, file name or code>
+1. When {fill}: the situation>, then {fill}: what the person who asked sees, in plain words; no command, file name, parameter, status code or code: the technical detail belongs in the spec>
 
 **Out of scope**
 - {fill}: what is not done, or "none">
 
-**Appetite.** {fill}: the size: days, PRs>
+**Estimation.** {fill}: the size: days, PRs>
 
 **Words of the person who asked → AC**
 
@@ -876,10 +877,10 @@ def spec_problems(text, sp=None, warn=None):
 # story_is_v2 tells it from the first card. Its labels are words in vi or en, matched at the start of the label (`**Bối cảnh.**`,
 # `**Tiêu chí chấp nhận (AC)**`, `## Questions`); a bold lead that is no label, or that opens a sentence, is text.
 STORY_PARTS = (("context", ("bối cảnh", "context")), ("ac", ("tiêu chí chấp nhận", "acceptance criteria")),
-               ("not_doing", ("không làm", "ngoài phạm vi", "out of scope", "not doing")), ("appetite", ("khẩu phần", "appetite")),
+               ("not_doing", ("không làm", "ngoài phạm vi", "out of scope", "not doing")), ("appetite", ("estimation", "khẩu phần", "appetite")),
                ("questions", ("câu hỏi", "questions")), ("decisions", ("quyết định", "decisions")),
                ("trace", ("lời người hỏi", "words of the person who asked")))
-STORY_NEEDS = (("context", "Context"), ("ac", "Acceptance criteria"), ("not_doing", "Out of scope"), ("appetite", "Appetite"))
+STORY_NEEDS = (("context", "Context"), ("ac", "Acceptance criteria"), ("not_doing", "Out of scope"), ("appetite", "Estimation"))
 STORY_REASON = ("lý do", "vì", "because", "why", "reason")     # the words of a recommendation's reason, vi and en
 # The four labelled parts of an open question, matched at the start of a label opening a line of the question (`**Tác động:** …`,
 # `- *Impact:* …`), and the words of the example its why part gives (a missing one only warns: the machine cannot read meaning).
@@ -1220,6 +1221,39 @@ def spec_body_changed(path, text, base=None):
     return None if not read else old is None or _body(old) != _body(text)
 
 
+SIZE_KINDS = {"intent": ("intent_max_bytes", "story", "keep the request, the ACs and the questions; move code-reading notes to the spec"),
+              "spec": ("spec_max_bytes", "spec", "split it by service or module"),
+              "plan": ("plan_max_bytes", "plan", "split it into waves")}
+CHARS_HINT_RX = re.compile(r"^the (?:story|spec) is \d+ characters, over \d+ ")     # the hint a byte message replaces
+
+
+def touched(path, base=None):
+    """"new" when the file is absent from the merge base, "edited" when its body changed there (a frontmatter change alone, such as
+    `status:`, does not count), else None; "new" when there is no base to read (a file named to the check is judged as touched)."""
+    try:
+        with open(path, encoding="utf-8", errors="surrogateescape") as f:     # as vsdlc.git_out reads the base: a stray byte is no touch
+            text = f.read()
+    except OSError:
+        return "new"
+    old, read = base_text(path, base)
+    return "new" if not read or old is None else "edited" if _body(old) != _body(text) else None
+
+
+def size_finding(kind, path, cfg, base=None):
+    """(red, message) for a story, a spec or a plan of 80 percent or more of its byte limit (bytes of the whole file as stored), else
+    None. Red only over the limit and touched; an untouched file over its limit only warns, and says what its next edit owes."""
+    key, what, todo = SIZE_KINDS[kind]
+    cap, n = cfg["kb"][key], os.path.getsize(path)
+    if n * 5 < cap * 4:
+        return None
+    head = "the %s is %d bytes, " % (what, n)
+    if n <= cap:
+        return False, "%s%d percent of its limit of %d (the whole file, UTF-8): %s" % (head, n * 100 // cap, cap, todo)
+    if touched(path, base):
+        return True, "%sover its limit of %d (the whole file, UTF-8; kb.%s): %s" % (head, cap, key, todo)
+    return False, "%sover its limit of %d (kb.%s) and this change does not touch it; its next edit must bring it under: %s" % (head, cap, key, todo)
+
+
 def plan_rows_changed(root, rel, base=None):
     """True when the plan is new in the change or a row cell other than Link changed (what the owner's plan signature binds:
     kb_plan.row_cells; a Link cell, the Decisions or the prose do not count); None when there is no base to read."""
@@ -1384,6 +1418,10 @@ def check_intent_file(path, root, cfg, strict, older):
             probs += shape
     elif is_story and not older:
         hints.append("the first story card: a new story takes the story the owner approves (kb.py new intent --type story writes it)")
+    size = size_finding("intent", path, cfg)
+    if size:                                    # one length message: the byte one replaces the characters hint
+        hints[:] = [h for h in hints if not CHARS_HINT_RX.match(h)]
+        (probs if size[0] else hints).append(size[1])
     rel = os.path.relpath(path, root)
     for w in warns:
         sys.stdout.write("WARNING %s: %s%s\n" % (rel, w, " (an intent already on the merge base only warns)" if older else ""))
@@ -1420,6 +1458,30 @@ def check_new_intents(root, cfg, strict):
         if n.endswith(".md") and not n.startswith(".") and "kb/intent/" + n not in on_base:
             rc = check_intent_file(os.path.join(d, n), root, cfg, strict, False) or rc
     return rc
+
+
+def check_sizes(root, cfg):
+    """rc 65 when a story, a spec or a plan this change touches is over its byte limit; a WARNING for one from 80 percent. A file
+    the change does not touch is not listed (`check <kind> <file>` says its size); no merge base, nothing is judged. A new
+    intent is judged by check_new_intents."""
+    if not plans.merge_base(root)[0]:
+        return 0
+    bad = []
+    for kind, sub in (("intent", "intent"), ("spec", "specs"), ("plan", "plans")):
+        d = os.path.join(root, "kb", sub)
+        for n in sorted(os.listdir(d)) if os.path.isdir(d) else ():
+            path = os.path.join(d, n)
+            if not n.endswith(".md") or n.startswith(".") or not os.path.isfile(path) or os.path.getsize(path) * 5 < cfg["kb"][SIZE_KINDS[kind][0]] * 4:
+                continue
+            how = touched(path)
+            size = size_finding(kind, path, cfg) if how and not (kind == "intent" and how == "new") else None
+            if size and size[0]:
+                bad.append("%s: %s" % (os.path.relpath(path, root), size[1]))
+            elif size:
+                sys.stdout.write("WARNING %s: %s\n" % (os.path.relpath(path, root), size[1]))
+    if bad:
+        sys.stderr.write("kb: size check failed (%d problem(s)):\n%s\n" % (len(bad), "\n".join("- " + b for b in bad)))
+    return 65 if bad else 0
 
 
 # ── the real-run record of a story (AC8) ─────────────────────────────────────────────────────────────
@@ -1621,14 +1683,15 @@ PLAN_ROW_RX = re.compile(r"^(?:Delivers\s+(AC\d+(?:\s*,\s*AC\d+)*)\s*:|enabling\
 PLAN_DELIVERS_RX = re.compile(r"^(?:(?:Delivers\s+)?(AC\d+(?:\s*,\s*AC\d+)*)(?=\s*(?:[:(]|$))|enabling\s*:\s*\w)", re.I)
 
 
+TITLE_MAX = 80                                                   # a plan row's Title: its Jira Sub-task summary is read from it
 PLAN_OLD_COLS = {"acceptance", "model", "current", "shared"}     # columns only the earlier plan shape has
 
 
 def plan_is_old(doc):
     """A plan whose row table has a column of the earlier shape (Must be true, Acceptance, Current state, Shared files, Model):
     a header kb_plan reads as `must` that is not `Delivers` is the earlier Must be true, in any language its COLUMNS know."""
-    return any(r["cols"] & PLAN_OLD_COLS or any(plans._header_key(h) == "must" and _header_word(h) != "delivers"
-                                                 for h in r["header"]) for r in doc["rows"])
+    return any(r["cols"] & PLAN_OLD_COLS or any(k == "must" and _header_word(h) != "delivers"
+                                                 for h, k in zip(r["header"], plans.header_keys(r["header"]))) for r in doc["rows"])
 
 
 def _header_word(cell):
@@ -1636,24 +1699,26 @@ def _header_word(cell):
     return re.sub(r"\(.*?\)|@\S*", "", plans._plain(cell)).strip().lower()
 
 
-PLAN_OLD_MSG = ("a story's plan new in this change, or whose row cells changed, takes the lean columns: Row, How, Delivers, Depends "
+PLAN_OLD_MSG = ("a story's plan new in this change, or whose row cells changed, takes the lean columns: Row, Title, How, Delivers, Depends "
                 "on, Trust touches, Link")
 
 
-def plan_trace(root, rel, sp, base=None):
-    """([(line, message)], story, AC ids) of the plan `rel`'s AC trace (`story`: the spec's intent says `type: story`, which
+def plan_trace(root, rel, sp, base=None, focus="warn"):
+    """([(line, message)], story, AC ids, warnings) of the plan `rel`'s AC trace (`story`: the spec's intent says `type: story`, which
     makes the findings red; any other plan only warns): every row's Must be true starts `Delivers AC<n>[, AC<m>]:` or
     `enabling: <reason>`, each id is an AC of the spec the plan's `Spec:` line names (its `## Mục tiêu` list), each AC is delivered
-    by a row not dropped, and the frontmatter has `focus:`. The `check links` problems are not here: `check plan` adds them."""
+    by a row not dropped, and the frontmatter has `focus:` (a problem when `intake.focus` is `required`, a warning in `warn`, nothing in `off`; the
+    warnings are `[(line, message)]`, never red). The `check links` problems are not here: `check plan` adds them."""
     doc, text = plans.read_plan(root, rel), plans._read(root, rel)
     if doc is None or text is None:
-        return [(1, "cannot read %s" % rel)], False, []
+        return [(1, "cannot read %s" % rel)], False, [], []
     (ip, spec), rp = plans.plan_refs(doc)
     found = _story_intent(root, spec, [ip] if ip else [])
     story = found is not None
     probs = [(1, m) for m in rp if "kb/specs/" in m]
-    if not kb_index.front_block(text.split("\n"))[0].get("focus"):
-        probs.append((1, "the frontmatter has no `focus: P<n>`"))
+    warns = []
+    if focus != "off" and not kb_index.front_block(text.split("\n"))[0].get("focus"):
+        (probs if focus == "required" else warns).append((1, "the frontmatter has no `focus: P<n>`"))
     stext = plans._read(root, spec) if spec else None
     if spec and stext is None:
         probs.append((1, "the spec %s cannot be read" % spec))
@@ -1679,13 +1744,22 @@ def plan_trace(root, rel, sp, base=None):
                 dropped.setdefault(n, []).append(r["id"])
             else:
                 delivered.add(n)
-    if story and plan_is_old(doc) and plan_rows_changed(root, rel, base):
-        probs.append((1, PLAN_OLD_MSG))
+    if story and plan_rows_changed(root, rel, base):
+        if plan_is_old(doc):
+            probs.append((1, PLAN_OLD_MSG))
+        for r in doc["rows"]:
+            t = r["title"]
+            bad = ("has no Title column" if t is None else "has an empty Title" if not t.strip() else
+                   "has a Title over %d characters" % TITLE_MAX if len(t.strip()) > TITLE_MAX else
+                   "has a Title on more than one line" if re.search(r"<br\s*/?>", t, re.I) else
+                   "has a backtick in its Title" if "`" in t else None)
+            if bad:
+                probs.append((r["line"], "row %s %s (a short outcome, one line, at most %d characters, no code)" % (r["id"], bad, TITLE_MAX)))
     for n in ids:
         if n not in delivered:
             probs.append((1, "AC%s is delivered by no row that is not dropped%s" % (
                 n, " (only by dropped row %s)" % ", ".join(dropped[n]) if n in dropped else "")))
-    return probs, story, ids
+    return probs, story, ids, warns
 
 
 def cmd_check_plan(root, target, cfg):
@@ -1694,7 +1768,15 @@ def cmd_check_plan(root, target, cfg):
     if not os.path.isfile(path):
         return die("cannot read %s" % path, 66)
     rel = _repo_rel(path, root)
-    found, story, ids = plan_trace(root, rel, cfg["tokens"]["spec"])
+    size = size_finding("plan", path, cfg)
+    if size and size[0]:
+        sys.stderr.write("kb: %s does not pass the plan size (1 problem):\n- %s\n" % (rel, size[1]))
+        return 65
+    if size:
+        sys.stdout.write("WARNING %s: %s\n" % (rel, size[1]))
+    found, story, ids, warns = plan_trace(root, rel, cfg["tokens"]["spec"], None, cfg["intake"]["focus"])
+    for ln, m in warns:
+        sys.stdout.write("WARNING %s:%d: %s\n" % (rel, ln, m))
     found = found + [(ln, "links: " + m) for src, ln, m, _t in plans.link_problems(root) if src == rel]
     if found and story:
         sys.stderr.write("kb: %s does not pass the plan trace (%d problem(s)):\n%s\n" % (rel, len(found), "\n".join("- line %d: %s" % f for f in found)))
@@ -1749,6 +1831,10 @@ def cmd_check(root, what, target, cfg=None, strict=False):
         else:
             hints.append("the earlier spec shape: a WARNING while its body is unchanged; once it changes, it takes the five "
                          "sections: %s" % five)
+    size = size_finding("spec", path, cfg or C.defaults())
+    if size:                                    # one length message: the byte one replaces the characters hint
+        hints[:] = [h for h in hints if not CHARS_HINT_RX.match(h)]
+        (probs if size[0] else hints).append(size[1])
     rel = os.path.relpath(path, root)
     for w in warns or ():
         sys.stdout.write("WARNING %s: %s (required on a new spec only: %s)\n" % (rel, w, why))
@@ -2297,6 +2383,7 @@ def read_only(argv):
     rc = kb_index.main(root, argv[0], argv[1:], cfg)
     if argv[0] == "check" and rc in (0, 65):
         rc = check_new_intents(root, cfg, "--strict" in argv) or rc
+        rc = check_sizes(root, cfg) or rc
         rc = check_real_runs(root, cfg) or rc
     return rc
 
@@ -2350,7 +2437,7 @@ def main(argv):
     if rest[0] == "focus":
         return cmd_focus(root, rest[1:])
     if rest[0] == "check" and rest[1:2] == ["links"]:
-        return plans.main(root, "links", rest[2:], lambda rel, base=None: plan_trace(root, rel, cfg["tokens"]["spec"], base)[:2],
+        return plans.main(root, "links", rest[2:], lambda rel, base=None: plan_trace(root, rel, cfg["tokens"]["spec"], base, cfg["intake"]["focus"])[:2],
                           guard=lambda rel, base: ac_guard(root, rel, base))
     if rest[0] == "check" and rest[1:2] == ["plan"] and len(rest) == 3:
         return cmd_check_plan(root, rest[2], cfg)

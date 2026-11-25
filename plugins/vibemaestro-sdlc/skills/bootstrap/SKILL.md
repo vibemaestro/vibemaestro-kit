@@ -15,13 +15,17 @@ skill `batonrun`. This file adds only what is particular to the bootstrap.
   attribution, `gh auth status`. Each installed plugin that depends on this one and ships `scripts/bootstrap_report.py` adds
   its own lines: what that plugin needs on this machine, and where its follow-up steps are written.
 - **At most two writes.** It installs the launcher, then merges the printed block into the user settings through the kind
-  `settings-merge`. The kind adds rules and absent attribution keys, and removes and flips nothing; a missing settings file
+  `settings-merge`. The kind adds rules and absent attribution keys, removes only the stale allow rules the engine names (below), and flips nothing; a missing settings file
   is created as `{}` first.
 - **Header.** `Stops: security-boundary`: it adds allow rules, so the owner signs, in every mode.
 - **Undo.** It puts each file back byte for byte while it is what the run left.
 - **Refusals.** It refuses at rehearse (the run's own exit 3) when there is nothing to do, or when adding rules cannot reach
   `permissions --check` rc 0 (an unsafe rule the owner must remove by hand; the refusal names it). The old broad ask rules
-  (from before the anchored block) are set aside: it never removes a rule, and `kit:permissions-upgrade` swaps them after it.
+  (from before the anchored block) are set aside: `kit:permissions-upgrade` swaps them after it.
+- **Stale allow rules.** It removes one kind of rule: an `allow` rule of the user settings, tool `Bash`, naming `baton` and an
+  `sdlc` version directory other than the installed one (the finding `names version …`). The plan line lists each, `remove allow -N
+  [the rules]`; nothing else is removed (not an ask or deny rule, not a project rule, not one of the installed version). When this
+  copy of `baton.py` does not run from a version directory the installed version is unknown and it removes none.
 
 ## Steps
 
