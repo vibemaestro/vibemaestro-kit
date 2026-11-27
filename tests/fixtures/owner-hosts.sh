@@ -95,3 +95,74 @@ owner_hosts() {
     [ "$why" = - ] || "$chas" "$(printf '%s\n' "$out" | sed -n 2p)" "$why" "[HOST] $id: the reason says '$why'"
   done <<< "$OWNER_HOSTS"
 }
+
+# owner_fold <code file> on|off|restore — the copy's LAUNCHER_FOLD: on runs the macOS launcher rule (app_launcher) on this
+# system, off runs it nowhere (a system other than macOS, also on a Mac), restore puts the line back (macOS only). A copy's
+# platform constant, as the suites' other copies' constants: not a break
+owner_fold() {
+  python3 - "$1" "$2" <<'PY' || { bad "owner_fold: LAUNCHER_FOLD not found in $1"; return 1; }
+import re, sys
+p, how = sys.argv[1:3]
+s = open(p, encoding="utf-8").read()
+new = {"on": "LAUNCHER_FOLD = True", "off": "LAUNCHER_FOLD = False", "restore": 'LAUNCHER_FOLD = sys.platform == "darwin"'}[how]
+s, n = re.subn(r'(?m)^LAUNCHER_FOLD = .*$', new, s)
+if n != 1:
+    sys.exit(1)
+open(p, "w", encoding="utf-8", newline="").write(s)
+PY
+}
+
+# owner_launchers <dir> <runner> <eq> <has> <code file> — the macOS desktop app's launcher (kb: the measured lineage): the app's
+# program, a launcher of its bundle that keeps Claude Code's command line after its own words, Claude Code. Every program is a
+# copy of bash at a path of its own, so the rule reads real program paths (/proc/<pid>/exe; proc_pidpath on macOS); a
+# program's script reads the words it passes on from a file where its own argv must not carry the flag. A row: id, fold (on:
+# the rule runs, off: a system other than macOS), the words the app starts, the decision. <code file> is the copy's baton.py
+# or brain_host.py (the file that holds LAUNCHER_FOLD); the rows end with the rule as the copy had it.
+owner_launchers() {
+  local dir=$1 runner=$2 ceq=$3 chas=$4 code=$5 id fold words want d b got exp out
+  if [ "${OS:-}" = Windows_NT ]; then
+    printf '  SKIP [LAUNCH] the macOS launcher rows: Windows reads no program path of a Git Bash script\n'; return 0
+  fi
+  b=$(command -v bash)
+  d="$dir/app"; mkdir -p "$d/Claude.app/Contents/MacOS" "$d/Claude.app/Contents/Helpers" "$d/Other.app/Contents/Helpers" "$d/bin" "$d/cc" "$d/cc2"
+  for p in Claude.app/Contents/MacOS/Claude Claude.app/Contents/Helpers/disclaimer Claude.app/Contents/Helpers/disclaimer2 \
+           Claude.app/Contents/Helpers/mid Other.app/Contents/Helpers/disclaimer bin/disclaimer cc/claude cc2/claude bin/nest \
+           bin/app bin/argv0; do
+    cp "$b" "$d/$p"
+  done
+  # app.sh <words file> <command…>: the app runs the words, then the command, as its child; launch.sh runs its words as its
+  # child; launch-off.sh drops one of them; launch-mid.sh hands them to a program that carries no flag; host.sh is Claude Code
+  printf 'A=(); while IFS= read -r w; do A+=("$w"); done < "$1"; shift\n"${A[@]}" "$@"\n' > "$d/app.sh"
+  printf '"$@"\n' > "$d/launch.sh"
+  printf 'a=("$@"); unset "a[4]"; "${a[@]}"\n' > "$d/launch-off.sh"
+  printf 'printf "%%s\\n" "$@" > "%s/mid.words"; "%s/Claude.app/Contents/Helpers/mid" "%s/app.sh" "%s/mid.words"\n' "$d" "$d" "$d" "$d" > "$d/launch-mid.sh"
+  printf 'while [ $# -gt 0 ] && [ "$1" != :: ]; do shift; done\nshift\nexport CLAUDE_PID=$$\n"$@"\n' > "$d/host.sh"
+  printf 'n=$1; shift; exec -a "$n" "$@"\n' > "$d/argv0.sh"     # the next program, its argv[0] the first word
+  printf 'exec "%s/cc2/claude" "%s/host.sh" --output-format stream-json --input-format stream-json --permission-prompt-tool=stdio :: "$@"\n' "$d" "$d" > "$d/nest.sh"
+  local A="$d/Claude.app/Contents/MacOS/Claude" H="$d/Claude.app/Contents/Helpers" CC="$d/cc/claude $d/host.sh $OWNER_SDK ::"
+  local rows="
+mac-launcher	on	$H/disclaimer $d/launch.sh $CC	ask
+non-macos	off	$H/disclaimer $d/launch.sh $CC	deny
+outside-bundle	on	$d/bin/disclaimer $d/launch.sh $CC	deny
+other-bundle	on	$d/Other.app/Contents/Helpers/disclaimer $d/launch.sh $CC	deny
+tail-one-off	on	$H/disclaimer $d/launch-off.sh $CC	deny
+not-direct-parent	on	$H/disclaimer $d/launch-mid.sh $CC	deny
+two-launchers	on	$H/disclaimer2 $d/launch.sh $H/disclaimer $d/launch.sh $CC	deny
+nested-sdk	on	$H/disclaimer $d/launch.sh $CC $d/bin/nest $d/nest.sh	deny
+argv0-in-bundle	on	$d/bin/argv0 $d/argv0.sh $H/disclaimer $d/bin/disclaimer $d/launch.sh $CC	deny
+parent-outside-bundle	on	$H/disclaimer $d/launch.sh $CC	deny
+"
+  while IFS=$'\t' read -r id fold words want; do
+    [ -n "$id" ] || continue
+    owner_fold "$code" "$fold" || return 1
+    printf '%s\n' $words > "$d/$id.words"
+    HOST=("$A" "$d/app.sh" "$d/$id.words"); HOST_ENV=(PATH="$PATH" CLAUDE_CODE_ENTRYPOINT=claude-desktop)
+    [ "$id" != parent-outside-bundle ] || HOST[0]="$d/bin/app"    # the app's own program outside any bundle
+    out=$("$runner" default); got=$(printf '%s\n' "$out" | head -n 1); exp=$([ "$want" = ask ] && echo ask/0 || echo deny)
+    [ "$got" = "$exp" ] || got="$got: $(printf '%s\n' "$out" | sed -n 2p)"
+    "$ceq" "$got" "$exp" "[LAUNCH] $id: $want"
+    [ "$want" = ask ] || "$chas" "$(printf '%s\n' "$out" | sed -n 2p)" "a process started with --permission-prompt-tool" \
+                           "[LAUNCH] $id: the reason names the process that carries the flag"
+  done <<< "$rows"
+  owner_fold "$code" restore; HOST=(); HOST_ENV=()
+}

@@ -1,0 +1,14 @@
+# Files over 1000 lines under plugins/ that tests/fixtures/size_lint.py lets stay: <lines> <path>. A number only goes down; no
+# line is added. Lower a number when its file shrinks; remove the line at 1000 or less.
+9096 plugins/vibemaestro-sdlc/scripts/baton.py
+5043 plugins/vibemaestro-brain/scripts/brain_store.py
+2471 plugins/vibemaestro-sdlc/scripts/kb.py
+2224 plugins/vibemaestro-sdlc/gates/merge_guard.py
+2186 plugins/vibemaestro-sdlc/scripts/release.py
+1941 plugins/vibemaestro-sdlc/gates/gh_write.py
+1611 plugins/vibemaestro-sdlc/scripts/vsdlc.py
+1460 plugins/vibemaestro-brain/scripts/brain_transfer.py
+1375 plugins/vibemaestro-brain/scripts/brain_hook.py
+1330 plugins/vibemaestro-sdlc/scripts/sdlc_config.py
+1309 plugins/vibemaestro-brain/scripts/brain_stale.py
+1190 plugins/vibemaestro-sdlc/scripts/kb_plan.py

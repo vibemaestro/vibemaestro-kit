@@ -213,8 +213,8 @@ if WINDOWS:                                             # no fcntl: msvcrt locks
 else:
     import fcntl
 O_BINARY = getattr(os, "O_BINARY", 0)                   # Windows opens a file in text mode without it: CRLF written, Ctrl-Z ends a read
-WINDOWS_WHERE = ("signed runs and the owner's dialog run on Linux and macOS, in a terminal, Claude Code's VS Code extension or "
-                 "the Claude desktop app")
+WINDOWS_WHERE = ("signed runs and the owner's dialog run on Linux and macOS, inside a `claude` session in a terminal, Claude Code's "
+                 "VS Code extension or the Claude desktop app")
 
 sys.dont_write_bytecode = True
 
@@ -3569,6 +3569,16 @@ def owner_mode():
     return v
 
 
+def unconfirmed_mode():
+    """The mode a mode file names without the owner's dialog line (written by an older baton.py), or None."""
+    try:
+        with open(os.path.join(state_dir(), "mode"), encoding="utf-8") as f:
+            lines = f.read().split("\n")
+    except (OSError, ValueError):
+        return None
+    return lines[0].strip() if lines[0].strip() in MODES and not proven(lines[1:]) else None
+
+
 def mode_source():
     """(mode, source): the owner's choice wins, then the machine policy, then manual by default. source: a SOURCES key."""
     m = owner_mode()
@@ -3726,6 +3736,7 @@ MANAGED_SETTINGS = ("/etc/claude-code/managed-settings.json", "/Library/Applicat
 SANDBOX_ENV = ("INTENT_SLUG", "SEAT")                  # vsdlc.SANDBOX_ENV: both set means a worker session (deprecated)
 ROLE_ENV = ("VIBEMAESTRO_ROLE", "worker")             # vsdlc.ROLE_ENV: the worker switch, exactly this value
 CLAUDE_PROGRAMS = ("claude", "claude.exe", "cli.js")    # an argv word naming Claude Code; also any path under claude/versions/
+LAUNCHER_FOLD = sys.platform == "darwin"   # the desktop app starts its Claude Code through a launcher of its bundle (app_launcher)
 PY_FLAGS = ("-I", "-B", "-E", "-s", "-S", "-u", "-O", "-OO", "-q", "-b", "-bb")  # python3 options a literal owner call may carry
 LINEAGE = True                                           # off only in the suites' isolated copies (tests/fixtures/baton-owner.sh)
 OWNER_PREFIXES = ("env", "xargs", "command", "exec", "nohup", "time", "sudo", "builtin", "nice", "timeout", "stdbuf", "setsid")
@@ -3750,6 +3761,33 @@ NO_MODE_DIALOG = ("a mode change is the owner's click in Claude Code's dialog: o
 SHAPE_MODE = ("the guard asks only for the printed command, exactly: <program> mode manual|auto, or <program> mode trust|untrust "
               "<remote>; printable ASCII, no quote or shell character; the program is this plugin's baton.py (`python3 [-I -B …] "
               "<it>`) or the installed launcher, by absolute path or as ~/… where the kit's text spells it so")
+
+
+IN_TERMINAL = "inside a `claude` session in a terminal"   # never "in a terminal": a plain shell has no session, so no dialog
+
+
+def owner_where(mode=False, queue=True):
+    """Where the owner's dialog opens when this session cannot: the end of a refusal for that reason. queue: this session can
+    queue the run (it has a session id)."""
+    if mode:
+        return "the owner makes this mode change %s, where the same `%s mode …` runs alone in its Bash call" % (
+            IN_TERMINAL, entry_command())
+    if not queue:
+        return "the owner signs %s" % IN_TERMINAL
+    return ("the owner signs %s: a run this session queued (`go --queue`) is signed there with /vibemaestro-sdlc:owner-sign, "
+            "then this session runs it (`run --queued <id>`)" % IN_TERMINAL)
+
+
+def no_dialog_here():
+    """Why the guard would refuse a `sign --by owner` or mode call from this session before any dialog, or None: no Claude
+    Code session, a -p run, or something that can answer the dialog in place of a human (the guard's own checks)."""
+    if not session_id():
+        return "no Claude Code session (CLAUDE_CODE_SESSION_ID)"
+    anc = ancestors()
+    if print_run(anc):
+        return "a -p run: no one answers its dialog"
+    ans = answerers(anc)
+    return "something can answer the dialog in place of a human: " + "; ".join(ans) if ans else None
 
 
 def asked_dir():
@@ -4021,6 +4059,74 @@ def official_host(argv):
             and flag_values(argv, "--permission-prompt-tool") == ["stdio"])
 
 
+def program_path(pid):
+    """The whole path of the program the running process `pid` runs, as the kernel holds it (Linux /proc/<pid>/exe, macOS
+    proc_pidpath), or ''. Never argv[0], which whoever starts a process chooses (macOS `ps -o comm=` prints argv[0])."""
+    try:
+        return os.readlink("/proc/%d/exe" % pid)
+    except OSError:
+        pass
+    if sys.platform != "darwin":
+        return ""
+    try:
+        import ctypes
+        buf = ctypes.create_string_buffer(4096)          # PROC_PIDPATHINFO_MAXSIZE
+        n = ctypes.CDLL(None).proc_pidpath(ctypes.c_int(pid), buf, ctypes.c_uint32(4096))   # libSystem, as every process has
+        return os.fsdecode(buf.raw[:n]) if n > 0 else ""
+    except (ImportError, OSError, AttributeError, ValueError):
+        return ""
+
+
+def pids_above():
+    """[(pid, argv)] of the processes above this one, nearest first, each argv read as ancestors reads it."""
+    out, pid = [], os.getppid()
+    while pid > 1 and len(out) < 64:
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+            with open("/proc/%d/stat" % pid) as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            try:
+                r = subprocess.run(["ps", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+                ppid_s, _, args = r.stdout.strip().partition(" ")
+                ppid, argv = int(ppid_s), args.split()
+            except (OSError, ValueError, subprocess.SubprocessError):
+                break
+        out.append((pid, argv))
+        pid = ppid
+    return out
+
+
+def app_bundle(path):
+    """The macOS app bundle (`….app`) an absolute program path lies inside, or None."""
+    k = path.find(".app/Contents/")
+    return path[:k + 4] if os.path.isabs(path) and k > 0 else None
+
+
+def app_launcher(anc):
+    """The index in `anc` of the macOS desktop app's launcher, or None. The app starts its Claude Code through a program of its
+    own bundle that keeps Claude Code's command line after its own words, so two processes carry the prompt tool; it is
+    folded into its child (vibemaestro-brain applies the same rule, _app_launcher). Only on macOS, and only the
+    outermost process carrying the prompt tool, whose direct child carries it too and is an official host, whose argv is
+    at least one word of its own followed by exactly that child's argv, and whose program lies inside the `.app` bundle of
+    its own parent's program. A launcher above a launcher is not folded: its child is not Claude Code."""
+    if not LAUNCHER_FOLD:
+        return None
+    at = [i for i, a in enumerate(anc) if prompt_tool(a[0])]
+    if len(at) < 2 or at[-2] != at[-1] - 1 or at[-1] + 1 >= len(anc):
+        return None
+    i = at[-1]
+    argv, child = anc[i][0], anc[i - 1][0]
+    if not (official_host(child) and len(argv) > len(child) and argv[-len(child):] == child):
+        return None
+    walk = pids_above()                                 # the same walk with each pid: the programs are read by pid
+    if len(walk) <= i + 1 or [walk[j][1] for j in (i - 1, i, i + 1)] != [anc[j][0] for j in (i - 1, i, i + 1)]:
+        return None
+    mine = app_bundle(program_path(walk[i][0]))
+    return i if mine and mine == app_bundle(program_path(walk[i + 1][0])) else None
+
+
 def print_run(anc):
     """True when an ancestor is Claude Code run with -p/--print: no one answers its dialog."""
     for argv, _c, _g, _h in anc:
@@ -4098,10 +4204,12 @@ def answerers(anc):
                 if isinstance(e, dict) and plugin_answers(str(e.get("installPath", ""))):
                     found.append("a PermissionRequest hook in the enabled plugin %s" % key.split("@")[0])
     # the official host's Claude Code is excused only when every process with a prompt tool has its command line: an SDK app
-    # run inside the host inherits its entry point but not its command line, while a Git Bash fork of one process keeps it
-    tools = {tuple(argv) for argv, _c, _g, _h in anc if prompt_tool(argv)}
-    for argv, cwd, _, _ in anc:
-        if prompt_tool(argv) and not (official_host(argv) and tools == {tuple(argv)}):
+    # run inside the host inherits its entry point but not its command line, while a Git Bash fork of one process keeps it;
+    # the macOS app's launcher is folded into the Claude Code it starts (app_launcher)
+    skip = app_launcher(anc)
+    tools = {tuple(argv) for i, (argv, _c, _g, _h) in enumerate(anc) if prompt_tool(argv) and i != skip}
+    for i, (argv, cwd, _, _) in enumerate(anc):
+        if prompt_tool(argv) and i != skip and not (official_host(argv) and tools == {tuple(argv)}):
             found.append("a process started with --permission-prompt-tool")
         for v in flag_values(argv, "--settings"):
             if v.lstrip().startswith("{"):
@@ -4157,7 +4265,7 @@ def owner_proof(argv):
                 % (("sets the mode", "mode unchanged", policy_note() if argv[1:2] and argv[1] in MODES else "") if mode
                    else ("signs", "nothing signed", ""))), path, rec
     if not session_id():
-        return "no Claude Code session (CLAUDE_CODE_SESSION_ID): " + nod, None, None
+        return "no Claude Code session (CLAUDE_CODE_SESSION_ID), so no dialog: " + owner_where(mode, queue=False), None, None
     if path is None:
         return ("no fresh record of the owner's dialog for this very command in this session: %s. Stop and tell the owner: if "
                 "they clicked yes, the record had expired (%d s), another Bash call of this session voided it, or an earlier "
@@ -4165,10 +4273,10 @@ def owner_proof(argv):
                 % (nod, ASKED_MAX_AGE)), None, None
     anc = ancestors()
     if print_run(anc):
-        return "a -p run: no one answers its dialog", path, rec
+        return "a -p run: no one answers its dialog; " + owner_where(mode), path, rec
     ans = answerers(anc)
     if ans:
-        return "something can answer the dialog in place of a human: " + "; ".join(ans), path, rec
+        return "something can answer the dialog in place of a human: %s; %s" % ("; ".join(ans), owner_where(mode)), path, rec
     bad = owner_unsafe(anc, "mode" if mode else "sign --by owner")
     if bad:
         return "; ".join(bad) + " (remove it: `permissions --check` names it)", path, rec
@@ -4441,13 +4549,13 @@ def guard_owner(inp):
     lin = lineage()
     ci = claude_index(lin, os.environ.get("CLAUDE_PID", ""))
     if LINEAGE and ci is None:
-        return deny("no Claude Code process above the hook, so no process can be bound to the owner's dialog")
+        return deny("no Claude Code process above the hook, so no process can be bound to the owner's dialog; " + owner_where(is_mode))
     anc = ancestors()
     if print_run(anc) or (ci is not None and headless(lin[ci][1])):
-        return deny("a -p run: no one answers its dialog")
+        return deny("a -p run: no one answers its dialog; " + owner_where(is_mode))
     ans = answerers(anc)
     if ans:
-        return deny("something can answer the dialog in place of a human: " + "; ".join(ans))
+        return deny("something can answer the dialog in place of a human: %s; %s" % ("; ".join(ans), owner_where(is_mode)))
     bad = owner_unsafe(anc, what)
     if bad:
         return deny("; ".join(bad) + " (remove it: `permissions --check` names it)")
@@ -5652,6 +5760,7 @@ WINDOW_FLOOR_PATHS = (
     "plugins/vibemaestro-brain/hooks/hooks.json",           # registers the brain's owner guard
     "plugins/vibemaestro-brain/scripts/brain.py",           # the owner commands' grammar the dialog is built from
     "plugins/vibemaestro-brain/scripts/brain_hook.py",      # the brain's owner guard (guard-owner)
+    "plugins/vibemaestro-brain/scripts/brain_host.py",      # which prompt-tool process the owner guard lets through (macOS)
     "plugins/vibemaestro-brain/scripts/brain_store.py",     # owner items, a window's scope and `brain windows`
     "plugins/vibemaestro-brain/scripts/pyrun.sh",           # runs the brain's hooks, its owner guard among them
     "plugins/vibemaestro-sdlc/.claude-plugin/plugin.json",  # what this plugin loads
@@ -6279,6 +6388,21 @@ def owner_commands(path, args, seal):
     return "%s sign --by owner --seal %s %s" % (entry_command(), seal, words), "%s run %s" % (entry_command(), words)
 
 
+def elsewhere_lines(path, call, stops, why):
+    """The lines after the decision card where this session cannot open the owner's dialog (why): where the owner signs and
+    how the run gets there (call: the arguments as given), never the sign command the guard refuses here. Both go lines carry
+    --reuse, since the bytes the card shows are run later than the 120 s a fresh file has, and the other session gets the
+    directory, which the binding holds."""
+    word = path if re.match(r"(?:kit|kind|project|user):", path) else os.path.abspath(path)
+    words = " ".join(shlex.quote(a) for a in [word] + call)
+    lines = ["not here:          %s; the owner signs %s" % (why, IN_TERMINAL)]
+    if session_id() and "secrets" not in stops:          # go --queue needs a session and never takes a secrets run
+        lines += ["queue here:        %s go --queue --reuse %s" % (entry_command(), words),
+                  "the owner there:   /vibemaestro-sdlc:owner-sign",
+                  "then here:         %s run --queued <id>" % entry_command()]
+    return lines + ["or there, from %s: %s go --reuse %s" % (shlex.quote(os.getcwd()), entry_command(), words)]
+
+
 def sandbox_handoff(path, args, seal, stops, params):
     """The lines a pod session reads after the decision card in place of the owner's sign and run commands: nobody in a pod
     signs as the owner (its guard refuses it), so the call goes to the coordinator, under a name its machine can run. A session
@@ -6745,14 +6869,19 @@ class Held:
         return "".join(self.parts)
 
 
-def mode_question():
+def mode_question(why_not=None):
     """The card lines of a mode nobody chose yet: ask the owner once. On the answer the session runs `mode` alone in its Bash
     call: the plugin's hook opens the owner's dialog and writes the record a mode change needs (owner_sets_mode), whatever the
-    ask rules say; a mode call with no record (a `!` command, a wrapper, a script) is refused."""
+    ask rules say; a mode call with no record (a `!` command, a wrapper, a script) is refused. why_not: why this session
+    cannot open that dialog (no_dialog_here); the card then says where the owner answers."""
     cmd = "%s mode <answer>" % entry_command()
-    how = "on the owner's answer the session runs `%s` alone in its Bash call; the plugin's hook opens the owner's dialog" % cmd
-    return ["  Stop:     mode manual (not chosen yet): ask the owner once which mode; auto is recommended on a solo machine"
-            " (help modes)", "  Mode:     " + how]
+    old = unconfirmed_mode()
+    ask = ("not chosen yet; the mode file says %s, unconfirmed: written by an older version): ask the owner once to confirm it"
+           % old if old else "not chosen yet): ask the owner once which mode")
+    how = ("not from this session (%s): the owner answers %s, where `%s` runs alone in its Bash call" % (why_not, IN_TERMINAL, cmd)
+           if why_not else
+           "on the owner's answer the session runs `%s` alone in its Bash call; the plugin's hook opens the owner's dialog" % cmd)
+    return ["  Stop:     mode manual (%s; auto is recommended on a solo machine (help modes)" % ask, "  Mode:     " + how]
 
 
 def decision_card(s, plan, stops, mode, chosen=True, question=None):
@@ -6987,16 +7116,18 @@ def cmd_go(rest):
                 log_event(d, event="go", result="owner", name=s.name, script=s.sha[:12], args=args,
                           dir=os.path.realpath(os.getcwd()), mode=mode, baton=s.baton_id())
             asks = mode == "manual" and not chosen and not s.call_stops()     # a Stops: none baton waits on the mode question
-            question = mode_question() if asks and not in_sandbox() else None   # a pod has no owner to ask: no mode command
+            why_not = None if in_sandbox() else no_dialog_here()   # a pod has its own hand-off below
+            question = mode_question(None if queue else why_not) if asks and not in_sandbox() else None   # a pod has no owner to ask
             card = decision_card(s, plan, s.call_stops(), mode, chosen or asks, question)
             if in_sandbox():                            # nobody in a pod sets the mode
                 why = why.replace(" (`baton mode` shows it; the owner sets it)", "")
             if queue and not needs_quoting(s, args):
                 word = path if re.match(r"(?:kit|kind|project|user):", path) else os.path.abspath(path)
                 it = queue_item(s, word, call, args, plan, s.call_stops(), mode, card, detail)
-                say("go: queued %s — %s: %d write%s; the owner signs it through the owner's dialog, in this session or another, "
+                say("go: queued %s — %s: %d write%s; the owner signs it through the owner's dialog, %s, "
                     "before %s (/vibemaestro-sdlc:owner-sign); wait: %s log --wait-queued %s; then: %s run --queued %s", it["id"], s.name,
-                    len(plan), "" if len(plan) == 1 else "s", it["expires"], entry_command(), it["id"], entry_command(), it["id"])
+                    len(plan), "" if len(plan) == 1 else "s", "%s (not this session: %s)" % (IN_TERMINAL, why_not) if why_not
+                    else "in this session or another", it["expires"], entry_command(), it["id"], entry_command(), it["id"])
                 return OK
             for ln in card:
                 say("%s", ln)
@@ -7022,6 +7153,9 @@ def cmd_go(rest):
                 else:
                     for ln in sandbox_handoff(path, args, seal, stops, s.params is not None):
                         say("%s", ln)
+            elif why_not:                               # the guard refuses its sign here: print where it works instead
+                for ln in elsewhere_lines(path, call, s.call_stops(), why_not):
+                    say("%s", ln)
             else:
                 say("on the owner's go: %s", sign_cmd)
                 say("then:              %s", run_cmd)
@@ -8149,7 +8283,12 @@ def cmd_mode(rest):
     if not rest:
         m, src = mode_source()
         say("%s", m)                                    # stdout: the word alone, for a script that reads it
-        say("baton: mode %s from %s", m, SOURCES[src], out=sys.stderr)
+        old = unconfirmed_mode() if src == "default" else None
+        if old:
+            say("baton: mode %s: the mode file says %s, unconfirmed (written by an older version): the owner confirms it once "
+                "with `%s mode %s`", m, old, entry_command(), old, out=sys.stderr)
+        else:
+            say("baton: mode %s from %s", m, SOURCES[src], out=sys.stderr)
         return OK
     if rest[0] in ("remotes", "trust", "untrust"):
         return cmd_remotes(rest)

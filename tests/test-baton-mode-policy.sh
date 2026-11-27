@@ -262,6 +262,24 @@ fam_e2e() {
   hasnt "$(cat "$BT_OUT")" "NOTE" "[E] no file: …and no note"
   eq "$(bt "$P" "$W" go "$W/plain.sh" "$W/o.txt" hello)" 8 "[E] no file: a Stops: none baton stops as before (exit 8)"
   has "$(both)" "not chosen yet" "[E] no file: …and asks the $M question as before"
+  # [E] a file an older version wrote (no owner's dialog line): manual, and said to be the file's value, unconfirmed
+  mk_cases "$P"; mkdir -p "$ST/vibemaestro/baton"; printf 'auto\n' > "$ST/vibemaestro/baton/$M"
+  eq "$(bt "$P" "$W" "$M")/$(cat "$BT_OUT")/$(cat "$BT_ERR")" \
+     "0/manual/baton: $M manual: the $M file says auto, unconfirmed (written by an older version): the owner confirms it once with \`python3 $P/scripts/baton.py $M auto\`" \
+     "[E] an older version's auto: stdout stays manual, stderr says the file's auto is unconfirmed and how to confirm it"
+  eq "$(bt "$P" "$W" go "$W/plain.sh" "$W/o.txt" hello)" 8 "[E] an older version's auto: a Stops: none baton stops (exit 8)"
+  has "$(both)" "  Stop:     $M manual (not chosen yet; the $M file says auto, unconfirmed: written by an older version): ask the owner once to confirm it" \
+      "[E] an older version's auto: …the card's question names the file's auto, unconfirmed"
+  printf 'manual\n' > "$ST/vibemaestro/baton/$M"
+  eq "$(bt "$P" "$W" "$M")/$(cat "$BT_ERR")" \
+     "0/baton: $M manual: the $M file says manual, unconfirmed (written by an older version): the owner confirms it once with \`python3 $P/scripts/baton.py $M manual\`" \
+     "[E] an older version's manual: unconfirmed too"
+  printf 'sometimes\n' > "$ST/vibemaestro/baton/$M"
+  eq "$(bt "$P" "$W" "$M")/$(cat "$BT_ERR")" "0/baton: $M manual from the default" "[E] an older version's file with no $M value: the default, nothing to confirm"
+  tree "$T" auto; printf 'manual\n' > "$ST/vibemaestro/baton/$M"
+  eq "$(bt "$P" "$W" "$M")/$(cat "$BT_OUT")/$(cat "$BT_ERR")" "0/auto/baton: $M auto from $SRC" \
+     "[E] an older version's manual under policy auto: the policy, not an unconfirmed file"
+  tree "$T"
 }
 
 echo "== the real plugin =="

@@ -754,6 +754,11 @@ case_hook_hosts() {  # [HOST] the shared table: the official hosts' dialog write
   rm -f "$MANAGED/managed-settings.json"
 }
 
+case_hook_launchers() {  # [LAUNCH] the shared table: the macOS app's launcher of its bundle is folded into its Claude Code; nothing else is
+  newp
+  owner_launchers "$TMP/launch$NP" brain_host_row c_eq c_has "$BROOT/scripts/brain_host.py"
+}
+
 case_hook_deny() {
   newp
   local m
@@ -1276,7 +1281,7 @@ print(t)')   # an op from a clock two hours ahead, chained as a write chains it:
   c_rc 5 "[W] a broken chain: brain windows refuses, rc 5"
 }
 
-for c in case_window case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_hosts case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_win_walk case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_result_text case_owner_budget case_chars case_answerer case_worker; do
+for c in case_window case_batch_fresh case_batch case_allowlist case_hook_mention case_hook_forms case_hook_project case_hook_ask case_hook_hosts case_hook_launchers case_hook_deny case_hook_next case_hook_void case_hook_line case_hook_literal case_hook_answerer case_hook_switch case_parenthome case_nlname case_isolation case_win_walk case_homes case_rawname case_grammar2 case_answerer2 case_grammar case_norecord case_mismatch case_used case_void case_fresh case_verbs case_result_text case_owner_budget case_chars case_answerer case_worker; do
   run_case $c; done
 cd "$TMP" || exit 1
 

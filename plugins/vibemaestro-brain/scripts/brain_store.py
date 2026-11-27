@@ -2338,11 +2338,11 @@ def answerers(project=None):
     # the official host's Claude Code is excused only when every process with a prompt tool has its command line: an SDK app
     # run inside the host inherits its entry point but not its command line, while a Git Bash fork of one process keeps it
     # (win_ancestors gives each process twice, split both ways: a process is its pair)
-    step = 2 if WINDOWS else 1
+    step, skip = 2 if WINDOWS else 1, __import__("brain_host")._app_launcher(anc)   # the macOS app's launcher, folded: brain_host.py
     procs = [tuple(tuple(a) for a, _c, _g, _h in anc[i - i % step:i - i % step + step]) for i in range(len(anc))]
-    tools = {procs[i] for i, (argv, _c, _g, _h) in enumerate(anc) if prompt_tool(argv)}
+    tools = {procs[i] for i, (argv, _c, _g, _h) in enumerate(anc) if prompt_tool(argv) and i != skip}
     for i, (argv, cwd, _, _) in enumerate(anc):
-        if prompt_tool(argv) and not (official_host(argv) and tools == {procs[i]}):
+        if prompt_tool(argv) and i != skip and not (official_host(argv) and tools == {procs[i]}):
             found.append("a process started with --permission-prompt-tool")
         for v in _flag_values(argv, "--settings"):
             if WINDOWS and not cwd and not v.lstrip().startswith("{") and not _drive_abs(v):

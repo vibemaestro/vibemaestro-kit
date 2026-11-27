@@ -35,10 +35,10 @@ fresh_env() {
   H="$(fresh)/home"; ST="$(fresh)/state"; PJ="$(fresh)/proj"
   mkdir -p "$H/.claude" "$PJ"; L="$ST/vibemaestro/baton/bin/baton"
 }
-# pb <plugin> <baton args...> — rc of baton.py run from the project; stdout in $PB_OUT, stderr in $PB_ERR
+# pb <plugin> <baton args...> — rc of baton.py run from the project (in session PB_SID when set); stdout in $PB_OUT, stderr in $PB_ERR
 pb() {
   local p=$1; shift
-  ( cd "$PJ" && cenv HOME="$H" XDG_STATE_HOME="$ST" CLAUDE_PROJECT_DIR="$PJ" python3 "$p/scripts/baton.py" "$@" ) >"$PB_OUT" 2>"$PB_ERR"
+  ( cd "$PJ" && cenv HOME="$H" XDG_STATE_HOME="$ST" CLAUDE_PROJECT_DIR="$PJ" ${PB_SID:+CLAUDE_CODE_SESSION_ID="$PB_SID"} python3 "$p/scripts/baton.py" "$@" ) >"$PB_OUT" 2>"$PB_ERR"
   echo $?
 }
 # kinds — the sorted unique finding kinds of the last `permissions --check` output
@@ -571,13 +571,13 @@ fam_mode_question() {
   fresh_env
   cp "$SRC_ROOT/tests/fixtures/baton-positional.sh" "$PJ/act.sh"; A="$PJ/act.sh"
   eq "$(pb "$P" permissions --check)" 7 "[mode-question] instrument: a fresh HOME without rules: permissions --check rc 7"
-  eq "$(pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] no rules, mode not chosen: go rc 8"
+  eq "$(PB_SID=s-owner pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] no rules, mode not chosen: go rc 8"
   has "$(cat "$PB_OUT")" "on the owner's answer the session runs \`python3 " "[mode-question] no rules: the session runs mode (the hook asks)"
   hasnt "$(cat "$PB_OUT")" "\`! " "[mode-question] no rules: no \`!\` command for the owner (a mode call with no record is refused)"
   good_settings "$P"; cp "$PJ/good.json" "$H/.claude/settings.json"
   eq "$(pb "$P" permissions --check)" 0 "[mode-question] instrument: the printed rules and the launcher: permissions --check rc 0"
   touch "$A"
-  eq "$(pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] rules in force, mode not chosen: go rc 8"
+  eq "$(PB_SID=s-owner pb "$P" go "$A" "$PJ/o.txt" hello)" 8 "[mode-question] rules in force, mode not chosen: go rc 8"
   has "$(cat "$PB_OUT")" "on the owner's answer the session runs \`$L mode <answer>\` alone in its Bash call; the plugin's hook opens the owner's dialog" \
     "[mode-question] rules in force: the session runs mode through the launcher, alone; the hook opens the dialog"
   [ ! -e "$ST/vibemaestro/baton/mode" ] && [ ! -e "$PJ/o.txt" ] && ok "[mode-question] go sets no mode and writes nothing" \
@@ -614,7 +614,8 @@ FAMILIES="fam_print fam_check fam_space fam_attribution fam_scopes fam_launcher 
 
 echo "== the real plugin =="
 for f in $FAMILIES; do
-  if [ "$f" = fam_session ]; then d="$TMP/real-session"; mk_plugin_copy "$d"; "$f" "$d"; else "$f" "$PLUGIN"; fi   # it breaks baton.py
+  # fam_session breaks baton.py; fam_mode_question's card reads the machine (its mode policy, settings and processes)
+  if [ "$f" = fam_session ] || [ "$f" = fam_mode_question ]; then d="$TMP/real-$f"; mk_plugin_copy "$d"; "$f" "$d"; else "$f" "$PLUGIN"; fi
 done
 
 echo "== nothing written outside the scratch tree =="

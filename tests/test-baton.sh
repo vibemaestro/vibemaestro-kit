@@ -2456,7 +2456,7 @@ fam_run_last() {
 # bts <plugin> <dir> <stdin file> <baton args...> — bt with stdin read from a file
 bts() {
   local p=$1 d=$2 i=$3; shift 3
-  ( cd "$d" && cenv XDG_STATE_HOME="$ST" ${BT_ENV[@]+"${BT_ENV[@]}"} python3 "$p/scripts/baton.py" "$@" ) < "$i" > "$BT_OUT" 2>&1; echo $?
+  ( cd "$d" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID="$OWNER_SID" ${BT_ENV[@]+"${BT_ENV[@]}"} python3 "$p/scripts/baton.py" "$@" ) < "$i" > "$BT_OUT" 2>&1; echo $?
 }
 # swap_at <script> <dir> <n> — plant an act line that, on the act's n-th call (0-based: go's rehearse, sign's rehearse, …), appends a
 # comment to the file baton runs ($BATON_SCRIPT, the stored stdin file): a byte changed between two phases

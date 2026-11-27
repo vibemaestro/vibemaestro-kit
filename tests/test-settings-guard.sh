@@ -19,6 +19,8 @@ SRC_ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
 . "$HERE/fixtures/lib.sh"
 # shellcheck source=fixtures/ports.sh
 . "$HERE/fixtures/ports.sh"
+# shellcheck source=fixtures/baton-owner.sh
+. "$HERE/fixtures/baton-owner.sh"    # mk_plugin_copy isolates the copy's baton from the machine (a pod's managed settings)
 
 PLUGIN="$SRC_ROOT/plugins/vibemaestro-sdlc"
 TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
@@ -442,9 +444,9 @@ fam_pod() {  # [Q] in a pod the owner never signs: the guard's message and the k
         "$W/.claude/settings.json" "$W/rules.json" 2>&1; echo "rc=$?")
   has "$out" "rc=8" "[Q] go kind:settings-merge with VIBEMAESTRO_ROLE=worker alone: exit 8"
   hasnt "$out" "sign --by owner" "[Q] …no sign line"
-  out=$(cd "$W" && cenv XDG_STATE_HOME="$st" python3 "$P/scripts/baton.py" go kind:settings-merge \
+  out=$(cd "$W" && cenv XDG_STATE_HOME="$st" CLAUDE_CODE_SESSION_ID=s-owner python3 "$P/scripts/baton.py" go kind:settings-merge \
         "$W/.claude/settings.json" "$W/rules.json" 2>&1; echo "rc=$?")
-  has "$out" "on the owner's go: " "[Q] outside a pod: the owner's sign line stays"
+  has "$out" "on the owner's go: " "[Q] outside a pod, in a Claude Code session: the owner's sign line stays"
 }
 
 fam_next() {  # [N] the deny names the exact next step: the rules file's content, the launcher as it is typed, the real settings path

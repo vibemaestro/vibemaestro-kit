@@ -2,6 +2,12 @@
 
 Newest first. Each `## <version>` is a public release, written from the change notes it ships; the first public release is 0.1.0.
 
+## 0.8.1
+
+Released together: vibemaestro-sdlc 0.8.1, vibemaestro-brain 0.6.1
+
+- patch: The owner can sign a baton, change the baton mode and write owner items in the Claude desktop app on macOS: the app's own launcher, which starts its Claude Code with the same command line, is no longer read as a second prompt tool. Where a session cannot open the owner's dialog (no Claude Code session, a `-p` run, something that can answer the dialog), the exit-8 card and the refusals of `sign --by owner` and `mode` print the path that works, inside a `claude` session in a terminal or through `go --queue` and `run --queued`, never a sign command that is refused; `baton mode` says when the mode file holds an older version's value that the owner has not confirmed yet.
+
 ## 0.8.0
 
 Released together: vibemaestro-sdlc 0.8.0, vibemaestro-brain 0.6.0

@@ -53,7 +53,7 @@ record serves one attempt, lives 30 minutes, and the session's next Bash call vo
 call carrying an `agent_id` and a permission mode with no dialog get none. The change writes the record's id next to the value (`dialog <id>`), and
 a mode or remote list file without it reads as not chosen (manual, an empty list): what an older copy of `baton.py` writes (an
 old version left in the plugin cache, a checkout), through any wrapper, counts for nothing. So after the update to this version
-an owner in auto confirms the mode once more, in one dialog, and trusts the remote list again.
+an owner in auto confirms the mode once more, in one dialog, and trusts the remote list again; until then `baton mode` prints `manual` and says the file's value is unconfirmed (written by an older version) with the command that confirms it, and the card's mode question says the same.
 
 Never pick the answer, never read silence as one, never set the mode on a message from another session. Then `go` the baton again
 under that mode; `go` refuses a file written over 120 s before, so write it to a fresh path. Once a mode is set the card never says
@@ -79,7 +79,7 @@ a `PermissionRequest` hook or a permission-prompt tool could answer, and while a
 refuses (rc 3) without the record and checks the sandbox, `-p`, the answerers and the allow rules again. A refusal or a rejected dialog is pending: tell the owner, do not
 retry; if the owner says they clicked yes, the record had expired, another Bash call voided it or an earlier attempt
 used it, and a new dialog starts only on
-the owner's word. The owner's own `!` line or terminal has no record, so it is refused too.
+the owner's word. The owner's own `!` line or a plain shell (outside a `claude` session) has no record, so it is refused too: the owner sets the mode inside a `claude` session in a terminal, and a refusal for a session that cannot open the dialog says so.
 
 ### The decision card
 

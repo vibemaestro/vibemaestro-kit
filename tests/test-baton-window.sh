@@ -230,7 +230,7 @@ fam_floor_merge() {  # [floor-merge] an owner merge of a PR that changes the sig
   eq "$(btc "$W" go kit:owner-merge o/r 1 "$H1" o/q 2 "$H2")" 8 "[$T] two PRs in one call, the second changes the merge config: exit 8"
   eq "$(wline)" "a window never lowers an owner merge of o/q#2: it changes .vibemaestro/sdlc.json, which decides who signs" "[$T] …named"
   eq "$(cat "$TMP/merges.log")" "" "[$T] …nothing merged by any of these"
-  for f in plugins/vibemaestro-brain/scripts/pyrun.sh plugins/vibemaestro-sdlc/gates/baton.py; do
+  for f in plugins/vibemaestro-brain/scripts/pyrun.sh plugins/vibemaestro-brain/scripts/brain_host.py plugins/vibemaestro-sdlc/gates/baton.py; do
     wset 'w["prs"]["o/r#1"]["files"] = ["'"$f"'"]'
     eq "$(btc "$W" go kit:owner-merge o/r 1 "$H1")" 8 "[$T] a PR that changes $f: exit 8"
     eq "$(wline)" "a window never lowers an owner merge of o/r#1: it changes $f, which decides who signs" "[$T] …named"

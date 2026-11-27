@@ -82,7 +82,7 @@ msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)' "$(win "$ST")" "$(win "$1")" "$(win "$2"
 }
 await() { local i; for i in $(seq 200); do [ -e "$1" ] && return 0; sleep 0.05; done; return 1; }
 lines() { local n; n=$(grep -c -F -- "$1" "$ST/log.tsv" 2>/dev/null); echo "${n:-0}"; }   # grep -c prints 0 itself, with rc 1
-ONE_LINE="does not run on Windows yet: a signed run needs the owner's dialog, which does not run there (signed runs and the owner's dialog run on Linux and macOS, in a terminal, Claude Code's VS Code extension or the Claude desktop app); nothing ran"
+ONE_LINE="does not run on Windows yet: a signed run needs the owner's dialog, which does not run there (signed runs and the owner's dialog run on Linux and macOS, inside a \`claude\` session in a terminal, Claude Code's VS Code extension or the Claude desktop app); nothing ran"
 
 echo "== [I] import, and the commands that only read =="
 eq "$(cd "$W" && python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import baton; print("imported")' "$(win "$PL/scripts")" 2>&1 | tr -d '\r')" \
@@ -187,7 +187,7 @@ print(json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "tool_nam
                   "cwd": sys.argv[1], "tool_input": {"command": sys.argv[2]}}))' "$(win "$W")" "$1" \
     | CLAUDE_PLUGIN_ROOT="$PL" capped /bin/sh "$PL/scripts/pyrun.sh" scripts/baton-guard.py 2>&1 | tr -d '\r')
 }
-DENY="the owner's dialog does not run on Windows yet (signed runs and the owner's dialog run on Linux and macOS, in a terminal, Claude Code's VS Code extension or the Claude desktop app)"
+DENY="the owner's dialog does not run on Windows yet (signed runs and the owner's dialog run on Linux and macOS, inside a \`claude\` session in a terminal, Claude Code's VS Code extension or the Claude desktop app)"
 O=$(guard "python3 $(cygpath -m "$PL/scripts/baton.py") sign --by owner --seal $SEAL kit:soul-line")
 eq "$(dec "$O")|$(why "$O")" "deny|baton: sign --by owner refused: $DENY" "[P4] the owner hook on sign --by owner: deny, one plain line"
 O=$(guard "python3 $(cygpath -m "$PL/scripts/baton.py") mode auto")

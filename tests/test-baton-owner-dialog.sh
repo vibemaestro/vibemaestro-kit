@@ -180,6 +180,62 @@ fam_owner_who() {  # [W] who answers: a sandbox, a subagent, a -p run, an answer
   BT_ENV=()
 }
 
+fam_owner_where() {  # [WH] a session that cannot open the owner's dialog: the card and the refusals say where it opens
+  local P=$1 out B T="inside a \`claude\` session in a terminal" A
+  setup "$P"; fake_claude "$W"; B="python3 $P/scripts/baton.py"
+  A="answer the dialog in place of a human: a process started with --permission-prompt-tool"
+  go_() { ( cd "$W" && cenv XDG_STATE_HOME="$ST" ${GO_ENV[@]+"${GO_ENV[@]}"} ${WRAP[@]+"${WRAP[@]}"} python3 "$P/scripts/baton.py" go act.sh "$W/out.txt" hello ) > "$BT_OUT" 2>&1; echo $?; }
+  GO_ENV=(CLAUDE_CODE_SESSION_ID=s-owner); WRAP=()
+  eq "$(go_)" 8 "[WH] control: go on a Stops: none baton, the mode not chosen: rc 8"
+  has "$(cat "$BT_OUT")" "on the owner's go: $B sign --by owner --seal " "[WH] control: …a session that opens the dialog gets the sign command"
+  WRAP=(bash "$W/claude" --permission-prompt-tool mcp__x__y)
+  eq "$(go_)" 8 "[WH] a --permission-prompt-tool ancestor: go stops for the owner, rc 8"; out=$(cat "$BT_OUT")
+  hasnt "$out" "sign --by owner" "[WH] …the card prints no sign command, which the guard refuses here"
+  has "$out" "not here:          something can $A; the owner signs $T" "[WH] …it says why not here and where the owner signs"
+  has "$out" "queue here:        $B go --queue --reuse $W/act.sh $W/out.txt hello" "[WH] …how this session queues the run (--reuse: run after the 120 s)"
+  has "$out" "the owner there:   /vibemaestro-sdlc:owner-sign" "[WH] …how the owner signs it there"
+  has "$out" "then here:         $B run --queued <id>" "[WH] …how this session runs it after"
+  has "$out" "  Mode:     not from this session (something can $A): the owner answers $T, where \`$B mode <answer>\` runs alone in its Bash call" \
+      "[WH] …the mode question says where the owner answers"
+  eq "$(HOOK_FIELD=permissionDecisionReason hook "$P")" \
+     "baton: sign --by owner refused: something can $A; the owner signs $T: a run this session queued (\`go --queue\`) is signed there with /vibemaestro-sdlc:owner-sign, then this session runs it (\`run --queued <id>\`)" \
+     "[WH] the guard's refusal of sign names where the owner signs"
+  eq "$(CMD="$B mode auto" HOOK_FIELD=permissionDecisionReason hook "$P")" \
+     "baton: mode refused: something can $A; the owner makes this mode change $T, where the same \`$B mode …\` runs alone in its Bash call" \
+     "[WH] the guard's refusal of a mode change names where the owner sets it"
+  local q id
+  q=$(printf '%s\n' "$out" | sed -n 's/^queue here: *//p')
+  touch -d @$(( $(date +%s) - 600 )) "$W/act.sh"          # the session runs it later than a fresh file's 120 s
+  out=$( (cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-owner "${WRAP[@]}" $q) 2>&1; echo "rc=$?")
+  has "$out" "the owner signs it through the owner's dialog, $T (not this session: something can $A), before " \
+      "[WH] the printed queue command runs from that session and says where the owner signs"
+  has "$out" "rc=0" "[WH] …rc 0"
+  id=$(printf '%s\n' "$out" | sed -n 's/^go: queued \([0-9a-f]\{16\}\) .*/\1/p')
+  WRAP=(); CMD="$B sign --by owner --queued $id" hook "$P" >/dev/null
+  eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-terminal $B sign --by owner --queued "$id") >/dev/null 2>&1; echo $?)" 3 \
+     "[WH] instrument: a record of another session does not sign"
+  CMD="$B sign --by owner --queued $id" hook "$P" '{"session_id": "s-terminal"}' >/dev/null
+  eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-terminal $B sign --by owner --queued "$id") >/dev/null 2>&1; echo $?)" 0 \
+     "[WH] the owner signs the queued item in a session that opens the dialog: rc 0"
+  eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-owner bash "$W/claude" --permission-prompt-tool mcp__x__y $B run --queued "$id") >/dev/null 2>&1; echo $?)/$(cat "$W/out.txt" 2>/dev/null)" \
+     "0/hello" "[WH] the printed run --queued runs it from the session that could not sign: rc 0, the act done"
+  rm -f "$W/out.txt"
+  hook "$P" >/dev/null
+  eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" CLAUDE_CODE_SESSION_ID=s-owner bash "$W/claude" --permission-prompt-tool mcp__x__y $CMD) 2>&1; echo "rc=$?")" \
+     "baton: sign refused: something can $A; the owner signs $T: a run this session queued (\`go --queue\`) is signed there with /vibemaestro-sdlc:owner-sign, then this session runs it (\`run --queued <id>\`)
+rc=3" "[WH] sign with a record under a --permission-prompt-tool ancestor: rc 3, naming where the owner signs"
+  GO_ENV=(); touch "$W/act.sh"
+  eq "$(go_)" 8 "[WH] no Claude Code session (a plain shell): go stops for the owner, rc 8"; out=$(cat "$BT_OUT")
+  hasnt "$out" "sign --by owner" "[WH] …no sign command"
+  hasnt "$out" "queue here:" "[WH] …no queue command (go --queue needs a session)"
+  has "$out" "not here:          no Claude Code session (CLAUDE_CODE_SESSION_ID); the owner signs $T" "[WH] …why not here, and where"
+  has "$out" "or there, from $W: $B go --reuse $W/act.sh $W/out.txt hello" "[WH] …the go to run there, from this directory (the binding holds it)"
+  eq "$( (cd "$W" && cenv XDG_STATE_HOME="$ST" $CMD) 2>&1; echo "rc=$?")" \
+     "baton: sign refused: no Claude Code session (CLAUDE_CODE_SESSION_ID), so no dialog: the owner signs $T
+rc=3" "[WH] sign in a plain shell: rc 3, naming a claude session in a terminal, not a terminal alone"
+  unset -f go_
+}
+
 fam_owner_spelling() {  # [S] the literal call only; other commands are not the guard's
   local P=$1 c
   setup "$P"
@@ -437,6 +493,12 @@ fam_owner_hosts() {  # [HOST] the shared table: the official hosts' dialog signs
   rm -f "$P.isolate/managed-settings.json"; WRAP=(); BT_ENV=()
 }
 
+fam_owner_launchers() {  # [LAUNCH] the shared table: the macOS app's launcher of its bundle is folded into its Claude Code; nothing else is
+  local P=$1
+  setup "$P"
+  owner_launchers "$(fresh)" baton_host_row eq has "$P/scripts/baton.py"
+}
+
 fam_owner_wiring() {  # [H] hooks.json runs the guard on every Bash call, as its own entry
   local P=$1
   has "$(hook_cmds "$P/hooks/hooks.json" PreToolUse Bash)" 'scripts/baton-guard.py' "[H] hooks.json: a PreToolUse Bash command runs baton-guard.py"
@@ -521,8 +583,8 @@ baton.record_asked("s-owner", "default", ["--by", "owner", "--void", sys.argv[2]
   eq "$(signed_n)" 1 "[X] …the signature stays"
 }
 
-FAMILIES="fam_owner_record fam_owner_modes fam_owner_who fam_owner_spelling fam_owner_rules fam_owner_auto fam_owner_mode fam_owner_oldcopy
-fam_owner_version fam_owner_lineage fam_owner_wiring fam_owner_hosts fam_owner_void"
+FAMILIES="fam_owner_record fam_owner_modes fam_owner_who fam_owner_where fam_owner_spelling fam_owner_rules fam_owner_auto fam_owner_mode fam_owner_oldcopy
+fam_owner_version fam_owner_lineage fam_owner_wiring fam_owner_hosts fam_owner_launchers fam_owner_void"
 echo "== the real plugin =="
 REAL="$TMP/real"; mk_plugin_copy "$REAL"
 for f in $FAMILIES; do echo "-- $f"; "$f" "$REAL"; done

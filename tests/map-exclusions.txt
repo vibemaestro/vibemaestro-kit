@@ -26,4 +26,4 @@ NOTICE  the attribution notice: a document
 tests/replay-current-state.sh  a manual parity tool (needs a clone of another repository): no suite runs it
 tests/fixtures/replay_gates.py  the gate replay that tests/replay-current-state.sh runs: no suite runs it
 kb/research-runs/*  study run files (prompts, report lines, a study's own checker and tally with their own tests): read by no suite
-tests/manual/*.sh  by-hand scripts (real runs on a logged-in machine): no suite runs them
+tests/manual/*  by-hand scripts (real runs on a logged-in machine or inside a Claude Code host): no suite runs them
